@@ -262,7 +262,7 @@ async function previewBackup(backupPath) {
   const entries = stdout.split('\n').filter(Boolean);
   const hasManifest = entries.some((e) => e.endsWith('/manifest.json') || e === 'manifest.json');
   if (!hasManifest) {
-    throw new Error('Not a valid Image Studio KH backup (no manifest)');
+    throw new Error('Not a valid Media Studio KH backup (no manifest)');
   }
   const prefix = entries[0].split('/')[0];
   const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-backup-peek-'));

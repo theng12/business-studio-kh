@@ -31,11 +31,12 @@ function saveSidebarCollapsed(v) {
 // since local IPC isn't gated.
 const NAV = [
   {
-    label: null,
+    label: 'Workspace',
     items: [
       { id: 'company',    name: 'Company',         icon: IconCompany },
       { id: 'dashboard',  name: 'Dashboard',       icon: IconDashboard,  shortcut: '1' },
       { id: 'brands',     name: 'Brands',          icon: IconBrand },
+      { id: 'library',   name: 'Product Library', icon: IconLibrary,   shortcut: '2' },
       // v0.22.13 promoted Categories to a top-level sidebar entry;
       // v0.22.14 demoted it back to a Settings tab. Brands has rich
       // per-row content (icon, color, product count) that justifies
@@ -46,15 +47,29 @@ const NAV = [
     ],
   },
   {
-    label: 'Production',
+    label: 'Image Studio',
     items: [
-      { id: 'library',   name: 'Product Library', icon: IconLibrary,   shortcut: '2' },
       // v0.49.51: gated by CAPABILITY (not role rank), so custom roles get
       // the right nav. A module shows if the user has any of its `caps`.
       { id: 'workspace', name: 'Image Workspace', icon: IconWorkspace, shortcut: '3', caps: ['images.manage'] },
       { id: 'aistudio',  name: 'AI Studio',       icon: IconAiStudio,  shortcut: '4', caps: ['ai.run'] },
       { id: 'overlay',   name: 'Overlay Studio',  icon: IconOverlay,   shortcut: '5', caps: ['overlay.use'] },
       { id: 'export',    name: 'Export Center',   icon: IconExport,    shortcut: '6', caps: ['export.run'] },
+    ],
+  },
+  {
+    label: 'Label Studio',
+    items: [
+      { id: 'labeltemplates', name: 'Label Templates', icon: IconOverlay, caps: ['labels.use'] },
+      { id: 'labelgenerate', name: 'Generate & Print', icon: IconExport, caps: ['labels.use'] },
+      { id: 'barcodes', name: 'Barcode Maker', icon: IconLibrary, caps: ['labels.use'] },
+      { id: 'labeljobs', name: 'Label History', icon: IconHistory, caps: ['labels.use'] },
+    ],
+  },
+  {
+    label: 'Catalog Studio',
+    items: [
+      { id: 'catalogstudio', name: 'Catalog Projects', icon: IconExport, caps: ['catalog.design'] },
     ],
   },
   {
@@ -137,6 +152,14 @@ export function Sidebar() {
   // collapsed. Persisted via localStorage helpers above.
   const [collapsed, setCollapsedRaw] = useState(loadSidebarCollapsed);
   const setCollapsed = (v) => { setCollapsedRaw(v); saveSidebarCollapsed(v); };
+  const [closedSections, setClosedSections] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('Sidebar.closedSections') || '{}'); } catch { return {}; }
+  });
+  const toggleSection = (label) => setClosedSections((current) => {
+    const next = { ...current, [label]: !current[label] };
+    try { localStorage.setItem('Sidebar.closedSections', JSON.stringify(next)); } catch {}
+    return next;
+  });
 
   // v0.45.0: effective role. Local IPC isn't role-gated, so standalone /
   // server-host renderers are admin by definition. In client mode we trust
@@ -167,8 +190,8 @@ export function Sidebar() {
     <>
       <aside className={`sidebar${collapsed ? ' is-collapsed' : ''}`}>
         <div className="sidebar__brand">
-          <div className="sidebar__brand-mark">IS</div>
-          <div className="sidebar__brand-name">Image Studio KH</div>
+          <div className="sidebar__brand-mark">MS</div>
+          <div className="sidebar__brand-name">Media Studio KH</div>
           {/* v0.26.30: collapse toggle. Chevron flips direction based
               on state — points LEFT when expanded (click to collapse,
               chevron points away from content), points RIGHT when
@@ -183,11 +206,10 @@ export function Sidebar() {
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             aria-pressed={collapsed}
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-              {collapsed
-                ? <path d="M4 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                : <path d="M8 2L4 6l4 4"  stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              }
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="1.5" y="2" width="13" height="12" rx="2.5" stroke="currentColor" />
+              <path d="M5.5 2v12" stroke="currentColor" />
+              {collapsed ? <path d="M8 8h4M10.5 5.5 13 8l-2.5 2.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" /> : <path d="M12 8H8m1.5-2.5L7 8l2.5 2.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />}
             </svg>
           </button>
         </div>
@@ -198,9 +220,11 @@ export function Sidebar() {
           {NAV.map((section, sectionIdx) => (
             <div key={sectionIdx} className="sidebar__section">
               {section.label ? (
-                <div className="sidebar__section-label">{section.label}</div>
+                <button type="button" className="sidebar__section-label" onClick={() => toggleSection(section.label)} aria-expanded={!closedSections[section.label]}>
+                  <span>{section.label}</span><svg width="10" height="10" viewBox="0 0 10 10" className={closedSections[section.label] ? 'is-closed' : ''}><path d="m2 3 3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+                </button>
               ) : null}
-              {section.items.filter((item) => hasAnyCap(caps, item.caps)).map((item) => {
+              {(!closedSections[section.label] || collapsed ? section.items : []).filter((item) => hasAnyCap(caps, item.caps)).map((item) => {
                 const Icon = item.icon;
                 const active = activeModule === item.id;
                 const disabled = !isModuleAvailable(item.id);

@@ -21,7 +21,7 @@ export function AboutCard({ versionInfo }) {
       <header className="about-card__head">
         <div>
           <div className="about-card__label">About</div>
-          <h2 className="about-card__title">Image Studio KH</h2>
+          <h2 className="about-card__title">Media Studio KH</h2>
           <div className="about-card__subtitle">Batch product image processor</div>
         </div>
         <div className="about-card__version">v{versionInfo?.app ?? '—'}</div>

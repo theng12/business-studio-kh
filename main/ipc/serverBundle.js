@@ -52,12 +52,12 @@ function register(/* helpers — unused; these are local-only */) {
     // bundles is self-documenting. `safe-` filename — Save dialog
     // already restricts the user to writable locations.
     const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
-    const defaultName = `image-studio-kh-${app.getVersion()}-${stamp}.${BUNDLE_EXT}`;
+    const defaultName = `media-studio-kh-${app.getVersion()}-${stamp}.${BUNDLE_EXT}`;
 
     const res = await dialog.showSaveDialog({
       title: 'Export server bundle',
       defaultPath: defaultName,
-      filters: [{ name: 'Image Studio KH bundle', extensions: [BUNDLE_EXT] }],
+      filters: [{ name: 'Media Studio KH bundle', extensions: [BUNDLE_EXT] }],
     });
     if (res.canceled || !res.filePath) return null;
 
@@ -116,7 +116,7 @@ function register(/* helpers — unused; these are local-only */) {
       const res = await dialog.showOpenDialog({
         title: 'Select server bundle to import',
         properties: ['openFile'],
-        filters: [{ name: 'Image Studio KH bundle', extensions: [BUNDLE_EXT, 'tgz', 'gz'] }],
+        filters: [{ name: 'Media Studio KH bundle', extensions: [BUNDLE_EXT, 'tgz', 'gz'] }],
       });
       if (res.canceled || !res.filePaths[0]) return null;
       bundlePath = res.filePaths[0];

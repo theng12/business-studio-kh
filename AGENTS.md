@@ -212,7 +212,7 @@ Why:
 - I have both Apple Silicon and Intel Macs on the test fleet (older Intel MacBook Pros are still kicking around as client-only machines)
 - Building both at once means I always have the right DMG for whichever Mac I'm pushing to next; no "wait, this is the wrong arch" surprise
 - electron-builder rebuilds native deps (better-sqlite3, sharp, @img/*) per arch automatically via @electron/rebuild — works fine on an Apple Silicon host
-- Output filenames are auto-suffixed: `Image Studio KH-X.Y.Z-arm64.dmg` and `Image Studio KH-X.Y.Z-x64.dmg` side-by-side in `dist/`
+- Output filenames are auto-suffixed: `Media Studio KH-X.Y.Z-arm64.dmg` and `Media Studio KH-X.Y.Z-x64.dmg` side-by-side in `dist/`
 - Build time is roughly 1.5× a single-arch build (native rebuild is the slow part; the rest is shared)
 
 Do NOT use `arch: ["universal"]` — universal binaries double the file size by bundling both arches in one app, and rebuild times are longer. Two separate DMGs is the simpler shipping model.

@@ -4,6 +4,7 @@ import { Button, Field, Input, Select, Textarea } from '../../components/ui.jsx'
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { Attribution } from '../../components/Attribution.jsx';
 import { HistoryModal } from '../../components/HistoryModal.jsx';
+import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { parseConflictError, showConflict } from '../../components/ConflictModal.jsx';
@@ -44,6 +45,13 @@ function emptyForm() {
     description: '',
     priceRetail: '',
     priceWholesale: '',
+    expiryDate: '',
+    taxRate: '',
+    reorderPoint: '',
+    reorderQuantity: '',
+    trackInventory: false,
+    variantAttributes: '',
+    countryOfOrigin: '',
     // v0.49.48: logistics & sourcing — feed PO line prefills + landed cost.
     supplierId: '',
     supplierSku: '',
@@ -73,6 +81,13 @@ function productToForm(p) {
     description: p.description ?? '',
     priceRetail: p.priceRetail == null ? '' : String(p.priceRetail),
     priceWholesale: p.priceWholesale == null ? '' : String(p.priceWholesale),
+    expiryDate: p.expiryDate ?? '',
+    taxRate: p.taxRate ?? '',
+    reorderPoint: p.reorderPoint ?? '',
+    reorderQuantity: p.reorderQuantity ?? '',
+    trackInventory: !!p.trackInventory,
+    variantAttributes: p.variantAttributes ?? '',
+    countryOfOrigin: p.countryOfOrigin ?? '',
     // v0.49.48: logistics & sourcing.
     supplierId: p.supplierId ?? '',
     supplierSku: p.supplierSku ?? '',
@@ -126,6 +141,10 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
   const [form, setForm] = useState(emptyForm());
   const [images, setImages] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [saveState, setSaveState] = useState('saved');
+  const [savedAt, setSavedAt] = useState(null);
+  const autoSaveTimer = useRef(null);
+  const skipNextAutoSave = useRef(true);
   // v0.49.39: multi-select state for the image grid. Set of FILEPATHS
   // (not indices — indices shift after a delete/reorder; filepaths are
   // stable per row). When non-empty, the selection toolbar appears
@@ -162,6 +181,7 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
 
   useEffect(() => {
     if (product) {
+      skipNextAutoSave.current = true;
       setForm(productToForm(product));
       setActiveProductId(product.id);
       window.api?.images.listByProduct(product.id).then(setImages).catch(() => setImages([]));
@@ -300,6 +320,13 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
       description: form.description.trim() || null,
       priceRetail: toNumberOrNull(form.priceRetail),
       priceWholesale: toNumberOrNull(form.priceWholesale),
+      expiryDate: form.expiryDate.trim() || null,
+      taxRate: form.taxRate.trim() || null,
+      reorderPoint: form.reorderPoint.trim() || null,
+      reorderQuantity: form.reorderQuantity.trim() || null,
+      trackInventory: !!form.trackInventory,
+      variantAttributes: form.variantAttributes.trim() || null,
+      countryOfOrigin: form.countryOfOrigin.trim() || null,
       // v0.49.48: logistics & sourcing — defaults that prefill PO lines.
       supplierId: form.supplierId || null,
       supplierSku: form.supplierSku.trim() || null,
@@ -318,6 +345,7 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
       return;
     }
     setSaving(true);
+    setSaveState('saving');
     try {
       if (isCreate) {
         const created = await createProduct(buildPayload());
@@ -337,6 +365,8 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
             expectedUpdatedAt: product?.updatedAt,
           });
           addToast(`Saved ${updated.sku}`, 'success');
+          setSaveState('saved');
+          setSavedAt(Date.now());
           setSkuError(null);
         } catch (err) {
           const conflict = parseConflictError(err);
@@ -360,11 +390,36 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
       }
     } catch (err) {
       setSkuError(err.message);
+      setSaveState('dirty');
       addToast(err.message, 'error');
     } finally {
       setSaving(false);
     }
   }
+
+  // Existing products auto-save after 500ms of quiet typing. The explicit
+  // Save button remains and writes the same payload for deliberate commits.
+  useEffect(() => {
+    if (isEmpty || isCreate || !activeProductId) return undefined;
+    if (skipNextAutoSave.current) { skipNextAutoSave.current = false; return undefined; }
+    clearTimeout(autoSaveTimer.current);
+    setSaveState('dirty');
+    autoSaveTimer.current = setTimeout(async () => {
+      if (!form.sku.trim()) return;
+      setSaveState('saving');
+      try {
+        await updateProduct(activeProductId, { ...buildPayload(), expectedUpdatedAt: product?.updatedAt });
+        setSaveState('saved');
+        setSavedAt(Date.now());
+      } catch (err) {
+        setSaveState('dirty');
+        addToast(err.message, 'error');
+      }
+    }, 500);
+    return () => clearTimeout(autoSaveTimer.current);
+    // Form is the intentional trigger; the store actions are stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form]);
 
   async function handleDelete() {
     if (!activeProductId) return;
@@ -749,6 +804,7 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
     <aside className="lib-panel" role="complementary" aria-label={title}>
       <header className="lib-panel__head">
         <div className="lib-panel__title">{title}</div>
+        {!isCreate ? <SaveStatus state={saveState} savedAt={savedAt} /> : null}
         <button
           type="button"
           className="lib-panel__close"
@@ -871,6 +927,22 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
         <Field label="Description" span="full">
           {({ id }) => <Textarea id={id} value={form.description} onChange={setField('description')} rows={3} />}
         </Field>
+
+        <div className="field field--full pf-logistics">
+          <div className="pf-logistics__head">
+            <span className="field__label">Labels &amp; catalog</span>
+            <span className="field__hint" style={{ marginTop: 0 }}>Shared fields available to Label Studio and Catalog Studio.</span>
+          </div>
+          <div className="pf-logistics__grid">
+            <Field label="Country of origin">{({ id }) => <Input id={id} value={form.countryOfOrigin} onChange={setField('countryOfOrigin')} />}</Field>
+            <Field label="Expiry date">{({ id }) => <Input id={id} type="date" value={form.expiryDate} onChange={setField('expiryDate')} />}</Field>
+            <Field label="Tax rate" hint="Stored as entered">{({ id }) => <Input id={id} value={form.taxRate} onChange={setField('taxRate')} placeholder="e.g. 10%" />}</Field>
+            <Field label="Variant attributes">{({ id }) => <Input id={id} value={form.variantAttributes} onChange={setField('variantAttributes')} placeholder="Color: Red, Size: M" />}</Field>
+            <Field label="Reorder point">{({ id }) => <Input id={id} value={form.reorderPoint} onChange={setField('reorderPoint')} />}</Field>
+            <Field label="Reorder quantity">{({ id }) => <Input id={id} value={form.reorderQuantity} onChange={setField('reorderQuantity')} />}</Field>
+            <label className="field"><span className="field__label">Inventory</span><span className="field__row"><input type="checkbox" checked={form.trackInventory} onChange={(e) => setForm((f) => ({ ...f, trackInventory: e.target.checked }))} /> Track inventory for this product</span></label>
+          </div>
+        </div>
 
         {/* v0.49.48: Logistics & sourcing. These default onto Purchase
             Order line items when this product is added to a PO, and feed

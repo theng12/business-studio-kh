@@ -108,7 +108,7 @@ function register({ expose }) {
       throw new Error(analyzed.message);
     }
     if (res.status === 401) throw new Error('Token rejected by server. Ask the admin to regenerate it (their Settings → Multi-Mac → Users → ↻ button), then paste the new one here.');
-    if (!res.ok) throw new Error(`Server returned ${res.status}. The address is reachable but isn't speaking the Image Studio KH protocol — is this URL pointing at a different app?`);
+    if (!res.ok) throw new Error(`Server returned ${res.status}. The address is reachable but isn't speaking the Media Studio KH protocol — is this URL pointing at a different app?`);
     const data = await res.json();
     return { ok: true, user: data.user, registeredChannels: data.registeredChannels };
   });
@@ -245,7 +245,7 @@ function register({ expose }) {
       throw new Error('Folder no longer exists');
     }
     if (!looksLikeOurDataDir(targetPath)) {
-      throw new Error('That folder doesn\'t look like an Image Studio KH data folder — refusing to trash it for safety.');
+      throw new Error('That folder doesn\'t look like an Media Studio KH data folder — refusing to trash it for safety.');
     }
     await shell.trashItem(targetPath);
     return { ok: true, path: targetPath };

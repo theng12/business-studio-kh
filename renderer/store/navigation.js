@@ -13,7 +13,9 @@
 // v0.26.31: 'history' added — global audit-log feed page.
 // v0.49.46: 'suppliers' added — OPERATIONS section Phase 1.
 // v0.49.47: 'purchaseorders' + 'costcalc' added — OPERATIONS Phase 2-4.
-const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'export', 'aistudio', 'overlay', 'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support'];
+const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'export', 'aistudio', 'overlay',
+  'labeltemplates', 'labelgenerate', 'barcodes', 'labeljobs', 'catalogstudio',
+  'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the
 // header copy inside the module itself.

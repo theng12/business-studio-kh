@@ -242,7 +242,7 @@ async function previewBundle(bundlePath) {
   const entries = stdout.split('\n').filter(Boolean);
   const hasManifest = entries.some((e) => e.endsWith('/manifest.json') || e === 'manifest.json');
   if (!hasManifest) {
-    throw new Error('Not a valid Image Studio KH bundle (no manifest)');
+    throw new Error('Not a valid Media Studio KH bundle (no manifest)');
   }
   // Extract just the manifest to a temp file and read it.
   const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-bundle-peek-'));

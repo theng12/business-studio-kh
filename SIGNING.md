@@ -1,6 +1,6 @@
 # Code signing + notarization
 
-This doc covers the future wire-up for distributing Image Studio KH as a signed + notarized macOS app. Until you have an Apple Developer Program membership ($99/year) and a Developer ID cert, the app ships unsigned and beta users run `xattr -cr` per the README.
+This doc covers the future wire-up for distributing Media Studio KH as a signed + notarized macOS app. Until you have an Apple Developer Program membership ($99/year) and a Developer ID cert, the app ships unsigned and beta users run `xattr -cr` per the README.
 
 When you're ready to sign:
 
@@ -60,7 +60,7 @@ Replace `mac.identity: null` with the cert name, and add notarization config:
 
 electron-builder needs an app-specific password to submit to Apple's notary service.
 
-1. Sign in to [appleid.apple.com](https://appleid.apple.com/) → Sign-In and Security → App-Specific Passwords → generate one (label it "Image Studio KH notarize").
+1. Sign in to [appleid.apple.com](https://appleid.apple.com/) → Sign-In and Security → App-Specific Passwords → generate one (label it "Media Studio KH notarize").
 2. Set environment variables before `npm run dist`:
 
    ```bash
@@ -88,7 +88,7 @@ After signing is in place, the next step is `electron-updater` for auto-updates:
    "publish": {
      "provider": "github",
      "owner": "your-github-handle",
-     "repo": "image-studio-kh"
+     "repo": "media-studio-kh"
    }
    ```
 

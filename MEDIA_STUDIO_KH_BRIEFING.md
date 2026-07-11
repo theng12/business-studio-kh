@@ -1,8 +1,8 @@
-# Image Studio KH — Build Briefing
+# Media Studio KH — Build Briefing
 
 ## Overview
 
-**App name:** Image Studio KH  
+**App name:** Media Studio KH
 **Type:** Desktop app (Electron + React)  
 **Purpose:** Batch product image processor. Takes raw, mixed-quality product photos and outputs clean, marketplace-ready images with correct backgrounds, sizes, formats, and file naming — ready to upload to Amazon, Shopify, Lazada, Etsy, or any custom destination.  
 **Primary user:** TerraNash — running multiple product businesses (construction materials, refurbished iPhones, FMCG). Needs to process large batches of product images across different categories efficiently.
@@ -28,7 +28,7 @@
 ## App Structure
 
 ```
-Image Studio KH
+Media Studio KH
 ├── 1. Product Library      ← import and manage products + raw images
 ├── 2. Image Workspace      ← process images per product (bg removal, canvas, enhance)
 ├── 3. Export Center        ← export profiles, queue, batch export runner

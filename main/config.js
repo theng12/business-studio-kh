@@ -20,7 +20,7 @@ function configPath() {
  * installs and avoid clobbering their data.
  */
 function defaultDataDir() {
-  return path.join(os.homedir(), 'Pictures', 'Image Studio KH');
+  return path.join(os.homedir(), 'Pictures', 'Media Studio KH');
 }
 
 function legacyDataDir() {

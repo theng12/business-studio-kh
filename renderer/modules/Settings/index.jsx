@@ -337,7 +337,7 @@ export function Settings() {
           </div>
           {config.dataDirIsCloud ? (
             <div className="cloud-sync-note">
-              <strong>iCloud sync mode active.</strong> Image Studio KH switched SQLite into a sync-friendly journal mode automatically. To avoid corruption:
+              <strong>iCloud sync mode active.</strong> Media Studio KH switched SQLite into a sync-friendly journal mode automatically. To avoid corruption:
               <ul>
                 <li><b>Quit the app completely before switching computers.</b> Cmd+Q, not just closing the window.</li>
                 <li>Wait until iCloud finishes syncing on the source Mac before opening on the destination — the folder's cloud icon in Finder should be a solid checkmark, not cycling arrows.</li>

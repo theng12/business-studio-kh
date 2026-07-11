@@ -44,7 +44,7 @@ export function ModeSegment({ config, addToast }) {
     if (next === current) return;
     const ok = await confirm({
       title: `Switch to ${next} mode?`,
-      message: 'Image Studio KH will quit and relaunch to apply the new mode.',
+      message: 'Media Studio KH will quit and relaunch to apply the new mode.',
       detail:
         next === 'server'
           ? 'In server mode this Mac hosts the data over the network for other Macs to connect to. Your local data folder stays exactly as it is. (Networking ships in v0.14.1 — v0.14.0 lets you set up users now.)'

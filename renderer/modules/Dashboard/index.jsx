@@ -46,10 +46,10 @@ export function Dashboard() {
       <div className="page">
         <PageHeader title="Dashboard" subtitle="Set up a company to get started." />
         <EmptyState
-          title={companies.length === 0 ? 'Welcome to Image Studio KH' : 'No company selected'}
+          title={companies.length === 0 ? 'Welcome to Media Studio KH' : 'No company selected'}
           body={
             companies.length === 0
-              ? 'Create a company to start adding brands and products. A company is the top-level container for all your image work.'
+              ? 'Create a company to start building one shared product library for images, labels, catalogs, and operations.'
               : 'Choose a company from the sidebar switcher, or create a new one.'
           }
           action={
@@ -192,7 +192,7 @@ export function Dashboard() {
               stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" transform="translate(-1, 0)" />
           </svg>
           <span className="donate-banner__text">
-            <strong>Image Studio KH is free.</strong> If it saves you hours each week, you can
+            <strong>Media Studio KH is free.</strong> If it saves you hours each week, you can
             support development with a donation — every bit keeps the app maintained and the
             bugs fixed.
           </span>

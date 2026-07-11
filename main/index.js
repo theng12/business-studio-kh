@@ -4,11 +4,11 @@ const fs = require('node:fs');
 
 // Lock the app's identity so dev and packaged builds resolve to the SAME
 // userData folder. Without this, npm run dev uses the package.json `name`
-// (`image-studio-kh`) while the packaged build uses `productName`
-// (`Image Studio KH`) — producing two separate folders in
+// (`media-studio-kh`) while the packaged build uses `productName`
+// (`Media Studio KH`) — producing two separate folders in
 // ~/Library/Application Support that don't share data or config.
 // Must run before app.whenReady().
-app.setName('Image Studio KH');
+app.setName('Media Studio KH');
 
 const { registerImageProtocol, registerClientImageProtocol, registerRendererProtocol } = require('./protocol');
 const { registerIpc } = require('./ipc');
@@ -23,11 +23,11 @@ const events = require('./events');
 
 const isDev = !app.isPackaged;
 
-// Match the briefing's data folder name: ~/Library/Application Support/Image Studio KH/
+// Match the briefing's data folder name: ~/Library/Application Support/Media Studio KH/
 // Set this BEFORE any path resolution so app.getPath('userData') returns the
 // new location consistently. The migration below copies existing data from
 // the old lowercase folder on first run.
-app.setName('Image Studio KH');
+app.setName('Media Studio KH');
 
 function migrateLegacyUserData() {
   try {
@@ -36,7 +36,7 @@ function migrateLegacyUserData() {
       return; // Already migrated or fresh install with the new name.
     }
     const parent = path.dirname(newUserData);
-    const oldUserData = path.join(parent, 'image-studio-kh');
+    const oldUserData = path.join(parent, 'media-studio-kh');
     if (!fs.existsSync(oldUserData)) return;
     fs.mkdirSync(newUserData, { recursive: true });
     fs.cpSync(oldUserData, newUserData, { recursive: true, errorOnExist: false, force: false });
@@ -327,13 +327,13 @@ app.on('child-process-gone', (_e, details) => {
 function handleFirstLaunch(config) {
   // Pick the most-data-bearing legacy folder. There are historically two
   // possible locations (see the long comment near app.setName above):
-  //   ~/Library/Application Support/Image Studio KH/data/    (packaged)
-  //   ~/Library/Application Support/image-studio-kh/data/    (dev, pre-fix)
+  //   ~/Library/Application Support/Media Studio KH/data/    (packaged)
+  //   ~/Library/Application Support/media-studio-kh/data/    (dev, pre-fix)
   // We prefer the one with a database.sqlite, then the one most recently
   // modified, so we don't lose data the user actually cares about.
   const candidates = [
     legacyDataDir(),
-    path.join(path.dirname(legacyDataDir()), '..', 'image-studio-kh', 'data'),
+    path.join(path.dirname(legacyDataDir()), '..', 'media-studio-kh', 'data'),
   ];
   const legacyPath = candidates.find((p) =>
     fs.existsSync(path.join(p, 'database.sqlite')) || fs.existsSync(path.join(p, 'assets')),
@@ -365,8 +365,8 @@ function handleFirstLaunch(config) {
     buttons: ['Choose a folder…', 'Use default', 'Quit'],
     defaultId: 1,
     cancelId: 2,
-    title: 'Where should Image Studio KH save your images?',
-    message: 'Image Studio KH stores your raw product photos, processed images, and AI generations in a single folder.',
+    title: 'Where should Media Studio KH save your images?',
+    message: 'Media Studio KH stores your raw product photos, processed images, and AI generations in a single folder.',
     detail:
       `The default is:\n${config.dataDir}\n\n` +
       `You can also point at an existing data folder — for example, one on ` +
@@ -381,7 +381,7 @@ function handleFirstLaunch(config) {
   if (res === 0) {
     const pick = dialog.showOpenDialogSync({
       properties: ['openDirectory', 'createDirectory'],
-      title: 'Pick a folder for Image Studio KH data',
+      title: 'Pick a folder for Media Studio KH data',
     });
     if (pick && pick[0]) {
       const next = { ...config, dataDir: pick[0], firstLaunchHandled: true };

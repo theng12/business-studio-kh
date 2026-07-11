@@ -23,7 +23,7 @@ const BACKUP_FORMAT_VERSION = 1;
 
 // Marker baked into every manifest so we can tell our backups apart
 // from an arbitrary .tar.gz the user renamed.
-const BACKUP_KIND = 'image-studio-kh-backup';
+const BACKUP_KIND = 'media-studio-kh-backup';
 
 // Custom extension (a gzipped tar underneath). Custom so double-click
 // in Finder doesn't auto-expand it and it's obviously ours.
@@ -110,7 +110,7 @@ function backupStamp(date) {
 /** Default backup filename for a given timestamp slug + app version. */
 function backupFilename(stamp, appVersion) {
   const v = appVersion ? `v${appVersion}-` : '';
-  return `image-studio-kh-backup-${v}${stamp}.${BACKUP_EXT}`;
+  return `media-studio-kh-backup-${v}${stamp}.${BACKUP_EXT}`;
 }
 
 /**
@@ -121,7 +121,7 @@ function backupFilename(stamp, appVersion) {
  */
 function isBackupFilename(name) {
   if (typeof name !== 'string') return false;
-  return new RegExp(`^image-studio-kh-backup-.+\\.${BACKUP_EXT}$`).test(name);
+  return new RegExp(`^media-studio-kh-backup-.+\\.${BACKUP_EXT}$`).test(name);
 }
 
 /**
@@ -146,7 +146,7 @@ function validateManifest(obj) {
     return { ok: false, error: 'Backup manifest is missing or not an object' };
   }
   if (obj.kind !== BACKUP_KIND) {
-    return { ok: false, error: 'Not an Image Studio KH backup (wrong or missing kind marker)' };
+    return { ok: false, error: 'Not an Media Studio KH backup (wrong or missing kind marker)' };
   }
   if (!Number.isInteger(obj.backupFormatVersion)) {
     return { ok: false, error: 'Backup manifest has no valid format version' };

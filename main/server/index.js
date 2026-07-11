@@ -244,13 +244,13 @@ async function handleRequest(req, res, dataDir) {
     // non-existent dist-electron/package.json. The throw made the
     // ENTIRE ping endpoint return 500, which surfaced to clients as a
     // permanent "Server hiccup" (amber) chip + a failing network
-    // diagnostic ("reachable but not an Image Studio KH server"),
+    // diagnostic ("reachable but not an Media Studio KH server"),
     // even though /api/whoami and all RPC calls worked fine. Use
     // app.getVersion() — the canonical Electron API that reads the
     // version correctly in both dev and production. Inline-required
     // to match the lazy-require style used elsewhere in this file.
     const appVersion = require('electron').app.getVersion();
-    sendJson(res, 200, { ok: true, app: 'image-studio-kh', version: appVersion });
+    sendJson(res, 200, { ok: true, app: 'media-studio-kh', version: appVersion });
     return;
   }
 

@@ -1,14 +1,14 @@
 import { Button } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 
-// NOWPayments hosted donation page for Image Studio KH. The URL is public
+// NOWPayments hosted donation page for Media Studio KH. The URL is public
 // (it's the donor-facing page on NOWPayments) so it's safe to commit.
 const NOWPAYMENTS_DONATION_URL = 'https://nowpayments.io/donation/studiokh';
 
 const nowpaymentsConfigured =
   !!NOWPAYMENTS_DONATION_URL && !NOWPAYMENTS_DONATION_URL.includes('TODO_');
 
-const APP_NAME = 'Image Studio KH';
+const APP_NAME = 'Media Studio KH';
 
 export function Support() {
   function openDonate() {

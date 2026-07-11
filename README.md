@@ -1,26 +1,44 @@
-# Image Studio KH
+# Media Studio KH
 
-Batch product image processor for catalog work — built as an Electron desktop app for macOS.
+A multi-purpose product media workspace for macOS, built with Electron.
 
-Manage a product catalog (companies → brands → products → images), batch-process raw photos through a Sharp pipeline (background removal, resize, format conversion, watermarking, color profiles), generate variations through AI providers (KIE.ai, fal.ai), composite text/barcode overlays via the Overlay Studio, and export to per-profile output folders. Works standalone or in a multi-Mac server/client mode for collaborative catalog work.
+Media Studio KH keeps one shared Product Library at the center of three focused workspaces: image production, label design and printing, and catalog creation. Product details are entered once and can then drive edited images, AI variations, barcodes, multilingual labels, shelf cards, and print-ready catalogs. The app works standalone and retains the existing multi-Mac server/client foundation for collaborative image workflows.
 
 ## Install (beta)
 
 The app isn't code-signed yet, so macOS Gatekeeper will refuse to open it out of the box.
 
 1. Download the DMG.
-2. Drag **Image Studio KH** into Applications.
+2. Drag **Media Studio KH** into Applications.
 3. In Terminal, strip the quarantine attribute Gatekeeper added on download:
 
    ```bash
-   xattr -cr "/Applications/Image Studio KH.app"
+   xattr -cr "/Applications/Media Studio KH.app"
    ```
 
 4. Open the app. You're good.
 
-If you don't run step 3 you'll see "Image Studio KH is damaged and can't be opened" — that's not a virus, it's Gatekeeper refusing to launch an unsigned app. Step 3 tells macOS the app came from you (it did — you literally just installed it).
+If you don't run step 3 you'll see "Media Studio KH is damaged and can't be opened" — that's not a virus, it's Gatekeeper refusing to launch an unsigned app. Step 3 tells macOS the app came from you (it did — you literally just installed it).
 
 ## Features
+
+**Shared workspace**
+- One Product Library for Image Studio, Label Studio, and Catalog Studio.
+- Collapsible left navigation keeps the studios distinct without splitting them into separate apps.
+- Product fields cover identity, pricing, tax, inventory, variants, origin, expiry dates, images, and custom values.
+- Existing products auto-save after edits and still provide an explicit Save action and visible save status.
+
+**Label Studio**
+- Starter templates for retail labels, compact barcode labels, and shelf cards.
+- Physical-size visual designer with draggable and layered text, price, barcode, QR, image, shape, divider, date, and country elements.
+- Live product-field binding, multilingual print rendering, image/logo imports, rotation, keyboard nudging, duplication, and explicit layer controls.
+- Generate PDF label sheets or individual PDF/PNG/JPEG files, control copies/margins/gaps, and print directly through a selected macOS printer.
+- Standalone barcode maker for Code 128, EAN-13, UPC-A, Code 39, and QR codes, plus a persistent label job history.
+
+**Catalog Studio**
+- Modern grid, wholesale price-list, and minimal lookbook starting templates.
+- Live catalog preview with cover design, A4/Letter and portrait/landscape layouts, one-to-five-column grids, grouping, sorting, field visibility, product filters, and brand/category filters.
+- Auto-save plus explicit Save, project duplication, and print-ready PDF export.
 
 **Catalog management**
 - Multi-tenant: one app, many companies. Each company has its own brands, categories, products, and asset tree.
@@ -66,7 +84,7 @@ If you don't run step 3 you'll see "Image Studio KH is damaged and can't be open
 - Conflict detection: if two clients edit the same row at the same time, get a Refresh / Overwrite dialog instead of silent last-write-wins.
 
 **Storage**
-- Default data folder is `~/Pictures/Image Studio KH/` (configurable in Settings).
+- Default data folder is `~/Pictures/Media Studio KH/` (configurable in Settings).
 - Asset tree: `<dataDir>/assets/<company>/<brand-or-_unassigned>/<sku>/<SKU>-NNN.<ext>`.
 - Content-addressed dedup (SHA-1 first 10 chars in filename).
 - iCloud Drive support: detected automatically, switches SQLite to DELETE journal mode for safe sync.
@@ -88,7 +106,7 @@ Requires Node 20+ and Xcode Command Line Tools (for `better-sqlite3`'s native bu
 ```bash
 npm install
 npm run dev    # Vite + Electron with HMR
-npm run dist   # build a DMG into dist/
+npm run dist   # build the macOS arm64 DMG into dist/
 ```
 
 The packaged build skips code signing (`identity: null` in package.json) so any team member can rebuild without an Apple Developer account. Once you have a Developer ID cert, see `SIGNING.md` for the wire-up.
@@ -107,7 +125,7 @@ assets/          # bundled fonts + theme JSON (ships in DMG)
 data/            # userData runtime (gitignored)
 ```
 
-`CLAUDE.md` at the repo root documents the durable engineering conventions used everywhere in this codebase.
+`AGENTS.md` at the repo root documents the durable engineering conventions used throughout this codebase.
 
 ## License
 

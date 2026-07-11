@@ -233,7 +233,7 @@ async function diagnoseServer({ url, token } = {}) {
         name: 'ping',
         label: 'Server reachable',
         ok: false,
-        message: `Server returned ${res.status} on /api/ping. The address is reachable but isn't an Image Studio KH server.`,
+        message: `Server returned ${res.status} on /api/ping. The address is reachable but isn't an Media Studio KH server.`,
       });
       return { overall: 'fail', steps };
     }
@@ -244,7 +244,7 @@ async function diagnoseServer({ url, token } = {}) {
       name: 'ping',
       label: 'Server reachable',
       ok: true,
-      message: serverVersion ? `Reachable. Server is running Image Studio KH v${serverVersion}.` : 'Reachable.',
+      message: serverVersion ? `Reachable. Server is running Media Studio KH v${serverVersion}.` : 'Reachable.',
     });
   } catch (err) {
     const analyzed = analyzeFetchError(err, base);
