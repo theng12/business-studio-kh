@@ -643,6 +643,8 @@ const PROXIED_CHANNELS = [
   'templates:list',
   'templates:get',
   'templates:listRuns',
+  'labels:listTemplates','labels:getTemplate','labels:preview','labels:barcodePreview','labels:listRuns',
+  'catalogStudio:list','catalogStudio:get','catalogStudio:preview',
   // v0.27.0: eyedropper — server holds the image bytes, so proxy it.
   'templates:sampleBgColor',
   // v0.15.0 — write endpoints. Catalog CRUD, image reorder/set-main/
@@ -686,6 +688,8 @@ const PROXIED_CHANNELS = [
   'ai:favoriteGallery','ai:removeGallery','ai:promoteGalleryToProduct',
   'exports:createProfile','exports:updateProfile','exports:removeProfile','exports:duplicateProfile',
   'templates:create','templates:update','templates:remove','templates:duplicate','templates:renderPreview',
+  'labels:createTemplate','labels:updateTemplate','labels:deleteTemplate','labels:duplicateTemplate','labels:deleteRun',
+  'catalogStudio:create','catalogStudio:update','catalogStudio:delete','catalogStudio:duplicate',
   // v0.26.15: apply-template handlers (single + bulk + by-filter).
   'templates:applyToProduct','templates:applyBulk','templates:applyByFilter',
   'images:setMainImage','images:reorderImages','images:removeFromProduct','images:flipSource',
@@ -800,6 +804,8 @@ const NOT_YET_PORTABLE = [
   // clear message instead of "No handler registered".
   'backups:create','backups:list','backups:last','backups:preview',
   'backups:reveal','backups:openFolder','backups:pickFolder','backups:restore',
+  'labels:listPrinters','labels:generate','labels:print','labels:openOutput','labels:importAsset','labels:saveBarcode',
+  'catalogStudio:export',
 ];
 
 /**
@@ -1098,7 +1104,7 @@ function registerClientFileHandlers() {
     // server data for. Local handler is fine.
     const res = await dialog.showSaveDialog({
       title: 'Save sample workbook',
-      defaultPath: 'business-studio-kh-products-sample.xlsx',
+      defaultPath: 'media-studio-kh-products-sample.xlsx',
       filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
     });
     if (res.canceled || !res.filePath) return null;

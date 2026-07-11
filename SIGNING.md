@@ -88,7 +88,7 @@ After signing is in place, the next step is `electron-updater` for auto-updates:
    "publish": {
      "provider": "github",
      "owner": "your-github-handle",
-     "repo": "business-studio-kh"
+     "repo": "media-studio-kh"
    }
    ```
 

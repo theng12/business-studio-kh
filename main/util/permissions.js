@@ -51,6 +51,8 @@ const READ_CHANNELS = new Set([
   'ai:listTasks', 'ai:listModels', 'ai:listPrompts', 'ai:listGallery', 'ai:listBulkGallery',
   'ai:getCredits', 'ai:estimateCost',
   'templates:list', 'templates:get', 'templates:listRuns',
+  'labels:listTemplates', 'labels:getTemplate', 'labels:preview', 'labels:listRuns',
+  'catalogStudio:list', 'catalogStudio:get', 'catalogStudio:preview',
   'exports:listProfiles', 'exports:getProfile', 'exports:listRuns',
   'suppliers:list', 'suppliers:get',
   'pos:list', 'pos:get', 'pos:getDetail',

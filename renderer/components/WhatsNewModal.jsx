@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.0',
+    date: '2026-07-11',
+    items: [
+      'NEW APP — Business Studio KH brings product images, labels, catalogs, and operations into one workspace with one shared Product Library.',
+      'NEW — Label Studio: starter templates, physical millimetre canvas, drag-and-drop elements, product-field binding, barcode and QR rendering, product images, brand logos, autosave plus manual Save, bulk PDF/PNG/JPEG generation, direct macOS printing, A4/Letter sheet layouts, and generation history.',
+      'NEW — Catalog Studio: reusable catalog projects, live preview, modern/minimal/retail templates, cover design, product and category selection, configurable card fields, page layout controls, autosave plus manual Save, and PDF export.',
+      'NEW — Barcode Maker creates Code 128, Code 39, EAN-13, UPC-A, and QR artwork without opening the label designer.',
+      'DESIGN — a reorganized collapsible sidebar separates Workspace, Image Studio, Label Studio, Catalog Studio, Operations, and System. The collapsed rail and toggle were redesigned, and generation now has a fluid Apple-inspired progress experience.',
+      'PRODUCTS — added shared label/catalog fields including country of origin, expiry date, tax rate, inventory tracking, reorder values, and variant attributes. Existing product editors now autosave after 500ms while retaining the explicit Save button.',
+    ],
+  },
+  {
     version: '0.49.53',
     date: '2026-06-13',
     items: [
@@ -1134,7 +1146,7 @@ const CHANGELOG = [
       'Bundle contents — what travels: the live SQLite database (captured via better-sqlite3\'s online `.backup()` API, so the snapshot is consistent even if other Macs are mid-write), every asset tree (`assets/`, `processed/`, `ai-gallery/`, `overlays/` — all your product images, processed exports, AI generations, and overlay templates), and a SANITIZED subset of config.json: AI provider keys (kie / fal / remove.bg), per-provider concurrency, bg-removal engine preference, custom presets, default tokens / separator, and default export profile id.',
       'Bundle contents — what does NOT travel + why: `mode` (the new Mac decides whether to be Server / Client / Standalone), `dataDir` (file paths are unique per machine), `serverPort` + `serverBindIp` (per-machine networking), `clientServerUrl` + `clientToken` (irrelevant when a Mac is taking over as the server), and the `dataDirIsCloud` flag (that\'s the new Mac\'s iCloud state). So importing onto a fresh Mac won\'t accidentally trample its network setup or point it at the wrong folder.',
       'Format: macOS-native tar.gz under the hood, renamed `.iskhbundle` for clarity. Zero new dependencies — uses the OS `tar` binary via `child_process`. Inside the archive: `manifest.json` (bundle format version + app version + createdAt + sourceDataDir + includes list), `database.sqlite` (consistent snapshot), `config.partial.json` (whitelisted config keys only), and the four asset trees. Bundle format version is stamped so future builds can refuse mismatched bundles with a clear error instead of silently corrupting data.',
-      'Export flow: click "Export bundle…" → Save dialog opens with a default filename like `business-studio-kh-0.26.32-2026-05-25-T14-23.iskhbundle` → pick destination (Desktop / external drive / AirDrop staging) → progress bar surfaces the four stages (snapshot, manifest, archive, cleanup) via the same `progress:event` overlay other bulk ops use. Asset trees are symlinked into the staging dir (not copied) and `tar -h` dereferences them at archive time — saves a full disk-to-disk pre-copy of potentially many GB of images. Cleanup runs in a `finally` block so a crash mid-export doesn\'t leave a stale `/tmp/iskh-bundle-*` folder.',
+      'Export flow: click "Export bundle…" → Save dialog opens with a default filename like `media-studio-kh-0.26.32-2026-05-25-T14-23.iskhbundle` → pick destination (Desktop / external drive / AirDrop staging) → progress bar surfaces the four stages (snapshot, manifest, archive, cleanup) via the same `progress:event` overlay other bulk ops use. Asset trees are symlinked into the staging dir (not copied) and `tar -h` dereferences them at archive time — saves a full disk-to-disk pre-copy of potentially many GB of images. Cleanup runs in a `finally` block so a crash mid-export doesn\'t leave a stale `/tmp/iskh-bundle-*` folder.',
       'Import flow: click "Pick bundle to import…" → Open dialog → we extract just `manifest.json` first and show a preview card with the bundle filename, size, creation date, source app version, format version, source data folder, and what trees are included. This is the "are you sure?" surface — destructive imports don\'t happen until you confirm against the actual bundle, not just the file path. Then click "Replace this Mac\'s data and restart" → confirm modal explains exactly what gets replaced (the entire data folder) and what gets backed up first (the existing data is moved aside to `<dataDir>.bak.<timestamp>` BEFORE extraction — recoverable from Finder if anything goes wrong) → import runs → app relaunches automatically so the new DB takes effect cleanly.',
       'Safety: import refuses on bundle-format-version mismatch (with the version difference spelled out in the error toast). The existing target data folder is renamed (`fs.rename`) — not deleted — before extraction; you can dig through `<dataDir>.bak.<timestamp>` if you need to recover anything. The portable config merge ONLY overwrites the whitelisted keys; if you had a different `mode` / `serverPort` / `dataDir` on this Mac, those stay exactly as they were. AI keys + presets DO get overwritten because that\'s the friction-killer everyone asked for — you don\'t retype your kie token.',
       'Backend: new module `main/serverBundle.js` (3 functions: `exportBundle`, `previewBundle`, `importBundle`) and IPC layer `main/ipc/serverBundle.js` (4 channels: `servers:exportBundle`, `servers:previewBundle`, `servers:importBundle`, `servers:applyImportedDataDir`). All four are local-only (NOT exposed to client mode RPC) — bundle ops touch the local filesystem + OS file dialogs, no version of this flow should run remotely over HTTP. Preload exposes `window.api.servers.*` for the new channels.',
@@ -2550,7 +2562,7 @@ const CHANGELOG = [
     version: '0.5.1',
     date: '2026-05-20',
     items: [
-      'Fix: dev and packaged builds wrote to two different folders in ~/Library/Application Support (one for "Business Studio KH", one for "business-studio-kh"). Locked the app name so both resolve to the same location from now on.',
+      'Fix: dev and packaged builds wrote to two different folders in ~/Library/Application Support (one for "Business Studio KH", one for "media-studio-kh"). Locked the app name so both resolve to the same location from now on.',
       'Legacy detection now also looks at the old lowercase folder so existing data there isn\'t orphaned.',
     ],
   },

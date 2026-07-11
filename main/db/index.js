@@ -221,6 +221,18 @@ function initDb(dataDir) {
   addColumnIfMissing(db, 'products', 'carton_h_cm',        'REAL');
   addColumnIfMissing(db, 'products', 'carton_d_cm',        'REAL');
   addColumnIfMissing(db, 'products', 'weight_per_unit_kg', 'REAL');
+
+  /* Media Studio shared product fields. These stay on the canonical product
+     row so Label and Catalog Studio read the same values as the Library. */
+  addColumnIfMissing(db, 'products', 'prices', "TEXT NOT NULL DEFAULT '{}'");
+  addColumnIfMissing(db, 'products', 'custom_fields', "TEXT NOT NULL DEFAULT '{}'");
+  addColumnIfMissing(db, 'products', 'expiry_date', 'TEXT');
+  addColumnIfMissing(db, 'products', 'tax_rate', 'TEXT');
+  addColumnIfMissing(db, 'products', 'reorder_point', 'TEXT');
+  addColumnIfMissing(db, 'products', 'reorder_quantity', 'TEXT');
+  addColumnIfMissing(db, 'products', 'track_inventory', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'products', 'variant_attributes', 'TEXT');
+  addColumnIfMissing(db, 'products', 'country_of_origin', 'TEXT');
   addColumnIfMissing(db, 'products', 'hs_code',            'TEXT');
   addColumnIfMissing(db, 'products', 'supplier_id',        'TEXT');
   addColumnIfMissing(db, 'products', 'supplier_sku',       'TEXT');
@@ -614,6 +626,68 @@ function runMigrations(database) {
     );
     CREATE INDEX IF NOT EXISTS idx_image_template_runs_company_created
       ON image_template_runs(company_id, created_at DESC);
+
+    /* ── Label Studio ─────────────────────────────────────────────── */
+    CREATE TABLE IF NOT EXISTS label_templates (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      width_mm REAL NOT NULL,
+      height_mm REAL NOT NULL,
+      background_color TEXT NOT NULL DEFAULT '#ffffff',
+      elements TEXT NOT NULL DEFAULT '[]',
+      is_starter INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE (company_id, name COLLATE NOCASE)
+    );
+    CREATE INDEX IF NOT EXISTS idx_label_templates_company_updated
+      ON label_templates(company_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS label_runs (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      template_id TEXT REFERENCES label_templates(id) ON DELETE SET NULL,
+      template_name TEXT,
+      format TEXT NOT NULL,
+      layout_mode TEXT NOT NULL DEFAULT 'single',
+      product_count INTEGER NOT NULL DEFAULT 0,
+      output_path TEXT,
+      settings TEXT NOT NULL DEFAULT '{}',
+      status TEXT NOT NULL DEFAULT 'completed',
+      error_message TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_label_runs_company_created
+      ON label_runs(company_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS label_generation_items (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES label_runs(id) ON DELETE CASCADE,
+      product_id TEXT REFERENCES products(id) ON DELETE SET NULL,
+      sku TEXT,
+      file_path TEXT,
+      product_snapshot TEXT NOT NULL DEFAULT '{}',
+      template_snapshot TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_label_generation_items_run
+      ON label_generation_items(run_id);
+
+    /* ── Catalog Studio ───────────────────────────────────────────── */
+    CREATE TABLE IF NOT EXISTS catalog_projects (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      config TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_exported_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_catalog_projects_company_updated
+      ON catalog_projects(company_id, updated_at DESC);
 
     /* --- v0.49.46: OPERATIONS - supplier + PO + cost tables ------
      *

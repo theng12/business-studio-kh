@@ -95,7 +95,7 @@ function register(/* helpers — unused */) {
   ipcMain.handle('samples:generateProductSheet', async () => {
     const res = await dialog.showSaveDialog({
       title: 'Save sample workbook',
-      defaultPath: 'business-studio-kh-products-sample.xlsx',
+      defaultPath: 'media-studio-kh-products-sample.xlsx',
       filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
     });
     if (res.canceled || !res.filePath) return null;

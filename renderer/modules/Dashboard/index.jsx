@@ -49,7 +49,7 @@ export function Dashboard() {
           title={companies.length === 0 ? 'Welcome to Business Studio KH' : 'No company selected'}
           body={
             companies.length === 0
-              ? 'Create a company to start adding brands and products. A company is the top-level container for all your image work.'
+              ? 'Create a company to start building one shared product library for images, labels, catalogs, and operations.'
               : 'Choose a company from the sidebar switcher, or create a new one.'
           }
           action={

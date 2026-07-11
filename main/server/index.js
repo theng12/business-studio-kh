@@ -250,7 +250,7 @@ async function handleRequest(req, res, dataDir) {
     // version correctly in both dev and production. Inline-required
     // to match the lazy-require style used elsewhere in this file.
     const appVersion = require('electron').app.getVersion();
-    sendJson(res, 200, { ok: true, app: 'business-studio-kh', version: appVersion });
+    sendJson(res, 200, { ok: true, app: 'media-studio-kh', version: appVersion });
     return;
   }
 

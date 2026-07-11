@@ -36,6 +36,8 @@ const CAPABILITIES = [
   { key: 'ai.run',           group: 'Production',  label: 'Run AI generation',             description: 'Queue AI image jobs in AI Studio, single and bulk.' },
   { key: 'overlay.use',      group: 'Production',  label: 'Use Overlay Studio',            description: 'Apply overlay templates to product images.' },
   { key: 'export.run',       group: 'Production',  label: 'Run exports',                   description: 'Run the Export Center and export catalog feeds.' },
+  { key: 'labels.use',       group: 'Production',  label: 'Design & print labels',          description: 'Create label templates, generate label files, and print labels.' },
+  { key: 'catalog.design',   group: 'Production',  label: 'Design & export catalogs',       description: 'Create catalog projects, preview layouts, and export PDFs.' },
   { key: 'costing.view',     group: 'Operations',  label: 'View costs, suppliers & POs',   description: 'See the OPERATIONS section: suppliers, purchase orders, landed cost.' },
   { key: 'costing.manage',   group: 'Operations',  label: 'Manage suppliers, POs & payments', description: 'Create/edit suppliers and purchase orders, record TT payments.' },
   { key: 'history.view',     group: 'System',      label: 'View edit history',             description: 'See the audit log of who changed what.' },
@@ -113,6 +115,8 @@ const CHANNEL_RULES = [
 
   // — Overlay Studio
   [/^templates:/,                                       'overlay.use'],
+  [/^labels:/,                                          'labels.use'],
+  [/^catalogStudio:/,                                   'catalog.design'],
 
   // — Exports
   [/^exports:/,                                         'export.run'],

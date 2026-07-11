@@ -2,7 +2,7 @@
 
 ## Overview
 
-**App name:** Business Studio KH  
+**App name:** Business Studio KH
 **Type:** Desktop app (Electron + React)  
 **Purpose:** Batch product image processor. Takes raw, mixed-quality product photos and outputs clean, marketplace-ready images with correct backgrounds, sizes, formats, and file naming — ready to upload to Amazon, Shopify, Lazada, Etsy, or any custom destination.  
 **Primary user:** TerraNash — running multiple product businesses (construction materials, refurbished iPhones, FMCG). Needs to process large batches of product images across different categories efficiently.

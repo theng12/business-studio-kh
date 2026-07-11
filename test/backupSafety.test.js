@@ -101,19 +101,19 @@ test('backupStamp — formats a fixed date deterministically', () => {
 
 test('backupFilename — includes version + stamp + extension', () => {
   const name = backupFilename('2026-05-31-2107', '0.49.31');
-  assert.equal(name, 'business-studio-kh-backup-v0.49.31-2026-05-31-2107.iskhbackup');
+  assert.equal(name, 'media-studio-kh-backup-v0.49.31-2026-05-31-2107.iskhbackup');
   assert.ok(name.endsWith(`.${BACKUP_EXT}`));
 });
 
 test('backupFilename — tolerates a missing version', () => {
-  assert.equal(backupFilename('2026-05-31-2107'), 'business-studio-kh-backup-2026-05-31-2107.iskhbackup');
+  assert.equal(backupFilename('2026-05-31-2107'), 'media-studio-kh-backup-2026-05-31-2107.iskhbackup');
 });
 
 test('isBackupFilename — accepts our names, rejects others', () => {
-  assert.equal(isBackupFilename('business-studio-kh-backup-v0.49.31-2026-05-31-2107.iskhbackup'), true);
-  assert.equal(isBackupFilename('business-studio-kh-backup-2026-05-31-2107.iskhbackup'), true);
+  assert.equal(isBackupFilename('media-studio-kh-backup-v0.49.31-2026-05-31-2107.iskhbackup'), true);
+  assert.equal(isBackupFilename('media-studio-kh-backup-2026-05-31-2107.iskhbackup'), true);
   assert.equal(isBackupFilename('random.tar.gz'), false);
-  assert.equal(isBackupFilename('business-studio-kh-backup.txt'), false);
+  assert.equal(isBackupFilename('media-studio-kh-backup.txt'), false);
   assert.equal(isBackupFilename('.DS_Store'), false);
   assert.equal(isBackupFilename(null), false);
 });

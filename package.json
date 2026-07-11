@@ -1,8 +1,8 @@
 {
-  "name": "business-studio-kh",
+  "name": "media-studio-kh",
   "private": true,
-  "version": "0.49.53",
-  "description": "Business Studio KH — batch product image processor",
+  "version": "0.1.0",
+  "description": "Business Studio KH — product images, labels, and catalogs in one workspace",
   "author": "TerraNash",
   "main": "dist-electron/main/index.js",
   "scripts": {
@@ -12,13 +12,15 @@
     "icon:build": "node scripts/build-icon.js",
     "webclient:bundle": "node scripts/build-webclient.js",
     "predist": "npm run webclient:bundle && npm run install:sharp-cross",
-    "dist": "vite build && electron-builder",
+    "dist": "vite build && electron-builder --mac dmg:arm64",
+    "dist:arm64": "vite build && electron-builder --mac dmg:arm64",
+    "dist:all": "vite build && electron-builder",
     "release": "npm version patch --no-git-tag-version && npm run dist",
     "release:minor": "npm version minor --no-git-tag-version && npm run dist",
     "release:major": "npm version major --no-git-tag-version && npm run dist",
     "test": "node --test 'test/**/*.test.js'",
     "postinstall": "electron-builder install-app-deps",
-    "install:sharp-cross": "npm install --no-save --include=optional --force @img/sharp-darwin-arm64@0.33.5 @img/sharp-libvips-darwin-arm64@1.0.4 @img/sharp-darwin-x64@0.33.5 @img/sharp-libvips-darwin-x64@1.0.4"
+    "install:sharp-cross": "npm install --no-save --include=optional --force @img/sharp-darwin-arm64@0.33.5 @img/sharp-libvips-darwin-arm64@1.0.4"
   },
   "dependencies": {
     "@imgly/background-removal": "^1.5.5",
@@ -43,7 +45,7 @@
     "vite-plugin-electron-renderer": "^0.14.6"
   },
   "build": {
-    "appId": "com.terranash.imagestudiokh",
+    "appId": "com.terranash.mediastudiokh",
     "productName": "Business Studio KH",
     "asar": true,
     "asarUnpack": [
@@ -62,6 +64,12 @@
       "dist-electron/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "assets/fonts",
+        "to": "fonts"
+      }
+    ],
     "extraMetadata": {
       "main": "dist-electron/main/index.js"
     },
@@ -70,8 +78,7 @@
         {
           "target": "dmg",
           "arch": [
-            "arm64",
-            "x64"
+            "arm64"
           ]
         }
       ],
