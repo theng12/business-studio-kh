@@ -2,6 +2,14 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.1',
+    date: '2026-07-12',
+    items: [
+      'FIX — Label template cards now keep their details and actions on separate responsive rows, preventing Duplicate, Delete, or Open from overflowing narrow grid columns.',
+      'POLISH — Template action buttons now share the available card width evenly and long template names wrap safely inside the card.',
+    ],
+  },
+  {
     version: '0.1.0',
     date: '2026-07-11',
     items: [
