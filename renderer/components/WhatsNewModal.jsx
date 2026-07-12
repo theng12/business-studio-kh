@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.2',
+    date: '2026-07-12',
+    items: [
+      'NEW — Catalog Studio now has separate Catalog Templates and Catalog Projects pages, with five viewable starting layouts for modern grids, wholesale pricing, lookbooks, retail promotions, and specification sheets.',
+      'NEW — Catalog projects have an explicit product composer: search the shared Product Library, add or remove items, see exactly what is already included, add all visible results, and arrange the final catalog order.',
+      'DESIGN — the catalog editor now uses clear Products and Layout & design steps, with a persistent “Catalog projects” return button and live PDF preview in both steps.',
+      'FIX — Catalog project cards now keep metadata and actions in separate responsive rows, so Duplicate, Delete, and Open remain inside narrow cards.',
+      'RENDERING — explicit empty projects remain empty, while manually arranged products keep their chosen order in preview and exported PDFs. Existing catalog projects remain compatible.',
+    ],
+  },
+  {
     version: '0.1.1',
     date: '2026-07-12',
     items: [

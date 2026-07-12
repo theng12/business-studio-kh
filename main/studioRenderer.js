@@ -151,11 +151,15 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
   const fonts = embeddedFontCss(JSON.stringify({ project, products, brands, categories, company }));
   const brandMap = new Map(brands.map((b) => [b.id, b]));
   const categoryMap = new Map(categories.map((x) => [x.id, x]));
+  const explicitSelection = c.selectionMode === 'explicit';
+  const manualOrder = new Map((c.productIds || []).map((id, index) => [id, index]));
   const selected = products.filter((p) => p.status !== 'inactive')
-    .filter((p) => !c.productIds?.length || c.productIds.includes(p.id))
+    .filter((p) => explicitSelection ? c.productIds?.includes(p.id) : (!c.productIds?.length || c.productIds.includes(p.id)))
     .filter((p) => !c.brandIds?.length || c.brandIds.includes(p.brandId))
     .filter((p) => !c.categoryIds?.length || c.categoryIds.includes(p.categoryId))
-    .sort((a, b) => String(c.sortBy === 'name' ? a.name : a.sku).localeCompare(String(c.sortBy === 'name' ? b.name : b.sku), undefined, { numeric: true }));
+    .sort((a, b) => c.sortBy === 'manual'
+      ? (manualOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (manualOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+      : String(c.sortBy === 'name' ? a.name : a.sku).localeCompare(String(c.sortBy === 'name' ? b.name : b.sku), undefined, { numeric: true }));
   const fields = c.fields || [
     { key: 'sku', label: 'SKU', visible: true }, { key: 'name', label: 'Name', visible: true, bold: true },
     { key: 'colorFinish', label: 'Color / Finish', visible: true }, { key: 'price', label: 'Price', visible: true, bold: true },
@@ -186,7 +190,7 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
   const cols = Math.max(1, Math.min(5, Number(c.columns) || 3));
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     ${fonts}@page{size:${c.pageSize || 'A4'} ${c.orientation || 'portrait'};margin:${Number(c.marginMm) || 10}mm}*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"MS Noto Khmer","MS Noto Thai","MS Noto SC","MS Noto JP","MS Noto KR","MS Noto",Arial,sans-serif;color:#162033;-webkit-print-color-adjust:exact;print-color-adjust:exact}.cover{height:calc(100vh - 20mm);position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:22mm;background:linear-gradient(145deg,${esc(c.primaryColor || '#111827')},${esc(c.accentColor || '#6366f1')});color:white;break-after:page}.cover-orb{position:absolute;width:150mm;height:150mm;border-radius:50%;right:-50mm;top:-55mm;background:rgba(255,255,255,.12);filter:blur(1px)}.eyebrow{font-size:9pt;letter-spacing:.22em;font-weight:700;opacity:.75}.cover h1{font-size:38pt;line-height:1.02;margin:6mm 0 3mm;max-width:150mm}.cover p{font-size:14pt;opacity:.78}.cover-count{margin-top:14mm;font-size:9pt;opacity:.65}.grid{display:grid;grid-template-columns:repeat(${cols},1fr);gap:${Number(c.gapMm) || 5}mm}.card{border:1px solid #e5e7eb;border-radius:${c.theme === 'minimal' ? '0' : '4mm'};overflow:hidden;break-inside:avoid;background:white}.photo{width:100%;aspect-ratio:1;object-fit:contain;background:#f8fafc;display:block}.placeholder{display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9pt}.card-body{padding:4mm}.brand{font-size:7pt;letter-spacing:.08em;text-transform:uppercase;color:${esc(c.accentColor || '#6366f1')};font-weight:700;margin-bottom:1.5mm}.field{font-size:8.5pt;color:#475569;margin-top:1mm;display:flex;gap:2mm;justify-content:space-between}.field span{color:#94a3b8}.field.bold{font-size:11pt;font-weight:700;color:#111827}.section-title{grid-column:1/-1;font-size:20pt;margin:2mm 0 4mm;color:${esc(c.primaryColor || '#111827')}}
-  </style></head><body>${cover}<main class="grid">${cards || '<p>No products match this catalog.</p>'}</main></body></html>`;
+  </style></head><body>${cover}<main class="grid">${cards || '<p>No products have been added to this catalog yet.</p>'}</main></body></html>`;
 }
 
 module.exports = { labelsDocument, buildCatalogHtml, barcodeUri, assetDataUri };
