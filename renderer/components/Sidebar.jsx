@@ -69,7 +69,8 @@ const NAV = [
   {
     label: 'Catalog Studio',
     items: [
-      { id: 'catalogstudio', name: 'Catalog Projects', icon: IconExport, caps: ['catalog.design'] },
+      { id: 'catalogtemplates', name: 'Catalog Templates', icon: IconOverlay, caps: ['catalog.design'] },
+      { id: 'catalogprojects', name: 'Catalog Projects', icon: IconExport, caps: ['catalog.design'] },
     ],
   },
   {

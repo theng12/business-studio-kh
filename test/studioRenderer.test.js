@@ -26,3 +26,20 @@ test('catalog renderer filters explicit product selections', () => {
   assert.match(html, /Included/);
   assert.doesNotMatch(html, /Excluded/);
 });
+
+test('catalog renderer treats an explicit empty selection as an empty project', () => {
+  const html = buildCatalogHtml({
+    project: { name: 'Empty', config: { selectionMode: 'explicit', productIds: [], cover: { enabled: false } } },
+    products: [{ id: 'a', sku: 'A', name: 'Should not appear' }],
+  });
+  assert.doesNotMatch(html, /Should not appear/);
+  assert.match(html, /No products have been added/);
+});
+
+test('catalog renderer preserves manual product order', () => {
+  const html = buildCatalogHtml({
+    project: { name: 'Ordered', config: { selectionMode: 'explicit', productIds: ['b', 'a'], sortBy: 'manual', cover: { enabled: false } } },
+    products: [{ id: 'a', sku: 'A', name: 'First source row' }, { id: 'b', sku: 'B', name: 'Second source row' }],
+  });
+  assert.ok(html.indexOf('Second source row') < html.indexOf('First source row'));
+});

@@ -14,7 +14,7 @@
 // v0.49.46: 'suppliers' added — OPERATIONS section Phase 1.
 // v0.49.47: 'purchaseorders' + 'costcalc' added — OPERATIONS Phase 2-4.
 const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'export', 'aistudio', 'overlay',
-  'labeltemplates', 'labelgenerate', 'barcodes', 'labeljobs', 'catalogstudio',
+  'labeltemplates', 'labelgenerate', 'barcodes', 'labeljobs', 'catalogtemplates', 'catalogprojects', 'catalogstudio',
   'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the
@@ -40,6 +40,7 @@ export function createNavigationSlice(set, get) {
     //   pendingPoSupplierId   → open the PO list pre-filtered to this supplier
     pendingPoId: null,
     pendingPoSupplierId: null,
+    pendingCatalogProjectId: null,
 
     setActiveModule(name) {
       if (!MODULES.includes(name)) {
@@ -74,6 +75,13 @@ export function createNavigationSlice(set, get) {
     // Consumed by the PO module once it's read the pending intent.
     clearPendingPoNav() {
       set({ pendingPoId: null, pendingPoSupplierId: null });
+    },
+
+    openCatalogProject(projectId) {
+      set({ pendingCatalogProjectId: projectId, activeModule: 'catalogprojects' });
+    },
+    clearPendingCatalogNav() {
+      set({ pendingCatalogProjectId: null });
     },
 
     isModuleAvailable(name) {

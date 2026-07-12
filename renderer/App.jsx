@@ -76,7 +76,8 @@ const LabelTemplates = lazy(() => import('./modules/LabelStudio/LabelTemplates.j
 const LabelGenerate = lazy(() => import('./modules/LabelStudio/LabelGenerate.jsx').then((m) => ({ default: m.LabelGenerate })));
 const BarcodeStudio = lazy(() => import('./modules/LabelStudio/BarcodeStudio.jsx').then((m) => ({ default: m.BarcodeStudio })));
 const LabelJobs = lazy(() => import('./modules/LabelStudio/LabelJobs.jsx').then((m) => ({ default: m.LabelJobs })));
-const CatalogStudio = lazy(() => import('./modules/CatalogStudio/index.jsx').then((m) => ({ default: m.CatalogStudio })));
+const CatalogTemplates = lazy(() => import('./modules/CatalogStudio/index.jsx').then((m) => ({ default: m.CatalogTemplates })));
+const CatalogProjects = lazy(() => import('./modules/CatalogStudio/index.jsx').then((m) => ({ default: m.CatalogProjects })));
 
 const PAGES = {
   dashboard: Dashboard,
@@ -94,7 +95,9 @@ const PAGES = {
   labelgenerate: LabelGenerate,
   barcodes: BarcodeStudio,
   labeljobs: LabelJobs,
-  catalogstudio: CatalogStudio,
+  catalogtemplates: CatalogTemplates,
+  catalogprojects: CatalogProjects,
+  catalogstudio: CatalogProjects,
   history:   History,
   settings:  Settings,
   support:   Support,

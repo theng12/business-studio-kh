@@ -36,8 +36,9 @@ If you don't run step 3 you'll see "Business Studio KH is damaged and can't be o
 - Standalone barcode maker for Code 128, EAN-13, UPC-A, Code 39, and QR codes, plus a persistent label job history.
 
 **Catalog Studio**
-- Modern grid, wholesale price-list, and minimal lookbook starting templates.
-- Live catalog preview with cover design, A4/Letter and portrait/landscape layouts, one-to-five-column grids, grouping, sorting, field visibility, product filters, and brand/category filters.
+- Separate Catalog Templates and Catalog Projects workspaces, with modern grid, wholesale price-list, minimal lookbook, retail promotion, and specification-sheet starting layouts.
+- Explicit product composer showing both the shared Product Library and the products already included in the project, with search, add/remove, counts, and manual ordering.
+- Live catalog preview with cover design, A4/Letter and portrait/landscape layouts, one-to-five-column grids, grouping, sorting, and field visibility controls.
 - Auto-save plus explicit Save, project duplication, and print-ready PDF export.
 
 **Catalog management**
