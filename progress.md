@@ -13,3 +13,9 @@ Pre-flight: no shared interfaces recorded yet; task batches will be kept bounded
 - H6 user removal, token regeneration, and role/name updates evict that user's WebSockets; server stop clears heartbeat timers, closes all upgraded sockets, and supports a clean restart.
 - H7 `pos:addLine` now enforces PO/product company equality in the shared DB boundary. The regression also fixed a newly confirmed `ORDER BY rowid` ambiguity in PO detail reads (`l.rowid`).
 - Proof: WebSocket lifecycle/RPC test, two-company SQLite PO fixture, server identity/RPC tests, and URL-normalization tests pass (13 total).
+
+2026-09-20 — Task 3 complete (H1, H2, H3):
+- H1 browser company switches now await the server active-company write, carry a generation through category/product/AI/refresh responses, restore the previous coherent view on a failed switch, and reset detail/image state on context changes.
+- H2 browser disconnects and server/token changes revoke blob URLs, clear image/detail/poll state, and invalidate late asset responses before they can repopulate caches.
+- H3 browser input and saved addresses normalize to a validated HTTP(S) origin, including legacy `/m` URLs; unsupported schemes are rejected before persistence. Generated `main/webclientHtml.js` was rebuilt.
+- Proof: browser-source freshness/URL test passes (3 tests); generated HTML matches source.
