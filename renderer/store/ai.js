@@ -1,6 +1,9 @@
 // AI Studio slice — models, prompts, tasks, gallery, credits, and the
 // per-product source / prompt / options + queue actions.
 
+let promptsRefreshSeq = 0;
+let tasksRefreshSeq = 0;
+
 export function createAiSlice(set, get) {
   return {
     // AI Studio
@@ -29,10 +32,15 @@ export function createAiSlice(set, get) {
 
     async refreshAiPrompts() {
       if (!window.api) return;
+      const seq = ++promptsRefreshSeq;
       const companyId = get().activeCompanyId;
       if (!companyId) { set({ aiPrompts: [] }); return; }
-      try { set({ aiPrompts: await window.api.ai.listPrompts(companyId) }); }
-      catch (err) { get().addToast(err.message, 'error'); }
+      try {
+        const aiPrompts = await window.api.ai.listPrompts(companyId);
+        if (seq === promptsRefreshSeq && get().activeCompanyId === companyId) set({ aiPrompts });
+      } catch (err) {
+        if (seq === promptsRefreshSeq && get().activeCompanyId === companyId) get().addToast(err.message, 'error');
+      }
     },
 
     async refreshAiCredits() {
@@ -47,19 +55,26 @@ export function createAiSlice(set, get) {
 
     async refreshAiTasks() {
       if (!window.api) return;
+      const seq = ++tasksRefreshSeq;
       const companyId = get().activeCompanyId;
       if (!companyId) { set({ aiTasks: [] }); return; }
-      try { set({ aiTasks: await window.api.ai.listTasks(companyId, { limit: 200 }) }); }
-      catch (err) { get().addToast(err.message, 'error'); }
+      try {
+        const aiTasks = await window.api.ai.listTasks(companyId, { limit: 200 });
+        if (seq === tasksRefreshSeq && get().activeCompanyId === companyId) set({ aiTasks });
+      } catch (err) {
+        if (seq === tasksRefreshSeq && get().activeCompanyId === companyId) get().addToast(err.message, 'error');
+      }
     },
 
     async refreshAiGalleryFor(productId) {
       if (!window.api || !productId) return;
+      const companyId = get().activeCompanyId;
       try {
         const entries = await window.api.ai.listGallery(productId);
+        if (get().activeCompanyId !== companyId) return;
         set((s) => ({ aiGalleryByProduct: { ...s.aiGalleryByProduct, [productId]: entries } }));
       } catch (err) {
-        get().addToast(err.message, 'error');
+        if (get().activeCompanyId === companyId) get().addToast(err.message, 'error');
       }
     },
 

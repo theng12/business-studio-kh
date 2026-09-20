@@ -4,6 +4,7 @@
 // the last dismissal. Absent or older than 7 days → banner shows again.
 const DONATE_DISMISS_KEY = 'iskh.donationDismissedAt';
 const DONATE_COOLOFF_MS = 7 * 24 * 60 * 60 * 1000;
+let refreshSeq = 0;
 
 function donateBannerShouldShow() {
   try {
@@ -26,6 +27,7 @@ export function createDashboardSlice(set, get) {
 
     async refreshDashboard() {
       if (!window.api) return;
+      const seq = ++refreshSeq;
       const companyId = get().activeCompanyId;
       if (!companyId) {
         set({ dashboardStats: null, dashboardRecentBrands: [], dashboardRecentProducts: [], dashboardCompleteness: null });
@@ -38,9 +40,11 @@ export function createDashboardSlice(set, get) {
           window.api.dashboard.recentProducts(companyId, 8),
           window.api.dashboard.completeness(companyId).catch(() => null),
         ]);
-        set({ dashboardStats: stats, dashboardRecentBrands: recentBrands, dashboardRecentProducts: recentProducts, dashboardCompleteness: completeness });
+        if (seq === refreshSeq && get().activeCompanyId === companyId) {
+          set({ dashboardStats: stats, dashboardRecentBrands: recentBrands, dashboardRecentProducts: recentProducts, dashboardCompleteness: completeness });
+        }
       } catch (err) {
-        get().addToast(err.message, 'error');
+        if (seq === refreshSeq && get().activeCompanyId === companyId) get().addToast(err.message, 'error');
       }
     },
 

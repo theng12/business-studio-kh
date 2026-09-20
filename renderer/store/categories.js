@@ -1,15 +1,22 @@
 // Categories slice — per-company category list + CRUD.
 
+let refreshSeq = 0;
+
 export function createCategoriesSlice(set, get) {
   return {
     categories: [],
 
     async refreshCategories() {
       if (!window.api) return;
+      const seq = ++refreshSeq;
       const companyId = get().activeCompanyId;
       if (!companyId) { set({ categories: [] }); return; }
-      try { set({ categories: await window.api.categories.list(companyId) }); }
-      catch (err) { get().addToast(err.message, 'error'); }
+      try {
+        const categories = await window.api.categories.list(companyId);
+        if (seq === refreshSeq && get().activeCompanyId === companyId) set({ categories });
+      } catch (err) {
+        if (seq === refreshSeq && get().activeCompanyId === companyId) get().addToast(err.message, 'error');
+      }
     },
 
     async createCategory(input) {
