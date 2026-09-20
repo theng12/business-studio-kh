@@ -1134,7 +1134,32 @@
     overlayTemplateId: 'iskh.web.overlayTemplateId',
     overlayDestKind:   'iskh.web.overlayDestKind', // 'append' | 'replaceMain'
   };
-  var baseUrl = (localStorage.getItem(LS.url) || '').replace(/\/+$/, '');
+  function normalizeServerAddress(raw) {
+    if (typeof raw !== 'string') throw new Error('Server URL must be text.');
+    var text = raw.trim();
+    if (!text) return '';
+    if (/^[a-z][a-z\d+.-]*:\/\//i.test(text) && !/^https?:\/\//i.test(text)) {
+      throw new Error('Server address must use http:// or https://.');
+    }
+    if (!/^https?:\/\//i.test(text)) text = 'http://' + text;
+    var parsed;
+    try { parsed = new URL(text); } catch (_) { throw new Error('Enter a valid HTTP(S) server address.'); }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('Server address must use http:// or https://.');
+    }
+    if (!parsed.hostname || parsed.username || parsed.password) {
+      throw new Error('Enter a valid HTTP(S) server address.');
+    }
+    return parsed.origin;
+  }
+  var storedBaseUrl = localStorage.getItem(LS.url) || '';
+  var baseUrl = '';
+  try {
+    baseUrl = normalizeServerAddress(storedBaseUrl);
+    if (baseUrl && baseUrl !== storedBaseUrl.trim()) localStorage.setItem(LS.url, baseUrl);
+  } catch (_) {
+    localStorage.removeItem(LS.url);
+  }
   var token = localStorage.getItem(LS.tok) || '';
 
   var PAGE_SIZE = 24;
@@ -1225,11 +1250,48 @@
     { id:'lib.flat-lay', category:'Angles', label:'Top-down flat lay',
       body:'Top-down flat-lay of the {name}, perfectly centered on a clean white surface, bright even lighting, a slight soft shadow for grounding. No props, no text.' },
   ];
+  var sessionGeneration = 0;
+  var companyGeneration = 0;
   var blobCache = {};      // relpath -> objectURL (so we don't refetch bytes)
   var imgListCache = {};   // productId -> images[]  (avoid refetching per product)
   var mainImgCache = {};   // productId -> main image relpath | null
   var thumbObserver = null; // IntersectionObserver: load thumbs only when scrolled into view
   var currentDetail = null; // product whose detail sheet is open (for Add photo)
+
+  function clearImageCaches() {
+    for (var k in blobCache) {
+      try { URL.revokeObjectURL(blobCache[k]); } catch (e) {}
+      delete blobCache[k];
+    }
+    for (var p in imgListCache) delete imgListCache[p];
+    for (var p2 in mainImgCache) delete mainImgCache[p2];
+  }
+
+  function resetSessionState() {
+    sessionGeneration += 1;
+    companyGeneration += 1;
+    clearImageCaches();
+    if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null; }
+    stopAiPolling();
+    if (state.aiActivityPollTimer) {
+      clearInterval(state.aiActivityPollTimer);
+      state.aiActivityPollTimer = null;
+    }
+    currentDetail = null;
+    state.companies = [];
+    state.companyId = null;
+    state.categories = [];
+    state.categoriesById = {};
+    state.categoryFilter = '';
+    state.products = [];
+    state.filtered = [];
+    state.page = 0;
+    state.selected.clear();
+    state.selectMode = false;
+    document.body.classList.remove('is-selecting');
+    var detail = document.getElementById('detail');
+    if (detail) detail.classList.remove('open');
+  }
 
   /* ── transport ─────────────────────────────────────────────── */
   function rpc(channel, args) {
@@ -1252,12 +1314,23 @@
   function assetUrl(relpath) {
     if (!relpath) return Promise.resolve(null);
     if (blobCache[relpath]) return Promise.resolve(blobCache[relpath]);
+    var requestSession = sessionGeneration;
+    var requestCompany = companyGeneration;
+    var requestBaseUrl = baseUrl;
+    var requestToken = token;
     var enc = relpath.split('/').map(encodeURIComponent).join('/');
-    return fetch(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } })
+    return fetch(requestBaseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + requestToken } })
       .then(function (res) { return res.ok ? res.blob() : null; })
       .then(function (blob) {
         if (!blob) return null;
+        if (requestSession !== sessionGeneration || requestCompany !== companyGeneration
+            || requestBaseUrl !== baseUrl || requestToken !== token) return null;
         var url = URL.createObjectURL(blob);
+        if (requestSession !== sessionGeneration || requestCompany !== companyGeneration
+            || requestBaseUrl !== baseUrl || requestToken !== token) {
+          try { URL.revokeObjectURL(url); } catch (e) {}
+          return null;
+        }
         blobCache[relpath] = url;
         return url;
       })
@@ -1283,9 +1356,9 @@
   }
 
   document.getElementById('connectBtn').addEventListener('click', function () {
-    var u = document.getElementById('srv').value.trim().replace(/\/+$/, '');
-    // Be forgiving: if the user omitted the scheme, assume http://.
-    if (u && !/^https?:\/\//i.test(u)) u = 'http://' + u;
+    var u;
+    try { u = normalizeServerAddress(document.getElementById('srv').value); }
+    catch (e) { document.getElementById('connectErr').textContent = e.message; return; }
     var t = document.getElementById('tok').value.trim();
     if (!u || !t) { document.getElementById('connectErr').textContent = 'Enter both the server URL and a token.'; return; }
     this.disabled = true; this.textContent = 'Connecting…';
@@ -1298,6 +1371,7 @@
         return res.json();
       })
       .then(function (whoami) {
+        if (u !== baseUrl || t !== token) resetSessionState();
         baseUrl = u; token = t;
         localStorage.setItem(LS.url, u); localStorage.setItem(LS.tok, t);
         // Capture role so we can hide buttons that the server would 403 on
@@ -1316,6 +1390,7 @@
 
   document.getElementById('disconnect').addEventListener('click', function () {
     if (!window.confirm('Disconnect from the server?\n\nYou’ll need to paste your access token again to reconnect.')) return;
+    resetSessionState();
     localStorage.removeItem(LS.tok);
     token = '';
     showConnect('');
@@ -1326,6 +1401,62 @@
   // this is purely the UX layer so the buttons don't even appear.
   function applyRoleGating() {
     document.body.dataset.role = state.role || '';
+  }
+
+  function switchCompany(id) {
+    var previous = {
+      id: state.companyId,
+      categories: state.categories,
+      categoriesById: state.categoriesById,
+      categoryFilter: state.categoryFilter,
+      products: state.products,
+      filtered: state.filtered,
+      page: state.page,
+    };
+    var generation = ++companyGeneration;
+    clearImageCaches();
+    stopAiPolling();
+    currentDetail = null;
+    state.selected.clear();
+    state.selectMode = false;
+    document.body.classList.remove('is-selecting');
+    var detail = document.getElementById('detail');
+    if (detail) detail.classList.remove('open');
+    state.companyId = id || null;
+    state.categories = [];
+    state.categoriesById = {};
+    state.categoryFilter = '';
+    state.products = [];
+    state.filtered = [];
+    state.page = 0;
+    updateCompanyButton();
+    updateCategoryButtons();
+    document.getElementById('list').innerHTML = '<div class="loading">Loading…</div>';
+
+    if (!id) return Promise.resolve(false);
+    return rpc('companies:setActive', id)
+      .then(function () {
+        if (generation !== companyGeneration || state.companyId !== id) return false;
+        return Promise.all([loadCategories(id, generation), loadProducts(id, generation)]);
+      })
+      .then(function (result) {
+        if (generation === companyGeneration && state.companyId === id) refreshAiBadge(id, generation);
+        return result;
+      })
+      .catch(function (err) {
+        if (generation !== companyGeneration) return false;
+        state.companyId = previous.id;
+        state.categories = previous.categories;
+        state.categoriesById = previous.categoriesById;
+        state.categoryFilter = previous.categoryFilter;
+        state.products = previous.products;
+        state.filtered = previous.filtered;
+        state.page = previous.page;
+        updateCompanyButton();
+        updateCategoryButtons();
+        render();
+        throw err;
+      });
   }
 
   /* ── boot: whoami (role) → companies → products ─────────────── */
@@ -1346,14 +1477,12 @@
       .then(function (r) {
         state.companies = r[0] || [];
         var active = r[1];
-        state.companyId = (state.companies.find(function (c) { return c.id === active; }) || state.companies[0] || {}).id || null;
+        var initialCompanyId = (state.companies.find(function (c) { return c.id === active; }) || state.companies[0] || {}).id || null;
+        state.companyId = null;
         updateCompanyButton();   // v0.46.0: paints the initials chip
         renderCompanySheet();    // v0.46.0: builds the company switcher list
         updateSortChip();        // v0.49.7: paint the sort chip from persisted prefs
-        setActiveCompany(state.companyId);
-        loadCategories();
-        loadProducts();
-        refreshAiBadge(); // v0.49.2 — paint the AI badge on boot
+        return switchCompany(initialCompanyId);
       })
       .catch(function (e) { showConnect('Connected, but loading failed: ' + e.message); });
     });  // ensureRole.then
@@ -1362,10 +1491,6 @@
   // Writes (importing a photo) target the caller's ACTIVE company on the
   // server, so keep it synced with whatever company you're viewing.
   // Per-user (v0.15.2), so this doesn't disturb other clients.
-  function setActiveCompany(id) {
-    if (id) rpc('companies:setActive', id).catch(function () {});
-  }
-
   document.getElementById('search').addEventListener('input', function () {
     state.search = this.value.trim().toLowerCase(); state.page = 0; applyFilter(); render();
   });
@@ -1406,13 +1531,8 @@
   }
   function pickCompany(id) {
     if (!id || id === state.companyId) { closeSheet('companySheet'); return; }
-    state.companyId = id; state.page = 0;
-    state.categoryFilter = ''; // categories belong to the OLD company; reset.
-    updateCompanyButton();
-    setActiveCompany(id);
     closeSheet('companySheet');
-    loadCategories();
-    loadProducts();
+    switchCompany(id).catch(function (e) { toast('Could not switch company: ' + e.message); });
   }
   document.getElementById('companyBtn').addEventListener('click', function () {
     renderCompanySheet();
@@ -1611,29 +1731,38 @@
 
   // Categories are per-company. Reloaded on boot and on every company switch
   // so the picker sheet + the detail-sheet "Category" line stay accurate.
-  function loadCategories() {
-    if (!state.companyId) {
-      state.categories = []; state.categoriesById = {};
-      updateCategoryButtons();
-      return Promise.resolve();
-    }
-    return rpc('categories:list', state.companyId)
+  function loadCategories(companyId, generation) {
+    if (!companyId) return Promise.resolve([]);
+    return rpc('categories:list', companyId)
       .then(function (rows) {
+        if (generation !== companyGeneration || state.companyId !== companyId) return null;
         state.categories = rows || [];
         state.categoriesById = {};
         state.categories.forEach(function (c) { state.categoriesById[c.id] = c.name || c.id; });
         if (state.categoryFilter && !state.categoriesById[state.categoryFilter]) state.categoryFilter = '';
         updateCategoryButtons();
       })
-      .catch(function () { /* non-fatal — filter just stays at "All" */ });
+      .catch(function (err) {
+        if (generation === companyGeneration && state.companyId === companyId) throw err;
+        return null;
+      });
   }
 
-  function loadProducts() {
+  function loadProducts(companyId, generation) {
     document.getElementById('list').innerHTML = '<div class="loading">Loading…</div>';
-    if (!state.companyId) { state.products = []; applyFilter(); render(); return; }
-    rpc('products:list', { companyId: state.companyId, filters: {} })
-      .then(function (rows) { state.products = rows || []; applyFilter(); render(); })
-      .catch(function (e) { document.getElementById('list').innerHTML = '<div class="empty">' + escapeHtml(e.message) + '</div>'; });
+    if (!companyId) return Promise.resolve([]);
+    return rpc('products:list', { companyId: companyId, filters: {} })
+      .then(function (rows) {
+        if (generation !== companyGeneration || state.companyId !== companyId) return null;
+        state.products = rows || [];
+        applyFilter();
+        render();
+        return state.products;
+      })
+      .catch(function (err) {
+        if (generation === companyGeneration && state.companyId === companyId) throw err;
+        return null;
+      });
   }
 
   function applyFilter() {
@@ -2459,9 +2588,13 @@
      transition the regular gallery refreshes so new variants are visible. */
   function renderAiResults(productId) {
     var box = document.getElementById('aiResults');
-    rpc('ai:listTasks', { companyId: state.companyId, limit: 20, statuses: ['queued','running','done','failed'] })
+    var requestCompanyId = state.companyId;
+    var requestGeneration = companyGeneration;
+    rpc('ai:listTasks', { companyId: requestCompanyId, limit: 20, statuses: ['queued','running','done','failed'] })
       .catch(function () { return []; })
       .then(function (tasks) {
+        if (requestGeneration !== companyGeneration || state.companyId !== requestCompanyId
+            || !currentDetail || currentDetail.id !== productId) return;
         var mine = (tasks || []).filter(function (t) { return t.productId === productId; });
         var pending = mine.filter(function (t) { return t.status === 'queued' || t.status === 'running'; });
         var broken = mine.filter(function (t) { return t.status === 'failed'; });
@@ -2532,25 +2665,30 @@
   function refreshNow() {
     var btn = document.getElementById('refreshBtn');
     btn.classList.add('is-spinning');
-    // Drop all in-memory caches.
-    for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
-    for (var p in imgListCache) delete imgListCache[p];
-    for (var p2 in mainImgCache) delete mainImgCache[p2];
+    var refreshCompanyId = state.companyId;
+    var refreshGeneration = companyGeneration;
+    clearImageCaches();
     var jobs = [];
     // Reload products (always — the grid behind any open sheet still needs it).
-    if (state.companyId) {
+    if (refreshCompanyId) {
       jobs.push(
-        rpc('products:list', { companyId: state.companyId, filters: {} })
-          .then(function (rows) { state.products = rows || []; applyFilter(); render(); })
+        rpc('products:list', { companyId: refreshCompanyId, filters: {} })
+          .then(function (rows) {
+            if (refreshGeneration !== companyGeneration || state.companyId !== refreshCompanyId) return;
+            state.products = rows || [];
+            applyFilter();
+            render();
+          })
           .catch(function () {})
       );
     }
     // Reload the open detail if any (gallery + AI section + product fields).
-    if (currentDetail && document.getElementById('detail').classList.contains('open')) {
+    if (refreshGeneration === companyGeneration && currentDetail
+        && document.getElementById('detail').classList.contains('open')) {
       renderGallery(currentDetail.id);
       renderAiResults(currentDetail.id);
     }
-    refreshAiBadge(); // v0.49.2 — keep the badge fresh after a manual refresh
+    refreshAiBadge(refreshCompanyId, refreshGeneration); // v0.49.2 — keep the badge fresh after a manual refresh
     Promise.all(jobs).finally(function () {
       // Brief minimum spin so the user sees feedback even when the round-trip
       // is instant on a fast network.
@@ -2569,11 +2707,14 @@
 
   state.aiActivityPollTimer = null;
 
-  function refreshAiBadge() {
-    if (!state.companyId) return;
-    rpc('ai:listTasks', { companyId: state.companyId, limit: 50, statuses: ['queued','running','failed'] })
+  function refreshAiBadge(companyId, generation) {
+    companyId = companyId === undefined ? state.companyId : companyId;
+    generation = generation === undefined ? companyGeneration : generation;
+    if (!companyId) return;
+    rpc('ai:listTasks', { companyId: companyId, limit: 50, statuses: ['queued','running','failed'] })
       .catch(function () { return []; })
       .then(function (tasks) {
+        if (generation !== companyGeneration || state.companyId !== companyId) return;
         var n = (tasks || []).length;
         var b = document.getElementById('aiActivityBadge');
         if (n > 0) { b.textContent = n > 99 ? '99+' : String(n); b.hidden = false; }
@@ -2600,10 +2741,13 @@
 
   function renderAiActivity() {
     var list = document.getElementById('aiActivityList');
-    if (!state.companyId) { list.innerHTML = '<div class="sheet-empty">No company selected.</div>'; return; }
-    rpc('ai:listTasks', { companyId: state.companyId, limit: 50, statuses: ['queued','running','failed'] })
+    var requestCompanyId = state.companyId;
+    var requestGeneration = companyGeneration;
+    if (!requestCompanyId) { list.innerHTML = '<div class="sheet-empty">No company selected.</div>'; return; }
+    rpc('ai:listTasks', { companyId: requestCompanyId, limit: 50, statuses: ['queued','running','failed'] })
       .catch(function () { return []; })
       .then(function (tasks) {
+        if (requestGeneration !== companyGeneration || state.companyId !== requestCompanyId) return;
         tasks = tasks || [];
         // Update the badge from this same fetch so we don't burn an extra call.
         var b = document.getElementById('aiActivityBadge');
