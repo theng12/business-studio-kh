@@ -183,7 +183,7 @@ function getDetail(id) {
       FROM po_lines l
       LEFT JOIN products p ON p.id = l.product_id
      WHERE l.po_id = ?
-     ORDER BY rowid ASC
+     ORDER BY l.rowid ASC
   `).all(id).map((r) => ({ ...rowToLine(r), productSku: r.product_sku, productName: r.product_name }));
   const components = db.prepare(`SELECT * FROM po_cost_components WHERE po_id = ? ORDER BY rowid ASC`)
     .all(id).map(rowToComponent);
@@ -407,6 +407,9 @@ function addLine(poId, input, userId = null) {
   const db = getDb();
   const product = db.prepare(`SELECT * FROM products WHERE id = ?`).get(input.productId);
   if (!product) throw new Error('Product not found');
+  if (product.company_id !== po.companyId) {
+    throw new Error('Product does not belong to purchase order company');
+  }
 
   const unitPriceSupplier = Number(input.unitPriceSupplierCurrency) || 0;
   const unitPriceUsd      = (unitPriceSupplier * (Number(po.exchangeRateToUsd) || 0)) || Number(input.unitPriceUsdAtPo) || 0;
