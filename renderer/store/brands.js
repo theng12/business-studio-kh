@@ -1,5 +1,7 @@
 // Brands slice — per-company brand list + CRUD.
 
+let refreshSeq = 0;
+
 export function createBrandsSlice(set, get) {
   return {
     // — Lookups (per active company)
@@ -10,11 +12,20 @@ export function createBrandsSlice(set, get) {
 
     async refreshBrands() {
       if (!window.api) return;
+      const seq = ++refreshSeq;
       const companyId = get().activeCompanyId;
       if (!companyId) { set({ brands: [], brandsLoading: false }); return; }
       set({ brandsLoading: true });
-      try { set({ brands: await window.api.brands.list(companyId), brandsLoading: false }); }
-      catch (err) { set({ brandsLoading: false }); get().addToast(err.message, 'error'); }
+      try {
+        const brands = await window.api.brands.list(companyId);
+        if (seq === refreshSeq && get().activeCompanyId === companyId) {
+          set({ brands, brandsLoading: false });
+        }
+      } catch (err) {
+        if (seq !== refreshSeq || get().activeCompanyId !== companyId) return;
+        set({ brandsLoading: false });
+        get().addToast(err.message, 'error');
+      }
     },
 
     async createBrand(input) {
