@@ -193,26 +193,8 @@ export function Settings() {
     setPendingDataFolder(null);
     try {
       const result = await window.api.settings.changeDataFolder(next, move);
-      // v0.21.4: if we just MOVED data and the old folder still
-      // has files (cpSync doesn't delete the source — it copies),
-      // offer to send the old folder to Trash. Recoverable from
-      // Finder if anything turns out to be missing.
-      if (move && result?.oldStillHasData && result?.oldPath) {
-        const trashIt = await confirm({
-          title: 'Move old data folder to Trash?',
-          message: `Your data is now at:\n${result.newPath}\n\nThe old copy at the following path is still on disk — same files, but no longer referenced by the app:\n${result.oldPath}`,
-          detail: 'You can recover it from Trash if anything turns out to be missing in the new location. If you keep it, you can delete it manually later.',
-          confirmLabel: 'Move to Trash',
-          cancelLabel: 'Keep for now',
-        });
-        if (trashIt) {
-          try {
-            await window.api.settings.trashFolder(result.oldPath);
-            addToast('Old data folder moved to Trash.', 'success');
-          } catch (err) {
-            addToast(`Couldn't trash old folder: ${err.message}`, 'error');
-          }
-        }
+      if (move && result?.sourceRetained) {
+        addToast('Original data folder retained until you verify the new location.', 'info');
       }
       addToast(move ? 'Data moved. Restarting…' : 'Pointed at new folder. Restarting…', 'success');
       setTimeout(() => window.api.app.relaunch(), 600);
@@ -894,4 +876,3 @@ function SettingRow({ label, hint, children }) {
     </div>
   );
 }
-
