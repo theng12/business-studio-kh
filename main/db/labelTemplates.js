@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
-const { parseJson } = require('./_util');
+const { parseJson, prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
 
 function rowToTemplate(row) {
   if (!row) return null;
@@ -58,7 +58,8 @@ function create(input) {
 function update(id, patch) {
   const current = get(id);
   if (!current) throw new Error('Label template not found');
-  const next = { ...current, ...patch };
+  const editable = prepareOptimisticPatch(current, patch, 'labelTemplate');
+  const next = { ...current, ...editable };
   getDb().prepare(`
     UPDATE label_templates SET
       name = @name, description = @description, width_mm = @widthMm,
@@ -73,7 +74,7 @@ function update(id, patch) {
     heightMm: Math.max(5, Number(next.heightMm) || 30),
     backgroundColor: next.backgroundColor || '#ffffff',
     elements: JSON.stringify(next.elements || []),
-    updatedAt: Date.now(),
+    updatedAt: nextUpdatedAt(current.updatedAt),
   });
   return get(id);
 }

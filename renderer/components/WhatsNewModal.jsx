@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.36',
+    date: '2026-09-21',
+    items: [
+      'FIX — Catalog, Social Grid and Label drafts reject stale saves instead of silently replacing another editor’s newer changes.',
+      'FIX — Save offers Refresh, Overwrite or Cancel when a draft conflicts. Leaving an editor waits for pending typing to save, and a failed save keeps the draft open.',
+      'FIX — catalog and Social Grid export timestamps stay attached to the server record when an older draft is saved.',
+      'Internal — retained same-millisecond revision, stale-draft and company-boundary regression checks. No database schema change or hosted release.',
+    ],
+  },
+  {
     version: '0.1.35',
     date: '2026-09-21',
     items: [

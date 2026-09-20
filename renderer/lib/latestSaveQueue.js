@@ -3,29 +3,46 @@
  * The server still receives every completed latest draft, in order, while a
  * burst of local edits cannot let an older response replace newer state.
  */
-export function createLatestSaveQueue({ persist, onStart, onSuccess, onError }) {
+export function createLatestSaveQueue({ persist, initialRevision = null, onStart, onSuccess, onError }) {
   let pending = null;
   let running = false;
   let active = null;
+  let lastCompleted = null;
+  let revision = initialRevision;
   let waiters = [];
+
+  function latestWaiterValue() {
+    let latest = null;
+    for (const waiter of waiters) {
+      const value = typeof waiter.value === 'function' ? waiter.value() : waiter.value;
+      if (value && value !== active && value !== lastCompleted) latest = value;
+    }
+    return latest;
+  }
 
   async function drain() {
     running = true;
     let lastError = null;
-    while (pending) {
+    while (pending || waiters.length) {
+      if (!pending) pending = latestWaiterValue();
+      if (!pending) break;
       const value = pending;
       pending = null;
       active = value;
       onStart?.(value);
       try {
-        const row = await persist(value);
+        const row = await persist(value, revision);
+        revision = row?.updatedAt ?? revision;
         lastError = null;
         active = null;
-        if (!pending) onSuccess?.(row, value);
+        lastCompleted = value;
+        onSuccess?.(row, value);
       } catch (error) {
         lastError = error;
         active = null;
+        pending = null;
         onError?.(error, value);
+        break;
       }
     }
     running = false;
@@ -46,10 +63,15 @@ export function createLatestSaveQueue({ persist, onStart, onSuccess, onError }) 
       if (!running) void drain();
     },
     flush(value) {
-      if (value && active !== value) pending = value;
-      const promise = new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+      const current = typeof value === 'function' ? value() : value;
+      if (current && active !== current && pending !== current && lastCompleted !== current) pending = current;
+      const latest = typeof value === 'function' ? value : null;
+      const promise = new Promise((resolve, reject) => waiters.push({ resolve, reject, value: latest }));
       if (!running) void drain();
       return promise;
+    },
+    setRevision(value) {
+      revision = value;
     },
     hasPending() {
       return running || !!pending;

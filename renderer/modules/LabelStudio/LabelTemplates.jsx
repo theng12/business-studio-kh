@@ -5,6 +5,7 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
+import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 
 const TYPES = [
   ['text', 'Text'], ['sku', 'SKU'], ['price', 'Price'], ['barcode', 'Barcode'], ['qr', 'QR code'],
@@ -28,6 +29,18 @@ function makeElement(type, n) {
   if (type === 'rect' || type === 'colorbar') return { ...base, width: type === 'colorbar' ? 52 : 24, height: type === 'colorbar' ? 3 : 14, fill: type === 'colorbar' ? '#4f46e5' : '#eef2ff', borderColor: '#c7d2fe', borderWidth: 1, radius: type === 'colorbar' ? 0 : 6 };
   if (type === 'divider') return { ...base, width: 35, height: 1, color: '#111827', thickness: 1 };
   return base;
+}
+
+function editableTemplate(template, expectedUpdatedAt) {
+  return {
+    name: template.name,
+    description: template.description,
+    widthMm: template.widthMm,
+    heightMm: template.heightMm,
+    backgroundColor: template.backgroundColor,
+    elements: template.elements,
+    ...(expectedUpdatedAt == null ? {} : { expectedUpdatedAt }),
+  };
 }
 
 function TemplateCard({ item, onOpen, onDuplicate, onDelete }) {
@@ -97,10 +110,11 @@ function Inspector({ element, onChange, onRemove, onPickImage, onDuplicate, onLa
 
 export function LabelTemplates() {
   const companyId = useAppStore((s) => s.activeCompanyId); const products = useAppStore((s) => s.products); const addToast = useAppStore((s) => s.addToast);
+  const companySwitching = useAppStore((s) => s.companySwitching);
   const [items, setItems] = useState([]); const [editing, setEditing] = useState(null); const [draft, setDraft] = useState(null); const [selectedId, setSelectedId] = useState(null);
   const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null); const [newOpen, setNewOpen] = useState(false); const [newName, setNewName] = useState('');
   const timer = useRef(null); const selected = draft?.elements?.find((x) => x.id === selectedId) || null;
-  const requestSeq = useRef(0); const remoteSeq = useRef(0); const editorGeneration = useRef(0); const latest = useRef(null); const dirty = useRef(false); const saveQueue = useRef(null); const saveRef = useRef(null);
+  const requestSeq = useRef(0); const remoteSeq = useRef(0); const editorGeneration = useRef(0); const latest = useRef(null); const dirty = useRef(false); const saveQueue = useRef(null); const saveRef = useRef(null); const acknowledgedRevision = useRef(null);
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
     if (!companyId) { setItems([]); return; }
@@ -110,11 +124,12 @@ export function LabelTemplates() {
     } catch (e) { if (seq === requestSeq.current) addToast(e.message, 'error'); }
   }, [companyId, addToast]);
   useEffect(() => {
-    editorGeneration.current += 1;
     if (dirty.current && latest.current) void saveRef.current?.(latest.current);
+    editorGeneration.current += 1;
     clearTimeout(timer.current);
     saveQueue.current = null;
     latest.current = null;
+    acknowledgedRevision.current = null;
     dirty.current = false;
     setEditing(null); setDraft(null); setSelectedId(null); setSaveState('saved');
     void load();
@@ -122,6 +137,7 @@ export function LabelTemplates() {
   useEffect(() => () => {
     clearTimeout(timer.current);
     if (dirty.current && latest.current) void saveRef.current?.(latest.current);
+    editorGeneration.current += 1;
   }, []);
   useEffect(() => {
     const offs = [];
@@ -133,42 +149,88 @@ export function LabelTemplates() {
       const generation = editorGeneration.current;
       const seq = ++remoteSeq.current;
       window.api.labels.getTemplate(editing).then((row) => {
-        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { setDraft(row); latest.current = row; setItems((all) => all.map((x) => x.id === row.id ? row : x)); }
+        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { setDraft(row); latest.current = row; acknowledgedRevision.current = row.updatedAt; saveQueue.current?.setRevision(row.updatedAt); setItems((all) => all.map((x) => x.id === row.id ? row : x)); }
       }).catch((e) => { if (generation === editorGeneration.current && seq === remoteSeq.current) addToast(e.message, 'error'); });
     };
     if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
     if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => refresh({ kind: 'labels', id: editing, op: 'update' })));
     return () => offs.forEach((off) => off?.());
   }, [editing, load, addToast]);
-  const save = useCallback((value = latest.current) => {
-    if (!value) return Promise.resolve();
-    clearTimeout(timer.current);
+  const ensureSaveQueue = useCallback(() => {
     if (!saveQueue.current) {
       const generation = editorGeneration.current;
       saveQueue.current = createLatestSaveQueue({
-        persist: (next) => window.api.labels.updateTemplate(next.id, next),
+        initialRevision: acknowledgedRevision.current,
+        persist: (next, expectedUpdatedAt) => window.api.labels.updateTemplate(next.id, editableTemplate(next, expectedUpdatedAt)),
         onStart: () => { if (generation === editorGeneration.current) setSaveState('saving'); },
-        onSuccess: (row, value) => { if (generation !== editorGeneration.current || latest.current !== value) return; setDraft(row); latest.current = row; dirty.current = false; setEditing(row.id); setSaveState('saved'); setSavedAt(Date.now()); setItems((all) => all.map((x) => x.id === row.id ? row : x)); },
-        onError: (e) => { if (generation === editorGeneration.current) { dirty.current = true; setSaveState('dirty'); } addToast(e.message, 'error'); },
+        onSuccess: (row, value) => {
+          if (generation !== editorGeneration.current) return;
+          acknowledgedRevision.current = row.updatedAt;
+          if (latest.current !== value) return;
+          setDraft(row); latest.current = row; dirty.current = false; setEditing(row.id); setSaveState('saved'); setSavedAt(Date.now()); setItems((all) => all.map((x) => x.id === row.id ? row : x));
+        },
+        onError: (e) => {
+          if (generation !== editorGeneration.current) return;
+          dirty.current = true; setSaveState('dirty');
+          if (!parseConflictError(e)) addToast(e.message, 'error');
+        },
       });
     }
-    saveQueue.current.enqueue(value);
-    return Promise.resolve();
+    return saveQueue.current;
   }, [addToast]);
+  const save = useCallback((value = latest.current) => {
+    if (!value) return Promise.resolve();
+    clearTimeout(timer.current);
+    ensureSaveQueue().enqueue(value);
+    return Promise.resolve();
+  }, [ensureSaveQueue]);
   saveRef.current = save;
   const flushPending = useCallback(() => {
     if (!dirty.current || !latest.current) return Promise.resolve();
     clearTimeout(timer.current);
-    if (!saveQueue.current) save(latest.current);
-    return saveQueue.current.flush(latest.current);
-  }, [save]);
+    return ensureSaveQueue().flush(() => dirty.current ? latest.current : null);
+  }, [ensureSaveQueue]);
+  const saveNow = useCallback(async () => {
+    const generation = editorGeneration.current;
+    const templateId = latest.current?.id;
+    try {
+      await flushPending();
+      return true;
+    } catch (error) {
+      let overwrittenDraft = null;
+      try {
+        const result = await resolveSaveConflict(error, {
+          refresh: () => window.api.labels.getTemplate(templateId),
+          overwrite: () => {
+            if (generation !== editorGeneration.current || latest.current?.id !== templateId) return Promise.reject(new Error('Editor changed before conflict resolution'));
+            overwrittenDraft = latest.current;
+            return window.api.labels.updateTemplate(overwrittenDraft.id, editableTemplate(overwrittenDraft));
+          },
+        });
+        if (result.choice === 'cancel') return false;
+        if (generation !== editorGeneration.current || latest.current?.id !== templateId) return false;
+        const row = result.row;
+        acknowledgedRevision.current = row.updatedAt;
+        ensureSaveQueue().setRevision(row.updatedAt);
+        if (result.choice === 'refresh' || latest.current === overwrittenDraft) {
+          setDraft(row); latest.current = row; dirty.current = false; setEditing(row.id); setSaveState('saved'); setSavedAt(Date.now()); setItems((all) => all.map((x) => x.id === row.id ? row : x));
+          return true;
+        }
+        await flushPending();
+        return true;
+      } catch (nextError) {
+        dirty.current = true; setSaveState('dirty'); addToast(nextError.message, 'error');
+        return false;
+      }
+    }
+  }, [addToast, ensureSaveQueue, flushPending]);
   useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
-  const change = useCallback((patch) => { remoteSeq.current += 1; const next = { ...draft, ...patch }; setDraft(next); latest.current = next; dirty.current = true; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }, [draft, save]);
+  const change = useCallback((patch) => { if (companySwitching) return; remoteSeq.current += 1; const next = { ...draft, ...patch }; setDraft(next); latest.current = next; dirty.current = true; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }, [companySwitching, draft, save]);
   const changeElement = useCallback((id, patch) => { change({ elements: draft.elements.map((x) => x.id === id ? { ...x, ...patch } : x) }); }, [draft, change]);
   function duplicateElement() { if (!selected) return; const copy = { ...selected, id: `${selected.type}-${Date.now()}`, x: selected.x + 2, y: selected.y + 2 }; change({ elements: [...draft.elements, copy] }); setSelectedId(copy.id); }
   function layerElement(direction) { if (!selected) return; const index = draft.elements.findIndex((x) => x.id === selected.id); const target = Math.max(0, Math.min(draft.elements.length - 1, index + direction)); if (target === index) return; const next = [...draft.elements]; const [item] = next.splice(index, 1); next.splice(target, 0, item); change({ elements: next }); }
   async function pickElementImage() { try { const source = await window.api.files.pickImageFile(); if (!source) return; const imported = await window.api.labels.importAsset(source, draft.name); changeElement(selected.id, { src: imported.relativePath }); } catch (e) { addToast(e.message, 'error'); } }
-  async function createTemplate() { try { const row = await window.api.labels.createTemplate({ companyId, name: newName || 'Untitled label', widthMm: 60, heightMm: 40, backgroundColor: '#ffffff', elements: [] }); editorGeneration.current += 1; saveQueue.current = null; latest.current = row; dirty.current = false; setItems((x) => [row, ...x]); setDraft(row); setEditing(row.id); setNewOpen(false); setNewName(''); } catch (e) { addToast(e.message, 'error'); } }
+  async function createTemplate() { try { const row = await window.api.labels.createTemplate({ companyId, name: newName || 'Untitled label', widthMm: 60, heightMm: 40, backgroundColor: '#ffffff', elements: [] }); editorGeneration.current += 1; saveQueue.current = null; latest.current = row; acknowledgedRevision.current = row.updatedAt; dirty.current = false; setItems((x) => [row, ...x]); setDraft(row); setEditing(row.id); setNewOpen(false); setNewName(''); } catch (e) { addToast(e.message, 'error'); } }
   /* v0.1.27: fetch BEFORE switching which template the editor shows.
    * `setEditing(item.id)` used to run first, so if the fetch failed the editor
    * stayed open on the PREVIOUS template's content while its header said the
@@ -183,6 +245,7 @@ export function LabelTemplates() {
       editorGeneration.current += 1;
       saveQueue.current = null;
       latest.current = full;
+      acknowledgedRevision.current = full.updatedAt;
       dirty.current = false;
       setEditing(item.id);
       setDraft(full);
@@ -208,15 +271,18 @@ export function LabelTemplates() {
     };
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   }, [editing, selectedId, selected, draft, change, changeElement]);
-  if (editing && draft) return <section className="page label-designer-page"><PageHeader title={draft.name} subtitle={`${draft.widthMm} × ${draft.heightMm} mm · Label Designer`} actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={() => save()} /><Button variant="ghost" onClick={() => {
-      /* Save the newest draft before leaving. */
-      clearTimeout(timer.current);
-      if (dirty.current && latest.current) void saveRef.current?.(latest.current);
+  async function leaveEditor() {
+    try {
+      await flushPending();
       editorGeneration.current += 1;
       saveQueue.current = null;
       dirty.current = false;
-      setEditing(null); setDraft(null); load();
-    }}>Back to templates</Button></>} />
+      setEditing(null); setDraft(null); await load();
+    } catch (error) {
+      if (parseConflictError(error)) addToast('This label changed elsewhere. Use Save to review it before leaving.', 'error');
+    }
+  }
+  if (editing && draft) return <section className="page label-designer-page"><PageHeader title={draft.name} subtitle={`${draft.widthMm} × ${draft.heightMm} mm · Label Designer`} actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} /><Button variant="ghost" onClick={leaveEditor}>Back to templates</Button></>} />
     <div className="designer-toolbar"><div className="designer-toolbar__brand"><Input value={draft.name} onChange={(e) => change({ name: e.target.value })} /></div><div className="designer-toolbar__tools">{TYPES.map(([type, label]) => <button type="button" key={type} onClick={() => { const el = makeElement(type, draft.elements.length); change({ elements: [...draft.elements, el] }); setSelectedId(el.id); }}><span>+</span>{label}</button>)}</div><div className="designer-toolbar__size"><Input type="number" value={draft.widthMm} onChange={(e) => change({ widthMm: Number(e.target.value) })} /><span>×</span><Input type="number" value={draft.heightMm} onChange={(e) => change({ heightMm: Number(e.target.value) })} /><span>mm</span><Input type="color" value={draft.backgroundColor} onChange={(e) => change({ backgroundColor: e.target.value })} /></div></div>
     <div className="designer-shell"><LabelCanvas template={draft} selectedId={selectedId} onSelect={setSelectedId} onMove={changeElement} sample={products[0]} /><Inspector element={selected} onChange={(patch) => changeElement(selected.id, patch)} onRemove={() => { change({ elements: draft.elements.filter((x) => x.id !== selected.id) }); setSelectedId(null); }} onPickImage={pickElementImage} onDuplicate={duplicateElement} onLayer={layerElement} /></div>
   </section>;
