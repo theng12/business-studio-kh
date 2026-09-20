@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { appImageSrc } from '../../lib/imageUrl.js';
 
 // v0.49.15: aspect-ratio presets exposed on the crop toolbar. The chip ids
 // are also the value persisted in `settings.cropAspectRatio`. "free" is
@@ -32,37 +33,7 @@ function rectAspectFromOutput(outputAspect, canvasW, canvasH) {
   return outputAspect * (canvasH / canvasW);
 }
 
-// Centered default rect — used when the user picks a ratio with no existing
-// rect, or when they pick Free and want a "reset to default" feel. 80% of
-// the shorter normalised dimension, kept inside [0,1].
-function centeredRect(rectAspectVal) {
-  let w, h;
-  if (!rectAspectVal) { w = 0.8; h = 0.8; }
-  else if (rectAspectVal >= 1) { w = 0.8; h = w / rectAspectVal; if (h > 0.9) { h = 0.9; w = h * rectAspectVal; } }
-  else                          { h = 0.8; w = h * rectAspectVal; if (w > 0.9) { w = 0.9; h = w / rectAspectVal; } }
-  return { x: (1 - w) / 2, y: (1 - h) / 2, width: w, height: h };
-}
 
-// Re-shape an existing rect to match a new aspect, preserving the rect\'s
-// center. Used when the user changes the ratio chip with a rect already on
-// screen — so they don\'t lose their position, just see it re-proportioned.
-function reshapeToAspect(rect, rectAspectVal) {
-  if (!rect) return centeredRect(rectAspectVal);
-  if (!rectAspectVal) return rect; // Free: leave alone
-  const cx = rect.x + rect.width / 2;
-  const cy = rect.y + rect.height / 2;
-  // Pick the larger of the two possible reshapes so the rect doesn\'t shrink
-  // dramatically (e.g. going from 4:3 to 1:1 should use the shared dimension).
-  let w = rect.width, h = w / rectAspectVal;
-  const altH = rect.height, altW = altH * rectAspectVal;
-  if (altW * altH > w * h) { w = altW; h = altH; }
-  if (h > 1) { h = 1; w = h * rectAspectVal; }
-  if (w > 1) { w = 1; h = w / rectAspectVal; }
-  let x = cx - w / 2, y = cy - h / 2;
-  x = Math.max(0, Math.min(1 - w, x));
-  y = Math.max(0, Math.min(1 - h, y));
-  return { x, y, width: w, height: h };
-}
 
 // Given anchor + current pointer (both in normalised canvas coords) and
 // an optional aspect lock, build a rect. For free mode this is just the
@@ -214,12 +185,14 @@ export function CanvasView({
   // the canvas so the user\'s choice survives them adjusting the rect.
   const [cropDestination, setCropDestination] = useState('newImage');
 
-  const rawSrc = image
-    ? `app-image://local/${encodeURIComponent(image.filepath)}`
-    : null;
-  const processedSrc = image?.processedFilepath
-    ? `app-image://local/${encodeURIComponent(image.processedFilepath)}?v=${cacheBust}`
-    : null;
+  /* v0.1.27: the RAW layer had no cache-busting stamp, while the processed one
+   * right below it did. Product image files are rewritten in place — flip,
+   * crop-to-source, or the renumbering that follows a delete — so the browser
+   * kept showing the pre-edit pixels on the big canvas after such an edit even
+   * though the thumbnail strip refreshed. AGENTS.md §12 requires every rendered
+   * image URL to carry a stamp that changes when the bytes do. */
+  const rawSrc = appImageSrc(image?.filepath, image?.contentHash || image?.id || cacheBust);
+  const processedSrc = appImageSrc(image?.processedFilepath, cacheBust);
 
   useEffect(() => {
     if (!dragging) return undefined;

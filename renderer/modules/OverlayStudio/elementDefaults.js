@@ -102,7 +102,7 @@ export function defaultElement(type) {
  * passes the token-filled content so the bg pill auto-sizes to fit
  * "BF-R5232-GD" instead of the un-filled "{sku}" string.
  */
-export function elementBox(el, canvasW, canvasH, previewText = null) {
+export function elementBox(el, canvasW, canvasH, previewText = null, designW = 2000, designH = 2000) {
   const explicitW = (el.width  ?? 0) * canvasW;
   const explicitH = (el.height ?? 0) * canvasH;
   // Text fallback: estimate from the actual content + font + padding so a
@@ -110,27 +110,34 @@ export function elementBox(el, canvasW, canvasH, previewText = null) {
   // ~0.55em-per-char heuristic matches the main-process renderer's
   // approxTextWidth(); padding * 2 matches the SVG pill's L+R padding so
   // the editor preview = the baked output.
+  //
+  // v0.1.8: the design→screen scale is `canvasW / designW`, using the
+  // template's ACTUAL canvas width. This used to be a hardcoded
+  // `canvasW / 2000`, which silently assumed every template was 2000px
+  // wide: on a 3000px template the selection outline was computed 50% too
+  // large relative to the text, so clicking an element showed a box that
+  // did not match what was drawn inside it.
   let fallbackW = explicitW;
   let fallbackH = explicitH;
   if (el.type === 'text') {
     const fontSize = el.font?.size ?? 48;
     const padding = (el.bg?.padding ?? 0);
-    const scale = canvasW / 2000;
-    const designFontPx = fontSize;
+    const scaleX = designW ? canvasW / designW : 1;
+    const scaleY = designH ? canvasH / designH : 1;
     const sample = previewText && previewText.length > 0 ? previewText : (el.content || '');
-    // Width = character count × 0.55em + horizontal padding × 2, scaled
-    // for the editor's CSS pixel size. Clamp to a sane minimum so a
-    // brand-new empty text element is still grabbable.
-    const designW = Math.max(80, sample.length * designFontPx * 0.55 + padding * 2);
-    const designH = Math.max(designFontPx * 1.15, designFontPx + padding * 2);
-    fallbackW = designW * scale;
-    fallbackH = designH * (canvasH / 2000);
+    // Width = character count × 0.55em + horizontal padding × 2, in DESIGN
+    // px, then scaled to the editor's CSS pixel size. Clamp to a sane
+    // minimum so a brand-new empty text element is still grabbable.
+    const designWpx = Math.max(80, sample.length * fontSize * 0.55 + padding * 2);
+    const designHpx = Math.max(fontSize * 1.15, fontSize + padding * 2);
+    fallbackW = designWpx * scaleX;
+    fallbackH = designHpx * scaleY;
   }
   const w = Math.max(20, explicitW || fallbackW);
   const h = Math.max(16, explicitH || fallbackH);
   const ax = (el.x ?? 0) * canvasW;
   const ay = (el.y ?? 0) * canvasH;
-  let left = ax, top = ay;
+  let left, top;
   switch (el.anchor) {
     case 'tr': left = ax - w;     top = ay;         break;
     case 'bl': left = ax;         top = ay - h;     break;

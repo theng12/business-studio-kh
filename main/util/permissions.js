@@ -43,7 +43,7 @@ const READ_CHANNELS = new Set([
   'images:listByProduct', 'images:findDuplicates', 'images:listMergeOps',
   'images:quarantineInfo',
   'dashboard:stats', 'dashboard:completeness', 'dashboard:recentBrands', 'dashboard:recentProducts',
-  'users:list', 'users:listForAttribution', 'users:presence',
+  'users:listForAttribution', 'users:presence',
   'search:global',
   'server:status', 'server:addresses', 'client:diagnoseServer', 'client:testConnection',
   'settings:getAll',
@@ -74,7 +74,7 @@ const PHOTOGRAPHER_EXTRA = new Set([
 ]);
 
 const ADMIN_ONLY_CHANNELS = new Set([
-  'users:create', 'users:update', 'users:remove', 'users:regenerateToken', 'users:ensureOwner',
+  'users:list', 'users:create', 'users:update', 'users:remove', 'users:regenerateToken', 'users:ensureOwner',
   'roles:create', 'roles:update', 'roles:remove',
   'server:start', 'server:stop',
   'settings:setMode', 'settings:changeDataFolder', 'settings:pickAndSetDataFolder', 'settings:trashFolder',

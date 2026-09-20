@@ -41,12 +41,34 @@ export function loadVisibleColumns() {
     if (!raw) {
       return new Set(COLUMN_DEFS.filter((c) => c.defaultVisible).map((c) => c.key));
     }
+
+    /* v0.1.27: store the OFF list explicitly, as well as the on list.
+     *
+     * The old format was a plain CSV of the ON keys, and the loader re-added
+     * any default-visible column that was "not mentioned". Turning OFF a
+     * column that is on by default (Name, SKU …) therefore removed it from the
+     * string, which made it look unmentioned, so it came straight back on the
+     * next launch — the preference could never be saved. Recording the explicit
+     * "off" set fixes that while keeping the same forward-compatible behaviour
+     * for columns added in a future version: a key in neither list still takes
+     * its default. */
+    if (raw.startsWith('v2|')) {
+      const [, onPart = '', offPart = ''] = raw.split('|');
+      const on = new Set(onPart.split(',').map((x) => x.trim()).filter(Boolean));
+      const off = new Set(offPart.split(',').map((x) => x.trim()).filter(Boolean));
+      const upgraded = new Set();
+      for (const c of COLUMN_DEFS) {
+        if (on.has(c.key)) upgraded.add(c.key);
+        else if (off.has(c.key)) continue;              // explicitly hidden
+        else if (c.defaultVisible) upgraded.add(c.key);  // new column → default
+      }
+      return upgraded;
+    }
+
+    // Legacy v1 value (plain CSV of ON keys) — read it the old way so an
+    // existing preference is not lost; it is rewritten in the new format on
+    // the next toggle.
     const saved = new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-    // Recompose: any column not mentioned at all → use defaultVisible.
-    // Any column explicitly in the saved set → on. The persistence write
-    // path always writes the FULL list of currently-on keys so this
-    // forward-compat fallback only kicks in when a NEW column appears
-    // in COLUMN_DEFS that wasn't there at the user's last save.
     const next = new Set();
     for (const c of COLUMN_DEFS) {
       if (saved.has(c.key)) next.add(c.key);
@@ -59,7 +81,10 @@ export function loadVisibleColumns() {
 }
 export function saveVisibleColumns(set) {
   try {
-    localStorage.setItem(COLUMNS_STORAGE_KEY, Array.from(set).join(','));
+    // v0.1.27: write ON and OFF explicitly — see loadVisibleColumns.
+    const on = COLUMN_DEFS.filter((c) => set.has(c.key)).map((c) => c.key);
+    const off = COLUMN_DEFS.filter((c) => !set.has(c.key)).map((c) => c.key);
+    localStorage.setItem(COLUMNS_STORAGE_KEY, `v2|${on.join(',')}|${off.join(',')}`);
   } catch {}
 }
 

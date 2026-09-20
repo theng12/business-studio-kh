@@ -9,6 +9,14 @@
  *      (remote clients). Same contract since v0.14.2. This is the
  *      thing every domain file calls.
  *
+ *      **`exposeLocal(channel, handler)`** (v0.1.17) — same contract and the
+ *      same validation, but local-only: NOT published to the RPC registry.
+ *      For channels that act on the machine running the handler (native
+ *      dialogs, absolute paths on this Mac, this Mac's settings and database
+ *      file), where a remote client would otherwise act on the wrong computer.
+ *      Before this existed those channels used a bare `ipcMain.handle` and got
+ *      no validation at all; see the note on `exposeLocal` below.
+ *
  *   2. **`emitCatalogChange(kind, op, id, extra)`** — fires a
  *      `catalog:changed` event so the renderer + remote clients
  *      refetch the affected slice. Used after every successful
@@ -26,6 +34,7 @@
 
 const { ipcMain } = require('electron');
 const { broadcast } = require('../events');
+const { validateArgs } = require('../util/validateArgs');
 
 /* ─── Constants ───────────────────────────────────────────────── */
 
@@ -37,13 +46,35 @@ const SAFE_WATERMARK_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 // Brand icons additionally accept SVG (vector logo art).
 const SAFE_BRAND_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg']);
 
-/* ─── expose(channel, handler) ───────────────────────────────── */
+/* ─── expose(channel, handler) / exposeLocal(channel, handler) ─── */
 
 /**
  * Register a channel with BOTH `ipcMain.handle` and the server's
  * RPC registry. The handler signature is `(args) => result` — one
  * argument, no IpcMainInvokeEvent. The wiring strips the event for
  * IPC calls and forwards `body.args` for RPC calls.
+ *
+ * v0.1.14: validation now happens HERE, so the local
+ * `ipcMain.handle` path and the remote RPC path behave identically.
+ *
+ * Before this, only the server dispatcher validated. That left the
+ * standalone app — the normal way this is used — completely
+ * unvalidated: a malformed call from the renderer went straight into
+ * the database and surfaced later as something like
+ * "datatype mismatch", which tells the user nothing. The validators
+ * themselves already existed; nothing was calling them on the local
+ * path.
+ *
+ * The message is deliberately shaped "Bad request: <reason>" to match
+ * what the RPC dispatcher returns for the same bad input, so a caller
+ * sees one wording regardless of how it was invoked. Handlers
+ * `throw new Error(...)` and the renderer shows `err.message`, so this
+ * reaches the user as a readable toast.
+ *
+ * The validator is resolved at CALL time rather than registration
+ * time, so channels registered before validators.js is reachable still
+ * get validated (and there is no load-order coupling between the two
+ * modules).
  */
 function expose(channel, handler) {
   try {
@@ -52,7 +83,41 @@ function expose(channel, handler) {
   } catch (err) {
     process.stderr.write(`[ipc.expose] server registry not available: ${err.message}\n`);
   }
-  ipcMain.handle(channel, (_e, ...args) => handler(args[0]));
+  ipcMain.handle(channel, (_e, ...args) => {
+    validateArgs(channel, args[0]);
+    return handler(args[0]);
+  });
+}
+
+/**
+ * v0.1.17: register a LOCAL-ONLY channel — still validated, but never
+ * published to the RPC registry.
+ *
+ * Use this instead of a bare `ipcMain.handle` for anything that acts on the
+ * machine running the handler rather than on the data:
+ *
+ *   - native dialogs (`files:pickFolder`, `backups:pickFolder`)
+ *   - absolute paths from this Mac (`files:readImageThumb`,
+ *     `watermarks:upload`, `brands:uploadIcon`)
+ *   - this Mac's own settings and folders (`settings:changeDataFolder`,
+ *     `settings:trashFolder`, `app:openDataFolder`)
+ *   - its database file (`backups:restore`, `servers:importBundle`)
+ *
+ * A remote client calling any of those through `expose()` would act on the
+ * wrong computer, which is why they must stay local. The mistake was that
+ * "local-only" was implemented as a bare `ipcMain.handle` — so the 57 channels
+ * written that way got NO validation at all. Local-only and unvalidated are
+ * two different decisions, and this function keeps them separate.
+ *
+ * Same `(args) => result` handler contract and same `Bad request: <reason>`
+ * error wording as `expose()`, so a handler can move between the two without
+ * changing its body — only its reachability changes.
+ */
+function exposeLocal(channel, handler) {
+  ipcMain.handle(channel, (_e, ...args) => {
+    validateArgs(channel, args[0]);
+    return handler(args[0]);
+  });
 }
 
 /* ─── Catalog change event helper ────────────────────────────── */
@@ -127,6 +192,7 @@ function assertProductInActiveCompany(productId, kind = 'Product') {
 
 module.exports = {
   expose,
+  exposeLocal,
   emitCatalogChange,
   assertEntityInActiveCompany,
   assertProductInActiveCompany,

@@ -52,6 +52,37 @@ export function Badge({ tone = 'slate', children }) {
   return <span className={`badge badge--${tone}`}>{children}</span>;
 }
 
+/**
+ * v0.1.5: label + live numeric readout + range input.
+ *
+ * Extracted from ImageWorkspace/SettingsPanel.jsx, where it was a private
+ * helper. The readout is the point: a bare `<input type="range">` gives no
+ * indication of the value you are actually setting, which made the
+ * Overlay Studio opacity/rotation sliders feel like they did nothing.
+ * Reuses the existing `.slider-field` styles.
+ *
+ * `suffix` renders straight after the number (e.g. '%' or '°').
+ */
+export function SliderField({ label, value, min, max, step = 1, suffix = '', onChange, disabled = false }) {
+  return (
+    <label className="slider-field">
+      <div className="slider-field__head">
+        <span>{label}</span>
+        <span className="slider-field__value">{value}{suffix}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </label>
+  );
+}
+
 export function Modal({
   open,
   onClose,
@@ -86,6 +117,14 @@ export function Modal({
 
   const cls = ['modal'];
   if (wide) cls.push('modal--wide');
+  // v0.1.3: `md` and `lg` promoted from the hand-rolled modals in
+  // Purchase Orders + Overlay Studio. Those passed `modal--md` /
+  // `modal--lg` classes that were never defined in index.css, so they
+  // silently rendered at the default width. They're real classes now
+  // (currently aliases of the default) so the size prop is honest and
+  // a single place tunes them later.
+  if (size === 'md') cls.push('modal--md');
+  if (size === 'lg') cls.push('modal--lg');
   if (size === 'xl') cls.push('modal--xl');
   // v0.43.0: 'xxl' fills ~92% of the viewport so wide content (e.g. the
   // Prompt Library's two-column rows) doesn't get squeezed into a narrow box.
@@ -134,7 +173,7 @@ export function EmptyState({ title, body, action }) {
 
 /**
  * Shared paginator used by Library, Brands, AI Studio, etc.
- * Per CLAUDE.md §10: any list that can grow past ~50 items gets this.
+ * Per AGENTS.md §10: any list that can grow past ~50 items gets this.
  *
  * Page indices are 0-based for state, 1-based for display.
  * `pageSizeOptions` defaults to [25, 50, 100, 200].

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { useAppStore } from '../../store/index.js';
@@ -34,10 +34,13 @@ function SettingRow({ label, hint, children }) {
 export function BackupsPanel({ config }) {
   const addToast = useAppStore((s) => s.addToast);
   const [list, setList] = useState({ backupsDir: null, backups: [], loading: true });
+  // v0.1.22: see the Backups folder row — two of the controls only make sense
+  // on the Mac that owns the folder.
+  const isClient = config?.mode === 'client';
   const [creating, setCreating] = useState(false);
   const [restoringPath, setRestoringPath] = useState(null);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const res = await window.api.backups.list();
       setList({ ...res, loading: false });
@@ -45,9 +48,9 @@ export function BackupsPanel({ config }) {
       setList({ backupsDir: null, backups: [], loading: false });
       addToast(`Couldn't list backups: ${err.message}`, 'error');
     }
-  }
+  }, [addToast]);
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); }, [refresh]);
 
   async function handleCreate() {
     if (creating) return;
@@ -82,7 +85,7 @@ export function BackupsPanel({ config }) {
   async function handleRestore(backup) {
     // Read + validate the manifest first so the confirm can show what's
     // inside before the user commits to replacing their data.
-    let preview = null;
+    let preview;
     try {
       preview = await window.api.backups.preview(backup.backupPath);
     } catch (err) {
@@ -100,8 +103,10 @@ export function BackupsPanel({ config }) {
         `Backup: ${backup.fileName}\n` +
         `Created: ${formatDateTime(preview.createdAt)} from app v${preview.appVersion ?? '—'}\n` +
         `Includes: ${(preview.includes ?? []).join(', ')}\n\n` +
-        `Target (this Mac):\n${config?.dataDir ?? ''}\n\n` +
-        'The app will restart automatically when the restore finishes.',
+        `${isClient ? 'Target (server Mac)' : 'Target (this Mac)'}:\n${isClient ? 'Configured on the server' : (config?.dataDir ?? '')}\n\n` +
+        (isClient
+          ? 'The server will restart automatically when the restore finishes; this client will reconnect.'
+          : 'The app will restart automatically when the restore finishes.'),
       confirmLabel: 'Replace and restart',
       danger: true,
     });
@@ -109,7 +114,12 @@ export function BackupsPanel({ config }) {
 
     setRestoringPath(backup.backupPath);
     try {
-      await window.api.backups.restore(backup.backupPath);
+      const result = await window.api.backups.restore(backup.backupPath);
+      if (result?.serverRestartScheduled) {
+        addToast('Backup restored on the server. Reconnecting…', 'success');
+        setRestoringPath(null);
+        return;
+      }
       addToast('Backup restored. Restarting…', 'success');
       setTimeout(() => window.api.app.relaunch(), 700);
     } catch (err) {
@@ -125,7 +135,9 @@ export function BackupsPanel({ config }) {
       <p className="setting-row__hint" style={{ marginTop: 0, maxWidth: 640 }}>
         Local snapshots of your database, images, and preferences. Use one before any
         large delete, duplicate-merge purge, bulk re-encode, or data-folder change.
-        Backups stay on this Mac — they are never uploaded anywhere.
+        {isClient
+          ? ' Backups stay on the Mac holding your data — they are never uploaded anywhere.'
+          : ' Backups stay on this Mac — they are never uploaded anywhere.'}
       </p>
 
       <SettingRow
@@ -141,18 +153,31 @@ export function BackupsPanel({ config }) {
 
       <SettingRow
         label="Backups folder"
-        hint="Where backups are written. Defaults to a `backups` folder inside your data folder; point it at an external drive to keep backups off the working disk."
+        hint={isClient
+          ? 'Where backups are written. The folder is on the Mac holding your data — a `backups` folder inside its data folder by default.'
+          : 'Where backups are written. Defaults to a `backups` folder inside your data folder; point it at an external drive to keep backups off the working disk.'}
       >
         <div className="setting-control-row">
           <code className="backups-dir-path">{list.backupsDir ?? '—'}</code>
-          <Button onClick={() => window.api.backups.openFolder()}>Open</Button>
-          <Button onClick={handlePickFolder}>Change…</Button>
+          {/* v0.1.22: these two open a Finder window and a folder picker. Both
+              would appear on the OTHER Mac, and the folder they name is on the
+              other Mac's disk, so from here they are pointless rather than
+              merely unhelpful — hidden, with the path still shown. Creating,
+              listing, previewing and restoring a backup all work from here. */}
+          {!isClient && (
+            <>
+              <Button onClick={() => window.api.backups.openFolder().catch((e) => addToast(e.message, 'error'))}>Open</Button>
+              <Button onClick={handlePickFolder}>Change…</Button>
+            </>
+          )}
         </div>
       </SettingRow>
 
       <SettingRow
         label="Recent backups"
-        hint="Newest first. Restore replaces the current data folder (a safety copy of the old data is kept) and restarts the app."
+        hint={isClient
+          ? 'Newest first. Restore replaces the server data folder, keeps a safety copy, then restarts the server while this client reconnects.'
+          : 'Newest first. Restore replaces the current data folder (a safety copy of the old data is kept) and restarts the app.'}
       >
         <div className="backups-list">
           {list.loading ? (
@@ -172,7 +197,7 @@ export function BackupsPanel({ config }) {
                     <div className="muted backups-row__file">{b.fileName}</div>
                   </div>
                   <div className="backups-row__actions">
-                    <Button variant="ghost" onClick={() => handleReveal(b.backupPath)}>Reveal</Button>
+                    {!isClient && <Button variant="ghost" onClick={() => handleReveal(b.backupPath)}>Reveal</Button>}
                     <Button
                       onClick={() => handleRestore(b)}
                       disabled={restoringPath !== null}

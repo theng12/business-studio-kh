@@ -175,7 +175,7 @@ export function Suppliers() {
     return (
       <div className="page">
         <PageHeader title="Suppliers" subtitle="Pick a company to manage its suppliers." />
-        <EmptyState message="No company selected. Choose one from the sidebar above to see its suppliers." />
+        <EmptyState title="No company selected" body="Choose one from the sidebar above to see its suppliers." />
       </div>
     );
   }
@@ -222,11 +222,12 @@ export function Suppliers() {
         <div className="muted" style={{ padding: 'var(--s-5)' }}>Loading…</div>
       ) : total === 0 ? (
         <EmptyState
-          message={search
-            ? `No suppliers match "${search}".`
+          title={search ? 'No matches' : statusFilter === 'archived' ? 'No archived suppliers' : 'No suppliers yet'}
+          body={search
+            ? `Nothing matches "${search}". Try a shorter search.`
             : statusFilter === 'archived'
-              ? 'No archived suppliers.'
-              : 'No suppliers yet. Add your first one — you\'ll be able to attach Purchase Orders to it once v0.49.47 ships.'}
+              ? 'Suppliers you archive will be listed here.'
+              : 'Add your first supplier to attach Purchase Orders to it.'}
         />
       ) : (
         <>

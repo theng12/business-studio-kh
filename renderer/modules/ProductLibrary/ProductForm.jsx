@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Field, Input, Select, Textarea } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
@@ -50,6 +50,7 @@ function emptyForm() {
     reorderPoint: '',
     reorderQuantity: '',
     trackInventory: false,
+    stockQty: '',
     variantAttributes: '',
     countryOfOrigin: '',
     // v0.49.48: logistics & sourcing — feed PO line prefills + landed cost.
@@ -86,6 +87,7 @@ function productToForm(p) {
     reorderPoint: p.reorderPoint ?? '',
     reorderQuantity: p.reorderQuantity ?? '',
     trackInventory: !!p.trackInventory,
+    stockQty: p.stockQty == null ? '' : String(p.stockQty),
     variantAttributes: p.variantAttributes ?? '',
     countryOfOrigin: p.countryOfOrigin ?? '',
     // v0.49.48: logistics & sourcing.
@@ -107,7 +109,7 @@ function toNumberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-export function ProductForm({ product, isCreating = false, onClose, onStartCreate, onProcess, onPreview }) {
+export function ProductForm({ product, isCreating = false, createKey = 0, onClose, onStartCreate, onProcess, onPreview }) {
   // The panel is persistently mounted (per the user's request to keep the
   // detail view always visible). There are three modes:
   //   - `product` truthy            → edit-existing form
@@ -144,6 +146,8 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
   const [saveState, setSaveState] = useState('saved');
   const [savedAt, setSavedAt] = useState(null);
   const autoSaveTimer = useRef(null);
+  /** The un-written autosave payload, so unmount can flush it instead of dropping it. */
+  const autoSavePayload = useRef(null);
   const skipNextAutoSave = useRef(true);
   // v0.49.39: multi-select state for the image grid. Set of FILEPATHS
   // (not indices — indices shift after a delete/reorder; filepaths are
@@ -178,12 +182,28 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
   const [historyOpen, setHistoryOpen] = useState(false);
   const [skuError, setSkuError] = useState(null);
   const [activeProductId, setActiveProductId] = useState(product?.id ?? null);
+  /* v0.1.27: the optimistic-concurrency token has to advance with each write.
+   *
+   * It used to be read from the `product` prop every time. `product` is the
+   * Library's local `editing` row (renderer/modules/ProductLibrary/index.jsx),
+   * and nothing ever re-points it at the refreshed store row — so the token
+   * stayed frozen at the value loaded when the panel opened. The server bumps
+   * `updated_at` on every write, so the FIRST save succeeded and every later one
+   * was rejected with CONFLICT: edit a field, wait for the autosave, edit
+   * another, and the second edit never persisted.
+   *
+   * Track the token from what the server actually returns instead. */
+  const lastSavedUpdatedAt = useRef(null);
+  /** Mirrors activeProductId for the unmount flush, which cannot read state. */
+  const activeProductIdRef = useRef(null);
 
   useEffect(() => {
     if (product) {
       skipNextAutoSave.current = true;
       setForm(productToForm(product));
+      lastSavedUpdatedAt.current = product.updatedAt ?? null;
       setActiveProductId(product.id);
+      activeProductIdRef.current = product.id;
       window.api?.images.listByProduct(product.id).then(setImages).catch(() => setImages([]));
     } else {
       // Either creating a new product or showing the empty state — either
@@ -191,6 +211,8 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
       setForm(emptyForm());
       setImages([]);
       setActiveProductId(null);
+      activeProductIdRef.current = null;
+      lastSavedUpdatedAt.current = null;
     }
     setSkuError(null);
     // v0.49.39: drop any per-image selection when the displayed product
@@ -199,7 +221,10 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
     // path image of the new product. Always reset.
     setSelectedFilepaths(new Set());
     setCopyMenuOpen(false);
-  }, [product, isCreating]);
+    // createKey changes when the user asks for ANOTHER new product while the
+    // panel is already in create mode; without it the effect would not re-run
+    // and the previously created product would stay on screen. */
+  }, [product, isCreating, createKey]);
 
   // v0.49.48: load this company's suppliers for the sourcing dropdown.
   // Includes archived (status 'all') so a product attached to a now-
@@ -325,6 +350,8 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
       reorderPoint: form.reorderPoint.trim() || null,
       reorderQuantity: form.reorderQuantity.trim() || null,
       trackInventory: !!form.trackInventory,
+      // v0.1.25: blank stays null ("not counted"), which is not the same as 0.
+      stockQty: toNumberOrNull(form.stockQty),
       variantAttributes: form.variantAttributes.trim() || null,
       countryOfOrigin: form.countryOfOrigin.trim() || null,
       // v0.49.48: logistics & sourcing — defaults that prefill PO lines.
@@ -362,8 +389,9 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
         try {
           const updated = await updateProduct(activeProductId, {
             ...buildPayload(),
-            expectedUpdatedAt: product?.updatedAt,
+            expectedUpdatedAt: lastSavedUpdatedAt.current,
           });
+          lastSavedUpdatedAt.current = updated?.updatedAt ?? null;
           addToast(`Saved ${updated.sku}`, 'success');
           setSaveState('saved');
           setSavedAt(Date.now());
@@ -373,14 +401,26 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
           if (!conflict) throw err;
           const choice = await showConflict(conflict);
           if (choice === 'refresh') {
-            // Pull the fresh row into the form. The selector that
-            // drives `product` reads from the store, so refreshing
-            // products is enough — the useEffect that syncs form
-            // state will pick up the new updatedAt and content.
+            /* v0.1.27: actually re-read the row.
+             *
+             * This used to call refreshProducts() alone and claim "the
+             * selector that drives `product` reads from the store". It does
+             * not — `product` is the Library's local `editing` object, which
+             * is never re-pointed — so Refresh updated the store behind the
+             * form, changed nothing on screen, and left the stale token in
+             * place. The next save conflicted again. Fetch the row and reset
+             * the form and token from it. */
+            const fresh = await window.api.products.get(activeProductId);
+            if (fresh) {
+              skipNextAutoSave.current = true;
+              setForm(productToForm(fresh));
+              lastSavedUpdatedAt.current = fresh.updatedAt ?? null;
+            }
             await refreshProducts();
             addToast('Form refreshed with the latest data', 'info');
           } else if (choice === 'overwrite') {
             const updated = await updateProduct(activeProductId, buildPayload());
+            lastSavedUpdatedAt.current = updated?.updatedAt ?? null;
             addToast(`Overwrote ${updated.sku}`, 'success');
             setSkuError(null);
           } else {
@@ -404,11 +444,21 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
     if (skipNextAutoSave.current) { skipNextAutoSave.current = false; return undefined; }
     clearTimeout(autoSaveTimer.current);
     setSaveState('dirty');
+    /* v0.1.27: hold the payload so leaving the panel can FLUSH it. Pressing Esc,
+     * clicking another row, hiding the panel or navigating away within 500 ms
+     * used to discard the edit — the cleanup below only cleared the timer, and
+     * the next effect run then skipped via skipNextAutoSave. */
+    autoSavePayload.current = buildPayload();
     autoSaveTimer.current = setTimeout(async () => {
-      if (!form.sku.trim()) return;
+      const owed = autoSavePayload.current;
+      autoSavePayload.current = null;      // claim it — the unmount flush must not repeat it
+      if (!owed || !owed.sku || !owed.sku.trim()) return;
       setSaveState('saving');
       try {
-        await updateProduct(activeProductId, { ...buildPayload(), expectedUpdatedAt: product?.updatedAt });
+        const updated = await updateProduct(activeProductId, {
+          ...owed, expectedUpdatedAt: lastSavedUpdatedAt.current,
+        });
+        lastSavedUpdatedAt.current = updated?.updatedAt ?? null;
         setSaveState('saved');
         setSavedAt(Date.now());
       } catch (err) {
@@ -420,6 +470,19 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
     // Form is the intentional trigger; the store actions are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form]);
+
+  /* Flush a pending autosave when the panel closes or the product changes.
+   * Empty deps: we want unmount only — an effect re-run triggered by a form
+   * edit must keep debouncing, not fire early. */
+  useEffect(() => () => {
+    const owed = autoSavePayload.current;
+    autoSavePayload.current = null;
+    if (!owed || !owed.sku || !owed.sku.trim()) return;
+    const id = activeProductIdRef.current;
+    if (!id) return;
+    window.api.products.update(id, { ...owed, expectedUpdatedAt: lastSavedUpdatedAt.current })
+      .catch(() => { /* the panel is closing; a toast here would be noise */ });
+  }, []);
 
   async function handleDelete() {
     if (!activeProductId) return;
@@ -491,14 +554,6 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
   }
 
   /* ─── Image grid handlers ─── */
-
-  async function refreshImagesFromIpc() {
-    if (!activeProductId) return;
-    const next = await window.api.images.listByProduct(activeProductId);
-    setImages(next);
-    // Refresh products list so thumbnail/count in the table updates too.
-    useAppStore.getState().refreshProducts();
-  }
 
   async function handleAddImage() {
     if (!activeProductId) {
@@ -763,12 +818,26 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
       ? 'New product'
       : `Edit product · ${form.sku}`;
 
-  // Esc clears the current selection (reverts to the empty placeholder).
-  // No-op when the panel is already empty so other handlers on the page
-  // (e.g. modal close) keep priority.
+  /* Esc clears the current selection (reverts to the empty placeholder).
+   *
+   * v0.1.29: SKIP when a modal is open. The old comment here claimed a no-op
+   * when the panel was empty kept "other handlers on the page (e.g. modal
+   * close)" in priority — but both this and <Modal> listen on `window`, and
+   * `stopPropagation()` does not stop a SIBLING listener on the same target.
+   * So pressing Esc inside, say, the import dialog closed the dialog AND
+   * cleared the product panel behind it. Checking for an open dialog is
+   * order-independent, which matters because listener order depends on which
+   * component mounted first. (Lightbox uses stopImmediatePropagation for the
+   * same reason, but that only works when it is registered FIRST; this is the
+   * robust direction.) */
   useEffect(() => {
     if (isEmpty) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose?.(); } };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;  // a modal owns Esc
+      e.stopPropagation();
+      onClose?.();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [isEmpty, onClose]);
@@ -940,6 +1009,7 @@ export function ProductForm({ product, isCreating = false, onClose, onStartCreat
             <Field label="Variant attributes">{({ id }) => <Input id={id} value={form.variantAttributes} onChange={setField('variantAttributes')} placeholder="Color: Red, Size: M" />}</Field>
             <Field label="Reorder point">{({ id }) => <Input id={id} value={form.reorderPoint} onChange={setField('reorderPoint')} />}</Field>
             <Field label="Reorder quantity">{({ id }) => <Input id={id} value={form.reorderQuantity} onChange={setField('reorderQuantity')} />}</Field>
+            <Field label="Stock on hand" hint="How many you have now. Leave blank if you don't count it.">{({ id }) => <Input id={id} type="number" step="any" value={form.stockQty} onChange={setField('stockQty')} placeholder="e.g. 24" />}</Field>
             <label className="field"><span className="field__label">Inventory</span><span className="field__row"><input type="checkbox" checked={form.trackInventory} onChange={(e) => setForm((f) => ({ ...f, trackInventory: e.target.checked }))} /> Track inventory for this product</span></label>
           </div>
         </div>

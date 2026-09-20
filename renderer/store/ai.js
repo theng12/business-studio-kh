@@ -1,6 +1,9 @@
 // AI Studio slice — models, prompts, tasks, gallery, credits, and the
 // per-product source / prompt / options + queue actions.
 
+let promptsRefreshSeq = 0;
+let tasksRefreshSeq = 0;
+
 export function createAiSlice(set, get) {
   return {
     // AI Studio
@@ -29,33 +32,49 @@ export function createAiSlice(set, get) {
 
     async refreshAiPrompts() {
       if (!window.api) return;
+      const seq = ++promptsRefreshSeq;
       const companyId = get().activeCompanyId;
       if (!companyId) { set({ aiPrompts: [] }); return; }
-      try { set({ aiPrompts: await window.api.ai.listPrompts(companyId) }); }
-      catch (err) { get().addToast(err.message, 'error'); }
+      try {
+        const aiPrompts = await window.api.ai.listPrompts(companyId);
+        if (seq === promptsRefreshSeq && get().activeCompanyId === companyId) set({ aiPrompts });
+      } catch (err) {
+        if (seq === promptsRefreshSeq && get().activeCompanyId === companyId) get().addToast(err.message, 'error');
+      }
     },
 
     async refreshAiCredits() {
       if (!window.api) return;
+      // v0.1.22: in client mode the generations run on the server Mac with ITS
+      // keys, so there is nothing here to read. This used to fire anyway and fail
+      // silently on every AI Studio mount and refresh.
+      if (get().appMode === 'client') return;
       try { set({ aiCredits: await window.api.ai.getCredits() }); }
       catch { /* keep last known */ }
     },
 
     async refreshAiTasks() {
       if (!window.api) return;
+      const seq = ++tasksRefreshSeq;
       const companyId = get().activeCompanyId;
       if (!companyId) { set({ aiTasks: [] }); return; }
-      try { set({ aiTasks: await window.api.ai.listTasks(companyId, { limit: 200 }) }); }
-      catch (err) { get().addToast(err.message, 'error'); }
+      try {
+        const aiTasks = await window.api.ai.listTasks(companyId, { limit: 200 });
+        if (seq === tasksRefreshSeq && get().activeCompanyId === companyId) set({ aiTasks });
+      } catch (err) {
+        if (seq === tasksRefreshSeq && get().activeCompanyId === companyId) get().addToast(err.message, 'error');
+      }
     },
 
     async refreshAiGalleryFor(productId) {
       if (!window.api || !productId) return;
+      const companyId = get().activeCompanyId;
       try {
         const entries = await window.api.ai.listGallery(productId);
+        if (get().activeCompanyId !== companyId) return;
         set((s) => ({ aiGalleryByProduct: { ...s.aiGalleryByProduct, [productId]: entries } }));
       } catch (err) {
-        get().addToast(err.message, 'error');
+        if (get().activeCompanyId === companyId) get().addToast(err.message, 'error');
       }
     },
 
@@ -65,13 +84,27 @@ export function createAiSlice(set, get) {
     },
     setAiSourceImage(filepath) { set({ aiSourceImagePath: filepath }); },
     setAiSelectedModel(key) {
-      set({ aiSelectedModelKey: key });
+      /* v0.1.27: reset the per-task count when the model changes.
+       *
+       * The count control is shown conditionally — a `nVariants` dropdown for
+       * models that declare one, a `numImages` box for fal models — but the
+       * value itself lives in `aiOptions` and survived a model switch. So
+       * picking 4 images on a fal model and then switching to a kie model left
+       * `numImages: 4` in state with no control to change it, and the
+       * confirmation dialog quoted 4 generations and 4× the cost for a run that
+       * would produce one image (fal honours `numImages`, kie honours
+       * `nVariants` — see main/ai/providers/). Clearing both on switch means a
+       * count can never outlive the model it was chosen for. */
+      set({ aiSelectedModelKey: key, aiOptions: { ...get().aiOptions, numImages: undefined, nVariants: undefined } });
       // Persist as the default for the next app launch — covers the common
       // case where a user picks (say) nano-banana-pro once and wants it to
       // stick. Best-effort: if the IPC write fails (file lock, etc.) the
       // user's session keeps the new selection in memory; only the persistence
       // is lost.
-      try { window.api?.settings?.setOne?.('aiDefaultModel', key); } catch (_) {}
+      try { window.api?.settings?.setOne?.('aiDefaultModel', key); } catch (err) {
+        // Selection still applies this session; only the saved default is lost.
+        console.warn('[soft-failure] persist aiDefaultModel:', err?.message || err);
+      }
     },
     setAiPrompt(text) { set({ aiPromptText: text }); },
     setAiOptions(patch) { set((s) => ({ aiOptions: { ...s.aiOptions, ...patch } })); },

@@ -15,11 +15,12 @@
  */
 
 const fs = require('node:fs');
+const { safeFileExt } = require('../util/fileKinds');
 const path = require('node:path');
-const { ipcMain } = require('electron');
 
 const config = require('../config');
 const companies = require('../db/companies');
+const { logSoftFailure } = require('../util/softFailure');
 const products = require('../db/products');
 const productImages = require('../db/productImages');
 const aiTasks = require('../db/aiTasks');
@@ -33,7 +34,7 @@ const queueRunner = require('../ai/queueRunner');
 const imageManager = require('../imageManager');
 const { getDataDir } = require('../db');
 
-function register({ expose, emitCatalogChange, assertEntityInActiveCompany, assertProductInActiveCompany }) {
+function register({ expose, emitCatalogChange, assertEntityInActiveCompany, assertProductInActiveCompany, exposeLocal }) {
   // v0.14.4: AI read channels portable to clients. Mutations +
   // queueing stay local until v0.15.0.
   expose('ai:listModels', () => aiModels.MODELS);
@@ -93,7 +94,11 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
       costEstimate: aiCosts.estimateForModel(input.model, input.options?.nVariants ?? input.options?.numImages ?? 1),
     });
     if (input.promptTemplateId) {
-      try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (_) {}
+      try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (err) {
+        // v0.1.12: the prompt library's "used N times" count would quietly
+        // stop moving. Harmless to the generation, but it is data the user sees.
+        logSoftFailure('ai:queueTask', `bump use count for prompt ${input.promptTemplateId}`, err);
+      }
     }
     queueRunner.nudge();
     return created;
@@ -220,7 +225,7 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
         productImages.setMain(productId, relativePath);
       } catch (err) {
         process.stderr.write(`[ai:promote asMain] setMain failed for ${relativePath}: ${err.message}\n`);
-        throw new Error(`Image was added, but setting it as main failed: ${err.message}`);
+        throw new Error(`Image was added, but setting it as main failed: ${err.message}`, { cause: err });
       }
     }
     // Link the gallery row to the product if it wasn't already.
@@ -348,7 +353,11 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
     }
 
     if (input.promptTemplateId) {
-      try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (_) {}
+      try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (err) {
+        // v0.1.12: the prompt library's "used N times" count would quietly
+        // stop moving. Harmless to the generation, but it is data the user sees.
+        logSoftFailure('ai:queueTask', `bump use count for prompt ${input.promptTemplateId}`, err);
+      }
     }
     if (queued.length > 0) queueRunner.nudge();
     return { queued: queued.length, tasks: queued, skipped };
@@ -362,7 +371,7 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
    * source. Returns the count actually queued (skips files that
    * failed to import).
    */
-  ipcMain.handle('ai:queueBulkBatch', async (_e, input) => {
+  exposeLocal('ai:queueBulkBatch', async (input) => {
     const companyId = companies.getActiveId();
     if (!companyId) throw new Error('No active company');
     if (input.companyId && input.companyId !== companyId) throw new Error('Cross-company queue blocked');
@@ -420,7 +429,11 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
       events.broadcast('progress:event', { id: opId, complete: true });
     }
     if (input.promptTemplateId) {
-      try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (_) {}
+      try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (err) {
+        // v0.1.12: the prompt library's "used N times" count would quietly
+        // stop moving. Harmless to the generation, but it is data the user sees.
+        logSoftFailure('ai:queueTask', `bump use count for prompt ${input.promptTemplateId}`, err);
+      }
     }
     if (queued.length > 0) queueRunner.nudge();
     return { queued: queued.length, tasks: queued, skipped };
@@ -452,8 +465,9 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
         const name = src?.name || 'source';
         try {
           if (!src?.bytes) throw new Error('Missing bytes');
-          let ext = (src.ext || '.jpg').toLowerCase();
-          if (!ext.startsWith('.')) ext = '.' + ext;
+          // v0.1.25: same traversal fix as imageManager — an ext of
+          // '.jpg/../../../../x' used to escape tmpRoot via path.join.
+          const ext = safeFileExt(src.ext, '.jpg');
           const tmpPath = path.join(tmpRoot, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
           await fs.promises.writeFile(tmpPath, Buffer.from(src.bytes));
           const slug = path.basename(name, path.extname(name)) || 'source';
@@ -481,7 +495,11 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
       try { await fs.promises.rm(tmpRoot, { recursive: true, force: true }); } catch (_) {}
     }
     if (input.promptTemplateId) {
-      try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (_) {}
+      try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (err) {
+        // v0.1.12: the prompt library's "used N times" count would quietly
+        // stop moving. Harmless to the generation, but it is data the user sees.
+        logSoftFailure('ai:queueTask', `bump use count for prompt ${input.promptTemplateId}`, err);
+      }
     }
     if (queued.length > 0) queueRunner.nudge();
     return { queued: queued.length, tasks: queued, skipped };
@@ -510,7 +528,7 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
    * keep IPC payload sane. The renderer renders them as previews;
    * user confirms before enqueueing.
    */
-  ipcMain.handle('ai:scanBulkFolder', (_e, folderPath) => {
+  exposeLocal('ai:scanBulkFolder', (folderPath) => {
     if (!folderPath) throw new Error('folderPath required');
     const paths = imageManager.scanImagesRecursive(folderPath);
     return paths.slice(0, 1000).map((abs) => {
@@ -525,7 +543,7 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
    * location. Returns the destination path or null if the user
    * cancelled.
    */
-  ipcMain.handle('ai:exportBulkImage', async (_e, { galleryId }) => {
+  exposeLocal('ai:exportBulkImage', async ({ galleryId }) => {
     const entry = aiGallery.get(galleryId);
     if (!entry) throw new Error('Gallery entry not found');
     if (entry.companyId !== companies.getActiveId()) throw new Error('Cross-company access denied');
@@ -543,10 +561,10 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
     return filePath;
   });
 
-  ipcMain.handle('ai:testKie', (_e, key) => aiKie.testConnection(key));
-  ipcMain.handle('ai:testFal', (_e, key) => aiFal.testConnection(key));
+  exposeLocal('ai:testKie', (key) => aiKie.testConnection(key));
+  exposeLocal('ai:testFal', (key) => aiFal.testConnection(key));
 
-  ipcMain.handle('ai:getCredits', async () => {
+  exposeLocal('ai:getCredits', async () => {
     const cfg = config.loadConfig();
     const [kie, fal] = await Promise.all([
       cfg.kieApiKey ? aiKie.getCredits(cfg.kieApiKey).catch(() => null) : Promise.resolve(null),

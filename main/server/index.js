@@ -21,8 +21,13 @@
  */
 
 const http = require('node:http');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { logSoftFailure } = require('../util/softFailure');
 const path = require('node:path');
 const fs = require('node:fs');
+const MAX_RPC_BODY_BYTES = 100 * 1024 * 1024;
+const RPC_BODY_TOO_LARGE_MESSAGE =
+  'Request body exceeds 100 MiB. Binary RPC payloads are transfer-encoded; keep raw files or batches below 75 MiB.';
 // v0.15.1: WebSocket support for live-update push to clients.
 // Loaded lazily inside bootServer() so dev workflows that don't run
 // the server (standalone mode) don't pay the import cost.
@@ -33,21 +38,18 @@ let WebSocketServer = null;
 const handlers = new Map();
 
 /**
- * v0.15.2: per-request caller identity. Set immediately before each
- * RPC handler runs, read by helpers like `companies.getActiveId()` to
- * scope state per-user. Cleared in a `finally` so an async handler's
- * later micro-tasks don't leak the wrong user-id into an unrelated
- * call. (better-sqlite3 is synchronous and our handlers mostly are,
- * so the window for an out-of-order interleave is tiny — but the
- * finally makes it provably safe.)
+ * Per-request caller identity. AsyncLocalStorage keeps concurrent RPC
+ * handlers isolated across awaits, including when they complete out of
+ * order. Helpers like `companies.getActiveId()` read this context to
+ * scope state per user.
  *
  * The local renderer (server-mode admin or standalone) has NO caller
  * user — it goes through ipcMain.handle, not /api/rpc. In that case
  * `getCurrentUserId()` returns null and downstream code falls back
  * to the shared app_state.
  */
-let _currentUserId = null;
-function getCurrentUserId() { return _currentUserId; }
+const callerUserId = new AsyncLocalStorage();
+function getCurrentUserId() { return callerUserId.getStore() ?? null; }
 
 /**
  * v0.15.0: undo the client's base64 envelope so binary payloads
@@ -113,23 +115,29 @@ let _bindings = null; // { port, addresses: string[] }
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let total = 0;
+    let tooLarge = false;
     const chunks = [];
     req.on('data', (chunk) => {
+      if (tooLarge) return;
       total += chunk.length;
-      if (total > 100 * 1024 * 1024) {
-        reject(new Error('Request body too large'));
-        req.destroy();
+      if (total > MAX_RPC_BODY_BYTES) {
+        tooLarge = true;
+        chunks.length = 0;
+        const err = new Error(RPC_BODY_TOO_LARGE_MESSAGE);
+        err.statusCode = 413;
+        reject(err);
         return;
       }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (tooLarge) return;
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw) return resolve(null);
       try { resolve(JSON.parse(raw)); }
       catch (err) { reject(new Error('Invalid JSON: ' + err.message)); }
     });
-    req.on('error', reject);
+    req.on('error', (err) => { if (!tooLarge) reject(err); });
   });
 }
 
@@ -184,23 +192,33 @@ async function serveAsset(req, res, urlPath, dataDir) {
   }
   const normalized = path.normalize(abs);
   if (
-    !normalized.startsWith(assetsRoot) &&
-    !normalized.startsWith(processedRoot) &&
-    !normalized.startsWith(aiGalleryRoot)
+    !isPathWithinRoot(assetsRoot, normalized) &&
+    !isPathWithinRoot(processedRoot, normalized) &&
+    !isPathWithinRoot(aiGalleryRoot, normalized)
   ) {
     res.writeHead(403); res.end(); return;
   }
-  // v0.26.42: combined stat + existence check in one async call.
-  // stat() returns the file info if it exists; ENOENT if not.
+  // Open first, then inspect that same handle. This closes the deletion race
+  // between stat() and createReadStream() and also rejects directories before
+  // sending a 200 response.
+  let handle;
   let stat;
   try {
-    stat = await fs.promises.stat(normalized);
+    handle = await fs.promises.open(normalized, 'r');
+    stat = await handle.stat();
   } catch (err) {
-    if (err.code === 'ENOENT') {
+    if (handle) {
+      try { await handle.close(); } catch (_) { /* original error wins */ }
+    }
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
       res.writeHead(404); res.end(); return;
     }
     process.stderr.write(`[serveAsset] stat error: ${err.message}\n`);
     res.writeHead(500); res.end(); return;
+  }
+  if (!stat.isFile()) {
+    await handle.close();
+    res.writeHead(404); res.end(); return;
   }
   const ext = path.extname(normalized).toLowerCase();
   const mime =
@@ -209,13 +227,36 @@ async function serveAsset(req, res, urlPath, dataDir) {
     ext === '.webp' ? 'image/webp' :
     ext === '.svg'  ? 'image/svg+xml' :
     'application/octet-stream';
-  res.writeHead(200, {
+  const etag = `"${stat.ino}-${stat.size}-${stat.mtimeMs}-${stat.ctimeMs}"`;
+  const headers = {
     'Content-Type': mime,
-    'Content-Length': stat.size,
-    'Cache-Control': 'no-cache', // mtime changes on renumber; force revalidation
+    'Cache-Control': 'private, no-cache',
+    'Vary': 'Authorization',
+    'ETag': etag,
     'Last-Modified': stat.mtime.toUTCString(),
+  };
+  if (req.headers['if-none-match'] === etag) {
+    await handle.close();
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+
+  res.writeHead(200, { ...headers, 'Content-Length': stat.size });
+  const stream = handle.createReadStream({ autoClose: true });
+  stream.on('error', (err) => {
+    process.stderr.write(`[serveAsset] read error: ${err.message}\n`);
+    if (!res.destroyed) res.destroy(err);
   });
-  fs.createReadStream(normalized).pipe(res);
+  res.on('close', () => {
+    if (!stream.destroyed) stream.destroy();
+  });
+  stream.pipe(res);
+}
+
+function isPathWithinRoot(root, candidate) {
+  const rel = path.relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 async function handleRequest(req, res, dataDir) {
@@ -259,7 +300,7 @@ async function handleRequest(req, res, dataDir) {
   // `webViewerEnabled` config flag (read per-request, default ON, so the
   // Settings toggle takes effect with no restart). Served from a compiled
   // string (require('../webclientHtml')), never a source-tree file, so it
-  // survives packaging (CLAUDE.md §21).
+  // survives packaging (AGENTS.md §21).
   if (req.method === 'GET' && (urlPath === '/m' || urlPath === '/m/')) {
     let enabled = true;
     try { enabled = require('../config').loadConfig().webViewerEnabled !== false; } catch (_) {}
@@ -268,7 +309,7 @@ async function handleRequest(req, res, dataDir) {
       res.end('The mobile web viewer is turned off.');
       return;
     }
-    let html = '';
+    let html;
     try { html = require('../webclientHtml'); } catch (_) { html = ''; }
     if (!html) { res.writeHead(500); res.end('viewer unavailable'); return; }
     // v0.49.4: `no-cache` was a footgun — it tells the browser "you MAY cache,
@@ -279,12 +320,19 @@ async function handleRequest(req, res, dataDir) {
     // SAME server. `no-store` is the universally-respected "do not cache".
     // The Pragma + Expires lines exist for older proxies that still gate on
     // HTTP/1.0 semantics — cheap belt-and-braces.
-    // CLAUDE.md §21: version comes from `app.getVersion()`, NEVER from
+    // AGENTS.md §21: version comes from `app.getVersion()`, NEVER from
     // `require('../../package.json')` — the relative path resolves in dev but
     // breaks in the packaged build (the compiled file moves to
     // `dist-electron/main/server/index.js`). Same trap as the v0.26.52 bug.
     let version = '';
-    try { version = require('electron').app.getVersion() || ''; } catch (_) {}
+    try {
+      version = require('electron').app.getVersion() || '';
+    } catch (err) {
+      // v0.1.12: an empty version here means clients show "v0.0.0" in the
+      // sidebar and the diagnostics chip can't compare builds — the exact
+      // symptom of the v0.26.52 packaging bug. Never let it be silent.
+      logSoftFailure('server', 'read app version for /api/ping', err);
+    }
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store, max-age=0, must-revalidate',
@@ -333,8 +381,14 @@ async function handleRequest(req, res, dataDir) {
     }
 
     let body;
+    const declaredBytes = Number(req.headers['content-length']);
+    if (Number.isFinite(declaredBytes) && declaredBytes > MAX_RPC_BODY_BYTES) {
+      req.resume();
+      sendJson(res, 413, { error: RPC_BODY_TOO_LARGE_MESSAGE });
+      return;
+    }
     try { body = await readJsonBody(req); }
-    catch (err) { sendJson(res, 400, { error: err.message }); return; }
+    catch (err) { sendJson(res, err.statusCode || 400, { error: err.message }); return; }
     const channel = body?.channel;
     if (!channel) { sendJson(res, 400, { error: 'channel required' }); return; }
     const handler = handlers.get(channel);
@@ -367,13 +421,10 @@ async function handleRequest(req, res, dataDir) {
     }
 
     try {
-      _currentUserId = user.id;
-      let result;
-      try {
-        result = await handler(deserializeFromClient(body.args));
-      } finally {
-        _currentUserId = null;
-      }
+      const result = await callerUserId.run(
+        user.id,
+        () => handler(deserializeFromClient(body.args)),
+      );
       sendJson(res, 200, { result: serializeResultForWire(result) });
     } catch (err) {
       // Surface the error message but not the stack trace by default.
@@ -405,6 +456,7 @@ function bootServer({ port, dataDir }) {
     const srv = http.createServer((req, res) => {
       handleRequest(req, res, dataDir).catch((err) => {
         process.stderr.write(`[server] unhandled: ${err.stack || err.message}\n`);
+          // Last-seen / presence bookkeeping. Failing to stamp a timestamp must not
         try { sendJson(res, 500, { error: 'Internal server error' }); } catch (_) {}
       });
     });
@@ -570,7 +622,7 @@ function collectLocalAddresses() {
       const ip = iface.address;
       // Categorize: Tailscale gets priority because it's the
       // recommended transport.
-      let kind = 'lan';
+      let kind;
       if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)) kind = 'tailscale';
       else if (/^192\.168\./.test(ip)) kind = 'lan';
       else if (/^10\./.test(ip)) kind = 'lan';

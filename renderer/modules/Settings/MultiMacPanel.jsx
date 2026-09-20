@@ -14,9 +14,9 @@
  * Settings/index.jsx) — the two files would otherwise have a circular
  * import. Keep the two copies in sync if you ever change SettingRow.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Button, Input, Modal, Select } from '../../components/ui.jsx';
+import { Button, Input, Select } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx). See the
@@ -42,6 +42,20 @@ export function ModeSegment({ config, addToast }) {
   const current = config?.mode ?? 'standalone';
   async function pick(next) {
     if (next === current) return;
+    /* v0.1.31: client mode needs a server address and a token BEFORE you switch.
+     *
+     * The confirm dialog below already said so in prose, but nothing enforced
+     * it — you could switch to client mode with both fields empty, the app
+     * restarted, and then EVERY screen showed a red error ("Server URL not
+     * set") with no obvious way out. Requiring them here means the mode that
+     * cannot work is never entered. They are set in this same panel. */
+    if (next === 'client' && (!config?.clientServerUrl?.trim() || !config?.clientToken?.trim())) {
+      addToast?.(
+        'Set the server address and user token below first — client mode cannot reach anything without them.',
+        'error',
+      );
+      return;
+    }
     const ok = await confirm({
       title: `Switch to ${next} mode?`,
       message: 'Media Studio KH will quit and relaunch to apply the new mode.',
@@ -87,7 +101,7 @@ export function ModeSegment({ config, addToast }) {
  * Tokens are shown in full (not redacted) because the admin needs to be
  * able to copy them. This page exists only on the server Mac itself.
  */
-export function ServerModePanel({ config, addToast }) {
+export function ServerModePanel({ config, addToast, clientMode = false }) {
   const [users, setUsers] = useState([]);
   const [showTokenFor, setShowTokenFor] = useState(null); // user id with token revealed
   const [busy, setBusy] = useState(false);
@@ -111,19 +125,27 @@ export function ServerModePanel({ config, addToast }) {
     catch (err) { setWebViewer(!next); addToast?.(err.message, 'error'); }
   }
   useEffect(() => {
+    // v0.1.22: the server controls are server-only, so on a client Mac this poll
+    // has nothing to ask — it would fail every three seconds and log a warning
+    // each time. The users list below is the part that works from here.
+    if (clientMode) return undefined;
     let cancelled = false;
     async function poll() {
       try {
         const s = await window.api.server.status();
         if (!cancelled) setServerStatus(s);
-      } catch (_) {}
+      } catch (err) {
+        // The Multi-Mac panel would otherwise sit on a stale status with no clue
+        // that polling is failing.
+        console.warn('[soft-failure] server status poll:', err?.message || err);
+      }
     }
     poll();
     const t = setInterval(poll, 3000);
     return () => { cancelled = true; clearInterval(t); };
-  }, []);
+  }, [clientMode]);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const list = await window.api.users.list();
       setUsers(list);
@@ -139,13 +161,8 @@ export function ServerModePanel({ config, addToast }) {
     } catch (err) {
       addToast?.(err.message, 'error');
     }
-  }
-  // v0.26.41 (audit pass): `refresh` is omitted from deps on purpose —
-  // it's recreated on every render of ServerModePanel and adding it
-  // would re-fire the effect after every render (which calls setUsers,
-  // which re-renders, infinite loop). Run-once-on-mount is what we want
-  // here; subsequent refreshes are user-driven (Add user, regenerate, etc.).
-  useEffect(() => { refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  }, [addToast]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   function openAdd() {
     setAddForm({ name: '', role: 'editor' });
@@ -223,6 +240,7 @@ export function ServerModePanel({ config, addToast }) {
 
   return (
     <>
+    {!clientMode && (
     <SettingRow
       label="Server status"
       hint="The HTTP server clients connect to. Paste one of the addresses below (plus the port) into a client Mac's Connection settings. Tailscale addresses (100.x.x.x) work from anywhere; the Bonjour name (yourmac.local) is recommended for LAN clients because it doesn't change when your router hands out a new IP; raw LAN IPs (192.168 / 10.x) work but can stop working if DHCP gives the server a new lease."
@@ -241,6 +259,17 @@ export function ServerModePanel({ config, addToast }) {
             <Button variant="primary" onClick={startServer}>Start</Button>
           )}
         </div>
+        {!serverStatus.running ? (
+          /* v0.1.31: explain the empty space. The addresses only exist once the
+           * server is running, so a user who came here looking for "the address
+           * to type on my other Mac" saw nothing and no reason why — the Tailscale
+           * address in particular appeared to be missing from the app. */
+          <p className="server-status__hint">
+            Start the server (or switch this Mac to <strong>Server</strong> mode above) and its
+            addresses — Tailscale, Bonjour and LAN — will be listed here, ready to paste into the
+            other Mac&rsquo;s Connection settings. Nothing is reachable from another Mac until then.
+          </p>
+        ) : null}
         {serverStatus.running && serverStatus.addresses?.length > 0 ? (
           <div className="server-status__addrs">
             {serverStatus.addresses.map((a) => {
@@ -303,6 +332,8 @@ export function ServerModePanel({ config, addToast }) {
         ) : null}
       </div>
     </SettingRow>
+    )}
+    {!clientMode && (
     <SettingRow
       label="Mobile web viewer"
       hint="Serves a lightweight phone/iPad page at /m on this same server — for viewing, searching, and adding product photos straight from the camera or photo library. Nothing to install: open the address in Safari and paste a user token. Toggle off to disable the page (your Mac clients' API stays up either way)."
@@ -329,9 +360,12 @@ export function ServerModePanel({ config, addToast }) {
         </div>
       ) : null}
     </SettingRow>
+    )}
     <SettingRow
       label="Users"
-      hint="Each connecting Mac authenticates with a user token. Add one per person who'll use the app. Tokens are long random strings — show them to the admin once, then they're stored in the DB. Anyone with the token has the user's role; regenerate if a token leaks."
+      hint={clientMode
+            ? "Each connecting Mac authenticates with a user token. These accounts live on the Mac holding your data — adding or changing one here updates that Mac. Tokens are long random strings; regenerate if one leaks."
+            : "Each connecting Mac authenticates with a user token. Add one per person who'll use the app. Tokens are long random strings — show them to the admin once, then they're stored in the DB. Anyone with the token has the user's role; regenerate if a token leaks."}
     >
       <div className="server-mode-users">
         <table className="users-table">
@@ -488,7 +522,12 @@ export function ClientModePanel({ config, patch }) {
     <>
       <SettingRow
         label="Server address"
-        hint="The IP or hostname where the Server-mode Mac is reachable. Over Tailscale that's a 100.x.x.x address; on LAN it's a 192.168 / 10.x address. Include http:// and the port (default 13180)."
+        /* v0.1.31: spell out the difference from the Mobile web viewer address
+         * three sections up, which is the same address with `/m` on the end.
+         * The two look almost identical and the wrong one used to be accepted
+         * and then fail every request. It is normalised to the plain address now
+         * — this hint exists so nobody has to discover that the hard way. */
+        hint="The IP or hostname where the Server-mode Mac is reachable, with http:// and the port (default 13180). Over Tailscale that's a 100.x.x.x address; on LAN it's a 192.168 / 10.x address. Do NOT use the Mobile web viewer address — that one ends in /m and is for a phone browser; if you paste it, the /m is removed for you."
       >
         <Input
           value={config.clientServerUrl ?? ''}

@@ -54,6 +54,11 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { app } = require('electron');
+const {
+  validateTarListing,
+  validateExtractedTree,
+  resolveSafeDest,
+} = require('./util/backupSafety');
 
 // Keep this list in lockstep with the comment above. Any new config
 // keys added later need an explicit decision here — silently bundling
@@ -238,19 +243,16 @@ async function previewBundle(bundlePath) {
   }
   // List the archive contents to make sure manifest.json is present.
   // `tar -tzf <file>` prints one path per line.
-  const { stdout } = await runCommand('tar', ['-tzf', bundlePath]);
-  const entries = stdout.split('\n').filter(Boolean);
-  const hasManifest = entries.some((e) => e.endsWith('/manifest.json') || e === 'manifest.json');
-  if (!hasManifest) {
-    throw new Error('Not a valid Media Studio KH bundle (no manifest)');
-  }
+  const { stdout: names } = await runCommand('tar', ['-tzf', bundlePath]);
+  const { stdout: verbose } = await runCommand('tar', ['-tvzf', bundlePath]);
+  const listing = validateTarListing(names, verbose);
   // Extract just the manifest to a temp file and read it.
   const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-bundle-peek-'));
   try {
     // Find the staging-folder prefix used in the archive. We packed
     // a single top-level dir via tar -C <parent> <name>, so every
     // entry starts with `<name>/`.
-    const prefix = entries[0].split('/')[0];
+    const prefix = listing.rootName;
     await runCommand('tar', ['-xzf', bundlePath, '-C', tmpDir, `${prefix}/manifest.json`]);
     const manifestText = await fsp.readFile(path.join(tmpDir, prefix, 'manifest.json'), 'utf8');
     // v0.26.40: JSON.parse can throw on a corrupted manifest. Wrap so
@@ -262,7 +264,7 @@ async function previewBundle(bundlePath) {
     try {
       manifest = JSON.parse(manifestText);
     } catch (err) {
-      throw new Error(`Bundle manifest is malformed JSON: ${err.message}`);
+      throw new Error(`Bundle manifest is malformed JSON: ${err.message}`, { cause: err });
     }
     // Size of the bundle itself for the renderer.
     const stat = await fsp.stat(bundlePath);
@@ -310,50 +312,52 @@ async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
     throw new Error(`Bundle format v${manifest.bundleFormatVersion} not supported (expected v${BUNDLE_FORMAT_VERSION})`);
   }
 
-  // Back up the existing target if it has data we'd otherwise lose.
-  // looksLikeOurDataDir guard is in settings.js; we recreate the
-  // check inline because we don't want to depend on the running
-  // app's settings module.
-  if (fs.existsSync(targetDataDir)) {
-    const stat = await fsp.stat(targetDataDir);
-    if (stat.isDirectory()) {
-      const entries = await fsp.readdir(targetDataDir);
-      const looksLikeData = entries.some((e) =>
-        e === 'database.sqlite' || e === 'assets' || e === 'processed' || e === 'ai-gallery'
-      );
-      if (looksLikeData) {
-        onProgress?.('backup');
-        const bakPath = `${targetDataDir}.bak.${Date.now()}`;
-        await fsp.rename(targetDataDir, bakPath);
-        // recreate the empty target dir so extraction has somewhere
-        // to land
-        await fsp.mkdir(targetDataDir, { recursive: true });
-      }
-    }
-  } else {
-    await fsp.mkdir(targetDataDir, { recursive: true });
-  }
-
-  // Extract into a staging dir first, then move the bundle's
-  // top-level entries up into targetDataDir. tar -C extracts a
-  // tree rooted at the original bundle's staging-folder name (e.g.
-  // `iskh-bundle-AbCd12/`) — we want its CONTENTS in targetDataDir,
-  // not a nested subfolder.
+  // Extract and validate the archive before backing up the target. A hostile
+  // or corrupt archive must never cause a live-folder rename by itself.
   onProgress?.('extract');
-  const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-bundle-extract-'));
+  // Keep staging beside the target so moving entries into an external-drive
+  // data folder cannot fail with EXDEV.
+  const targetParent = path.dirname(path.resolve(targetDataDir));
+  await fsp.mkdir(targetParent, { recursive: true });
+  const tmpRoot = await fsp.mkdtemp(path.join(targetParent, '.iskh-bundle-extract-'));
+  let bakPath = null;
   try {
     await runCommand('tar', ['-xzf', bundlePath, '-C', tmpRoot]);
-    // Find the single top-level folder the archive contained.
     const tmpEntries = await fsp.readdir(tmpRoot);
     if (tmpEntries.length !== 1) {
       throw new Error('Bundle structure unexpected (expected a single top-level folder)');
     }
     const bundleRoot = path.join(tmpRoot, tmpEntries[0]);
+    await validateExtractedTree(bundleRoot);
+
+    // Back up the existing target if it has data we'd otherwise lose.
+    // looksLikeOurDataDir guard is in settings.js; we recreate the check
+    // inline because we don't want to depend on the running app's settings
+    // module.
+    if (fs.existsSync(targetDataDir)) {
+      const stat = await fsp.stat(targetDataDir);
+      if (stat.isDirectory()) {
+        const entries = await fsp.readdir(targetDataDir);
+        const looksLikeData = entries.some((e) =>
+          e === 'database.sqlite' || e === 'assets' || e === 'processed' || e === 'ai-gallery'
+        );
+        if (looksLikeData) {
+          onProgress?.('backup');
+          bakPath = `${targetDataDir}.bak.${Date.now()}`;
+          await fsp.rename(targetDataDir, bakPath);
+          // recreate the empty target dir so extraction has somewhere
+          // to land
+          await fsp.mkdir(targetDataDir, { recursive: true });
+        }
+      }
+    } else {
+      await fsp.mkdir(targetDataDir, { recursive: true });
+    }
 
     // Move every entry under bundleRoot → targetDataDir/<same name>.
     for (const ent of await fsp.readdir(bundleRoot)) {
       const src = path.join(bundleRoot, ent);
-      const dst = path.join(targetDataDir, ent);
+      const dst = resolveSafeDest(targetDataDir, ent);
       if (fs.existsSync(dst)) {
         // Shouldn't happen because we either backed up or created
         // empty target above, but defensive.
@@ -395,6 +399,21 @@ async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
       importedManifest: manifest,
       targetDataDir,
     };
+  } catch (err) {
+    /* Roll back any incomplete install after the live folder was moved aside.
+     * The staged tree is fully validated before this point, but a later move
+     * or config merge can still fail. Restore the complete safety copy rather
+     * than leaving a partial database/assets mix in place. */
+    if (bakPath && fs.existsSync(bakPath)) {
+      try {
+        await fsp.rm(targetDataDir, { recursive: true, force: true });
+        await fsp.rename(bakPath, targetDataDir);
+        process.stderr.write(`[bundle import] failed (${err.message}) — your original data folder was restored.\n`);
+      } catch (rollbackErr) {
+        process.stderr.write(`[bundle import] failed (${err.message}) AND the rollback failed (${rollbackErr.message}). Your original data is in ${bakPath}.\n`);
+      }
+    }
+    throw err;
   } finally {
     try { await fsp.rm(tmpRoot, { recursive: true, force: true }); } catch (_) {}
   }

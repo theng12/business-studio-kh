@@ -96,7 +96,7 @@ async function clearAppCache() {
   try {
     await session.defaultSession.clearCache();
   } catch (err) {
-    throw new Error(`Failed to clear cache: ${err.message}`);
+    throw new Error(`Failed to clear cache: ${err.message}`, { cause: err });
   }
   return { ok: true, bytesFreed: bytesBefore, cachePath };
 }

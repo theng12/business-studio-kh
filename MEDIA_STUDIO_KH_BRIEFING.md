@@ -1,370 +1,244 @@
-# Media Studio KH — Build Briefing
+# Media Studio KH — Product Briefing
+
+**Last full fact-check: 2026-09-19** (against the code, not against the previous
+version of this document). Same convention as `AGENTS.md` §22: a claim that names
+a file, a package or a number carries `(verified 2026-09-19)` where it is worth
+singling out, and anything else falls back to that date.
+
+> **This file was rewritten, not edited.** The previous version described
+> Image Studio KH — a four-module batch image processor — and had been stale for
+> a long time. It described a `remove.bg` fallback that was deleted, a 20-image
+> cap that is now 50, and a four-module app that now has nineteen pages. See
+> **Corrections** at the end for the specific claims that were wrong.
+
+**What this document is:** the product overview — what the app is, what it does,
+how it is laid out, what it stores, and how it is built.
+
+**What it is not:** the engineering rulebook. Coding conventions, IPC rules,
+database conventions, packaging traps and versioning policy live in
+`AGENTS.md`. Where the two overlap, `AGENTS.md` wins.
+
+---
 
 ## Overview
 
-**App name:** Media Studio KH
-**Type:** Desktop app (Electron + React)  
-**Purpose:** Batch product image processor. Takes raw, mixed-quality product photos and outputs clean, marketplace-ready images with correct backgrounds, sizes, formats, and file naming — ready to upload to Amazon, Shopify, Lazada, Etsy, or any custom destination.  
-**Primary user:** TerraNash — running multiple product businesses (construction materials, refurbished iPhones, FMCG). Needs to process large batches of product images across different categories efficiently.
+**Media Studio KH** is a desktop workspace for a product business. It covers the
+media side of selling: product photos, label printing, catalog design, and the
+supplier/cost bookkeeping that sits behind them.
+
+It began as a batch product-image processor and grew outward from there. The
+batch image work is still the core (Product Library → Image Workspace → Export
+Center), but the app now also runs a label studio, a catalog studio, an AI image
+studio, an overlay/watermark studio, and a purchasing area.
+
+- **Runs entirely locally.** No account, no cloud service, no telemetry. The one
+  exception is AI Studio, which calls a provider you configure and pay for
+  yourself; everything else — including background removal — runs on the Mac.
+- **One Mac or several.** See **Modes** below.
+- **Apple Silicon only.** Every build is a single arm64 DMG
+  (verified 2026-09-19).
 
 ---
 
-## Tech Stack
+## Tech stack
 
-| Layer | Choice | Notes |
-|---|---|---|
-| Framework | Electron + React | Desktop-first, same stack as companion app Catalog Studio KH |
-| UI | React + plain CSS | No UI framework. Custom components throughout |
-| Background removal | @imgly/background-removal | Pure Node/WASM, fully bundleable, no user install required |
-| BG removal fallback | remove.bg API | Optional, user provides their own API key in Settings |
-| Image processing | Sharp | Resize, format conversion, color profile, quality |
-| Local database | SQLite via better-sqlite3 | Stores products, images, export profiles, settings |
-| File system | Node.js fs + Electron dialog | Folder picker, deep folder scanning, output path management |
-
-**No external cloud dependency required.** Everything runs locally. remove.bg is opt-in only.
-
----
-
-## App Structure
-
-```
-Media Studio KH
-├── 1. Product Library      ← import and manage products + raw images
-├── 2. Image Workspace      ← process images per product (bg removal, canvas, enhance)
-├── 3. Export Center        ← export profiles, queue, batch export runner
-└── 4. Settings             ← app preferences, API keys, categories, output path
-```
-
-### Window Layout
-
-- **Left sidebar** — fixed navigation between the 4 modules
-- **Main content area** — each module renders here
-- Standard Electron window with custom titlebar (macOS traffic lights style)
-- Minimum window size: 1100 × 700px
-
----
-
-## Module 1 — Product Library
-
-### Purpose
-The entry point. Every product is a container that holds metadata and raw images. Products must be created/imported here before images can be processed.
-
-### Layout
-Three-column layout:
-- Left: filter sidebar (Brand, Category, Status)
-- Center: product table or grid (toggle between views)
-- Right: opens as detail/edit panel when a product is selected
-
-### Product Fields
-
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| SKU | Text | Yes | Primary identifier, must be unique |
-| Name | Text | No | |
-| Brand | Dropdown | No | Managed list (add/edit in Settings) |
-| Barcode | Text | No | EAN, UPC, or other |
-| Secondary Code | Text | No | Supplier code or alt SKU |
-| Category | Dropdown | No | Managed list |
-| Subcategory | Text/Dropdown | No | |
-| Color / Finish | Text | No | |
-| Variant | Text | No | Size, material, etc. |
-| Unit | Text | No | sqm, piece, box, etc. |
-| Status | Dropdown | No | Active / Inactive / Draft — default: Active |
-| Tags | Comma-separated text | No | |
-| Description | Textarea | No | |
-| Retail Price | Number | No | |
-| Wholesale Price | Number | No | |
-| Images | Multi-file | No | Up to 20 images per product |
-
-### Product Table Columns
-IMAGE (thumbnail) · SKU · BRAND · NAME · CATEGORY · COLOR/FINISH · IMAGES (count, e.g. 3/20) · PROCESS STATUS · STATUS
-
-### Process Status values
-- **Unprocessed** — no images have been processed yet
-- **In progress** — some images processed, some raw
-- **Done** — all images processed
-- **Exported** — processed and exported at least once
-
-### Actions (top bar)
-- Search by SKU, name, color, tags
-- Toggle Table / Grid view
-- Auto-match images (scan a folder and match filenames to SKUs)
-- Import Excel/CSV
-- + New product button
-
-### Import Methods
-
-**1. Manual — New Product modal**
-- Form with all fields listed above
-- Images: drag and drop or click to add, paste from clipboard (Cmd+V / Ctrl+V)
-- Re-importing the same image is detected and skipped automatically
-- Save creates the product; images can be added after saving
-
-**2. Excel / CSV Import**
-- Download sample template available
-- Maps columns to product fields
-- Validates SKUs for duplicates before import
-- Shows import summary (X created, X updated, X skipped)
-
-**3. Folder Scan / Auto-match**
-- User selects a root folder
-- App scans recursively (up to 5 folder levels deep)
-- Finds all image files: JPG, JPEG, PNG, WEBP, HEIC
-- Attempts to match filenames to existing SKUs (exact match and fuzzy match)
-- Matched images are attached to their products automatically
-- Unmatched images land in an "Import Queue" (shown as a badge on the sidebar)
-- Import Queue lets user manually drag-assign unmatched images to products
-
-### Filters (left sidebar)
-- Brand (multi-select)
-- Category (multi-select)
-- Status (Active / Inactive / Draft)
-- Process status (Unprocessed / In progress / Done / Exported)
-
----
-
-## Module 2 — Image Workspace
-
-### Purpose
-The processing screen. Opened when the user clicks "Process" on a product. Shows all images for that product in a strip on the left, the canvas editor in the center, and the processing settings panel on the right.
-
-### Navigation
-Accessed from Product Library via a "Process →" button on each product row. Breadcrumb in the top bar shows: Product Library / [SKU · Product Name].
-
-### Layout — Three panels
-
-**Left panel — Image strip**
-- Vertical list of all images attached to the current product
-- Each thumbnail shows: image name, status (Raw / Done)
-- Active image highlighted with border
-- Progress bar at the bottom: "X of Y processed"
-- Clicking a thumbnail switches the canvas to that image
-
-**Center — Canvas**
-- Shows the current image being worked on
-- Default view: checkerboard pattern (shows transparency after bg removal)
-- Top bar controls:
-  - Canvas size label (e.g. "2000 × 2000px · sRGB")
-  - **Fill preview toggle** — switches canvas from checkerboard to the chosen background fill color so user can preview the final look
-  - **Before / After toggle** — splits the canvas with a draggable center divider; left side = original raw image, right side = processed result. "Single" mode shows just the processed canvas.
-- Alignment guides (centered crosshair lines, subtle blue, toggleable)
-- Bottom toolbar: Move · Crop · Brush (touch-up edges) · Zoom in · Zoom % · Zoom out · Reset view
-
-**Right panel — Processing settings**
-Collapsible sections:
-
-**Background**
-- Toggle: Remove background (on/off)
-- Background fill color swatches: White (#FFFFFF), Light grey (#F5F5F5), Grey (#E0E0E0), Black (#000000), + Custom color picker
-- Info hint: "Toggle Fill preview on canvas to see fill color"
-
-**Canvas & Size**
-- Marketplace preset tags: Amazon · Shopify · Etsy · Lazada · Custom
-  - Selecting a preset auto-fills the size fields and locks the color profile
-- Output size inputs: Width × Height (px)
-- Product fill slider: 50%–100% (how much of the canvas the product occupies, default 85%)
-
-**Enhance**
-- Toggle: Auto-adjust (auto brightness/contrast/white balance)
-- Brightness slider: -100 to +100
-- Contrast slider: -100 to +100
-- Toggle: Add shadow (subtle drop shadow under product)
-
-**Watermark**
-- Toggle: Show watermark
-- When on: upload logo image, set position (corner picker), set opacity slider
-
-**Apply buttons (bottom of right panel)**
-- "Apply to this image" — processes current image with current settings
-- "Apply settings to all X" — batch applies current settings to all images in the product
-- Note: "Applies current panel settings to all images"
-
-### Marketplace canvas presets (built-in)
-| Preset | Size | Format | Color profile |
-|---|---|---|---|
-| Amazon | 2000×2000 | JPG | sRGB |
-| Shopify | 2048×2048 | WEBP | sRGB |
-| Etsy | 2000×2000 | JPG | sRGB |
-| Lazada | 800×800 | JPG | sRGB |
-| TikTok Shop | 800×800 | JPG | sRGB |
-
----
-
-## Module 3 — Export Center
-
-### Purpose
-Takes processed images and exports them in the correct format, size, file name, and folder structure for each destination platform.
-
-### Layout — Two columns
-
-**Left column — Export profiles list**
-- List of saved export profiles
-- Each profile shows: icon (marketplace color-coded), name, summary (size · format · bg)
-- Actions per profile: Edit · Duplicate
-- "+ New profile" button at top
-
-**Right column — two zones stacked**
-
-**Top zone — Selected profile details**
-- Profile name + Edit button
-- Detail cards: Size · Format + Quality · Background fill · Color profile
-- File naming pattern builder:
-  - Token blocks: `{SKU}` `{COLOR}` `{INDEX}` `{DATE}` `{BRAND}` — drag to reorder, click to remove
-  - Separator selector: dash / underscore / none
-  - Live preview: shows example filename using current product data
-  - Example: `BBC-TILE-001-WHITE-01.jpg`
-
-**Bottom zone — Export queue**
-- List of products selected for this export run
-- Each row: checkbox · thumbnail · SKU + name · category · image count · status badge
-- Status badges: Ready (green) · Partial — X unprocessed (amber) · Queued (blue)
-- Partial warning behavior: unprocessed images are **skipped** during export; after export completes a summary shows "X images skipped — unprocessed"
-- "+ Add products" button to add more products to the queue
-
-**Run bar (bottom)**
-- Summary: "X products · Y images selected for export"
-- Output folder path display + edit button (folder picker)
-- "Run export" primary button
-
-### Export profile fields
-| Field | Options |
+| Layer | Choice |
 |---|---|
-| Name | Text |
-| Size | Width × Height (px) |
-| Format | JPG / PNG / WEBP |
-| Quality | 1–100 (for JPG/WEBP) |
-| Background fill | Color picker |
-| Color profile | sRGB / Display P3 |
-| File naming pattern | Token builder (see above) |
-| Output subfolder | Optional subfolder name appended to base output path |
+| Shell | Electron 33.4.11 + `vite-plugin-electron` |
+| UI | React 18 + Vite 5 |
+| Styling | One hand-written `renderer/index.css` — no Tailwind, no CSS build step |
+| State | Zustand (one store, composed of ~16 slice files) |
+| Database | SQLite via `better-sqlite3` |
+| Spreadsheets | SheetJS (`xlsx`) |
+| Images | `sharp` |
+| Background removal | `@imgly/background-removal` — local ONNX, runs in the renderer |
+| Barcodes / QR | `bwip-js` (main process) |
+| PDF | Electron's own `webContents.printToPDF()` |
+| Icons | Inline SVG — no icon library |
 
-### One profile per run
-Simplicity rule: each export run uses a single profile applied to all selected products. To export the same products to multiple platforms, the user runs export once per profile.
+Two entries in the table above are worth calling out because older documents got
+them wrong: there is **no Tailwind** (never was, in this codebase's history as
+Media Studio KH) and **no Puppeteer** (PDFs come from Electron directly, so
+there is no bundled Chromium to download).
 
-### Profile preview
-When a profile is selected, a small rendered preview thumbnail shows a sample product image processed with that profile's settings (background, canvas ratio, padding). Updates live as profile settings change.
-
----
-
-## Module 4 — Settings
-
-### Sections
-
-**General**
-- Default output folder — folder picker, stores base path for all exports
-- Default export profile — dropdown, pre-selects a profile in Export Center on launch
-- App language — English only for now (placeholder for future)
-
-**Background removal**
-- Engine selector: Local (bundled @imgly) / remove.bg API
-- remove.bg API key input (masked, show/hide toggle)
-- Usage counter (calls made this month, if API mode selected)
-- Test connection button
-
-**File naming**
-- Default separator: Dash / Underscore / None
-- Default token order (drag to reorder)
-
-**Marketplace presets**
-- List of built-in presets (read-only) with their specs
-- User can add custom presets: name, size, format, color profile
-
-**Categories & brands**
-- Two managed lists: Categories · Brands
-- Add / rename / delete entries
-- These populate the dropdowns in Product Library
-
-**About**
-- App version
-- Open logs folder
-- Check for updates (placeholder)
+Source is JavaScript (`.js` / `.jsx`), not TypeScript.
 
 ---
 
-## Data Model (SQLite)
+## Modes
+
+The app runs in one of three modes, set in Settings and requiring a restart
+(`verified 2026-09-19` in `main/index.js`):
+
+| Mode | What it means |
+|---|---|
+| **standalone** | Everything on this Mac. The normal way to use it. |
+| **server** | This Mac holds the data and serves it to other Macs over the network. |
+| **client** | This Mac has no local database; it works against a server Mac. |
+
+In client mode the renderer is unchanged — the same screens, the same calls —
+and the main process forwards each request to the server over HTTP, with the
+data folder and its assets served over the same connection.
+
+**Client mode is not fully at parity.** 41 channels are stubbed with a clear
+"not yet available in client mode" message rather than implemented: local
+backup/restore, user and role administration, server controls, the data-folder
+mover, label printing and generation, catalog PDF export, and AI provider key
+checks. Label printing is the one most likely to matter in practice, because
+printing is inherently local to the Mac you are sitting at. This is a known,
+tracked list, not a surprise — see `test/clientReachability.test.js`.
+
+---
+
+## App structure
+
+The sidebar has six sections and **nineteen pages** (17 feature modules, plus the
+Company page and Settings) (`verified 2026-09-19` in
+`renderer/components/Sidebar.jsx`):
+
+| Section | Pages |
+|---|---|
+| Workspace | Company · Dashboard · Brands · Product Library |
+| Image Studio | Image Workspace · AI Studio · Overlay Studio · Export Center |
+| Label Studio | Label Templates · Generate & Print · Barcode Maker · Label History |
+| Catalog Studio | Catalog Templates · Catalog Projects |
+| Operations | Suppliers · Purchase Orders · Cost Calculator |
+| System | History · Settings |
+
+Pages in the Image Studio, Label Studio, Catalog Studio and Operations sections
+are gated by **capability**, not by role rank — a page is hidden when the signed-in
+user's role lacks its capability (e.g. `images.manage`, `labels.use`,
+`costing.view`). Workspace and System pages are ungated, so Company and Settings
+are always reachable (`verified 2026-09-19`).
+
+Window: 1400 × 900 by default, minimum 1100 × 700 (`verified 2026-09-19`).
+
+Deep, per-area specifications live beside this file in `docs/`:
+`PRODUCT_LIBRARY_HANDOFF.md`, `COMPANY_MANAGER_HANDOFF.md`,
+`DONATIONS_HANDOFF.md`, `AUDIT_2026-05-20.md`. Those have their own accuracy
+dates and have not all been re-checked recently.
+
+---
+
+## The areas, briefly
+
+**Product Library** — the entry point. A product holds metadata plus an ordered
+list of images, position 0 being the main one. Imports run through a three-step
+flow (pick file → map columns → review). Bulk operations act on a selection:
+convert format, compress, resize, auto-crop, enhance, remove background, apply
+an overlay, edit fields, and AI generation. **Cap: 50 images per product**
+(`MAX_IMAGES_PER_PRODUCT` in `main/imageManager.js`, verified 2026-09-19).
+
+**Image Workspace** — per-image, per-product editing: crop and straighten with
+aspect presets, canvas presets, background removal, enhance, watermark.
+Auto-saves, with an explicit Save as well.
+
+**AI Studio** — queue image generation against a product or a folder, using a
+provider you configure. Results land in the product's gallery. Costs are shown
+before you run.
+
+**Overlay Studio** — reusable templates (text, barcode, logo/image) composited
+onto product images or onto loose image files. The latter is the "watermark a
+folder of photos" tool.
+
+**Export Center** — export profiles (format, size, naming tokens, destination)
+and a batch runner that writes marketplace-ready files.
+
+**Label Studio** — label templates, a generate-and-print page (PDF/PNG/JPEG, one
+per page or sheet layout), a standalone barcode maker, and a run history.
+
+**Catalog Studio** — catalog templates and projects, with HTML/PDF output.
+
+**Operations** — suppliers, purchase orders with lines/components/payments, and a
+landed-cost calculator that rolls supplier pricing into a per-product cost.
+
+**System** — a global audit-log feed, and Settings (preferences, categories,
+AI keys, multi-Mac configuration, roles and permissions, backup/restore,
+data-folder location, About).
+
+---
+
+## Data model
+
+SQLite, 28 tables (`verified 2026-09-19` from the schema in `main/db/index.js`):
 
 ```
-products
-  id, sku, name, brand_id, barcode, secondary_code,
-  category_id, subcategory, color_finish, variant,
-  unit, status, tags, description, price_retail, price_wholesale,
-  process_status, created_at, updated_at
-
-product_images
-  id, product_id, filename, filepath, original_filepath,
-  order_index, is_processed, processed_filepath,
-  workspace_settings (JSON), created_at
-
-export_profiles
-  id, name, marketplace, width, height, format, quality,
-  background_color, color_profile, naming_pattern,
-  output_subfolder, created_at, updated_at
-
-export_runs
-  id, profile_id, run_at, product_count, image_count,
-  skipped_count, output_path, notes
-
-brands
-  id, name, color
-
-categories
-  id, name, parent_id
-
-settings
-  key, value
+companies  users  roles  brands  categories  suppliers
+products  product_images  product_landed_costs
+purchase_orders  po_lines  po_cost_components  po_payments
+label_templates  label_runs  label_generation_items
+catalog_projects
+image_templates  image_template_runs  image_merge_ops
+export_profiles  export_runs
+ai_tasks  ai_gallery  ai_prompt_templates
+audit_log  app_state  settings
 ```
 
----
-
-## File & Folder Conventions
-
-### App data location
-- macOS: `~/Library/Application Support/ImageStudioKH/`
-- Windows: `%APPDATA%/ImageStudioKH/`
-- Contains: `database.sqlite`, `processed/` folder, `settings.json`
-
-### Processed images storage
-- `[AppData]/processed/[SKU]/[filename]`
-- Originals are never modified — always write to the processed folder
-
-### Export output
-- Base path set by user in Settings
-- Each export run creates: `[base path]/[output subfolder if set]/[named files]`
+`products` carries more than the obvious retail fields — carton dimensions and
+weight, per-unit weight, tax rate, reorder point/quantity, inventory tracking,
+supplier SKU, HS code, country of origin, and JSON `prices` / `custom_fields`
+objects that imports merge rather than replace. Read the schema rather than a
+document for the authoritative column list.
 
 ---
 
-## Key UX Rules
+## File and folder conventions
 
-1. **Originals are sacred** — never overwrite or modify original uploaded images. Always write processed versions to a separate folder.
-2. **Non-destructive** — workspace settings are stored per image so the user can re-process with different settings at any time.
-3. **Batch-first** — every action that can be batched should offer a "apply to all" option.
-4. **Skip and inform** — if an image can't be exported (unprocessed, missing file), skip it silently and show a post-run summary of what was skipped and why.
-5. **One profile per export run** — keep Export Center simple. Multiple destinations = multiple runs.
-6. **Familiar UX** — layout and component patterns should feel consistent with Catalog Studio KH (the companion app the user already uses daily).
+**Data folder** — user-configurable in Settings, defaulting to
+`app.getPath('userData')/data`. Its layout:
+
+```
+<dataDir>/
+  database.sqlite      the whole app state
+  assets/              imported files, deduplicated by content
+  processed/           processed image output
+  ai-gallery/          AI generation results
+  backups/             local .iskhbackup archives (unless repointed)
+```
+
+**Asset naming.** Imported files are copied into `assets/<kind>/` and named
+`<slug>.<ext>`, with `-2`, `-3`, … appended on a filename collision. Dedup works
+by *hashing the existing file and comparing* — identical content reuses the
+existing file rather than being copied again. Note the name is **not** built from
+the hash: an earlier version of this document claimed `<slug>-<hash10>.<ext>`,
+which this app has never done. Distinct but identically-named files therefore
+coexist as `logo.png` and `logo-2.png`.
+
+**Images in the renderer** are addressed as
+`app-image://local/<relative-path>`, served by `main/protocol.js` from
+`<dataDir>/assets`. A cache-busting `?v=` stamp is appended wherever the bytes
+behind a URL can change without the URL changing. The protocol refuses absolute
+paths and rejects anything that resolves outside the allowed roots.
 
 ---
 
-## Build Order
+## Verification status
 
-Build module by module in this order, testing each before moving to the next:
-
-1. Project scaffold (Electron + React boilerplate, SQLite setup, window frame, sidebar nav)
-2. App shell (routing, sidebar, window chrome)
-3. Product Library (database schema, product list, add/edit modal, CSV import)
-4. Image Workspace (canvas, @imgly bg removal, settings panel, before/after view)
-5. Export Center (profiles, queue, batch export, naming pattern builder)
-6. Settings (all preference screens, managed lists)
+- `npm run lint` — 0 errors, 13 warnings. All 13 are
+  `react-hooks/exhaustive-deps` and are deliberately left visible; see the
+  comment in `eslint.config.mjs`.
+- `npm test` — 258 checks, all passing (2 skipped unless run under Electron's
+  Node, which `npm run test:native` does).
+- `vite build` — clean.
+- All nineteen pages were opened and drawn without error in both standalone and
+  client mode (last checked 2026-09-19).
 
 ---
 
-## Notes for Claude Code
+## Corrections
 
-- Ask the user to confirm before running `npm install` steps that will take a while
-- Test each module works before scaffolding the next
-- Use plain CSS modules or scoped styles — no Tailwind, no styled-components
-- All IPC between Electron main and renderer should go through a typed preload bridge
-- Sharp should run in the main process (Node), not the renderer
-- @imgly/background-removal can run in the renderer (it uses WASM)
-- Use `better-sqlite3` (synchronous) not `sqlite3` (async) for simplicity
-- Keep the database layer in a separate `src/db/` folder with one file per table
-- Store workspace settings as JSON blob in the `product_images` table — no need to normalize every slider value into its own column
+What the previous version of this file said, and what is true
+(all verified 2026-09-19):
+
+| It said | Actually |
+|---|---|
+| A four-module app (Library, Workspace, Export, Settings) | Nineteen pages across six sections |
+| "Up to 20 images per product" | 50, enforced in `main/imageManager.js` |
+| A `remove.bg` fallback with an API key | Deleted. Only the local `@imgly` engine remains. No cloud background removal exists to fall back to |
+| Background removal is "pure Node/WASM" | It runs in the renderer as local ONNX/WASM, which is why production loads the UI over `app://` rather than `file://` |
+| Filenames are `<slug>-<hash10>.<ext>` | `<slug>.<ext>`, deduplicated by comparing content hashes |
+| Nothing about multi-Mac operation | Three modes (standalone / server / client), with client mode at partial parity |
+| Nothing about labels, catalogs, overlays, purchasing, roles or AI | All are shipped areas of the app |
+
+Two claims the previous version got **right** and that are worth keeping: no
+Tailwind and no Puppeteer. Both remain true.

@@ -44,6 +44,8 @@ function rowToProduct(row) {
     reorderPoint: row.reorder_point ?? null,
     reorderQuantity: row.reorder_quantity ?? null,
     trackInventory: !!row.track_inventory,
+    // v0.1.25: units on hand. null = never counted (distinct from 0).
+    stockQty: row.stock_qty == null ? null : Number(row.stock_qty),
     variantAttributes: row.variant_attributes ?? null,
     countryOfOrigin: row.country_of_origin ?? null,
     // v0.49.47/48: logistics & sourcing — feed PO line prefills + landed cost.
@@ -104,34 +106,21 @@ function list(companyId, filters = {}) {
   if (!companyId) return [];
   const { search, brandIds, categoryIds, status, processStatus } = filters;
   const params = [companyId];
-  // v0.32.0: the old form ran THREE correlated subqueries PER product row
-  // (image count, processed count, main-image path). For a company with
-  // ~1800 products that's ~5,400 nested scans of product_images on every
-  // single list() — the dominant cost behind "client first-sync / CSV
-  // import is so slow" (every sync + post-import refresh calls this). The
-  // grouped LEFT JOINs below scan product_images ONCE each instead, turning
-  // O(products × images) into O(products + images). Output columns are
-  // identical, so rowToProduct + the wire shape are unchanged.
+  // The indexed correlated lookups are deliberate. A previous grouped-join
+  // version scanned every product_images row twice before applying the
+  // company filter. With the existing (product_id, order_index) indexes, the
+  // three lookups touch only images for the selected company's products. The
+  // native benchmark in test/productsListQuery.test.js covers the measured
+  // trade-off and keeps this path honest as the data shape changes.
   let sql = `
     SELECT p.*,
-      COALESCE(ic.image_count, 0) AS image_count,
-      COALESCE(ic.processed_image_count, 0) AS processed_image_count,
-      mi.filepath AS main_image_path
+      (SELECT COUNT(*) FROM product_images pi
+         WHERE pi.product_id = p.id) AS image_count,
+      (SELECT COUNT(*) FROM product_images pi
+         WHERE pi.product_id = p.id AND pi.is_processed = 1) AS processed_image_count,
+      (SELECT pi.filepath FROM product_images pi
+         WHERE pi.product_id = p.id ORDER BY pi.order_index ASC LIMIT 1) AS main_image_path
     FROM products p
-    LEFT JOIN (
-      SELECT product_id,
-             COUNT(*) AS image_count,
-             SUM(CASE WHEN is_processed = 1 THEN 1 ELSE 0 END) AS processed_image_count
-        FROM product_images
-       GROUP BY product_id
-    ) ic ON ic.product_id = p.id
-    LEFT JOIN (
-      SELECT product_id, filepath FROM (
-        SELECT product_id, filepath,
-               ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY order_index ASC) AS rn
-          FROM product_images
-      ) WHERE rn = 1
-    ) mi ON mi.product_id = p.id
     WHERE p.company_id = ?
   `;
 
@@ -214,6 +203,51 @@ function getBySku(companyId, sku) {
   return rowToProduct(row);
 }
 
+/**
+ * v0.1.27 — refuse a second product that would share another product's image
+ * folder.
+ *
+ * The on-disk directory is `company/brand/<slug(sku)>`, and `slugify` collapses
+ * every run of non-alphanumerics to one `-`. So `A-1`, `A 1`, `A/1`, `A_1` and
+ * `A.1` all resolve to the SAME folder — and because UNIQUE(company_id, sku) is
+ * on the raw SKU, all five were allowed to exist. They then shared one
+ * directory AND one `<slug>-NNN` filename pattern, so deleting one product
+ * destroyed the others' images, and reordering or renaming one silently
+ * overwrote the others' files.
+ *
+ * Preventing the collision is the fix that holds everywhere at once, because
+ * every one of those destructive paths assumes "one product owns this folder".
+ * It is deliberately a hard error naming the conflicting SKU rather than an
+ * automatic `-2` suffix: a silent rename would move files that already exist,
+ * and the user cannot see which product they are looking at on disk either
+ * way. Changing a SKU is cheap; recovering overwritten photos is not.
+ *
+ * Returns the conflicting product, or null.
+ */
+function findAssetDirCollision(companyId, proposed, excludeId = null) {
+  if (!companyId || !proposed?.sku) return null;
+  const company = getCompanies().get(companyId);
+  if (!company) return null;
+  let target;
+  try {
+    const brand = proposed.brandId ? getBrands().get(proposed.brandId) : null;
+    target = productAssetDir(company, brand, proposed);
+  } catch (_) {
+    return null;   // an uncomputable path cannot collide
+  }
+  const rows = getDb()
+    .prepare('SELECT * FROM products WHERE company_id = ? AND id <> ?')
+    .all(companyId, excludeId ?? '');
+  for (const row of rows) {
+    const other = rowToProduct(row);
+    try {
+      const otherBrand = other.brandId ? getBrands().get(other.brandId) : null;
+      if (productAssetDir(company, otherBrand, other) === target) return other;
+    } catch (_) { /* skip uncomputable */ }
+  }
+  return null;
+}
+
 function create(input) {
   if (!input?.companyId) throw new Error('companyId is required');
   if (!input?.sku || !input.sku.trim()) {
@@ -223,6 +257,16 @@ function create(input) {
   const existing = getBySku(input.companyId, sku);
   if (existing) {
     throw new Error(`SKU "${sku}" already exists for this company`);
+  }
+  /* v0.1.27: a different SKU that slugs to the same folder would share this
+   * product's images on disk — see findAssetDirCollision. */
+  const clash = findAssetDirCollision(input.companyId, { sku, brandId: input.brandId ?? null });
+  if (clash) {
+    throw new Error(
+      `SKU "${sku}" would share an image folder with "${clash.sku}" — they differ only by `
+      + 'punctuation, and the app stores images per product. Add a distinguishing character '
+      + `(for example "${sku}-A") or change the brand.`,
+    );
   }
   const id = newId();
   const ts = Date.now();
@@ -236,7 +280,7 @@ function create(input) {
         track_inventory, variant_attributes, country_of_origin,
         supplier_id, supplier_sku, hs_code, carton_qty,
         carton_w_cm, carton_h_cm, carton_d_cm, weight_per_unit_kg,
-        process_status, created_at, updated_at, updated_by_user_id
+        process_status, created_at, updated_at, updated_by_user_id, stock_qty
       ) VALUES (
         @id, @companyId, @sku, @name, @brandId, @barcode, @secondaryCode,
         @categoryId, @subcategory, @colorFinish, @variant, @unit,
@@ -245,7 +289,7 @@ function create(input) {
         @trackInventory, @variantAttributes, @countryOfOrigin,
         @supplierId, @supplierSku, @hsCode, @cartonQty,
         @cartonWCm, @cartonHCm, @cartonDCm, @weightPerUnitKg,
-        @processStatus, @createdAt, @updatedAt, @updatedByUserId
+        @processStatus, @createdAt, @updatedAt, @updatedByUserId, @stockQty
       )`,
     )
     .run({
@@ -273,6 +317,7 @@ function create(input) {
       reorderPoint: input.reorderPoint ?? null,
       reorderQuantity: input.reorderQuantity ?? null,
       trackInventory: input.trackInventory ? 1 : 0,
+      stockQty: input.stockQty ?? null,
       variantAttributes: input.variantAttributes ?? null,
       countryOfOrigin: input.countryOfOrigin ?? null,
       // v0.49.48: logistics & sourcing.
@@ -332,6 +377,7 @@ const UPDATABLE = {
   reorderPoint: { col: 'reorder_point' },
   reorderQuantity: { col: 'reorder_quantity' },
   trackInventory: { col: 'track_inventory', transform: (v) => (v ? 1 : 0) },
+  stockQty: { col: 'stock_qty' },
   variantAttributes: { col: 'variant_attributes' },
   countryOfOrigin: { col: 'country_of_origin' },
   // v0.49.48: logistics & sourcing.
@@ -428,6 +474,16 @@ function update(id, patch) {
     const newBrand = newBrandId ? getBrands().get(newBrandId) : null;
     const proposedProduct = { ...existing, sku: newSku, brandId: newBrandId, companyId: newCompanyId };
     newDir = productAssetDir(newCompany, newBrand, proposedProduct);
+    /* v0.1.27: same guard when a SKU or brand change moves the product onto a
+     * folder another product already owns. */
+    const moveClash = findAssetDirCollision(newCompanyId, proposedProduct, id);
+    if (moveClash) {
+      throw new Error(
+        `SKU "${newSku}" would share an image folder with "${moveClash.sku}" — `
+        + 'they differ only by punctuation, and the app stores images per product. '
+        + `Add a distinguishing character (for example "${newSku}-A") or pick another brand.`,
+      );
+    }
   }
 
   const sets = [];
@@ -517,6 +573,10 @@ function remove(id) {
   // Compute the asset dir before deletion so we can clean up after.
   // Safe to skip if the product doesn't exist (nothing to clean).
   let dirToClean = null;
+  /* v0.1.27: hoisted out of the try below because the shared-folder check in
+   * the cleanup block needs them too. */
+  let removedProduct = null;
+  let removedCompany = null;
   // v0.22.0: also collect ai-gallery files attached to this
   // product. ON DELETE CASCADE on ai_gallery.product_id removes
   // the DB rows, but the PNG/JPG files on disk under
@@ -530,6 +590,8 @@ function remove(id) {
       const company = getCompanies().get(existing.companyId);
       const brand = existing.brandId ? getBrands().get(existing.brandId) : null;
       if (company) dirToClean = productAssetDir(company, brand, existing);
+      removedProduct = existing;
+      removedCompany = company;
 
       // Gather ai_gallery file paths for this product.
       try {
@@ -583,7 +645,47 @@ function remove(id) {
       // `KT-Ceramic/ROYAL/BF-R5232-GD`). Prepend the assets segment.
       const abs = path.join(getDataDir(), 'assets', dirToClean);
       if (fs.existsSync(abs)) {
-        fs.rmSync(abs, { recursive: true, force: true });
+        /* v0.1.27: never delete a folder another product also owns.
+         *
+         * The on-disk directory is derived from the company + brand + a SLUG of
+         * the SKU, and slugify collapses every run of non-alphanumerics to a
+         * single `-`. So `A-1`, `A 1`, `A/1`, `A_1` and `A.1` all map to the
+         * same folder — while UNIQUE(company_id, sku) is on the RAW sku, so all
+         * five can legitimately coexist. Deleting one of them used to
+         * `rmSync(..., { recursive: true })` the shared folder and destroy the
+         * others' images, leaving their product_images rows pointing at files
+         * that no longer existed.
+         *
+         * When the folder is shared, remove only THIS product's files (its
+         * basename prefix) and leave the directory and everything else in it
+         * alone. */
+        const siblings = getDb()
+          .prepare('SELECT * FROM products WHERE company_id = ? AND id <> ?')
+          .all(removedCompany.id, id)
+          .map(rowToProduct);
+        const sharedWith = siblings.filter((other) => {
+          const otherBrand = other.brandId ? getBrands().get(other.brandId) : null;
+          return productAssetDir(removedCompany, otherBrand, other) === dirToClean;
+        });
+        if (sharedWith.length > 0) {
+          /* Delete NOTHING when the folder is shared.
+           *
+           * A slug collision produces the same `<slug>-NNN` basename too, so
+           * there is no reliable way to tell this product's files from the
+           * other's — `A-1-001.jpg` is simultaneously both. Removing "our own"
+           * files would therefore delete the other product's only copy as well.
+           * Leaving a few orphaned files behind is strictly better than
+           * destroying a product's images, and the boot sweep already treats
+           * unreferenced asset files as recoverable rather than fatal. */
+          process.stderr.write(
+            `[products.remove] ${dirToClean} is shared with ${sharedWith.length} other product(s), `
+            + `which all slug to the same folder name (e.g. "A-1" and "A 1"). Nothing was deleted — `
+            + `their files cannot be told apart from ${removedProduct.sku}'s. `
+            + 'Rename one of the SKUs (add a distinguishing character) to separate them.\n',
+          );
+        } else {
+          fs.rmSync(abs, { recursive: true, force: true });
+        }
       }
     } catch (err) {
       process.stderr.write(`[products.remove] cleanup ${dirToClean}: ${err.message}\n`);
@@ -730,6 +832,10 @@ function bulkUpsert(companyId, rows, opts = {}) {
     // v0.49.49: logistics & sourcing — importable from a packing list.
     'supplierSku', 'hsCode', 'cartonQty', 'cartonWCm', 'cartonHCm',
     'cartonDCm', 'weightPerUnitKg',
+    // v0.1.25: units on hand. Under the 'merge' policy a blank cell leaves the
+    // existing count untouched (see nextValueFor), so re-importing a price list
+    // that has no stock column cannot silently zero everybody's stock.
+    'stockQty',
   ];
   // Field is considered "supplied" by the import row when the key is
   // present at all (even if the value is empty string). Empty string vs
@@ -843,6 +949,8 @@ function bulkUpsert(companyId, rows, opts = {}) {
             cartonHCm:       row.cartonHCm       ?? null,
             cartonDCm:       row.cartonDCm       ?? null,
             weightPerUnitKg: row.weightPerUnitKg ?? null,
+            // v0.1.25: units on hand.
+            stockQty:        row.stockQty        ?? null,
           };
           if (dryRun) {
             // For previews, surface the non-default fields so the user

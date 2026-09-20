@@ -49,7 +49,7 @@ async function uploadSource(apiKey, { absPath, mimeType, model }) {
   try {
     bytes = await fs.promises.readFile(absPath);
   } catch (err) {
-    if (err.code === 'ENOENT') throw new Error('Source image missing');
+    if (err.code === 'ENOENT') throw new Error('Source image missing', { cause: err });
     throw err;
   }
   const ext = (path.extname(absPath) || '.png').slice(1).toLowerCase();
@@ -211,9 +211,9 @@ async function falQueueRequest(url, apiKey, label) {
 // caller can surface "what the server actually returned" in the error
 // message. Truncated to 500 chars in the error to avoid log floods.
 async function readJsonWithRaw(res) {
-  let text = '';
+  let text;
   try { text = await res.text(); } catch { text = ''; }
-  let parsed = null;
+  let parsed;
   try { parsed = text ? JSON.parse(text) : {}; } catch { parsed = null; }
   return { parsed, text };
 }

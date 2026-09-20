@@ -44,7 +44,7 @@ function register({ expose, emitCatalogChange }) {
       try {
         fgBuffer = await fs.promises.readFile(srcAbs);
       } catch (err) {
-        if (err.code === 'ENOENT') throw new Error('Source image missing on disk');
+        if (err.code === 'ENOENT') throw new Error('Source image missing on disk', { cause: err });
         throw err;
       }
     }

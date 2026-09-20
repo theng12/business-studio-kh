@@ -7,6 +7,7 @@ const productImages = require('./db/productImages');
 const brands = require('./db/brands');
 const { slugify } = require('./util/slug');
 const { formatIndexToken } = require('./util/exportIndex');
+const { logSoftFailure } = require('./util/softFailure');
 
 /* ── Filename token builder ───────────────────────────────────── */
 
@@ -409,7 +410,14 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
 
     // Flip the product to "exported" if it had processed images.
     if (images.some((im) => im.isProcessed)) {
-      try { products.setProcessStatus(product.id, 'exported'); } catch (_) {}
+      try {
+        products.setProcessStatus(product.id, 'exported');
+      } catch (err) {
+        // v0.1.12: this is user-visible — the product's status pill would
+        // still read "processed" even though it exported fine. Not fatal to the
+        // run, but it must not be silent.
+        logSoftFailure('exportRunner', `set process status "exported" for ${product.sku}`, err);
+      }
     }
   }
 
@@ -428,9 +436,9 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
           if (productImages.listByProduct(pid).length >= MAX) break; // respect cap
           const { image: added, skipped: addSkipped } = await productImages.addFromSource(pid, f, { originalFilepath: f });
           if (added && !addSkipped) {
-            try { productImages.setDedupExempt(added.id, true); } catch (_) {}
+            try { productImages.setDedupExempt(added.id, true); } catch (err) { logSoftFailure('exportRunner', 'flag imported copy dedup-exempt', err); }
             savedToLibrary++;
-            if (!mainSet) { try { productImages.setMain(pid, added.filepath); } catch (_) {} mainSet = true; }
+            if (!mainSet) { try { productImages.setMain(pid, added.filepath); } catch (err) { logSoftFailure('exportRunner', 'set main image on import-back', err); } mainSet = true; }
           }
         } catch (_) { /* per-image best-effort; don't fail the whole export */ }
       }

@@ -11,6 +11,10 @@ import { removeBackground } from '../../lib/bgRemoval.js';
 
 export function ImageWorkspace() {
   const activeProductId = useAppStore((s) => s.activeProductId);
+  /** Mirrors activeProductId so work started before a switch can tell whether
+   *  the user is still looking at the product it belongs to. */
+  const activeProductIdRef = useRef(null);
+  activeProductIdRef.current = activeProductId;
   const sku = useAppStore((s) => s.workspaceProductSku);
   const productName = useAppStore((s) => s.workspaceProductName);
   const images = useAppStore((s) => s.workspaceImages);
@@ -52,7 +56,7 @@ export function ImageWorkspace() {
   // click still SELECTS the image as the active workspace target; preview
   // is the secondary action (magnifier button or double-click).
   const [lightbox, setLightbox] = useState({ open: false, idx: 0 });
-  // Auto-save status indicator per CLAUDE.md §6 — Editors don't have a Save
+  // Auto-save status indicator per AGENTS.md §6 — Editors don't have a Save
   // button; every change persists via IPC immediately. We surface the state
   // ('idle' | 'saving' | 'saved' | 'error') so the user knows their tweaks
   // are durable without clicking anything.
@@ -61,7 +65,24 @@ export function ImageWorkspace() {
   // Holds the most recent timer + the settings snapshot keyed by image
   // filepath; the effect below cleans both up when the image switches.
   const saveDebounceRef = useRef(null);
+  /** The not-yet-written settings change, so leaving the screen can flush it. */
+  const pendingSaveRef = useRef(null);
   const lastSavedKeyRef = useRef(null);  // 'filepath::serialised-settings' last successfully saved
+  // Keep writes for this editor in submission order. Client-mode RPC calls
+  // use separate HTTP requests, so response order alone cannot protect the
+  // database from an older autosave arriving after a newer explicit Save.
+  const saveChainRef = useRef(Promise.resolve());
+  const queuedSaveRef = useRef(null);
+  const saveGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    // React StrictMode runs effect cleanup/setup once during development;
+    // reset this flag on setup so a remounted effect can still report state.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   function handleCropChange(rect) {
     setSettings((s) => ({ ...s, cropRect: rect }));
@@ -163,49 +184,138 @@ export function ImageWorkspace() {
     if (activeProductId) loadWorkspaceForProduct(activeProductId);
   }, [activeProductId, loadWorkspaceForProduct]);
 
+  /* Identifies an image as "the same picture we were just looking at".
+   *
+   * v0.1.29: the filepath ALONE is not enough. Product image files are
+   * renumbered positionally, so a delete or reorder elsewhere can put a
+   * DIFFERENT picture behind the same path — the workspace would then keep the
+   * previous image's crop and rotation on screen, and the next Save would write
+   * those settings onto the wrong record. The content hash changes when the
+   * bytes do, and the row id is a stable last resort.
+   *
+   * Note this is deliberately NOT the whole `activeImage` object: that
+   * reference changes after every save, and using it as a dependency would loop
+   * (save → store update → new object → re-seed → save again). */
+  const imageIdentity = (img) => (img ? `${img.filepath}::${img.contentHash || img.id}` : null);
+
+  function enqueueWorkspaceSave(productId, filepath, settings) {
+    const key = `${productId}::${filepath}::${JSON.stringify(settings)}`;
+    if (queuedSaveRef.current?.key === key) return queuedSaveRef.current.promise;
+    const save = () => window.api.workspace.saveSettings(productId, filepath, settings);
+    const next = saveChainRef.current.then(save, save);
+    // A failed write must not permanently block later saves. Keep the
+    // returned promise rejecting so each caller still reports its own error.
+    saveChainRef.current = next.catch(() => {});
+    const request = { key, promise: next };
+    queuedSaveRef.current = request;
+    next.then(
+      () => { if (queuedSaveRef.current === request) queuedSaveRef.current = null; },
+      () => { if (queuedSaveRef.current === request) queuedSaveRef.current = null; },
+    );
+    return next;
+  }
+
   // When the active image changes, seed settings from its stored workspace_settings.
   const activeImage = images[activeIdx] ?? null;
+  const activeImageRef = useRef(activeImage);
+  activeImageRef.current = activeImage;
+  const activeImageFilepath = activeImage?.filepath ?? null;
+  const activeImageContentHash = activeImage?.contentHash ?? null;
+  const activeImageId = activeImage?.id ?? null;
+  const seededIdentityRef = useRef(null);
   useEffect(() => {
-    if (!activeImage) return;
-    setSettings(mergeSettings(activeImage.workspaceSettings));
+    const image = activeImageRef.current;
+    if (!image) return;
+    seededIdentityRef.current = imageIdentity(image);
+    saveGenerationRef.current += 1;
+    setSettings(mergeSettings(image.workspaceSettings));
     // The freshly-seeded settings are by definition "saved" — track that
     // key so the debounce below doesn't fire a redundant write.
-    lastSavedKeyRef.current = `${activeImage.filepath}::${JSON.stringify(mergeSettings(activeImage.workspaceSettings))}`;
-    setSaveStatus({ state: 'idle', lastSavedAt: activeImage.workspaceSettings ? Date.now() : null });
-    // v0.26.41 (audit pass): activeImage is in scope but only filepath
-    // is in the dep array on purpose. We want to re-seed ONLY when the
-    // user navigates to a different image file — not every time the
-    // image object's workspaceSettings reference changes (which happens
-    // after every save). Adding activeImage to deps would cause an
-    // infinite save loop: save → store update → new activeImage → seed
-    // → debounce fires → save again.
-  }, [activeImage?.filepath]); // eslint-disable-line react-hooks/exhaustive-deps
+    lastSavedKeyRef.current = `${imageIdentity(image)}::${JSON.stringify(mergeSettings(image.workspaceSettings))}`;
+    setSaveStatus({ state: 'idle', lastSavedAt: image.workspaceSettings ? Date.now() : null });
+    // Re-seed when the user navigates to a different image file, or when the
+    // SAME path now holds different bytes (a renumber from another Mac).
+  }, [activeImageFilepath, activeImageContentHash, activeImageId]);
 
   // Auto-save: 500ms debounce after the last settings change. We compare a
   // serialised key per (image, settings) tuple to skip writes when nothing
   // actually differs from the last saved state (e.g. flip-and-flip-back).
   useEffect(() => {
-    if (!activeImage || !activeProductId) return undefined;
-    const key = `${activeImage.filepath}::${JSON.stringify(settings)}`;
+    const image = activeImageRef.current;
+    if (!image || !activeProductId) return undefined;
+    const identity = imageIdentity(image);
+    // The seed effect above runs before this effect when the image changes.
+    // The settings value here is still for the previous image in that render;
+    // never queue it against the newly selected image.
+    if (seededIdentityRef.current === identity) {
+      seededIdentityRef.current = null;
+      return undefined;
+    }
+    const key = `${identity}::${JSON.stringify(settings)}`;
     if (key === lastSavedKeyRef.current) return undefined;
 
     setSaveStatus((s) => ({ ...s, state: 'saving' }));
+    /* v0.1.27: remember what is owed, so it can still be written if the user
+     * moves on before the debounce elapses. It used to be dropped: the cleanup
+     * only cleared the timer, so nudging a slider and immediately switching
+     * image or product lost the change with no sign anything had happened. */
+    const saveGeneration = ++saveGenerationRef.current;
+    pendingSaveRef.current = {
+      productId: activeProductId,
+      filepath: image.filepath,
+      settings,
+      key,
+      identity,
+      saveGeneration,
+    };
     const handle = setTimeout(async () => {
+      const owed = pendingSaveRef.current;
+      pendingSaveRef.current = null;      // claim it — the flush must not repeat it
+      saveDebounceRef.current = null;
+      if (!owed) return;
       try {
-        await window.api.workspace.saveSettings(activeProductId, activeImage.filepath, settings);
-        lastSavedKeyRef.current = key;
+        await enqueueWorkspaceSave(owed.productId, owed.filepath, owed.settings);
+        if (!mountedRef.current || saveGenerationRef.current !== owed.saveGeneration ||
+          activeProductIdRef.current !== owed.productId ||
+          imageIdentity(activeImageRef.current) !== owed.identity) return;
+        lastSavedKeyRef.current = owed.key;
         setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
       } catch (err) {
-        setSaveStatus({ state: 'error', lastSavedAt: null });
+        const stillCurrent = mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
+          activeProductIdRef.current === owed.productId &&
+          imageIdentity(activeImageRef.current) === owed.identity;
+        if (stillCurrent) setSaveStatus({ state: 'error', lastSavedAt: null });
         addToast(`Save failed: ${err.message}`, 'error');
       }
     }, 500);
     saveDebounceRef.current = handle;
     return () => clearTimeout(handle);
-  }, [settings, activeImage?.filepath, activeProductId, addToast]);
+  }, [settings, activeImageFilepath, activeImageContentHash, activeImageId, activeProductId, addToast]);
+
+  /* Flush ONLY when the image or product being edited changes, or on unmount.
+   *
+   * Deliberately keyed on identity, not on `settings`: a settings change must
+   * keep debouncing (clear + reschedule), which is what the effect above does.
+   * When identity changes, though, the pending write belongs to the PREVIOUS
+   * image and is still valid — so it is sent rather than cancelled. Splitting
+   * the two concerns is what makes both behaviours correct. */
+  useEffect(() => () => {
+    const owed = pendingSaveRef.current;
+    pendingSaveRef.current = null;
+    if (!owed) return;
+    enqueueWorkspaceSave(owed.productId, owed.filepath, owed.settings)
+      .then(() => {
+        if (mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
+          activeProductIdRef.current === owed.productId &&
+          imageIdentity(activeImageRef.current) === owed.identity) {
+          lastSavedKeyRef.current = owed.key;
+        }
+      })
+      .catch((err) => addToast(`Save failed: ${err.message}`, 'error'));
+  }, [activeImageFilepath, activeImageContentHash, activeImageId, activeProductId, addToast]);
 
   // Refresh the "X min ago" display every 30s without re-fetching anything —
-  // matches the CLAUDE.md §6 auto-refresh requirement for the indicator.
+  // matches the AGENTS.md §6 auto-refresh requirement for the indicator.
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 30000);
@@ -230,6 +340,16 @@ export function ImageWorkspace() {
   }
 
   async function processOne(image) {
+    /* v0.1.29: pin the product this run belongs to.
+     *
+     * `activeProductId` is read again after the awaits below, and it is a
+     * closure value — if the user switched product in the meantime, the refresh
+     * would load the NEW product's images while the completed work belonged to
+     * the old one, leaving the strip showing one product under another's
+     * header. Capturing it once, and skipping the repaint when it no longer
+     * matches, keeps the screen consistent. (The product switcher is also
+     * disabled while a run is in flight; this is the belt to that braces.) */
+    const runProductId = activeProductId;
     let foregroundBytes = null;
     if (settings.removeBackground) {
       // v0.49.33: only one engine remains — the bundled local @imgly
@@ -244,18 +364,24 @@ export function ImageWorkspace() {
             setProcessingLabel(`Removing background… ${Math.round(ratio * 100)}%`);
           }
         },
+        // v0.1.27: stamp the cutout cache so a flipped/cropped image
+        // (same path, new bytes) cannot reuse the previous cutout.
+        image.contentHash || image.id,
       );
       foregroundBytes = bytes;
     }
     setProcessingLabel('Compositing…');
     const res = await window.api.workspace.processImage(
-      activeProductId,
+      runProductId,
       image.filepath,
       settings,
       foregroundBytes,
     );
-    await refreshWorkspaceImages(activeProductId);
-    bumpProcessedTick();
+    // Only repaint if we are still looking at the product this run was for.
+    if (activeProductIdRef.current === runProductId) {
+      await refreshWorkspaceImages(runProductId);
+      bumpProcessedTick();
+    }
     return res;
   }
 
@@ -263,13 +389,16 @@ export function ImageWorkspace() {
    * Explicit Save: persist current settings *now*, bypassing the 500ms
    * debounce. Cancels the pending auto-save timer so we don't fire twice.
    * Idempotent — if no changes since last save, no IPC call is made.
-   * Per CLAUDE.md §6 (updated 2026-05-20): editors keep an explicit Save
+   * Per AGENTS.md §6 (updated 2026-05-20): editors keep an explicit Save
    * button as the user's deliberate-commit affordance, on top of the
    * automatic debounced save.
    */
   async function handleSaveNow() {
     if (!activeImage || !activeProductId) return;
-    const key = `${activeImage.filepath}::${JSON.stringify(settings)}`;
+    const image = activeImage;
+    const productId = activeProductId;
+    const identity = imageIdentity(image);
+    const key = `${identity}::${JSON.stringify(settings)}`;
     if (key === lastSavedKeyRef.current && saveStatus.state !== 'error') {
       // Already saved — give a friendly nudge so the click doesn't feel
       // ignored.
@@ -277,14 +406,27 @@ export function ImageWorkspace() {
       return;
     }
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    if (pendingSaveRef.current?.identity === identity &&
+      pendingSaveRef.current.productId === productId) {
+      pendingSaveRef.current = null;
+    }
+    const saveGeneration = ++saveGenerationRef.current;
     setSaveStatus((s) => ({ ...s, state: 'saving' }));
     try {
-      await window.api.workspace.saveSettings(activeProductId, activeImage.filepath, settings);
-      lastSavedKeyRef.current = key;
-      setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
-      addToast('Saved', 'success');
+      await enqueueWorkspaceSave(productId, image.filepath, settings);
+      const stillCurrent = mountedRef.current && saveGenerationRef.current === saveGeneration &&
+        activeProductIdRef.current === productId &&
+        imageIdentity(activeImageRef.current) === identity;
+      if (stillCurrent) {
+        lastSavedKeyRef.current = key;
+        setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
+        addToast('Saved', 'success');
+      }
     } catch (err) {
-      setSaveStatus({ state: 'error', lastSavedAt: null });
+      const stillCurrent = mountedRef.current && saveGenerationRef.current === saveGeneration &&
+        activeProductIdRef.current === productId &&
+        imageIdentity(activeImageRef.current) === identity;
+      if (stillCurrent) setSaveStatus({ state: 'error', lastSavedAt: null });
       addToast(`Save failed: ${err.message}`, 'error');
     }
   }
@@ -318,7 +460,6 @@ export function ImageWorkspace() {
       } catch (err) {
         failures += 1;
         // Continue with the rest, but record the issue.
-        // eslint-disable-next-line no-console
         console.warn(`Failed to process ${img.filename}:`, err);
       }
     }
@@ -353,6 +494,7 @@ export function ImageWorkspace() {
         products={products}
         activeProductId={activeProductId}
         onPick={(id) => { if (id) openProductInWorkspace(id); }}
+        busy={processing}
       />
       <div className="ws-toolbar__group">
         <button
@@ -495,7 +637,9 @@ export function ImageWorkspace() {
         // pixels too.
         productId={activeProductId}
         onImageMutated={() => {
-          refreshWorkspaceImages(activeProductId);
+          // v0.1.28: this refresh was uncaught, so a failure left the strip stale
+          // and said nothing.
+          refreshWorkspaceImages(activeProductId).catch((err) => addToast(err.message, 'error'));
           bumpProcessedTick();
         }}
       />
@@ -517,7 +661,7 @@ export function ImageWorkspace() {
  * Disabled when at the ends of the list. The label shows current index so
  * the user knows where they are ("12 / 344").
  */
-function ProductNav({ products, activeProductId, onPick }) {
+function ProductNav({ products, activeProductId, onPick, busy = false }) {
   const idx = products.findIndex((p) => p.id === activeProductId);
   const canPrev = idx > 0;
   const canNext = idx >= 0 && idx < products.length - 1;
@@ -526,7 +670,7 @@ function ProductNav({ products, activeProductId, onPick }) {
       <button
         type="button"
         className="segment"
-        disabled={!canPrev}
+        disabled={!canPrev || busy}
         title="Previous product"
         onClick={() => onPick(products[idx - 1]?.id)}
       >◀</button>
@@ -534,7 +678,13 @@ function ProductNav({ products, activeProductId, onPick }) {
         className="ws-prodnav__select segment"
         value={activeProductId ?? ''}
         onChange={(e) => onPick(e.target.value || null)}
-        title="Jump to product"
+        /* v0.1.29: switching product mid-run is blocked. The in-flight process
+         * is already writing to the previous product, and the refresh that
+         * follows it would paint THAT product's images under the new product's
+         * header — then the next Apply would fail with "Image not found on
+         * product". Finishing the current run first is a one-click wait. */
+        disabled={busy}
+        title={busy ? 'Wait for the current run to finish' : 'Jump to product'}
       >
         {idx < 0 ? <option value="">— Pick a product —</option> : null}
         {products.map((p) => (
@@ -546,7 +696,7 @@ function ProductNav({ products, activeProductId, onPick }) {
       <button
         type="button"
         className="segment"
-        disabled={!canNext}
+        disabled={!canNext || busy}
         title="Next product"
         onClick={() => onPick(products[idx + 1]?.id)}
       >▶</button>
@@ -558,7 +708,7 @@ function ProductNav({ products, activeProductId, onPick }) {
 }
 
 /**
- * Save-status indicator per CLAUDE.md §6. Reflects the auto-save state
+ * Save-status indicator per AGENTS.md §6. Reflects the auto-save state
  * effect's `state` machine: 'idle' | 'saving' | 'saved' | 'error'.
  * Re-renders every 30s (via the parent's tick state) so the relative time
  * ("2 min ago") stays current without re-fetching anything.

@@ -69,9 +69,15 @@ jobs:
           # the WhatsNewModal entry — future improvement).
           name: ${{ github.ref_name }}
           # The two DMGs are the only assets users need.
+          # NOTE: the productName is "Media Studio KH" (package.json `build.
+          # productName`), and dmg.artifactName is
+          # `${productName}-${version}-${arch}.${ext}`. These globs previously
+          # read "Image Studio KH", the app's pre-fork name — they matched
+          # nothing, so a release published with no DMGs attached. Keep this in
+          # sync with productName if the app is ever renamed again.
           files: |
-            dist/Image Studio KH-*-arm64.dmg
-            dist/Image Studio KH-*-x64.dmg
+            dist/Media Studio KH-*-arm64.dmg
+            dist/Media Studio KH-*-x64.dmg
           # Keep the release draft-OFF: as soon as the tag is pushed
           # and the build passes, the release goes live with the
           # DMGs attached. Flip this to `true` if you'd rather review

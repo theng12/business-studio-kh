@@ -11,6 +11,7 @@
 
 const {
   expose,
+  exposeLocal,
   emitCatalogChange,
   assertEntityInActiveCompany,
   assertProductInActiveCompany,
@@ -43,10 +44,12 @@ const suppliersDomain  = require('./ipc/suppliers');     // v0.49.46: OPERATIONS
 const purchaseOrdersDomain = require('./ipc/purchaseOrders'); // v0.49.47: OPERATIONS — Phase 2+3+4
 const labelsDomain     = require('./ipc/labels');
 const catalogStudioDomain = require('./ipc/catalogStudio');
+const socialGridDomain  = require('./ipc/socialGrid');  // v0.1.25: square product-grid posts
 
 function registerIpc(_ctx) {
   const helpers = {
     expose,
+    exposeLocal,
     emitCatalogChange,
     assertEntityInActiveCompany,
     assertProductInActiveCompany,
@@ -75,6 +78,7 @@ function registerIpc(_ctx) {
   purchaseOrdersDomain.register(helpers);   // v0.49.47
   labelsDomain.register(helpers);
   catalogStudioDomain.register(helpers);
+  socialGridDomain.register(helpers);       // v0.1.25
 }
 
 module.exports = { registerIpc };

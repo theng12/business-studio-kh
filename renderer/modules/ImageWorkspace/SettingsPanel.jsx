@@ -1,4 +1,4 @@
-import { Button, Input, Select } from '../../components/ui.jsx';
+import { Button, Input } from '../../components/ui.jsx';
 import { Section } from '../../components/Section.jsx';
 import { FILL_SWATCHES, MARKETPLACE_PRESETS, WATERMARK_CORNERS, getPreset } from '../../lib/presets.js';
 

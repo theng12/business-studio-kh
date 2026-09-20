@@ -86,8 +86,8 @@ function resolveBox(el, imgW, imgH) {
   const h = Math.max(1, Math.round((el.height ?? 0) * imgH));
   const ax = Math.round((el.x ?? 0) * imgW);
   const ay = Math.round((el.y ?? 0) * imgH);
-  let left = ax;
-  let top = ay;
+  let left;
+  let top;
   switch (el.anchor) {
     case 'tr': left = ax - w;       top = ay;            break;
     case 'bl': left = ax;           top = ay - h;        break;
@@ -135,6 +135,11 @@ async function renderTextElement(el, ctx, imgW, imgH) {
   const radius  = Math.round(el.bg?.radius  ?? 0);
   const bgColor = el.bg?.color ?? null;
   const bgOpacity = el.bg?.opacity ?? 1;
+  // v0.1.5: element-level opacity, clamped. Applies to the WHOLE element
+  // (text + caption band), not the band alone — the editor canvas does the
+  // same via a CSS `opacity` on the element wrapper, so exports match.
+  // Legacy templates have no opacity key → 1 → byte-identical rendering.
+  const elOpacity = Math.max(0, Math.min(1, Number(el.opacity ?? 1)));
 
   // Width: caller can constrain via el.width (fraction of image). Otherwise
   // grow to fit text + padding.
@@ -154,8 +159,10 @@ async function renderTextElement(el, ctx, imgW, imgH) {
     : '';
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+    <g fill-opacity="${escapeXml(String(elOpacity))}">
     ${bg}
     <text x="${textX}" y="${textY}" font-family="${escapeXml(fontFamily)}" font-size="${fontSize}" font-weight="${fontWeight}" font-style="${fontStyle}" fill="${escapeXml(color)}" text-anchor="${textAnchor}">${escapeXml(content)}</text>
+    </g>
   </svg>`;
 
   const buf = await sharp(Buffer.from(svg)).png().toBuffer();
@@ -229,7 +236,7 @@ async function renderBarcodeElement(el, ctx, imgW, imgH) {
       backgroundcolor: 'FFFFFF',
     });
   } catch (err) {
-    throw new Error(`Barcode "${content}" couldn't be encoded as ${bcid}: ${err.message}`);
+    throw new Error(`Barcode "${content}" couldn't be encoded as ${bcid}: ${err.message}`, { cause: err });
   }
 
   // Stretch bars to fill the target box width × barsH exactly. fit:'fill'
@@ -239,6 +246,11 @@ async function renderBarcodeElement(el, ctx, imgW, imgH) {
     .resize(targetW, barsH, { fit: 'fill' })
     .png()
     .toBuffer();
+
+  // v0.1.5: element opacity — see renderTextElement. The opaque white
+  // scanner-contrast background is deliberately NOT faded; only the bars
+  // and digits are, matching the editor where the white plate stays solid.
+  const elOpacity = Math.max(0, Math.min(1, Number(el.opacity ?? 1)));
 
   // Compose bars + text on a transparent canvas of the target size.
   const layers = [{ input: resizedBars, left: 0, top: 0 }];
@@ -266,10 +278,25 @@ async function renderBarcodeElement(el, ctx, imgW, imgH) {
   const baseSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${targetW}" height="${targetH}">
     <rect width="${targetW}" height="${targetH}" fill="#ffffff" />
   </svg>`;
-  const barcodeCard = await sharp(Buffer.from(baseSvg))
+  let barcodeCard = await sharp(Buffer.from(baseSvg))
     .composite(layers)
     .png()
     .toBuffer();
+
+  // Fade bars + digits together, after they're flattened onto the plate, so
+  // the plate's white stays fully opaque. `dest-in` with a uniform grey
+  // multiplies the layer alpha by the grey level.
+  if (elOpacity < 1) {
+    const mask = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${targetW}" height="${targetH}">` +
+      `<rect x="0" y="0" width="${targetW}" height="${barsH + (showText && textH >= 8 ? textH : 0)}" ` +
+      `fill="#000" fill-opacity="${elOpacity}"/></svg>`,
+    );
+    barcodeCard = await sharp(barcodeCard)
+      .composite([{ input: mask, blend: 'dest-in' }])
+      .png()
+      .toBuffer();
+  }
 
   const padding = Math.round(el.bg?.padding ?? 0);
   const radius  = Math.round(el.bg?.radius  ?? 0);
@@ -293,21 +320,51 @@ async function renderBarcodeElement(el, ctx, imgW, imgH) {
   return { buf: composed, naturalWidth: pillW, naturalHeight: pillH };
 }
 
-async function renderImageElement(el, ctx, imgW, imgH) {
+/**
+ * Where an element's asset actually lives, given its data-folder-relative path.
+ *
+ * v0.1.19: this is a parameter rather than a hard-coded `path.join(getDataDir(),
+ * 'assets', rel)` for two reasons.
+ *
+ *   1. It makes composition work without a LOCAL data folder. A client Mac has
+ *      none — its data is on the server — so it can now supply a resolver that
+ *      fetches the asset from the server instead. See
+ *      main/client/index.js → makeAssetResolver.
+ *   2. It makes `getDataDir()` lazy. It used to be called at the top of
+ *      renderImageElement for EVERY image element, even one whose source was an
+ *      inline/absolute path that never needed the data folder — and on a client
+ *      that call throws "Data dir not set". Now it is only reached when a
+ *      data-folder asset is genuinely being resolved.
+ *
+ * The default keeps the previous behaviour exactly, so every existing caller is
+ * unaffected.
+ */
+function defaultResolveAsset(rel) {
+  return path.join(getDataDir(), 'assets', rel);
+}
+
+async function renderImageElement(el, ctx, imgW, imgH, resolveAsset, strictImageAssets = false) {
   if (!el.source) return null;
-  const dataDir = getDataDir();
-  let abs = null;
+
+  // Work out which data-folder asset this element refers to (if any), then let
+  // the caller turn that into a readable absolute path.
+  let rel = null;
   if (el.source === 'brand-icon') {
-    if (ctx.brandIcon) abs = path.join(dataDir, 'assets', ctx.brandIcon);
+    if (ctx.brandIcon) rel = ctx.brandIcon;
   } else if (el.source.startsWith('product-image:')) {
     const idx = Number(el.source.split(':')[1] ?? 0);
-    const rel = ctx.productImages?.[idx]?.filepath;
-    if (rel) abs = path.join(dataDir, 'assets', rel);
+    rel = ctx.productImages?.[idx]?.filepath ?? null;
   } else if (el.source.startsWith('asset:')) {
-    const rel = el.source.slice('asset:'.length);
-    if (rel && !path.isAbsolute(rel)) abs = path.join(dataDir, 'assets', rel);
+    const r = el.source.slice('asset:'.length);
+    if (r && !path.isAbsolute(r)) rel = r;
   }
-  if (!abs || !fs.existsSync(abs)) return null;
+  if (!rel) return null;
+
+  const abs = await resolveAsset(rel);
+  if (!abs || !fs.existsSync(abs)) {
+    if (strictImageAssets) throw new Error(`Required overlay artwork not found: ${rel}`);
+    return null;
+  }
 
   const targetW = Math.max(16, Math.round((el.width  ?? 0.15) * imgW));
   const targetH = Math.max(16, Math.round((el.height ?? 0.15) * imgH));
@@ -333,9 +390,22 @@ async function renderImageElement(el, ctx, imgW, imgH) {
  * @param {Buffer | string} args.inputImage — either bytes or an absolute path
  * @param {object} args.template — { canvasWidth, canvasHeight, elements }
  * @param {object} args.context  — { sku, name, brand, brandIcon, ... }
+ * @param {Function} [args.resolveAsset] — (relPath) => absolute path | null.
+ *   Turns a data-folder-relative asset path into something readable. Defaults
+ *   to the local data folder; a client Mac passes a resolver that pulls the
+ *   asset from the server instead. See defaultResolveAsset above.
+ * @param {boolean} [args.strictImageAssets=false] — fail when a configured
+ *   image asset cannot be resolved/rendered. External-file batches use this
+ *   so required artwork cannot be silently omitted.
  * @returns {Promise<Buffer>} PNG bytes of the composited image
  */
-async function compose({ inputImage, template, context = {} }) {
+async function compose({
+  inputImage,
+  template,
+  context = {},
+  resolveAsset = defaultResolveAsset,
+  strictImageAssets = false,
+}) {
   if (!template || !Array.isArray(template.elements)) {
     throw new Error('Template missing or has no elements');
   }
@@ -380,8 +450,11 @@ async function compose({ inputImage, template, context = {} }) {
     try {
       if (el.type === 'text')    rendered = await renderTextElement(el, context, imgW, imgH);
       else if (el.type === 'barcode') rendered = await renderBarcodeElement(el, context, imgW, imgH);
-      else if (el.type === 'image')   rendered = await renderImageElement(el, context, imgW, imgH);
+      else if (el.type === 'image')   rendered = await renderImageElement(
+        el, context, imgW, imgH, resolveAsset, strictImageAssets,
+      );
     } catch (err) {
+      if (strictImageAssets && el.type === 'image') throw err;
       // Per-element failure shouldn't kill the whole composite — surface
       // through stderr so the runner can capture it in batch results.
       process.stderr.write(`[overlay] element ${el.id ?? '?'} (${el.type}) failed: ${err.message}\n`);
@@ -466,4 +539,5 @@ function outputPathFor(template, productSku, originalFilename) {
   };
 }
 
-module.exports = { compose, fillTokens, outputPathFor };
+module.exports = {
+  defaultResolveAsset, compose, fillTokens, outputPathFor };

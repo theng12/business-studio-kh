@@ -10,7 +10,12 @@ const fs = require('node:fs');
 // Must run before app.whenReady().
 app.setName('Media Studio KH');
 
-const { registerImageProtocol, registerClientImageProtocol, registerRendererProtocol } = require('./protocol');
+const {
+  isPathWithinRoot,
+  registerImageProtocol,
+  registerClientImageProtocol,
+  registerRendererProtocol,
+} = require('./protocol');
 const { registerIpc } = require('./ipc');
 const { initDb } = require('./db');
 const { loadConfig, saveConfig, legacyDataDir } = require('./config');
@@ -27,7 +32,11 @@ const isDev = !app.isPackaged;
 // Set this BEFORE any path resolution so app.getPath('userData') returns the
 // new location consistently. The migration below copies existing data from
 // the old lowercase folder on first run.
-app.setName('Media Studio KH');
+// (app.setName() is called once, near the top of this file, positioned
+// before the protocol/db/config requires so they resolve userData under the
+// right name. v0.1.3 removed a second identical call that used to sit here —
+// it ran after those paths were already resolved, so it was a no-op that
+// only looked load-bearing.)
 
 function migrateLegacyUserData() {
   try {
@@ -130,9 +139,9 @@ function resolveAppImageUrl(srcUrl) {
   const normalized = path.normalize(abs);
 
   if (
-    !normalized.startsWith(assetsRoot) &&
-    !normalized.startsWith(processedRoot) &&
-    !normalized.startsWith(aiGalleryRoot)
+    !isPathWithinRoot(assetsRoot, normalized) &&
+    !isPathWithinRoot(processedRoot, normalized) &&
+    !isPathWithinRoot(aiGalleryRoot, normalized)
   ) {
     throw new Error('path escapes asset roots');
   }
@@ -562,6 +571,31 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+}).catch((err) => {
+  // v0.1.3: this chain used to have no rejection handler. A throw anywhere
+  // inside — a bad config.json, a native module that failed to load, a
+  // port/permission error during boot — produced an unhandled rejection
+  // and a permanently blank window with no window chrome, no error, and
+  // nothing in the UI to explain it. The crash log had the event but the
+  // user had no idea where to look.
+  //
+  // Surface it: log (which mirrors to stdout), then show a native dialog
+  // naming the log file so the failure is actionable on a client's Mac
+  // where the user can't read the terminal.
+  logEvent('boot:failed', err && (err.stack || err.message || String(err)));
+  const logPath = crashLogPath();
+  try {
+    dialog.showErrorBox(
+      'Media Studio KH could not start',
+      `${(err && (err.message || String(err))) || 'Unknown error'}\n\n` +
+      `Details were written to:\n${logPath}\n\n` +
+      'Send that file to support if this keeps happening.',
+    );
+  } catch (_) {
+    // showErrorBox is unavailable before `ready` in some Electron
+    // versions; the crash log above is still the durable record.
+  }
+  app.exit(1);
 });
 
 app.on('before-quit', () => logEvent('before-quit'));

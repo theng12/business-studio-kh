@@ -10,7 +10,7 @@
  * Enforcement is server-side (permissions.js); this is the authoring UI.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Input, Textarea, EmptyState } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 
@@ -23,7 +23,7 @@ export function RolesPanel({ addToast }) {
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [r, caps] = await Promise.all([
@@ -37,8 +37,8 @@ export function RolesPanel({ addToast }) {
     } finally {
       setLoading(false);
     }
-  }
-  useEffect(() => { load(); }, []);
+  }, [addToast]);
+  useEffect(() => { load(); }, [load]);
 
   // Group capabilities by their `group` for the matrix.
   const grouped = useMemo(() => {
