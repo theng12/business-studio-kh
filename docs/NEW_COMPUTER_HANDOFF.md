@@ -67,7 +67,7 @@ On the old computer, `.serena/` remains untracked and a safety stash named `Pres
 
 **Move the data-owning server:** this is a separate operation from cloning code. The handoff does not perform it.
 
-1. Finish writes and save editors. Stop client edits, imports, exports, and AI jobs before taking the transfer snapshot; the archive currently snapshots the DB before reading live image trees (see findings). Keep writes stopped until cutover completes; an exported SQLite snapshot alone does not freeze the image trees.
+1. Finish writes and save editors. Stop client edits, imports, exports, and AI jobs before taking the transfer snapshot; the archive now rejects detected changes, but quiescing writes still makes the migration boundary easiest to reason about. Keep writes stopped until cutover completes; an exported SQLite snapshot alone does not freeze independently changing image trees.
 2. On the old data-owning Mac, use Settings → Multi-Mac → Migration → Export bundle. Transfer the `.iskhbundle` privately. It includes database users/tokens and portable AI API keys in ordinary archive contents; it is not encrypted. The 0.1.34 importer removes the extracted credential-bearing `config.partial.json` after a successful merge, but keep the archive private and never put it in GitHub.
 3. On the new Mac, start with a fresh/disposable standalone installation and use its current/default data directory. If a different target is essential, choose a verified empty directory with **Move existing data OFF**, restart, and confirm the selected path before import; never select valuable/pre-existing data. Use Migration → Pick bundle to import, inspect its version/date and target, then Replace and restart. Use a bundle made by the same 0.1.34 app for this migration; historical/future-schema compatibility needs a separate check. This replaces that Mac's current data; existing recognized data is moved to a timestamped sibling backup.
 4. Mode, network address/port, machine-local `clientServerUrl`/`clientToken`, and backup destination do not travel. Server-side user/token rows do travel inside the database, so existing user tokens remain valid unless deliberately changed. Set the new Mac to Server mode, restart, and update clients to its address. Keep the old server inactive as a writer once clients switch.
@@ -264,6 +264,17 @@ These are not additional confirmed bugs. Reproduce before changing behavior.
 - **Hardware/network:** install the same version on two physical Macs; check connect/reconnect after server restart, Wi-Fi loss and sleep/wake, changed DHCP address, company switching, original/processed image refresh and one edit in each direction. Measure actual LAN response times before claiming an app-wide speedup.
 - **Print/render:** verify a real selected printer, Khmer/ASCII text, label physical dimensions/margins, PDF export and cancellation. The existing render probe covers output rendering, not printer hardware.
 - **Paid AI:** use stubs/fixtures first for queue recovery, duplicate submission, cancellation and repair. Real paid requests require explicit authority; none were made in this audit.
+
+## 0.1.34 verification ledger
+
+- `npm run check`: **429 passed**, 0 failed/cancelled; lint clean. Node emitted one existing module-type warning while importing an ESM renderer fixture.
+- `npm run test:native`: **22 passed** under the Electron 44 runtime bundled by the local install.
+- `npm run check:client-server`: passed with real disposable SQLite, HTTP RPC, WebSocket reconnect, `/m` normalization, image upload/download and capability checks.
+- `npm run check:render`: passed; ASCII and Khmer text survived the real Electron capture with embedded fonts.
+- `npm audit` and `npm audit --omit=dev`: **0 vulnerabilities** each.
+- `npm run dist`: passed; unsigned arm64 DMG created at `dist/Media Studio KH-0.1.34-arm64.dmg`. `hdiutil verify` reported a valid checksum; SHA-256 is `45c7fa690a7e48df3bafecf32974c6de93fb2cefa19ab9e73a5f36bc262c3604` and the artifact is 245,022,620 bytes.
+- Packaged smoke: the asar-built server/client modules were loaded by the packaged Electron executable against disposable temporary data; the same real RPC, WebSocket, image and token-gate checks passed with version 0.1.34.
+- Environment note: the shell host is Node 26.8.2/npm 11.19.1 rather than the documented Node 24 setup. The packaged Electron runtime is Node 24.21.0; no real account, catalog, signing identity, hosted workflow, release or paid provider was used.
 
 ## Historical execution order
 
