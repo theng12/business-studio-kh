@@ -87,6 +87,7 @@ export function AutoMatchModal({ open, onClose }) {
             <Stat label="SKUs matched"           value={`${stats.matchedSkus} / ${stats.totalProducts}`} />
             <Stat label="Images imported"        value={stats.imagesImported}  tone="emerald" />
             <Stat label="Duplicates skipped"     value={stats.imagesSkippedDup} />
+            {stats.imagesFailed > 0 ? <Stat label="Failed" value={stats.imagesFailed} tone="amber" /> : null}
             <Stat label="Products updated"       value={stats.productsTouched} />
             <Stat label="Unmatched files"        value={stats.unmatchedFiles} />
             {stats.imagesSkippedCap > 0 ? (
@@ -108,6 +109,14 @@ export function AutoMatchModal({ open, onClose }) {
                 </span>
               ) : null}
             </p>
+          ) : null}
+          {Array.isArray(stats.failures) && stats.failures.length > 0 ? (
+            <DiagnosticList
+              title={`Failed imports (${stats.failures.length})`}
+              hint="These files matched a SKU but could not be imported. Fix the reported problem and run the folder again."
+              items={stats.failures.map((failure) => `${failure.filepath} — ${failure.error}`)}
+              mono
+            />
           ) : null}
 
           {/* Two diagnostic lists so the user can act on what's missing

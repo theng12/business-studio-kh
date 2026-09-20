@@ -38,6 +38,7 @@ const { retryWaitMs, shouldRetry } = require('../util/rateLimitRetry');
 // v0.1.18: the shared argument check, so client-mode local channels validate
 // exactly like the server/standalone ones do.
 const { validateArgs } = require('../util/validateArgs');
+const { writeExclusiveFile, writeUniqueFile } = require('../util/exclusiveFile');
 // v0.15.1: WebSocket client (same `ws` lib as the server). Used in
 // client mode to subscribe to live update events. Loaded lazily so
 // standalone / server mode doesn't pay the import cost.
@@ -87,6 +88,25 @@ let _connectionState = {
 };
 let _pollTimer = null;
 let _pollBackoffMs = 2000;
+// ponytail: JSON/base64 keeps the 100 MiB encoded ceiling and buffers the
+// payload. Add streaming only for an operation whose normal workload needs it.
+const MAX_RPC_BODY_BYTES = 100 * 1024 * 1024;
+const DRAG_PREP_TTL_MS = 5 * 60 * 1000;
+const issuedDragPaths = new Map();
+
+function takeIssuedDragPaths(paths) {
+  const now = Date.now();
+  for (const [filePath, expiresAt] of issuedDragPaths) {
+    if (expiresAt < now) issuedDragPaths.delete(filePath);
+  }
+  const allowed = [];
+  for (const filePath of paths) {
+    const expiresAt = issuedDragPaths.get(filePath);
+    issuedDragPaths.delete(filePath);
+    if (expiresAt >= now) allowed.push(filePath);
+  }
+  return allowed;
+}
 // v0.26.38: debounce counter for the ping loop. We only flip the
 // chip red after N consecutive failures — a single transient ping
 // failure (slow GC, momentary packet loss, server's HTTP layer
@@ -264,6 +284,13 @@ async function rpc(channel, args) {
   let responseBytes = 0;
   let body;
   try {
+    if (requestBytes > MAX_RPC_BODY_BYTES) {
+      _syncStats.errorCount += 1;
+      throw new Error(
+        'This transfer exceeds the server’s 100 MiB request limit. ' +
+        'Binary data expands during transfer encoding, so keep raw files or batches below 75 MiB.',
+      );
+    }
     // v0.49.43: retry loop for HTTP 429. The server's /api/rpc limiter
     // (120 calls / 10s per token) returns a 429 + Retry-After when a
     // burst — e.g. a post-bulk-op refetch — exceeds it. Previously we
@@ -1375,6 +1402,7 @@ function registerClientFileHandlers() {
       }
       const res = await rpc(channel, { ...args, destination: { ...destination, collect: true } });
       const outputs = Array.isArray(res?.outputs) ? res.outputs : [];
+      const folder = path.resolve(destination.folder);
       /* v0.1.29: say so if the server produced nothing to write. Silently
        * writing zero files is how the first cut of this bridge behaved — the
        * export reported success and the folder stayed empty. A missing
@@ -1387,8 +1415,6 @@ function registerClientFileHandlers() {
         }
         return { ...res, outputs: [], outputFolder: folder };
       }
-      const nodeFs = require('node:fs');
-      const folder = path.resolve(destination.folder);
       await fsp.mkdir(folder, { recursive: true });
 
       const written = [];
@@ -1396,15 +1422,7 @@ function registerClientFileHandlers() {
         if (!out?.bytes) { written.push(null); continue; }
         // Name collision is resolved HERE, because only this Mac can see what
         // is already in the folder. Same -2, -3 … convention as the server.
-        const proposed = String(out.name || 'overlay.png');
-        const parsed = path.parse(path.join(folder, proposed));
-        let dest = path.join(parsed.dir, `${parsed.name}${parsed.ext}`);
-        let n = 2;
-        while (nodeFs.existsSync(dest) && n < 9999) {
-          dest = path.join(parsed.dir, `${parsed.name}-${n}${parsed.ext}`);
-          n += 1;
-        }
-        await fsp.writeFile(dest, Buffer.from(out.bytes));
+        const dest = await writeUniqueFile(folder, out.name || 'overlay.png', Buffer.from(out.bytes));
         written.push(dest);
       }
 
@@ -1478,26 +1496,27 @@ function registerClientFileHandlers() {
     const cache = new Map();
     let n = 0;
     const resolveAsset = async (rel) => {
+      if (!rel) return null;
       if (cache.has(rel)) return cache.get(rel);
       const base = baseUrl();
       const auth = authHeader();
-      let abs = null;
-      if (base && auth) {
-        try {
-          const res = await fetch(`${base}/assets/${encodeURI(rel)}`, {
-            headers: { Authorization: auth },
-          });
-          if (res.ok) {
-            n += 1;
-            abs = path.join(tmpDir, `${n}-${path.basename(rel)}`);
-            await fsp.writeFile(abs, Buffer.from(await res.arrayBuffer()));
-          }
-        } catch (_) {
-          // Left as null: a logo that cannot be fetched is left out of the
-          // composite, exactly as an unset logo is.
-          abs = null;
-        }
+      if (!base || !auth) {
+        throw new Error(`Could not load overlay artwork "${rel}": server connection is not configured`);
       }
+      let res;
+      try {
+        res = await fetch(`${base}/assets/${encodeURI(rel)}`, {
+          headers: { Authorization: auth },
+        });
+      } catch (err) {
+        throw new Error(`Could not load overlay artwork "${rel}": ${err.message}`, { cause: err });
+      }
+      if (!res.ok) {
+        throw new Error(`Could not load overlay artwork "${rel}": server returned ${res.status}`);
+      }
+      n += 1;
+      const abs = path.join(tmpDir, `${n}-${path.basename(rel)}`);
+      await fsp.writeFile(abs, Buffer.from(await res.arrayBuffer()));
       cache.set(rel, abs);
       return abs;
     };
@@ -1696,29 +1715,23 @@ function registerClientImageImportBridges() {
       let dest = path.resolve(outRootAbs, rel);
       if (!dest.startsWith(outRootAbs + path.sep) && dest !== outRootAbs) continue;
 
-      if (nodeFs.existsSync(dest)) {
-        if (mode === 'skip') {
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      const bytes = Buffer.from(f.bytes);
+      if (mode === 'skip') {
+        try {
+          await writeExclusiveFile(dest, bytes);
+        } catch (err) {
+          if (err.code !== 'EEXIST') throw err;
           skippedExisting += 1;
           skippedNow.push({ sku: path.basename(rel), reason: 'Already exists in the output folder' });
           continue;
         }
-        if (mode === 'replace') {
-          replaced += 1;
-        } else {
-          // keepBoth — same naming the server uses: -2, -3, … until free.
-          const parsed = path.parse(dest);
-          let n = 2;
-          let candidate;
-          do {
-            candidate = path.join(parsed.dir, `${parsed.name}-${n}${parsed.ext}`);
-            n += 1;
-          } while (nodeFs.existsSync(candidate) && n < 1000);
-          dest = candidate;
-        }
+      } else if (mode === 'replace') {
+        if (nodeFs.existsSync(dest)) replaced += 1;
+        await fsp.writeFile(dest, bytes);
+      } else {
+        dest = await writeUniqueFile(path.dirname(dest), path.basename(dest), bytes);
       }
-
-      await fsp.mkdir(path.dirname(dest), { recursive: true });
-      await fsp.writeFile(dest, Buffer.from(f.bytes));
       written.push(dest);
     }
 
@@ -1854,38 +1867,73 @@ function registerClientImageImportBridges() {
     const sku = ((providedSku || 'product').toString().trim() || 'product')
       .replace(/[^A-Za-z0-9._-]+/g, '-');
 
-    let copied = 0;
-    const failures = [];
-    for (let i = 0; i < filepaths.length; i++) {
+    // Resolve every destination before starting I/O so completion order cannot
+    // change filenames. Three transfers gave a useful speedup without turning
+    // a copy action into an unbounded request burst.
+    // ponytail: at most three complete image bodies are buffered; stream this
+    // operation if larger normal images make that memory ceiling a problem.
+    const jobs = [];
+    for (let i = 0; i < filepaths.length; i += 1) {
       const rel = filepaths[i];
       const ext = path.extname(rel) || '.jpg';
       const idx = String(i + 1).padStart(3, '0');
       const baseName = `${sku}-${idx}${ext}`;
 
-      // Collision avoidance — same pattern as the standalone handler.
+      // Reserve each destination atomically before any downloads start. This
+      // keeps names deterministic while preventing another simultaneous copy
+      // action from claiming a path between existsSync() and writeFile().
       let final = path.join(folder, baseName);
       let collisionN = 1;
-      while (fs.existsSync(final)) {
-        final = path.join(folder, `${sku}-${idx} (${collisionN})${ext}`);
-        collisionN += 1;
-        if (collisionN > 999) break;
+      let output = null;
+      let reservationError = null;
+      while (!output) {
+        try {
+          output = await fsp.open(final, 'wx');
+        } catch (err) {
+          if (err.code !== 'EEXIST') {
+            reservationError = err;
+            break;
+          }
+          final = path.join(folder, `${sku}-${idx} (${collisionN})${ext}`);
+          collisionN += 1;
+        }
       }
+      jobs.push({ rel, final, output, reservationError });
+    }
 
-      try {
-        // The app-image:// protocol handler is the client-mode
-        // passthrough that HTTPs to the server with the bearer token
-        // and proxies the bytes back. So net.fetch hides all the
-        // "where do these bytes live" complexity from us.
-        const url = `app-image://local/${encodeURIComponent(rel)}`;
-        const res = await nt.fetch(url);
-        if (!res.ok) throw new Error(`fetch returned ${res.status}`);
-        const buf = Buffer.from(await res.arrayBuffer());
-        await fsp.writeFile(final, buf);
-        copied += 1;
-      } catch (err) {
-        failures.push({ filename: path.basename(rel), error: err.message });
+    const results = new Array(jobs.length);
+    let cursor = 0;
+    async function copyNext() {
+      while (cursor < jobs.length) {
+        const i = cursor;
+        cursor += 1;
+        const { rel, final, output, reservationError } = jobs[i];
+
+        try {
+          if (reservationError) throw reservationError;
+          // The app-image:// protocol handler is the client-mode
+          // passthrough that HTTPs to the server with the bearer token
+          // and proxies the bytes back. So net.fetch hides all the
+          // "where do these bytes live" complexity from us.
+          const url = `app-image://local/${encodeURIComponent(rel)}`;
+          const res = await nt.fetch(url);
+          if (!res.ok) throw new Error(`fetch returned ${res.status}`);
+          const buf = Buffer.from(await res.arrayBuffer());
+          await output.writeFile(buf);
+          await output.close();
+          results[i] = null;
+        } catch (err) {
+          if (output) {
+            try { await output.close(); } catch (_) { /* original error wins */ }
+            try { await fsp.rm(final, { force: true }); } catch (_) { /* best effort */ }
+          }
+          results[i] = { filename: path.basename(rel), error: err.message };
+        }
       }
     }
+    await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, () => copyNext()));
+    const failures = results.filter(Boolean);
+    const copied = results.length - failures.length;
 
     if (copied > 0) {
       try { shl.openPath(folder); } catch (_) { /* non-fatal */ }
@@ -1937,6 +1985,9 @@ function registerClientImageImportBridges() {
     const { net: nt } = require('electron');
     const os = require('node:os');
     const crypto = require('node:crypto');
+    const productImageRows = await rpc('images:listByProduct', productId);
+    if (!Array.isArray(productImageRows)) throw new Error('Could not verify product images with the server');
+    const productFilepaths = new Set(productImageRows.map((image) => image.filepath));
 
     // Unique temp dir per drag. Path collisions inside it are still
     // possible if the user dragged duplicate filenames from different
@@ -1951,20 +2002,10 @@ function registerClientImageImportBridges() {
     // not CPU; Promise.all is fine for typical (≤20) selection sizes.
     await Promise.all(filepaths.map(async (rel) => {
       try {
-        // Filename collision avoidance within this drag's temp dir.
-        // Doesn't need to match a SKU pattern here — the file will
-        // be dropped into the user's target (browser, Mail, …) and
-        // the receiving system renames as needed.
-        const baseName = path.basename(rel) || 'image.jpg';
-        let final = path.join(tmpDir, baseName);
-        let n = 1;
-        while (fs.existsSync(final)) {
-          const ext = path.extname(baseName);
-          const stem = baseName.slice(0, baseName.length - ext.length);
-          final = path.join(tmpDir, `${stem} (${n})${ext}`);
-          n += 1;
-          if (n > 999) break;
+        if (typeof rel !== 'string' || !productFilepaths.has(rel)) {
+          throw new Error('image is not attached to this product');
         }
+        const baseName = path.basename(rel) || 'image.jpg';
 
         // app-image:// in client mode routes to HTTPS server with
         // bearer token (registerClientImageProtocol). Same auth
@@ -1974,7 +2015,8 @@ function registerClientImageImportBridges() {
         const res = await nt.fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buf = Buffer.from(await res.arrayBuffer());
-        await fsp.writeFile(final, buf);
+        const final = await writeUniqueFile(tmpDir, baseName, buf);
+        issuedDragPaths.set(final, Date.now() + DRAG_PREP_TTL_MS);
         downloaded.push(final);
       } catch (err) {
         failed.push({ filepath: rel, error: err.message });
@@ -1995,15 +2037,17 @@ function registerClientImageImportBridges() {
     // completes in seconds, but receiving apps may read the bytes
     // lazily — 5 minutes is paranoia-safe without leaving the temp
     // dir around forever.
-    setTimeout(() => {
+    const cleanupTimer = setTimeout(() => {
+      for (const filePath of downloaded) issuedDragPaths.delete(filePath);
       fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-    }, 5 * 60 * 1000);
+    }, DRAG_PREP_TTL_MS);
+    cleanupTimer.unref?.();
 
     return { tmpDir, files: downloaded, failed };
   });
 
   ipcMain.on('images:startDragOut', async (event, args = {}) => {
-    const { preparedPaths } = args;
+    const preparedPaths = args && typeof args === 'object' ? args.preparedPaths : null;
     if (!Array.isArray(preparedPaths) || preparedPaths.length === 0) {
       // No prepared paths — the renderer either skipped prepareDrag
       // (which client mode requires) or the drag was triggered with
@@ -2014,7 +2058,7 @@ function registerClientImageImportBridges() {
     // Defensive existence check — temp files may have been cleaned
     // up by the 5 min timer if the user prepared a drag and then
     // sat on the pill for too long.
-    const livePaths = preparedPaths.filter((p) => {
+    const livePaths = takeIssuedDragPaths(preparedPaths).filter((p) => {
       try { return fs.existsSync(p); } catch { return false; }
     });
     if (livePaths.length === 0) return;
@@ -2080,6 +2124,7 @@ function registerClientImageImportBridges() {
     let imagesImported = 0;
     let imagesSkippedDup = 0;
     let imagesSkippedCap = 0;
+    const failures = [];
 
     // Pre-tally for a determinate bar.
     let total = 0;
@@ -2105,8 +2150,12 @@ function registerClientImageImportBridges() {
             });
             if (res?.skipped) imagesSkippedDup += 1;
             else { imagesImported += 1; touched = true; }
-          } catch (_err) {
-            imagesSkippedDup += 1;
+          } catch (err) {
+            failures.push({
+              filepath: path.relative(folderPath, c.sourcePath) || path.basename(c.sourcePath),
+              sku: product.sku,
+              error: err.message,
+            });
           }
           done += 1;
           events.broadcast('progress:event', {
@@ -2146,6 +2195,8 @@ function registerClientImageImportBridges() {
       imagesImported,
       imagesSkippedDup,
       imagesSkippedCap,
+      imagesFailed: failures.length,
+      failures,
       unmatchedFiles: unmatched.length,
       unmatchedSamples,
       unmatchedSamplesCapped: unmatched.length > unmatchedSamples.length,

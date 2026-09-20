@@ -21,6 +21,8 @@ import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { GenerationExperience } from '../../components/GenerationExperience.jsx';
 import { useAppStore } from '../../store/index.js';
 import { CANVAS_PRESETS, GridControls } from './GridControls.jsx';
+import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
+import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 
 /** Config keys that change WHICH products are selected rather than merely how
  *  they are drawn. Editing one of these invalidates the page the user is on. */
@@ -113,7 +115,8 @@ function PreviewPane({ preview, loading, error, config, onPage, onExport, export
   );
 }
 
-function PresetEditor({ presetId, onBack }) {
+export function PresetEditor({ presetId, onBack }) {
+  const companyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
@@ -135,16 +138,39 @@ function PresetEditor({ presetId, onBack }) {
   const latest = useRef(null);
   /** True while an edit has not yet reached the server, so unmount can flush it. */
   const dirty = useRef(false);
+  const saveQueue = useRef(null);
+  const editorGeneration = useRef(0);
+  const remoteSeq = useRef(0);
 
   useEffect(() => { void refreshBrands(); void refreshCategories(); }, [refreshBrands, refreshCategories]);
 
   useEffect(() => {
     let cancelled = false;
+    const generation = ++editorGeneration.current;
+    saveQueue.current = null;
+    latest.current = null;
+    dirty.current = false;
     window.api.socialGrid.get(presetId)
-      .then((row) => { if (!cancelled) { setPreset(row); setSavedAt(row.updatedAt); latest.current = row; } })
-      .catch((e) => addToast(e.message, 'error'));
-    return () => { cancelled = true; };
-  }, [presetId, addToast]);
+      .then((row) => { if (!cancelled && generation === editorGeneration.current) { setPreset(row); setSavedAt(row.updatedAt); latest.current = row; dirty.current = false; } })
+      .catch((e) => { if (!cancelled && generation === editorGeneration.current) addToast(e.message, 'error'); });
+    return () => { cancelled = true; editorGeneration.current += 1; };
+  }, [presetId, companyId, addToast]);
+
+  useEffect(() => {
+    const offs = [];
+    const generation = editorGeneration.current;
+    const refresh = (event) => {
+      if (event?.kind !== 'socialGrid' || event.id !== presetId || dirty.current) return;
+      if (event.op === 'delete') { onBack(); return; }
+      const seq = ++remoteSeq.current;
+      window.api.socialGrid.get(presetId).then((row) => {
+        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { setPreset(row); latest.current = row; setSavedAt(row.updatedAt); }
+      }).catch((e) => { if (generation === editorGeneration.current && seq === remoteSeq.current) addToast(e.message, 'error'); });
+    };
+    if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
+    if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => refresh({ kind: 'socialGrid', id: presetId, op: 'update' })));
+    return () => offs.forEach((off) => off?.());
+  }, [presetId, onBack, addToast]);
 
   const config = preset?.config;
 
@@ -185,22 +211,28 @@ function PresetEditor({ presetId, onBack }) {
     return () => clearTimeout(previewTimer.current);
   }, [config, pageIndex, refreshPreview]);
 
-  const save = useCallback(async (value) => {
-    if (!value) return;
+  const save = useCallback((value = latest.current) => {
+    if (!value) return Promise.resolve();
     clearTimeout(saveTimer.current);
-    setSaveState('saving');
-    try {
-      const row = await window.api.socialGrid.update(value.id, { name: value.name, config: value.config });
-      setPreset(row);
-      latest.current = row;
-      dirty.current = false;
-      setSavedAt(Date.now());
-      setSaveState('saved');
-    } catch (e) {
-      setSaveState('dirty');
-      addToast(e.message, 'error');
+    if (!saveQueue.current) {
+      const generation = editorGeneration.current;
+      saveQueue.current = createLatestSaveQueue({
+        persist: (next) => window.api.socialGrid.update(next.id, { name: next.name, config: next.config }),
+        onStart: () => { if (generation === editorGeneration.current) setSaveState('saving'); },
+        onSuccess: (row, value) => { if (generation !== editorGeneration.current || latest.current !== value) return; setPreset(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved'); },
+        onError: (e) => { if (generation === editorGeneration.current) { dirty.current = true; setSaveState('dirty'); } addToast(e.message, 'error'); },
+      });
     }
+    saveQueue.current.enqueue(value);
+    return Promise.resolve();
   }, [addToast]);
+  const flushPending = useCallback(() => {
+    if (!dirty.current || !latest.current) return Promise.resolve();
+    clearTimeout(saveTimer.current);
+    if (!saveQueue.current) save(latest.current);
+    return saveQueue.current.flush(latest.current);
+  }, [save]);
+  useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
 
   /* One place applies a new preset value, mirrors it into `latest` for the
    * explicit Save button, marks the form dirty and schedules the autosave.
@@ -210,6 +242,7 @@ function PresetEditor({ presetId, onBack }) {
    * inside one is a side effect in what must be a pure function. `preset` is
    * the current render's value, which is fresh for every user keystroke. */
   function applyNext(next) {
+    remoteSeq.current += 1;
     setPreset(next);
     latest.current = next;
     dirty.current = true;
@@ -250,13 +283,14 @@ function PresetEditor({ presetId, onBack }) {
     setProgress(10);
     const pulse = setInterval(() => setProgress((x) => Math.min(88, x + 6)), 220);
     try {
-      const res = await window.api.socialGrid.exportImages(config, folder, preset.id);
+      if (dirty.current) await flushPending();
+      const committed = latest.current || preset;
+      const res = await window.api.socialGrid.exportImages(committed.config, folder, committed.id);
       setProgress(100);
       const n = res.pageCount ?? res.outputPaths?.length ?? 0;
       addToast(`Saved ${n} image${n === 1 ? '' : 's'} to ${folder}`, 'success');
-      const row = await window.api.socialGrid.get(preset.id);
-      setPreset(row);
-      latest.current = row;
+      const row = await window.api.socialGrid.get(committed.id);
+      if (latest.current === committed && !dirty.current) { setPreset(row); latest.current = row; dirty.current = false; }
     } catch (e) {
       addToast(e.message, 'error');
     } finally {
@@ -332,12 +366,24 @@ export function SocialGrid() {
   const [startSize, setStartSize] = useState('square');
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(() => {
-    if (!companyId) return undefined;
-    return window.api.socialGrid.list(companyId).then(setPresets).catch((e) => addToast(e.message, 'error'));
+  const requestSeq = useRef(0);
+  const load = useCallback(async () => {
+    const seq = ++requestSeq.current;
+    if (!companyId) { setPresets([]); setEditing(null); return; }
+    try {
+      const rows = await window.api.socialGrid.list(companyId);
+      if (seq === requestSeq.current) setPresets(rows);
+    } catch (e) { if (seq === requestSeq.current) addToast(e.message, 'error'); }
   }, [companyId, addToast]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { setEditing(null); void load(); }, [companyId, load]);
+  useEffect(() => {
+    const offs = [];
+    const refresh = (event) => { if (!event || event.kind === 'socialGrid') void load(); };
+    if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
+    if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => { void load(); }));
+    return () => offs.forEach((off) => off?.());
+  }, [load]);
 
   const canvas = useMemo(() => CANVAS_PRESETS.find((p) => p.id === startSize) ?? CANVAS_PRESETS[0], [startSize]);
 
@@ -365,7 +411,7 @@ export function SocialGrid() {
   }
 
   if (editing) {
-    return <PresetEditor presetId={editing} onBack={() => { setEditing(null); void load(); }} />;
+    return <PresetEditor key={editing} presetId={editing} onBack={() => { setEditing(null); void load(); }} />;
   }
 
   return (

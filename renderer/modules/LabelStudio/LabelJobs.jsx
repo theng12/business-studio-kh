@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, EmptyState } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { useAppStore } from '../../store/index.js';
@@ -18,11 +18,25 @@ export function LabelJobs() {
   const addToast = useAppStore((s) => s.addToast);
   const [runs, setRuns] = useState([]);
   const [thisMac, setThisMac] = useState(null);
+  const requestSeq = useRef(0);
 
-  const load = () => companyId
-    && window.api.labels.listRuns(companyId, 200).then(setRuns).catch((e) => addToast(e.message, 'error'));
+  const load = useCallback(async () => {
+    const seq = ++requestSeq.current;
+    if (!companyId) { setRuns([]); return; }
+    try {
+      const rows = await window.api.labels.listRuns(companyId, 200);
+      if (seq === requestSeq.current) setRuns(rows);
+    } catch (e) { if (seq === requestSeq.current) addToast(e.message, 'error'); }
+  }, [companyId, addToast]);
 
-  useEffect(() => { void load(); }, [companyId]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const offs = [];
+    const refresh = (event) => { if (!event || event.kind === 'labels') void load(); };
+    if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
+    if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => { void load(); }));
+    return () => offs.forEach((off) => off?.());
+  }, [load]);
 
   // Which Mac is this? Needed to tell "my file" from "the other Mac's file".
   useEffect(() => {

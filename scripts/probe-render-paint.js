@@ -33,11 +33,16 @@ const { app } = require('electron');
 
 const ROOT = path.join(__dirname, '..');
 const sharp = require('sharp');
+const renderUserDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'msr-render-userdata-'));
+app.setPath('userData', renderUserDataDir);
+process.on('exit', () => {
+  try { fs.rmSync(renderUserDataDir, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+});
 
 // The asset resolver reaches for the configured data folder; this script has no
 // database, so give it an empty one. Every image below is supplied inline.
 require.cache[require.resolve(path.join(ROOT, 'main/db'))] = {
-  exports: { getDataDir: () => path.join(os.tmpdir(), 'msr-no-data') },
+  exports: { getDataDir: () => path.join(renderUserDataDir, 'data') },
 };
 
 const { buildPageHtml, } = require(path.join(ROOT, 'main/socialGridRenderer'));

@@ -25,6 +25,7 @@ const companies = require('../db/companies');
 const imageTemplates = require('../db/imageTemplates');
 const imageTemplateRuns = require('../db/imageTemplateRuns');
 const templateRenderer = require('../templateRenderer');
+const { writeUniqueFile } = require('../util/exclusiveFile');
 const { applyTemplateToFiles, validateExternalRequest } = require('../util/externalOverlay');
 const { getDataDir } = require('../db');
 
@@ -127,11 +128,7 @@ async function applyOverlayToProductImages({ template, product, scope, destinati
       }
       const folder = destination.folder;
       await fs.promises.mkdir(folder, { recursive: true });
-      let name = `${base}.png`;
-      let n = 2;
-      while (fs.existsSync(path.join(folder, name)) && n < 9999) { name = `${base}-${n}.png`; n += 1; }
-      const absOut = path.join(folder, name);
-      await fs.promises.writeFile(absOut, bytes);
+      const absOut = await writeUniqueFile(folder, `${base}.png`, bytes);
       outputs.push({ outputFilepath: absOut, savedTo: absOut });
     } else {
       // append / appendAsMain / replaceMain → add an overlaid copy.

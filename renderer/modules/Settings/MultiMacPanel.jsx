@@ -14,7 +14,7 @@
  * Settings/index.jsx) — the two files would otherwise have a circular
  * import. Keep the two copies in sync if you ever change SettingRow.
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Input, Select } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
@@ -145,7 +145,7 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
     return () => { cancelled = true; clearInterval(t); };
   }, [clientMode]);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const list = await window.api.users.list();
       setUsers(list);
@@ -161,13 +161,8 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
     } catch (err) {
       addToast?.(err.message, 'error');
     }
-  }
-  // v0.26.41 (audit pass): `refresh` is omitted from deps on purpose —
-  // it's recreated on every render of ServerModePanel and adding it
-  // would re-fire the effect after every render (which calls setUsers,
-  // which re-renders, infinite loop). Run-once-on-mount is what we want
-  // here; subsequent refreshes are user-driven (Add user, regenerate, etc.).
-  useEffect(() => { refresh(); }, []);
+  }, [addToast]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   function openAdd() {
     setAddForm({ name: '', role: 'editor' });

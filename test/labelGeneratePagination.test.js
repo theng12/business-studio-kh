@@ -33,6 +33,10 @@ function makeReactHarness(storeState) {
     return hookValues[index].value;
   }
 
+  function useCallback(callback, deps) {
+    return useMemo(() => callback, deps);
+  }
+
   function useEffect(effect, deps) {
     const index = hookIndex++;
     const previous = effectValues[index];
@@ -43,7 +47,7 @@ function makeReactHarness(storeState) {
   }
 
   const jsx = (type, props, key) => ({ type, key, props: props || {} });
-  const react = { useState, useRef, useMemo, useEffect, createElement: jsx };
+  const react = { useState, useRef, useMemo, useCallback, useEffect, createElement: jsx };
   const zustand = {
     create: () => {
       const store = (selector) => selector(storeState);

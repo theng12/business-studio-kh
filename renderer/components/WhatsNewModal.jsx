@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.33',
+    date: '2026-09-20',
+    items: [
+      'FIX — Client reconnects refresh missed changes, company switches keep the correct data, and overlapping server requests retain the right user identity.',
+      'FIX — Catalog, label, Social Grid and Image Workspace saves preserve newer edits. Export waits for pending changes, and switching images keeps settings attached to the correct image.',
+      'FIX — Label selection now follows the visible page. Catalog, label and Social Grid changes appear on connected Macs without reopening the page.',
+      'FIX — Backup restores validate archives before replacing data. Drag-out and export copies protect existing files, missing overlay artwork reports a failure, and failed imports show their actual errors.',
+      'POLISH — Fewer duplicate refreshes, narrower product-image queries, reusable image downloads and bounded client copying reduce unnecessary work. Removed fixed delays after label and catalog operations.',
+      'Internal — restricted token-bearing management access, updated audited dependencies and the Apple Silicon runtime, and added server/client and data-safety regression checks. Requires macOS 12 or newer.',
+    ],
+  },
+  {
     version: '0.1.32',
     date: '2026-09-20',
     items: [

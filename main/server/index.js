@@ -25,6 +25,9 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { logSoftFailure } = require('../util/softFailure');
 const path = require('node:path');
 const fs = require('node:fs');
+const MAX_RPC_BODY_BYTES = 100 * 1024 * 1024;
+const RPC_BODY_TOO_LARGE_MESSAGE =
+  'Request body exceeds 100 MiB. Binary RPC payloads are transfer-encoded; keep raw files or batches below 75 MiB.';
 // v0.15.1: WebSocket support for live-update push to clients.
 // Loaded lazily inside bootServer() so dev workflows that don't run
 // the server (standalone mode) don't pay the import cost.
@@ -112,23 +115,29 @@ let _bindings = null; // { port, addresses: string[] }
 async function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let total = 0;
+    let tooLarge = false;
     const chunks = [];
     req.on('data', (chunk) => {
+      if (tooLarge) return;
       total += chunk.length;
-      if (total > 100 * 1024 * 1024) {
-        reject(new Error('Request body too large'));
-        req.destroy();
+      if (total > MAX_RPC_BODY_BYTES) {
+        tooLarge = true;
+        chunks.length = 0;
+        const err = new Error(RPC_BODY_TOO_LARGE_MESSAGE);
+        err.statusCode = 413;
+        reject(err);
         return;
       }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (tooLarge) return;
       const raw = Buffer.concat(chunks).toString('utf8');
       if (!raw) return resolve(null);
       try { resolve(JSON.parse(raw)); }
       catch (err) { reject(new Error('Invalid JSON: ' + err.message)); }
     });
-    req.on('error', reject);
+    req.on('error', (err) => { if (!tooLarge) reject(err); });
   });
 }
 
@@ -183,23 +192,33 @@ async function serveAsset(req, res, urlPath, dataDir) {
   }
   const normalized = path.normalize(abs);
   if (
-    !normalized.startsWith(assetsRoot) &&
-    !normalized.startsWith(processedRoot) &&
-    !normalized.startsWith(aiGalleryRoot)
+    !isPathWithinRoot(assetsRoot, normalized) &&
+    !isPathWithinRoot(processedRoot, normalized) &&
+    !isPathWithinRoot(aiGalleryRoot, normalized)
   ) {
     res.writeHead(403); res.end(); return;
   }
-  // v0.26.42: combined stat + existence check in one async call.
-  // stat() returns the file info if it exists; ENOENT if not.
+  // Open first, then inspect that same handle. This closes the deletion race
+  // between stat() and createReadStream() and also rejects directories before
+  // sending a 200 response.
+  let handle;
   let stat;
   try {
-    stat = await fs.promises.stat(normalized);
+    handle = await fs.promises.open(normalized, 'r');
+    stat = await handle.stat();
   } catch (err) {
-    if (err.code === 'ENOENT') {
+    if (handle) {
+      try { await handle.close(); } catch (_) { /* original error wins */ }
+    }
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') {
       res.writeHead(404); res.end(); return;
     }
     process.stderr.write(`[serveAsset] stat error: ${err.message}\n`);
     res.writeHead(500); res.end(); return;
+  }
+  if (!stat.isFile()) {
+    await handle.close();
+    res.writeHead(404); res.end(); return;
   }
   const ext = path.extname(normalized).toLowerCase();
   const mime =
@@ -208,13 +227,36 @@ async function serveAsset(req, res, urlPath, dataDir) {
     ext === '.webp' ? 'image/webp' :
     ext === '.svg'  ? 'image/svg+xml' :
     'application/octet-stream';
-  res.writeHead(200, {
+  const etag = `"${stat.ino}-${stat.size}-${stat.mtimeMs}-${stat.ctimeMs}"`;
+  const headers = {
     'Content-Type': mime,
-    'Content-Length': stat.size,
-    'Cache-Control': 'no-cache', // mtime changes on renumber; force revalidation
+    'Cache-Control': 'private, no-cache',
+    'Vary': 'Authorization',
+    'ETag': etag,
     'Last-Modified': stat.mtime.toUTCString(),
+  };
+  if (req.headers['if-none-match'] === etag) {
+    await handle.close();
+    res.writeHead(304, headers);
+    res.end();
+    return;
+  }
+
+  res.writeHead(200, { ...headers, 'Content-Length': stat.size });
+  const stream = handle.createReadStream({ autoClose: true });
+  stream.on('error', (err) => {
+    process.stderr.write(`[serveAsset] read error: ${err.message}\n`);
+    if (!res.destroyed) res.destroy(err);
   });
-  fs.createReadStream(normalized).pipe(res);
+  res.on('close', () => {
+    if (!stream.destroyed) stream.destroy();
+  });
+  stream.pipe(res);
+}
+
+function isPathWithinRoot(root, candidate) {
+  const rel = path.relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 async function handleRequest(req, res, dataDir) {
@@ -339,8 +381,14 @@ async function handleRequest(req, res, dataDir) {
     }
 
     let body;
+    const declaredBytes = Number(req.headers['content-length']);
+    if (Number.isFinite(declaredBytes) && declaredBytes > MAX_RPC_BODY_BYTES) {
+      req.resume();
+      sendJson(res, 413, { error: RPC_BODY_TOO_LARGE_MESSAGE });
+      return;
+    }
     try { body = await readJsonBody(req); }
-    catch (err) { sendJson(res, 400, { error: err.message }); return; }
+    catch (err) { sendJson(res, err.statusCode || 400, { error: err.message }); return; }
     const channel = body?.channel;
     if (!channel) { sendJson(res, 400, { error: 'channel required' }); return; }
     const handler = handlers.get(channel);

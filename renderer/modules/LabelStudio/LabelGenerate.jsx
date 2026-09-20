@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Input, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -13,24 +13,27 @@ export function LabelGenerate() {
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [phase, setPhase] = useState(0); const [detail, setDetail] = useState(''); const [previewHtml, setPreviewHtml] = useState('');
   const templatesRequestRef = useRef(0); const previewRequestRef = useRef(0);
   useEffect(() => {
-    const requestId = ++templatesRequestRef.current;
+    ++templatesRequestRef.current;
     ++previewRequestRef.current;
     setTemplates([]); setTemplateId(''); setSelected([]); setProductPage(0); setPreviewHtml('');
     if (!companyId) return () => { templatesRequestRef.current += 1; };
-    window.api.labels.listTemplates(companyId)
-      .then((rows) => {
-        if (requestId !== templatesRequestRef.current) return;
-        setTemplates(rows); setTemplateId(rows[0]?.id || '');
-      })
-      // v0.1.28: the sibling printer call below explains why failures must be
-      // surfaced; this one still swallowed them, leaving an empty dropdown
-      // with no reason given.
-      .catch((err) => { if (requestId === templatesRequestRef.current) addToast(`Could not load label templates — ${err.message}`, 'error'); }); // v0.1.21: this used to swallow the failure, so on a Mac where the printer
-    // list could not be read the dropdown just stayed empty with no explanation.
+    const loadTemplates = () => {
+      const refreshId = ++templatesRequestRef.current;
+      return window.api.labels.listTemplates(companyId)
+        .then((rows) => {
+          if (refreshId !== templatesRequestRef.current) return;
+          setTemplates(rows); setTemplateId((current) => rows.some((row) => row.id === current) ? current : (rows[0]?.id || ''));
+        })
+        .catch((err) => { if (refreshId === templatesRequestRef.current) addToast(`Could not load label templates — ${err.message}`, 'error'); });
+    };
+    void loadTemplates();
+    const offs = [];
+    if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged((event) => { if (event?.kind === 'labels') void loadTemplates(); }));
+    if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => { void loadTemplates(); }));
     window.api.labels.listPrinters()
       .then(setPrinters)
       .catch((err) => addToast(`Could not read the printer list — ${err.message}`, 'error'));
-    return () => { if (templatesRequestRef.current === requestId) templatesRequestRef.current += 1; };
+    return () => { templatesRequestRef.current += 1; offs.forEach((off) => off?.()); };
   },
     // addToast is a Zustand action — a stable reference, so listing it cannot
     // make this effect re-run.
@@ -39,10 +42,10 @@ export function LabelGenerate() {
     const off = window.api.events.onProgress((ev) => { if (ev?.kind !== 'labels' || ev.complete) return; setProgress(ev.total ? ev.done / ev.total * 82 + 12 : 15); setPhase(ev.phase === 'finishing' ? 3 : 2); setDetail(ev.label || ''); });
     return () => { if (typeof off === 'function') off(); };
   }, []);
-  const productRows = Array.isArray(products) ? products : [];
-  const templateRows = Array.isArray(templates) ? templates : [];
-  const printerRows = Array.isArray(printers) ? printers : [];
-  const filtered = useMemo(() => { const q = search.toLowerCase(); return productRows.filter((p) => !q || `${p.sku} ${p.name}`.toLowerCase().includes(q)); }, [products, search]);
+  const productRows = useMemo(() => (Array.isArray(products) ? products : []), [products]);
+  const templateRows = useMemo(() => (Array.isArray(templates) ? templates : []), [templates]);
+  const printerRows = useMemo(() => (Array.isArray(printers) ? printers : []), [printers]);
+  const filtered = useMemo(() => { const q = search.toLowerCase(); return productRows.filter((p) => !q || `${p.sku} ${p.name}`.toLowerCase().includes(q)); }, [productRows, search]);
   const productPageInfo = useMemo(() => paginate(filtered.length, productPage, productPageSize), [filtered.length, productPage, productPageSize]);
   const visibleProducts = filtered.slice(productPageInfo.pageStart, productPageInfo.pageEnd);
   useEffect(() => { if (productPage !== productPageInfo.currentPage) setProductPage(productPageInfo.currentPage); }, [productPage, productPageInfo.currentPage]);
@@ -54,21 +57,23 @@ export function LabelGenerate() {
     const cols = Math.max(1, Math.floor((pw - marginMm * 2 + gapMm) / (t.widthMm + gapMm)));
     const rows = Math.max(1, Math.floor((ph - marginMm * 2 + gapMm) / (t.heightMm + gapMm)));
     return { cols, rows, total: cols * rows };
-  }, [templates, templateId, pageSize, orientation, marginMm, gapMm, mode]);
+  }, [templateRows, templateId, pageSize, orientation, marginMm, gapMm, mode]);
   const layout = { mode, pageSize, orientation, marginMm, gapMm, copies };
-  async function preview() { const requestId = ++previewRequestRef.current; if (!templateId) return; const productId = selected[0] || productRows[0]?.id; if (!productId) return; try { const res = await window.api.labels.preview({ templateId, productId, layout: { mode: 'single' } }); if (requestId !== previewRequestRef.current) return; setPreviewHtml(res.html); } catch (e) { if (requestId === previewRequestRef.current) addToast(e.message, 'error'); } }
-  useEffect(() => { const previewRef = previewRequestRef; ++previewRef.current; const id = setTimeout(preview, 200); return () => { clearTimeout(id); ++previewRef.current; }; }, [templateId, selected[0], companyId]);
+  const selectedProductId = selected[0];
+  const selectedTemplate = templateRows.find((row) => row.id === templateId);
+  const preview = useCallback(async () => { const requestId = ++previewRequestRef.current; const previewTemplateId = selectedTemplate?.id || templateId; if (!previewTemplateId) return; const productId = selectedProductId || productRows[0]?.id; if (!productId) return; try { const res = await window.api.labels.preview({ templateId: previewTemplateId, productId, layout: { mode: 'single' } }); if (requestId !== previewRequestRef.current) return; setPreviewHtml(res.html); } catch (e) { if (requestId === previewRequestRef.current) addToast(e.message, 'error'); } }, [templateId, selectedTemplate, selectedProductId, productRows, addToast]);
+  useEffect(() => { const previewRef = previewRequestRef; ++previewRef.current; const id = setTimeout(preview, 200); return () => { clearTimeout(id); ++previewRef.current; }; }, [preview]);
   function toggle(id) { setSelected((x) => x.includes(id) ? x.filter((v) => v !== id) : [...x, id]); }
   async function pickFolder() { const f = await window.api.files.pickFolder(); if (f) setOutputFolder(f); }
   async function generate() {
     if (!selected.length) return addToast('Select at least one product', 'error'); if (!outputFolder) return addToast('Pick an output folder', 'error');
     setWorking(true); setProgress(6); setPhase(0); setDetail(`${selected.length} products`);
-    try { await new Promise((r) => setTimeout(r, 450)); setProgress(12); setPhase(1); const res = await window.api.labels.generate({ companyId, templateId, productIds: selected, outputFolder, format, layout }); setProgress(100); setPhase(3); setDetail('Ready'); await new Promise((r) => setTimeout(r, 700)); addToast(`Created ${res.files.length} file${res.files.length === 1 ? '' : 's'}`, 'success'); }
+    try { setProgress(12); setPhase(1); const res = await window.api.labels.generate({ companyId, templateId, productIds: selected, outputFolder, format, layout }); setProgress(100); setPhase(3); setDetail('Ready'); addToast(`Created ${res.files.length} file${res.files.length === 1 ? '' : 's'}`, 'success'); }
     catch (e) { addToast(e.message, 'error'); } finally { setWorking(false); }
   }
   async function print() {
     if (!selected.length) return addToast('Select at least one product', 'error'); setWorking(true); setProgress(8); setPhase(0);
-    try { await window.api.labels.print({ companyId, templateId, productIds: selected, layout, printOptions: { silent: !!printer, deviceName: printer, copies: 1 } }); setProgress(100); setPhase(3); await new Promise((r) => setTimeout(r, 500)); addToast('Print job sent', 'success'); } catch (e) { addToast(e.message, 'error'); } finally { setWorking(false); }
+    try { await window.api.labels.print({ companyId, templateId, productIds: selected, layout, printOptions: { silent: !!printer, deviceName: printer, copies: 1 } }); setProgress(100); setPhase(3); addToast('Print job sent', 'success'); } catch (e) { addToast(e.message, 'error'); } finally { setWorking(false); }
   }
   if (!productRows.length) return <section className="page"><PageHeader title="Generate & Print" subtitle="Create labels from Product Library data." /><EmptyState title="No products yet" body="Add products to the Product Library before generating labels." /></section>;
   return <section className="page"><PageHeader title="Generate & Print" subtitle="Turn selected products into print-ready labels." actions={<div className="selection-count">{selected.length} selected</div>} />

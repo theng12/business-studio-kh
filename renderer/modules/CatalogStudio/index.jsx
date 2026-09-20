@@ -5,6 +5,8 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { GenerationExperience } from '../../components/GenerationExperience.jsx';
 import { useAppStore } from '../../store/index.js';
+import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
+import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 
 const THEMES = [
   { id: 'modern', name: 'Modern', description: 'Soft cards, generous spacing, bold cover.' },
@@ -154,21 +156,61 @@ function LivePreview({ preview, onRefresh }) {
   return <main className="catalog-preview"><div className="catalog-preview__bar"><span>Live PDF preview</span><Button variant="ghost" onClick={onRefresh}>Refresh</Button></div>{preview ? <iframe title="Catalog preview" srcDoc={preview} /> : <div className="preview-placeholder">Building preview…</div>}</main>;
 }
 
-function CatalogEditor({ projectId, onBack }) {
+export function CatalogEditor({ projectId, onBack }) {
   const products = useAppStore((s) => s.products); const addToast = useAppStore((s) => s.addToast);
   const [project, setProject] = useState(null); const [preview, setPreview] = useState(''); const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null);
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [tab, setTab] = useState('products'); const timer = useRef(null);
   /* v0.1.27: the pending edit is FLUSHED on unmount, not thrown away. The
    * autosave waits 550 ms, so "tweak a setting, click ← Catalog projects"
    * discarded the change silently — the debounce timer was merely cleared. */
-  const pending = useRef(null);
   const saveRef = useRef(null);
-  useEffect(() => { let cancelled = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled) { setProject(p); setSavedAt(p.updatedAt); } }).catch((e) => addToast(e.message, 'error')); return () => { cancelled = true; clearTimeout(timer.current); if (pending.current) void saveRef.current?.(pending.current); }; }, [projectId, addToast]);
-  const refreshPreview = useCallback(async () => { try { const r = await window.api.catalogStudio.preview(projectId); setPreview(r.html); } catch (e) { addToast(e.message, 'error'); } }, [projectId, addToast]);
-  useEffect(() => { if (!project) return undefined; const id = setTimeout(refreshPreview, 260); return () => clearTimeout(id); }, [project?.updatedAt, refreshPreview]);
-  const save = useCallback(async (value = project) => { if (!value) return; clearTimeout(timer.current); setSaveState('saving'); try { const row = await window.api.catalogStudio.update(value.id, value); setProject(row); setSavedAt(Date.now()); setSaveState('saved'); } catch (e) { setSaveState('dirty'); addToast(e.message, 'error'); } }, [project, addToast]);
+  const latest = useRef(null);
+  const dirty = useRef(false);
+  const saveQueue = useRef(null);
+  const editorGeneration = useRef(0);
+  const remoteSeq = useRef(0);
+  const save = useCallback((value = latest.current) => {
+    if (!value) return Promise.resolve();
+    clearTimeout(timer.current);
+    if (!saveQueue.current) {
+      const generation = editorGeneration.current;
+      saveQueue.current = createLatestSaveQueue({
+        persist: (next) => window.api.catalogStudio.update(next.id, next),
+        onStart: () => { if (generation === editorGeneration.current) setSaveState('saving'); },
+        onSuccess: (row, value) => { if (generation !== editorGeneration.current || latest.current !== value) return; setProject(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved'); },
+        onError: (e) => { if (generation === editorGeneration.current) { dirty.current = true; setSaveState('dirty'); } addToast(e.message, 'error'); },
+      });
+    }
+    saveQueue.current.enqueue(value);
+    return Promise.resolve();
+  }, [addToast]);
   saveRef.current = save;
-  function change(patch) { const next = { ...project, ...patch }; setProject(next); pending.current = next; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => { pending.current = null; save(next); }, 550); }
+  const flushPending = useCallback(() => {
+    if (!dirty.current || !latest.current) return Promise.resolve();
+    clearTimeout(timer.current);
+    if (!saveQueue.current) save(latest.current);
+    return saveQueue.current.flush(latest.current);
+  }, [save]);
+  useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
+  useEffect(() => { let cancelled = false; const generation = ++editorGeneration.current; saveQueue.current = null; latest.current = null; dirty.current = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled && generation === editorGeneration.current) { setProject(p); latest.current = p; setSavedAt(p.updatedAt); } }).catch((e) => { if (!cancelled && generation === editorGeneration.current) addToast(e.message, 'error'); }); return () => { cancelled = true; editorGeneration.current += 1; clearTimeout(timer.current); if (dirty.current && latest.current) void saveRef.current?.(latest.current); }; }, [projectId, addToast]);
+  useEffect(() => {
+    const offs = [];
+    const generation = editorGeneration.current;
+    const refresh = (event) => {
+      if (event?.kind !== 'catalogStudio' || event.id !== projectId || dirty.current) return;
+      if (event.op === 'delete') { onBack(); return; }
+      const seq = ++remoteSeq.current;
+      window.api.catalogStudio.get(projectId).then((row) => {
+        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { setProject(row); latest.current = row; setSavedAt(row.updatedAt); }
+      }).catch((e) => { if (generation === editorGeneration.current && seq === remoteSeq.current) addToast(e.message, 'error'); });
+    };
+    if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
+    if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => refresh({ kind: 'catalogStudio', id: projectId, op: 'update' })));
+    return () => offs.forEach((off) => off?.());
+  }, [projectId, onBack, addToast]);
+  const refreshPreview = useCallback(async () => { try { const r = await window.api.catalogStudio.preview(projectId); setPreview(r.html); } catch (e) { addToast(e.message, 'error'); } }, [projectId, addToast]);
+  useEffect(() => { if (!project) return undefined; const id = setTimeout(refreshPreview, 260); return () => clearTimeout(id); }, [project, refreshPreview]);
+  function change(patch) { remoteSeq.current += 1; const next = { ...project, ...patch }; setProject(next); latest.current = next; dirty.current = true; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }
   function updateConfig(patch) { change({ config: { ...project.config, ...patch } }); }
   async function exportPdf() {
     // v0.1.27: inside a try — a failing dialog used to reject out of the
@@ -177,7 +219,7 @@ function CatalogEditor({ projectId, onBack }) {
     try { folder = await window.api.files.pickFolder(); } catch (e) { addToast(e.message, 'error'); return; }
     if (!folder) return;
     setWorking(true); setProgress(8); let pulse = null;
-    try { pulse = setInterval(() => setProgress((x) => Math.min(88, x + 7)), 180); const res = await window.api.catalogStudio.exportPdf(project.id, folder); setProgress(100); await new Promise((r) => setTimeout(r, 650)); addToast(`Catalog exported to ${res.outputPath}`, 'success'); setProject(await window.api.catalogStudio.get(project.id)); }
+    try { pulse = setInterval(() => setProgress((x) => Math.min(88, x + 7)), 180); if (dirty.current) await flushPending(); const exportDraft = latest.current || project; const res = await window.api.catalogStudio.exportPdf(exportDraft.id, folder); setProgress(100); addToast(`Catalog exported to ${res.outputPath}`, 'success'); const row = await window.api.catalogStudio.get(exportDraft.id); if (latest.current === exportDraft && !dirty.current) { setProject(row); latest.current = row; dirty.current = false; } }
     catch (e) { addToast(e.message, 'error'); } finally { if (pulse) clearInterval(pulse); setWorking(false); }
   }
   if (!project) return <div className="page-loading">Loading catalog…</div>;
@@ -213,11 +255,25 @@ export function CatalogTemplates() {
 export function CatalogProjects() {
   const companyId = useAppStore((s) => s.activeCompanyId); const addToast = useAppStore((s) => s.addToast); const setActiveModule = useAppStore((s) => s.setActiveModule);
   const pendingProjectId = useAppStore((s) => s.pendingCatalogProjectId); const clearPendingCatalogNav = useAppStore((s) => s.clearPendingCatalogNav);
-  const [projects, setProjects] = useState([]); const [editing, setEditing] = useState(null);
-  const load = useCallback(() => companyId && window.api.catalogStudio.list(companyId).then(setProjects).catch((e) => addToast(e.message, 'error')), [companyId, addToast]);
-  useEffect(() => { void load(); }, [load]);
+  const [projects, setProjects] = useState([]); const [editing, setEditing] = useState(null); const requestSeq = useRef(0);
+  const load = useCallback(async () => {
+    const seq = ++requestSeq.current;
+    if (!companyId) { setProjects([]); setEditing(null); return; }
+    try {
+      const rows = await window.api.catalogStudio.list(companyId);
+      if (seq === requestSeq.current) setProjects(rows);
+    } catch (e) { if (seq === requestSeq.current) addToast(e.message, 'error'); }
+  }, [companyId, addToast]);
+  useEffect(() => { setEditing(null); void load(); }, [companyId, load]);
+  useEffect(() => {
+    const offs = [];
+    const refresh = (event) => { if (!event || event.kind === 'catalogStudio') void load(); };
+    if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
+    if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => { void load(); }));
+    return () => offs.forEach((off) => off?.());
+  }, [load]);
   useEffect(() => { if (pendingProjectId) { setEditing(pendingProjectId); clearPendingCatalogNav(); } }, [pendingProjectId, clearPendingCatalogNav]);
-  if (editing) return <CatalogEditor projectId={editing} onBack={() => { setEditing(null); void load(); }} />;
+  if (editing) return <CatalogEditor key={editing} projectId={editing} onBack={() => { setEditing(null); void load(); }} />;
   return <section className="page"><PageHeader title="Catalog Projects" subtitle="Manage saved catalogs and continue where you left off." actions={<Button onClick={() => setActiveModule('catalogtemplates')}>+ New from template</Button>} />
     <div className="studio-intro studio-intro--catalog"><div><span className="studio-intro__icon">C</span><div><strong>Your catalog workspace</strong><p>Open a project to manage its products, ordering, layout and PDF output.</p></div></div><span className="studio-intro__badge">{projects.length} project{projects.length === 1 ? '' : 's'}</span></div>
     <div className="catalog-project-grid">{projects.length ? projects.map((p) => <ProjectCard key={p.id} project={p} onOpen={() => setEditing(p.id)} onDuplicate={async () => { try { await window.api.catalogStudio.duplicate(p.id); void load(); } catch (e) { addToast(e.message, 'error'); } }} onDelete={async () => { if (!(await confirm({ title: `Delete “${p.name}”?`, message: 'The catalog project is removed. Products and images are not affected.', danger: true }))) return; try { await window.api.catalogStudio.remove(p.id); void load(); } catch (e) { addToast(e.message, 'error'); } }} />) : <EmptyState title="No catalog projects" body="Choose a template, then add products from your library." action={<Button onClick={() => setActiveModule('catalogtemplates')}>Browse catalog templates</Button>} />}</div>

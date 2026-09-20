@@ -5,7 +5,7 @@ import { useAppStore } from '../../store/index.js';
 
 export function BarcodeStudio() {
   const addToast = useAppStore((s) => s.addToast); const [value, setValue] = useState('123456789012'); const [format, setFormat] = useState('code128'); const [dataUrl, setDataUrl] = useState('');
-  useEffect(() => { const id = setTimeout(() => window.api.labels.barcodePreview(value, format).then((r) => setDataUrl(r.dataUrl || '')).catch((e) => addToast(e.message, 'error')), 220); return () => clearTimeout(id); }, [value, format]);
+  useEffect(() => { const id = setTimeout(() => window.api.labels.barcodePreview(value, format).then((r) => setDataUrl(r.dataUrl || '')).catch((e) => addToast(e.message, 'error')), 220); return () => clearTimeout(id); }, [value, format, addToast]);
   async function copy() { try { await navigator.clipboard.writeText(value); addToast('Barcode value copied', 'success'); } catch (e) { addToast(e.message, 'error'); } }
   async function savePng() { try { const folder = await window.api.files.pickFolder(); if (!folder) return; const res = await window.api.labels.saveBarcode(value, format, folder); addToast(`Saved to ${res.outputPath}`, 'success'); } catch (e) { addToast(e.message, 'error'); } }
   return <section className="page"><PageHeader title="Barcode Maker" subtitle="Create a scannable barcode or QR code without building a label template." />

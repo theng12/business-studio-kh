@@ -21,8 +21,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
   expose('catalogStudio:get', ({ id } = {}) => assertEntityInActiveCompany(projects.get(id), 'Catalog project'));
   expose('catalogStudio:create', (input = {}) => { const row = projects.create(input); emitCatalogChange('catalogStudio', 'create', row.id); return row; });
   expose('catalogStudio:update', ({ id, patch } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const row = projects.update(id, patch); emitCatalogChange('catalogStudio', 'update', id); return row; });
-  expose('catalogStudio:delete', ({ id } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); return projects.remove(id); });
-  expose('catalogStudio:duplicate', ({ id } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); return projects.duplicate(id); });
+  expose('catalogStudio:delete', ({ id } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const ok = projects.remove(id); emitCatalogChange('catalogStudio', 'delete', id); return ok; });
+  expose('catalogStudio:duplicate', ({ id } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const row = projects.duplicate(id); emitCatalogChange('catalogStudio', 'create', row.id); return row; });
   expose('catalogStudio:preview', ({ id } = {}) => { const project = assertEntityInActiveCompany(projects.get(id), 'Catalog project'); return { html: buildCatalogHtml(context(project)) }; });
   exposeLocal('catalogStudio:export', async ({ id, outputFolder } = {}) => {
     const project = projects.get(id); if (!project) throw new Error('Catalog project not found');
@@ -38,6 +38,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       await toPdf(html, target, { orientation: project.config?.orientation });
       events.broadcast('progress:event', { id: opId, kind: 'catalog', done: 3, total: 3, phase: 'complete', label: project.name });
       projects.markExported(id);
+      emitCatalogChange('catalogStudio', 'update', id);
       return { outputPath: target };
     } finally { events.broadcast('progress:event', { id: opId, complete: true }); }
   });
@@ -67,6 +68,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     const project = projects.get(id); if (!project) throw new Error('Catalog project not found');
     assertEntityInActiveCompany(project, 'Catalog project');
     projects.markExported(id);
+    emitCatalogChange('catalogStudio', 'update', id);
     return { ok: true };
   });
 }

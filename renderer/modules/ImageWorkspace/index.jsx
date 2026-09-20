@@ -68,6 +68,21 @@ export function ImageWorkspace() {
   /** The not-yet-written settings change, so leaving the screen can flush it. */
   const pendingSaveRef = useRef(null);
   const lastSavedKeyRef = useRef(null);  // 'filepath::serialised-settings' last successfully saved
+  // Keep writes for this editor in submission order. Client-mode RPC calls
+  // use separate HTTP requests, so response order alone cannot protect the
+  // database from an older autosave arriving after a newer explicit Save.
+  const saveChainRef = useRef(Promise.resolve());
+  const queuedSaveRef = useRef(null);
+  const saveGenerationRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    // React StrictMode runs effect cleanup/setup once during development;
+    // reset this flag on setup so a remounted effect can still report state.
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   function handleCropChange(rect) {
     setSettings((s) => ({ ...s, cropRect: rect }));
@@ -183,25 +198,60 @@ export function ImageWorkspace() {
    * (save → store update → new object → re-seed → save again). */
   const imageIdentity = (img) => (img ? `${img.filepath}::${img.contentHash || img.id}` : null);
 
+  function enqueueWorkspaceSave(productId, filepath, settings) {
+    const key = `${productId}::${filepath}::${JSON.stringify(settings)}`;
+    if (queuedSaveRef.current?.key === key) return queuedSaveRef.current.promise;
+    const save = () => window.api.workspace.saveSettings(productId, filepath, settings);
+    const next = saveChainRef.current.then(save, save);
+    // A failed write must not permanently block later saves. Keep the
+    // returned promise rejecting so each caller still reports its own error.
+    saveChainRef.current = next.catch(() => {});
+    const request = { key, promise: next };
+    queuedSaveRef.current = request;
+    next.then(
+      () => { if (queuedSaveRef.current === request) queuedSaveRef.current = null; },
+      () => { if (queuedSaveRef.current === request) queuedSaveRef.current = null; },
+    );
+    return next;
+  }
+
   // When the active image changes, seed settings from its stored workspace_settings.
   const activeImage = images[activeIdx] ?? null;
+  const activeImageRef = useRef(activeImage);
+  activeImageRef.current = activeImage;
+  const activeImageFilepath = activeImage?.filepath ?? null;
+  const activeImageContentHash = activeImage?.contentHash ?? null;
+  const activeImageId = activeImage?.id ?? null;
+  const seededIdentityRef = useRef(null);
   useEffect(() => {
-    if (!activeImage) return;
-    setSettings(mergeSettings(activeImage.workspaceSettings));
+    const image = activeImageRef.current;
+    if (!image) return;
+    seededIdentityRef.current = imageIdentity(image);
+    saveGenerationRef.current += 1;
+    setSettings(mergeSettings(image.workspaceSettings));
     // The freshly-seeded settings are by definition "saved" — track that
     // key so the debounce below doesn't fire a redundant write.
-    lastSavedKeyRef.current = `${imageIdentity(activeImage)}::${JSON.stringify(mergeSettings(activeImage.workspaceSettings))}`;
-    setSaveStatus({ state: 'idle', lastSavedAt: activeImage.workspaceSettings ? Date.now() : null });
+    lastSavedKeyRef.current = `${imageIdentity(image)}::${JSON.stringify(mergeSettings(image.workspaceSettings))}`;
+    setSaveStatus({ state: 'idle', lastSavedAt: image.workspaceSettings ? Date.now() : null });
     // Re-seed when the user navigates to a different image file, or when the
     // SAME path now holds different bytes (a renumber from another Mac).
-  }, [activeImage?.filepath, activeImage?.contentHash, activeImage?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeImageFilepath, activeImageContentHash, activeImageId]);
 
   // Auto-save: 500ms debounce after the last settings change. We compare a
   // serialised key per (image, settings) tuple to skip writes when nothing
   // actually differs from the last saved state (e.g. flip-and-flip-back).
   useEffect(() => {
-    if (!activeImage || !activeProductId) return undefined;
-    const key = `${imageIdentity(activeImage)}::${JSON.stringify(settings)}`;
+    const image = activeImageRef.current;
+    if (!image || !activeProductId) return undefined;
+    const identity = imageIdentity(image);
+    // The seed effect above runs before this effect when the image changes.
+    // The settings value here is still for the previous image in that render;
+    // never queue it against the newly selected image.
+    if (seededIdentityRef.current === identity) {
+      seededIdentityRef.current = null;
+      return undefined;
+    }
+    const key = `${identity}::${JSON.stringify(settings)}`;
     if (key === lastSavedKeyRef.current) return undefined;
 
     setSaveStatus((s) => ({ ...s, state: 'saving' }));
@@ -209,23 +259,38 @@ export function ImageWorkspace() {
      * moves on before the debounce elapses. It used to be dropped: the cleanup
      * only cleared the timer, so nudging a slider and immediately switching
      * image or product lost the change with no sign anything had happened. */
-    pendingSaveRef.current = { productId: activeProductId, filepath: activeImage.filepath, settings, key };
+    const saveGeneration = ++saveGenerationRef.current;
+    pendingSaveRef.current = {
+      productId: activeProductId,
+      filepath: image.filepath,
+      settings,
+      key,
+      identity,
+      saveGeneration,
+    };
     const handle = setTimeout(async () => {
       const owed = pendingSaveRef.current;
       pendingSaveRef.current = null;      // claim it — the flush must not repeat it
+      saveDebounceRef.current = null;
       if (!owed) return;
       try {
-        await window.api.workspace.saveSettings(owed.productId, owed.filepath, owed.settings);
+        await enqueueWorkspaceSave(owed.productId, owed.filepath, owed.settings);
+        if (!mountedRef.current || saveGenerationRef.current !== owed.saveGeneration ||
+          activeProductIdRef.current !== owed.productId ||
+          imageIdentity(activeImageRef.current) !== owed.identity) return;
         lastSavedKeyRef.current = owed.key;
         setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
       } catch (err) {
-        setSaveStatus({ state: 'error', lastSavedAt: null });
+        const stillCurrent = mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
+          activeProductIdRef.current === owed.productId &&
+          imageIdentity(activeImageRef.current) === owed.identity;
+        if (stillCurrent) setSaveStatus({ state: 'error', lastSavedAt: null });
         addToast(`Save failed: ${err.message}`, 'error');
       }
     }, 500);
     saveDebounceRef.current = handle;
     return () => clearTimeout(handle);
-  }, [settings, activeImage?.filepath, activeProductId, addToast]);
+  }, [settings, activeImageFilepath, activeImageContentHash, activeImageId, activeProductId, addToast]);
 
   /* Flush ONLY when the image or product being edited changes, or on unmount.
    *
@@ -238,10 +303,16 @@ export function ImageWorkspace() {
     const owed = pendingSaveRef.current;
     pendingSaveRef.current = null;
     if (!owed) return;
-    window.api.workspace.saveSettings(owed.productId, owed.filepath, owed.settings)
-      .then(() => { lastSavedKeyRef.current = owed.key; })
-      .catch(() => { /* the component is going away; nothing useful to show */ });
-  }, [activeImage?.filepath, activeImage?.contentHash, activeImage?.id, activeProductId]);
+    enqueueWorkspaceSave(owed.productId, owed.filepath, owed.settings)
+      .then(() => {
+        if (mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
+          activeProductIdRef.current === owed.productId &&
+          imageIdentity(activeImageRef.current) === owed.identity) {
+          lastSavedKeyRef.current = owed.key;
+        }
+      })
+      .catch((err) => addToast(`Save failed: ${err.message}`, 'error'));
+  }, [activeImageFilepath, activeImageContentHash, activeImageId, activeProductId, addToast]);
 
   // Refresh the "X min ago" display every 30s without re-fetching anything —
   // matches the AGENTS.md §6 auto-refresh requirement for the indicator.
@@ -324,7 +395,10 @@ export function ImageWorkspace() {
    */
   async function handleSaveNow() {
     if (!activeImage || !activeProductId) return;
-    const key = `${activeImage.filepath}::${JSON.stringify(settings)}`;
+    const image = activeImage;
+    const productId = activeProductId;
+    const identity = imageIdentity(image);
+    const key = `${identity}::${JSON.stringify(settings)}`;
     if (key === lastSavedKeyRef.current && saveStatus.state !== 'error') {
       // Already saved — give a friendly nudge so the click doesn't feel
       // ignored.
@@ -332,14 +406,27 @@ export function ImageWorkspace() {
       return;
     }
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    if (pendingSaveRef.current?.identity === identity &&
+      pendingSaveRef.current.productId === productId) {
+      pendingSaveRef.current = null;
+    }
+    const saveGeneration = ++saveGenerationRef.current;
     setSaveStatus((s) => ({ ...s, state: 'saving' }));
     try {
-      await window.api.workspace.saveSettings(activeProductId, activeImage.filepath, settings);
-      lastSavedKeyRef.current = key;
-      setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
-      addToast('Saved', 'success');
+      await enqueueWorkspaceSave(productId, image.filepath, settings);
+      const stillCurrent = mountedRef.current && saveGenerationRef.current === saveGeneration &&
+        activeProductIdRef.current === productId &&
+        imageIdentity(activeImageRef.current) === identity;
+      if (stillCurrent) {
+        lastSavedKeyRef.current = key;
+        setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
+        addToast('Saved', 'success');
+      }
     } catch (err) {
-      setSaveStatus({ state: 'error', lastSavedAt: null });
+      const stillCurrent = mountedRef.current && saveGenerationRef.current === saveGeneration &&
+        activeProductIdRef.current === productId &&
+        imageIdentity(activeImageRef.current) === identity;
+      if (stillCurrent) setSaveStatus({ state: 'error', lastSavedAt: null });
       addToast(`Save failed: ${err.message}`, 'error');
     }
   }

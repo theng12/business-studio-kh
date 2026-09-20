@@ -5,6 +5,7 @@
 // persisted globally and survives company switches, so the slice
 // doesn't need to reset it. See store/products.js + productsDefaults.js.
 import { DEFAULT_FILTERS } from './productsDefaults.js';
+import { flushCompanySwitches } from '../lib/companySwitch.js';
 
 let switchSeq = 0;
 let switchChain = Promise.resolve();
@@ -77,7 +78,10 @@ export function createCompaniesSlice(set, get) {
     async setActiveCompany(id) {
       const seq = ++switchSeq;
       pendingSwitches += 1;
-      const write = switchChain.then(() => window.api.companies.setActive(id));
+      const write = switchChain.then(async () => {
+        await flushCompanySwitches();
+        return window.api.companies.setActive(id);
+      });
       switchChain = write.catch(() => {});
       /* v0.1.28: surface a failure. The server rejects when the company no
        * longer exists, or when a client's link is down — and the caller in the

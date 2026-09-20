@@ -10,7 +10,12 @@ const fs = require('node:fs');
 // Must run before app.whenReady().
 app.setName('Media Studio KH');
 
-const { registerImageProtocol, registerClientImageProtocol, registerRendererProtocol } = require('./protocol');
+const {
+  isPathWithinRoot,
+  registerImageProtocol,
+  registerClientImageProtocol,
+  registerRendererProtocol,
+} = require('./protocol');
 const { registerIpc } = require('./ipc');
 const { initDb } = require('./db');
 const { loadConfig, saveConfig, legacyDataDir } = require('./config');
@@ -134,9 +139,9 @@ function resolveAppImageUrl(srcUrl) {
   const normalized = path.normalize(abs);
 
   if (
-    !normalized.startsWith(assetsRoot) &&
-    !normalized.startsWith(processedRoot) &&
-    !normalized.startsWith(aiGalleryRoot)
+    !isPathWithinRoot(assetsRoot, normalized) &&
+    !isPathWithinRoot(processedRoot, normalized) &&
+    !isPathWithinRoot(aiGalleryRoot, normalized)
   ) {
     throw new Error('path escapes asset roots');
   }
