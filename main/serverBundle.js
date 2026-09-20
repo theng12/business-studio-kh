@@ -159,8 +159,8 @@ async function exportBundle({ outputPath, onProgress } = {}) {
 
   try {
     // 1. Record the asset trees before the DB snapshot. The database
-    //    and files must describe the same moment; symlinking live trees
-    //    into tar made that guarantee impossible.
+    //    and files must describe the same moment; regular copied trees
+    //    plus the post-copy inventory check reject a moving source.
     onProgress?.('snapshot');
     const trees = ['assets', 'processed', 'ai-gallery', 'overlays'];
     const treeSnapshot = await snapshotDataTrees(dataDir, trees);
