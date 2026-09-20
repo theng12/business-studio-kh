@@ -107,6 +107,8 @@ function getRegisteredChannels() {
 
 let _server = null;
 let _bindings = null; // { port, addresses: string[] }
+let _wss = null;
+const _wsHeartbeats = new Map();
 
 /**
  * Read the request body, JSON-parse it, and yield the parsed object.
@@ -473,6 +475,7 @@ function bootServer({ port, dataDir }) {
       const events = require('../events');
       const users = require('../db/users');
       const wss = new WebSocketServer({ noServer: true });
+      _wss = wss;
 
       srv.on('upgrade', (req, socket, head) => {
         const url = req.url || '';
@@ -534,6 +537,11 @@ function bootServer({ port, dataDir }) {
             }
             try { ws.ping(); } catch (_) {}
           }, 30_000);
+          _wsHeartbeats.set(ws, interval);
+          ws.on('close', () => {
+            clearInterval(_wsHeartbeats.get(ws));
+            _wsHeartbeats.delete(ws);
+          });
           ws.on('close', () => clearInterval(interval));
         });
       });
@@ -552,6 +560,12 @@ function bootServer({ port, dataDir }) {
 
 function stopServer() {
   if (!_server) return Promise.resolve();
+  const events = require('../events');
+  events.closeAllWsClients({ terminate: true });
+  for (const interval of _wsHeartbeats.values()) clearInterval(interval);
+  _wsHeartbeats.clear();
+  try { _wss?.close(); } catch (_) {}
+  _wss = null;
   return new Promise((resolve) => {
     _server.close(() => {
       _server = null;

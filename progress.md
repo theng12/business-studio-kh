@@ -8,3 +8,8 @@ Pre-flight: no shared interfaces recorded yet; task batches will be kept bounded
 - H13 bundle and local backup archives inventory/hash asset trees around the DB snapshot, copy them into staging, and reject changes instead of archiving a mixed-time dataset.
 - H15 successful bundle import removes extracted `config.partial.json` credential residue.
 - Proof: 44 focused pure-JS regression tests pass, including archive safety, config recovery, data-folder move safety, credential cleanup, snapshot consistency, and server URL normalization.
+
+2026-09-20 — Task 2 complete (H6, H7):
+- H6 user removal, token regeneration, and role/name updates evict that user's WebSockets; server stop clears heartbeat timers, closes all upgraded sockets, and supports a clean restart.
+- H7 `pos:addLine` now enforces PO/product company equality in the shared DB boundary. The regression also fixed a newly confirmed `ORDER BY rowid` ambiguity in PO detail reads (`l.rowid`).
+- Proof: WebSocket lifecycle/RPC test, two-company SQLite PO fixture, server identity/RPC tests, and URL-normalization tests pass (13 total).
