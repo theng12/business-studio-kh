@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ANCHORS, BARCODE_FORMATS, IMAGE_SOURCES, TOKENS } from './elementDefaults.js';
-import { Field, Input, Select, Textarea } from '../../components/ui.jsx';
+import { Field, Input, Select, Textarea, SliderField } from '../../components/ui.jsx';
 
 /**
  * v0.26.17: NumberInput — a controlled number input that doesn't
@@ -155,31 +155,47 @@ export function Inspector({ element, onChange, onDelete }) {
         </div>
         <AnchorPicker value={element.anchor} onChange={(v) => patchEl({ anchor: v })} />
         {/* v0.23.0: rotation control. Stored as degrees in (-180, 180].
-            The canvas rotation handle is the primary affordance; this
-            input is for precision — type exactly 45° instead of trying
-            to drag-snap it. Reset button zeros rotation in one click. */}
-        <Field label="Rotation (°)">
-          {({ id }) => (
-            <div className="field__row">
-              <NumberInput
-                id={id}
-                step="1"
-                min="-180"
-                max="180"
-                value={Math.round(element.rotation ?? 0)}
-                clamp={(v) => ((v + 180) % 360 + 360) % 360 - 180}
-                onCommit={(v) => patchEl({ rotation: v })}
-              />
-              <button
-                type="button"
-                className="field__inline-btn"
-                onClick={() => patchEl({ rotation: 0 })}
-                title="Reset rotation to 0°"
-                disabled={(element.rotation ?? 0) === 0}
-              >↺</button>
-            </div>
-          )}
-        </Field>
+            The canvas rotation handle is the primary affordance; the number
+            box is for precision — type exactly 45° instead of trying to
+            drag-snap it. Reset button zeros rotation in one click.
+            v0.1.5: the slider is now the shared SliderField, so it shows the
+            live degree readout while dragging (a bare range input gave no
+            indication of the angle). Value binds to the committed
+            `rotation`; while the number box is mid-edit the slider shows the
+            last committed value, because NumberInput deliberately owns its
+            own draft state and callers must not drive it. */}
+        <div className="rotation-field">
+          <div className="field__row">
+            <Field label="Rotation (°)">
+              {({ id }) => (
+                <NumberInput
+                  id={id}
+                  step="1"
+                  min="-180"
+                  max="180"
+                  value={Math.round(element.rotation ?? 0)}
+                  clamp={(v) => ((v + 180) % 360 + 360) % 360 - 180}
+                  onCommit={(v) => patchEl({ rotation: v })}
+                />
+              )}
+            </Field>
+            <button
+              type="button"
+              className="field__inline-btn"
+              onClick={() => patchEl({ rotation: 0 })}
+              title="Reset rotation to 0°"
+              disabled={(element.rotation ?? 0) === 0}
+            >↺</button>
+          </div>
+          <SliderField
+            label="Drag to rotate"
+            value={Math.round(element.rotation ?? 0)}
+            min={-180}
+            max={180}
+            suffix="°"
+            onChange={(v) => patchEl({ rotation: v })}
+          />
+        </div>
       </Section>
 
       {element.type !== 'text' ? (
@@ -323,6 +339,17 @@ function TextProps({ element, patchEl, patchFont, patchBg }) {
             </Select>
           )}
         </Field>
+        {/* v0.1.5: element opacity. Text used to have no opacity control at
+            all — the only slider was the caption band's own alpha — and the
+            canvas ignored `element.opacity` for text even if set. */}
+        <SliderField
+          label="Opacity"
+          value={Math.round((element.opacity ?? 1) * 100)}
+          min={0}
+          max={100}
+          suffix="%"
+          onChange={(v) => patchEl({ opacity: Math.max(0, Math.min(1, v / 100)) })}
+        />
       </Section>
 
       <Section title="Font">
@@ -405,6 +432,15 @@ function BarcodeProps({ element, patchEl, patchBg }) {
           />
           <span>Include human-readable text below barcode</span>
         </label>
+        {/* v0.1.5: element opacity — see the note on the text control. */}
+        <SliderField
+          label="Opacity"
+          value={Math.round((element.opacity ?? 1) * 100)}
+          min={0}
+          max={100}
+          suffix="%"
+          onChange={(v) => patchEl({ opacity: Math.max(0, Math.min(1, v / 100)) })}
+        />
       </Section>
 
       <BgSection element={element} patchBg={patchBg} />
@@ -412,33 +448,119 @@ function BarcodeProps({ element, patchEl, patchBg }) {
   );
 }
 
+/**
+ * v0.1.4: ImageProps gained the ability to import an image file from disk.
+ *
+ * Background: the backend has always understood `source: 'asset:<relpath>'`
+ * (main/templateRenderer.js renderImageElement resolves it under
+ * <dataDir>/assets/), and the canvas already resolves it
+ * (EditorCanvas resolveImageSrc). But nothing in the UI could ever PRODUCE
+ * that value — the source dropdown only offered brand-icon and
+ * product-image:N, so a custom image element was impossible to fill in.
+ * This closes that loop: pick a file → import via the generic
+ * `watermarks:upload` channel (content-hash deduped, stored under
+ * assets/watermarks/) → set `asset:<relpath>` on the element.
+ *
+ * The channel is named for its original caller (Image Workspace
+ * watermarks) but it is a generic asset importer: it takes a local path
+ * and returns a deduped relative path. Reusing it means no new IPC
+ * surface and, importantly, no change to main/client/index.js — it is
+ * already exposed for clients.
+ */
 function ImageProps({ element, patchEl }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const isAsset = typeof element.source === 'string' && element.source.startsWith('asset:');
+  const assetRel = isAsset ? element.source.slice('asset:'.length) : null;
+  const assetName = assetRel ? (assetRel.split('/').pop() || assetRel) : null;
+
+  async function importImage() {
+    setErr(null);
+    try {
+      const picked = await window.api.files.pickImageFile({ multiple: false });
+      const sourcePath = Array.isArray(picked) ? picked[0] : picked;
+      if (!sourcePath) return;                       // user cancelled
+      setBusy(true);
+      const { relativePath } = await window.api.watermarks.upload(sourcePath);
+
+      // Size the box to the image's own aspect ratio instead of leaving a
+      // square default that distorts it. We only know the natural size
+      // after the protocol can serve it, so measure via an Image().
+      let patch = { source: `asset:${relativePath}` };
+      const dims = await new Promise((resolve) => {
+        const img = new Image();
+        const done = (v) => resolve(v);
+        img.onload = () => done({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = () => done(null);
+        img.src = `app-image://local/${encodeURIComponent(relativePath)}`;
+      });
+      if (dims && dims.w > 0 && dims.h > 0) {
+        // Fit inside a 30% box of the canvas, preserving aspect.
+        const box = 0.3;
+        const ratio = dims.w / dims.h;
+        if (ratio >= 1) patch = { ...patch, width: box, height: box / ratio };
+        else patch = { ...patch, width: box * ratio, height: box };
+      }
+      patchEl(patch);
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Section title="Source">
       <Field label="Image source" hint="Picks the actual file at apply time, based on each product's data.">
         {({ id }) => (
           <Select id={id} value={element.source ?? 'brand-icon'} onChange={(e) => patchEl({ source: e.target.value })}>
             {IMAGE_SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+            {isAsset ? (
+              <option value={element.source}>{`Imported file — ${assetName}`}</option>
+            ) : null}
           </Select>
         )}
       </Field>
-      <Field label="Opacity">
-        {({ id }) => (
-          <Input
-            id={id}
-            type="range"
-            min="0"
-            max="100"
-            step="1"
-            value={Math.round((element.opacity ?? 1) * 100)}
-            onChange={(e) => patchEl({ opacity: Math.max(0, Math.min(1, Number(e.target.value) / 100)) })}
-          />
-        )}
-      </Field>
+
+      <div className="field">
+        <span className="field__label">Your own image</span>
+        <div className="field__row">
+          <button
+            type="button"
+            className="btn btn--ghost"
+            onClick={importImage}
+            disabled={busy}
+          >{busy ? 'Importing…' : (isAsset ? 'Replace image…' : 'Import image…')}</button>
+          {isAsset ? (
+            <button
+              type="button"
+              className="field__inline-btn"
+              title="Remove the imported image from this element"
+              onClick={() => patchEl({ source: 'brand-icon' })}
+            >Remove</button>
+          ) : null}
+        </div>
+        <span className="field__hint">
+          {isAsset
+            ? `Using ${assetName}. Saved into the app's data folder, so the template keeps working if the original file moves.`
+            : 'PNG, JPG or WEBP. Imported into the app so it is not tied to a path on your disk.'}
+        </span>
+        {err ? <p className="field__error">{err}</p> : null}
+      </div>
+
+      {/* v0.1.5: shared SliderField so the value is visible while dragging —
+          a bare range input gave no readout of the intensity being set. */}
+      <SliderField
+        label="Opacity"
+        value={Math.round((element.opacity ?? 1) * 100)}
+        min={0}
+        max={100}
+        suffix="%"
+        onChange={(v) => patchEl({ opacity: Math.max(0, Math.min(1, v / 100)) })}
+      />
     </Section>
   );
 }
-
 function BgSection({ element, patchBg }) {
   const bg = element.bg ?? {};
   const hasBg = !!bg.color;

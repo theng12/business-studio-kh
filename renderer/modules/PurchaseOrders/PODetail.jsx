@@ -22,9 +22,9 @@
  * doesn't apply to the header.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Button, Input, Select, Textarea, Badge, EmptyState } from '../../components/ui.jsx';
+import { Button, Input, Select, Textarea, Badge, EmptyState, Modal } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { STATUS_TONE, STATUS_LABEL } from './index.jsx';
@@ -133,7 +133,7 @@ export function PODetail({ poId, onBack }) {
 
   async function saveHeaderPatch(patch) {
     try {
-      const updated = await window.api.purchaseOrders.update(poId, patch);
+      await window.api.purchaseOrders.update(poId, patch);
       // Header-only update returns a header, not detail. Refetch the
       // full detail to keep lines/components in lockstep with whatever
       // the recompute did to per-line caches.
@@ -756,75 +756,74 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
   const canSubmit = (mode === 'edit' || productId) && qty !== '' && Number(qty) > 0;
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal modal--lg" onClick={(e) => e.stopPropagation()}>
-        <header className="modal__header">
-          <h2>{mode === 'create' ? 'Add line item' : 'Edit line item'}</h2>
-          <button className="modal__close" aria-label="Close (Esc)" title="Close (Esc)" onClick={onCancel}>×</button>
-        </header>
-        <div className="modal__body">
-          <div className="form-grid">
-            {mode === 'create' && (
-              <label className="field field--full">
-                <span className="field__label">Product *</span>
-                <Select value={productId} onChange={(e) => setProductId(e.target.value)}>
-                  <option value="">{products.length ? 'Choose…' : 'No products yet — add some in the Library first'}</option>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.sku}{p.name ? ` — ${p.name}` : ''}
-                    </option>
-                  ))}
-                </Select>
-                {products.length === 0 && (
-                  <span className="field__hint">This PO’s company has no products. Create products in the Product Library, then add them here.</span>
-                )}
-              </label>
-            )}
-            <label className="field">
-              <span className="field__label">Supplier SKU</span>
-              <Input value={supplierSku} onChange={(e) => setSupplierSku(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">Qty *</span>
-              <Input type="number" min="0" step="1" value={qty} onChange={(e) => setQty(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">Unit price ({currency})</span>
-              <Input type="number" min="0" step="0.0001" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">Units per carton</span>
-              <Input type="number" min="0" step="1" value={cartonQty} onChange={(e) => setCartonQty(e.target.value)} />
-              <span className="field__hint">Used for CBM allocation + container fill.</span>
-            </label>
-            <label className="field">
-              <span className="field__label">Carton W (cm)</span>
-              <Input type="number" min="0" step="0.1" value={cartonW} onChange={(e) => setCartonW(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">Carton H (cm)</span>
-              <Input type="number" min="0" step="0.1" value={cartonH} onChange={(e) => setCartonH(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">Carton D (cm)</span>
-              <Input type="number" min="0" step="0.1" value={cartonD} onChange={(e) => setCartonD(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">Weight per unit (kg)</span>
-              <Input type="number" min="0" step="0.001" value={weightKg} onChange={(e) => setWeightKg(e.target.value)} />
-            </label>
-            <label className="field field--full">
-              <span className="field__label">Notes</span>
-              <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </label>
-          </div>
-        </div>
-        <footer className="modal__footer">
+    <Modal
+      open
+      onClose={onCancel}
+      title={mode === 'create' ? 'Add line item' : 'Edit line item'}
+      size="lg"
+      footer={
+        <>
           <Button variant="ghost" onClick={onCancel}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={!canSubmit}>Save</Button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <div className="form-grid">
+        {mode === 'create' && (
+          <label className="field field--full">
+            <span className="field__label">Product *</span>
+            <Select value={productId} onChange={(e) => setProductId(e.target.value)}>
+              <option value="">{products.length ? 'Choose…' : 'No products yet — add some in the Library first'}</option>
+              {products.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.sku}{p.name ? ` — ${p.name}` : ''}
+                </option>
+              ))}
+            </Select>
+            {products.length === 0 && (
+              <span className="field__hint">This PO’s company has no products. Create products in the Product Library, then add them here.</span>
+            )}
+          </label>
+        )}
+        <label className="field">
+          <span className="field__label">Supplier SKU</span>
+          <Input value={supplierSku} onChange={(e) => setSupplierSku(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field__label">Qty *</span>
+          <Input type="number" min="0" step="1" value={qty} onChange={(e) => setQty(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field__label">Unit price ({currency})</span>
+          <Input type="number" min="0" step="0.0001" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field__label">Units per carton</span>
+          <Input type="number" min="0" step="1" value={cartonQty} onChange={(e) => setCartonQty(e.target.value)} />
+          <span className="field__hint">Used for CBM allocation + container fill.</span>
+        </label>
+        <label className="field">
+          <span className="field__label">Carton W (cm)</span>
+          <Input type="number" min="0" step="0.1" value={cartonW} onChange={(e) => setCartonW(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field__label">Carton H (cm)</span>
+          <Input type="number" min="0" step="0.1" value={cartonH} onChange={(e) => setCartonH(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field__label">Carton D (cm)</span>
+          <Input type="number" min="0" step="0.1" value={cartonD} onChange={(e) => setCartonD(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field__label">Weight per unit (kg)</span>
+          <Input type="number" min="0" step="0.001" value={weightKg} onChange={(e) => setWeightKg(e.target.value)} />
+        </label>
+        <label className="field field--full">
+          <span className="field__label">Notes</span>
+          <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+  </div>
+    </Modal>
   );
 }
 
@@ -863,60 +862,59 @@ function ComponentModal({ mode, currency, incoterm, component, onCancel, onSave 
   }
   const canSubmit = kind && amount !== '' && Number(amount) >= 0;
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal modal--md" onClick={(e) => e.stopPropagation()}>
-        <header className="modal__header">
-          <h2>{mode === 'create' ? 'Add cost component' : 'Edit cost component'}</h2>
-          <button className="modal__close" aria-label="Close (Esc)" title="Close (Esc)" onClick={onCancel}>×</button>
-        </header>
-        <div className="modal__body">
-          <div className="form-grid">
-            <label className="field">
-              <span className="field__label">Kind *</span>
-              <Select value={kind} onChange={(e) => setKind(e.target.value)}>
-                {COMPONENT_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
-              </Select>
-            </label>
-            <label className="field">
-              <span className="field__label">Amount ({currency}) *</span>
-              <Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </label>
-            {kindConflicts && (
-              <div className="field field--full po-incoterm-note">
-                Heads up — this PO is <strong>{incotermNorm}</strong>, which normally already
-                includes <strong>{String(kind).toLowerCase()}</strong> in the supplier&apos;s
-                unit price.{' '}
-                {incotermNorm === 'FOB'
-                  ? 'If this is destination-side inland haulage, it’s fine to add.'
-                  : 'Adding it here may double-count the cost.'}
-              </div>
-            )}
-            <label className="field field--full">
-              <span className="field__label">Label / description</span>
-              <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Sea freight Shenzhen→Sihanoukville" />
-            </label>
-            <label className="field field--full">
-              <span className="field__label">Allocation basis *</span>
-              <Select value={allocationBasis} onChange={(e) => setBasis(e.target.value)}>
-                {ALLOCATION_BASES.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
-              </Select>
-              <span className="field__hint">
-                How this cost gets split across line items. By value is the safe default.
-                Volume / weight only work if every line has carton dims or per-unit weight.
-              </span>
-            </label>
-            <label className="field field--full">
-              <span className="field__label">Notes</span>
-              <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </label>
-          </div>
-        </div>
-        <footer className="modal__footer">
+    <Modal
+      open
+      onClose={onCancel}
+      title={mode === 'create' ? 'Add cost component' : 'Edit cost component'}
+      size="md"
+      footer={
+        <>
           <Button variant="ghost" onClick={onCancel}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={!canSubmit}>Save</Button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <div className="form-grid">
+        <label className="field">
+          <span className="field__label">Kind *</span>
+          <Select value={kind} onChange={(e) => setKind(e.target.value)}>
+            {COMPONENT_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}
+          </Select>
+        </label>
+        <label className="field">
+          <span className="field__label">Amount ({currency}) *</span>
+          <Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </label>
+        {kindConflicts && (
+          <div className="field field--full po-incoterm-note">
+            Heads up — this PO is <strong>{incotermNorm}</strong>, which normally already
+            includes <strong>{String(kind).toLowerCase()}</strong> in the supplier&apos;s
+            unit price.{' '}
+            {incotermNorm === 'FOB'
+              ? 'If this is destination-side inland haulage, it’s fine to add.'
+              : 'Adding it here may double-count the cost.'}
+          </div>
+        )}
+        <label className="field field--full">
+          <span className="field__label">Label / description</span>
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Sea freight Shenzhen→Sihanoukville" />
+        </label>
+        <label className="field field--full">
+          <span className="field__label">Allocation basis *</span>
+          <Select value={allocationBasis} onChange={(e) => setBasis(e.target.value)}>
+            {ALLOCATION_BASES.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+          </Select>
+          <span className="field__hint">
+            How this cost gets split across line items. By value is the safe default.
+            Volume / weight only work if every line has carton dims or per-unit weight.
+          </span>
+        </label>
+        <label className="field field--full">
+          <span className="field__label">Notes</span>
+          <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+  </div>
+    </Modal>
   );
 }
 
@@ -961,74 +959,73 @@ function PaymentModal({ mode, currency, defaultFxRate, payment, outstanding, onC
   const canSubmit = amount !== '' && amtNum >= 0 && (isUsd || fxNum > 0);
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal modal--md" onClick={(e) => e.stopPropagation()}>
-        <header className="modal__header">
-          <h2>{mode === 'create' ? 'Record payment' : 'Edit payment'}</h2>
-          <button className="modal__close" aria-label="Close (Esc)" title="Close (Esc)" onClick={onCancel}>×</button>
-        </header>
-        <div className="modal__body">
-          <div className="form-grid">
-            <label className="field">
-              <span className="field__label">Type *</span>
-              <Select value={kind} onChange={(e) => setKind(e.target.value)}>
-                {PAYMENT_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
-              </Select>
-            </label>
-            <label className="field">
-              <span className="field__label">Status *</span>
-              <Select value={status} onChange={(e) => setStatus(e.target.value)}>
-                {PAYMENT_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </Select>
-              <span className="field__hint">Planned = scheduled but not wired yet (doesn’t count as paid).</span>
-            </label>
-            <label className="field">
-              <span className="field__label">Amount ({currency}) *</span>
-              <Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">FX rate (1 {currency} = ? USD)</span>
-              <Input
-                type="number" min="0" step="0.0001"
-                value={fxRate}
-                disabled={isUsd}
-                onChange={(e) => setFxRate(e.target.value)}
-              />
-              <span className="field__hint">
-                {isUsd ? 'USD PO — no conversion.' : `= ${fmtUsd(usdPreview)} USD for this payment.`}
-              </span>
-            </label>
-            <label className="field">
-              <span className="field__label">TT / bank fee (USD)</span>
-              <Input type="number" min="0" step="0.01" value={ttFee} onChange={(e) => setTtFee(e.target.value)} />
-            </label>
-            <label className="field" style={{ justifyContent: 'flex-end' }}>
-              <span className="po-pay-check">
-                <input type="checkbox" checked={ttFeeInLanded} onChange={(e) => setTtFeeInLanded(e.target.checked)} />
-                <span>Include this fee in landed cost</span>
-              </span>
-              <span className="field__hint">Off = tracked as a separate cash expense only.</span>
-            </label>
-            <label className="field">
-              <span className="field__label">Date sent</span>
-              <Input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
-            </label>
-            <label className="field">
-              <span className="field__label">TT / wire reference</span>
-              <Input value={reference} onChange={(e) => setRef(e.target.value)} placeholder="e.g. TT-20260607-001" />
-            </label>
-            <label className="field field--full">
-              <span className="field__label">Notes</span>
-              <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </label>
-          </div>
-        </div>
-        <footer className="modal__footer">
+    <Modal
+      open
+      onClose={onCancel}
+      title={mode === 'create' ? 'Record payment' : 'Edit payment'}
+      size="md"
+      footer={
+        <>
           <Button variant="ghost" onClick={onCancel}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={!canSubmit}>Save</Button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <div className="form-grid">
+        <label className="field">
+          <span className="field__label">Type *</span>
+          <Select value={kind} onChange={(e) => setKind(e.target.value)}>
+            {PAYMENT_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+          </Select>
+        </label>
+        <label className="field">
+          <span className="field__label">Status *</span>
+          <Select value={status} onChange={(e) => setStatus(e.target.value)}>
+            {PAYMENT_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </Select>
+          <span className="field__hint">Planned = scheduled but not wired yet (doesn’t count as paid).</span>
+        </label>
+        <label className="field">
+          <span className="field__label">Amount ({currency}) *</span>
+          <Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field__label">FX rate (1 {currency} = ? USD)</span>
+          <Input
+            type="number" min="0" step="0.0001"
+            value={fxRate}
+            disabled={isUsd}
+            onChange={(e) => setFxRate(e.target.value)}
+          />
+          <span className="field__hint">
+            {isUsd ? 'USD PO — no conversion.' : `= ${fmtUsd(usdPreview)} USD for this payment.`}
+          </span>
+        </label>
+        <label className="field">
+          <span className="field__label">TT / bank fee (USD)</span>
+          <Input type="number" min="0" step="0.01" value={ttFee} onChange={(e) => setTtFee(e.target.value)} />
+        </label>
+        <label className="field" style={{ justifyContent: 'flex-end' }}>
+          <span className="po-pay-check">
+            <input type="checkbox" checked={ttFeeInLanded} onChange={(e) => setTtFeeInLanded(e.target.checked)} />
+            <span>Include this fee in landed cost</span>
+          </span>
+          <span className="field__hint">Off = tracked as a separate cash expense only.</span>
+        </label>
+        <label className="field">
+          <span className="field__label">Date sent</span>
+          <Input type="date" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field__label">TT / wire reference</span>
+          <Input value={reference} onChange={(e) => setRef(e.target.value)} placeholder="e.g. TT-20260607-001" />
+        </label>
+        <label className="field field--full">
+          <span className="field__label">Notes</span>
+          <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
+        </label>
+  </div>
+    </Modal>
   );
 }
 

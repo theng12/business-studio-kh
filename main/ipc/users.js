@@ -15,26 +15,25 @@
  * created or regenerated (one-time display in the admin UI).
  */
 
-const { ipcMain } = require('electron');
 
-function register({ expose }) {
-  ipcMain.handle('users:list', () => {
+function register({ expose, exposeLocal }) {
+  expose('users:list', () => {
     const users = require('../db/users');
     return users.list();
   });
-  ipcMain.handle('users:create', (_e, { name, role }) => {
+  expose('users:create', ({ name, role }) => {
     const users = require('../db/users');
     return users.create({ name, role });
   });
-  ipcMain.handle('users:update', (_e, { id, patch }) => {
+  expose('users:update', ({ id, patch }) => {
     const users = require('../db/users');
     return users.update(id, patch);
   });
-  ipcMain.handle('users:remove', (_e, id) => {
+  expose('users:remove', (id) => {
     const users = require('../db/users');
     return users.remove(id);
   });
-  ipcMain.handle('users:regenerateToken', (_e, id) => {
+  expose('users:regenerateToken', (id) => {
     const users = require('../db/users');
     return users.regenerateToken(id);
   });
@@ -42,7 +41,7 @@ function register({ expose }) {
      server mode and the users table is still empty. Creates a default
      "Owner" with admin role and returns it (including the token,
      which the UI shows for one-time copy). */
-  ipcMain.handle('users:ensureOwner', () => {
+  expose('users:ensureOwner', () => {
     const users = require('../db/users');
     return users.ensureOwner();
   });

@@ -31,14 +31,14 @@
  * apply use). Stages map to the serverBundle module's onProgress hook.
  */
 
-const { ipcMain, dialog, app } = require('electron');
+const { dialog, app } = require('electron');
 const serverBundle = require('../serverBundle');
 const events = require('../events');
 const config = require('../config');
 
 const BUNDLE_EXT = 'iskhbundle';
 
-function register(/* helpers — unused; these are local-only */) {
+function register({ exposeLocal }) {
 
   /**
    * Export the active data folder into a `.iskhbundle`. Opens a Save
@@ -46,8 +46,7 @@ function register(/* helpers — unused; these are local-only */) {
    * drive, AirDrop staging folder, etc.). Returns immediately if the
    * user cancels.
    */
-  ipcMain.handle('servers:exportBundle', async () => {
-    const cfg = config.loadConfig();
+  exposeLocal('servers:exportBundle', async () => {
     // Default filename includes the version so a folder full of
     // bundles is self-documenting. `safe-` filename — Save dialog
     // already restricts the user to writable locations.
@@ -110,7 +109,7 @@ function register(/* helpers — unused; these are local-only */) {
    *
    * Returns null if the dialog was canceled.
    */
-  ipcMain.handle('servers:previewBundle', async (_e, args) => {
+  exposeLocal('servers:previewBundle', async (args) => {
     let bundlePath = args?.bundlePath;
     if (!bundlePath) {
       const res = await dialog.showOpenDialog({
@@ -139,7 +138,7 @@ function register(/* helpers — unused; these are local-only */) {
    *      doesn't take effect until the next launch because the live
    *      better-sqlite3 connection still holds the old file's handle.
    */
-  ipcMain.handle('servers:importBundle', async (_e, args) => {
+  exposeLocal('servers:importBundle', async (args) => {
     const bundlePath = args?.bundlePath;
     const targetDataDir = args?.targetDataDir;
     if (!bundlePath) throw new Error('bundlePath is required');
@@ -195,7 +194,7 @@ function register(/* helpers — unused; these are local-only */) {
    * (relaunch=false) if it wants to surface a "Restart later" CTA
    * instead of forcing it.
    */
-  ipcMain.handle('servers:applyImportedDataDir', async (_e, args) => {
+  exposeLocal('servers:applyImportedDataDir', async (args) => {
     const newDataDir = args?.dataDir;
     const relaunch = args?.relaunch !== false;
     if (!newDataDir || typeof newDataDir !== 'string') {

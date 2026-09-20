@@ -78,6 +78,9 @@ export function AIStudio() {
   const refreshAiTasks = useAppStore((s) => s.refreshAiTasks);
   const refreshAiModels = useAppStore((s) => s.refreshAiModels);
   const refreshAiCredits = useAppStore((s) => s.refreshAiCredits);
+  // v0.1.21: in client mode several panels show where their settings live
+  // rather than offering a control that cannot work — see CreditPills.
+  const isClientMode = useAppStore((s) => s.appMode) === 'client';
   const aiCredits = useAppStore((s) => s.aiCredits);
   const addToast = useAppStore((s) => s.addToast);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
@@ -161,9 +164,18 @@ export function AIStudio() {
 
   // Whenever the source product changes, fetch its images + gallery.
   useEffect(() => {
-    if (!sourceProductId) { setSourceImages([]); return; }
-    window.api.images.listByProduct(sourceProductId).then(setSourceImages).catch(() => setSourceImages([]));
+    if (!sourceProductId) { setSourceImages([]); return undefined; }
+    /* v0.1.27: ignore a response for a product we have already navigated away
+     * from. Without this, switching quickly from product A to B could paint A's
+     * thumbnails into B's panel — and since the panel queues whichever source
+     * image is selected, the next task would use A's image path against B's
+     * product id. */
+    let cancelled = false;
+    window.api.images.listByProduct(sourceProductId)
+      .then((imgs) => { if (!cancelled) setSourceImages(imgs); })
+      .catch(() => { if (!cancelled) setSourceImages([]); });
     refreshAiGalleryFor(sourceProductId);
+    return () => { cancelled = true; };
   }, [sourceProductId, refreshAiGalleryFor]);
 
   // Recompute cost when model / options change.
@@ -173,18 +185,12 @@ export function AIStudio() {
     window.api.ai.estimateCost(selectedModelKey, count).then(setCostEstimate).catch(() => setCostEstimate(null));
   }, [selectedModelKey, aiOptions.nVariants, aiOptions.numImages]);
 
-  if (!activeCompanyId) {
-    return (
-      <div className="page">
-        <PageHeader title="AI Studio" />
-        <EmptyState
-          title="No company selected"
-          body="Create or select a company before queueing generations."
-          action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
-        />
-      </div>
-    );
-  }
+  /* v0.1.11: this was an early `return`, which made every hook declared
+   * below it conditional. React requires the same hooks in the same order on
+   * every render, so switching to (or away from) a company with no active
+   * selection changed the hook count and React threw. The empty state now
+   * branches inside the single return, below all hooks. */
+  const noCompanySelected = !activeCompanyId;
 
   const selectedModel = models.find((m) => m.key === selectedModelKey) ?? models[0];
   const requiresSource = selectedModel?.supportsSource;
@@ -307,7 +313,7 @@ export function AIStudio() {
         const count = selectedModel?.key === 'kie:gpt4o-image'
           ? (opts.nVariants ?? 1)
           : (opts.numImages ?? 1);
-        const task = await queueAiTask({
+        await queueAiTask({
           productId: sourceProductId,
           sourceImagePath: requiresSource ? sourceImagePath : null,
           provider: selectedModel.provider,
@@ -440,6 +446,17 @@ export function AIStudio() {
   const gallery = sourceProductId ? (galleryByProduct[sourceProductId] ?? []) : [];
 
   return (
+    noCompanySelected ? (
+      <div className="page">
+        <PageHeader title="AI Studio" />
+        <EmptyState
+          title="No company selected"
+          body="Create or select a company before queueing generations."
+          action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
+        />
+      </div>
+    ) : (
+      <>
     <div className="page page--ai">
       <PageHeader
         title="AI Studio"
@@ -466,7 +483,7 @@ export function AIStudio() {
                 aria-selected={mode === 'bulk'}
               >Bulk / Folder</button>
             </div>
-            <CreditPills credits={aiCredits} onRefresh={refreshAiCredits} />
+            <CreditPills credits={aiCredits} onRefresh={refreshAiCredits} isClient={isClientMode} />
           </>
         }
       />
@@ -487,6 +504,7 @@ export function AIStudio() {
               onFilesChange={setBulkFiles}
               onError={(msg) => addToast(msg, 'error')}
               exportDir={bulkExportDir}
+              isClient={isClientMode}
               onExportDirChange={setBulkExportDir}
             />
           </section>
@@ -695,16 +713,15 @@ export function AIStudio() {
             </Field>
           ) : null}
 
-          {/* Count: nVariants (kie:gpt4o-image legacy) or numImages (fal) */}
-          {selectedModel?.nVariants ? (
-            <Field label="Variants per task">
-              {({ id }) => (
-                <Select id={id} value={String(aiOptions.nVariants ?? 1)} onChange={(e) => setAiOptions({ nVariants: Number(e.target.value) })}>
-                  {selectedModel.nVariants.map((n) => <option key={n} value={String(n)}>{n}</option>)}
-                </Select>
-              )}
-            </Field>
-          ) : selectedModel?.provider === 'fal' ? (
+          {/* Count. Only fal exposes one: it is the sole provider that honours
+              `numImages` (see main/ai/providers/fal.js). The kie provider reads
+              `nVariants`, but no model in main/ai/models.js declares it and the
+              legacy `kie:gpt4o-image` model it was added for is gone — so the
+              "Variants per task" dropdown that used to sit here could never
+              render. Removed rather than left as unreachable markup; the
+              `nVariants` support in the provider and the cost estimate stays,
+              because it defaults to 1 and costs nothing. */}
+          {selectedModel?.provider === 'fal' ? (
             <Field label="Number of images" hint="1–4">
               {({ id }) => (
                 <Input
@@ -980,13 +997,13 @@ export function AIStudio() {
                             type="button"
                             className="row-action"
                             title="Try to recover the result from the provider"
-                            onClick={() => repairAiTask(t.id)}
+                            onClick={() => Promise.resolve(repairAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}
                           >Repair</button>
                           <button
                             type="button"
                             className="row-action"
                             title="Submit a brand-new task with the same parameters"
-                            onClick={() => queueFreshAiTask(t.id)}
+                            onClick={() => Promise.resolve(queueFreshAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}
                           >Queue fresh</button>
                         </>
                       ) : null}
@@ -1014,9 +1031,13 @@ export function AIStudio() {
                         >Copy ID</button>
                       ) : null}
                       {t.status === 'running' || t.status === 'queued' ? (
-                        <button type="button" className="row-action" onClick={() => cancelAiTask(t.id)}>Cancel</button>
+                        <button type="button" className="row-action" onClick={() => Promise.resolve(cancelAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>Cancel</button>
                       ) : null}
-                      <button type="button" className="row-action" onClick={() => removeAiTask(t.id)}>×</button>
+                      {/* v0.1.25: these four were uncaught. The store actions do not
+                          catch either, so a rejection (e.g. "Task belongs to a
+                          different company" after switching company) was completely
+                          silent — the button just did nothing. */}
+                      <button type="button" className="row-action" onClick={() => Promise.resolve(removeAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>×</button>
                     </div>
                   </li>
                 );
@@ -1087,6 +1108,8 @@ export function AIStudio() {
         </Modal>
       ) : null}
     </div>
+      </>
+    )
   );
 }
 
@@ -1251,7 +1274,19 @@ function ProductCombobox({ id, products, value, onChange }) {
   );
 }
 
-function CreditPills({ credits, onRefresh }) {
+function CreditPills({ credits, onRefresh, isClient = false }) {
+  // v0.1.21: credits belong to the account that RUNS the generations, which in
+  // client mode is the server Mac. Clicking a pill here could never load
+  // anything, so instead of two dead "—" buttons this says where they live.
+  if (isClient) {
+    return (
+      <div className="ai-credits">
+        <span className="muted" style={{ fontSize: 12.5 }}>
+          Credits are shown on the Mac that runs the generations (the one holding your data).
+        </span>
+      </div>
+    );
+  }
   const kieLabel = credits?.kie != null
     ? `${credits.kie.toLocaleString()} credits`
     : '—';

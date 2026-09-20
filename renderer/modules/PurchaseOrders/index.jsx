@@ -25,7 +25,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Button, EmptyState, Pagination, paginate, Badge, Select, Input } from '../../components/ui.jsx';
+import { Button, EmptyState, Pagination, paginate, Badge, Select, Input, Modal } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PODetail, PAYMENT_STATUS_TONE, PAYMENT_STATUS_LABEL } from './PODetail.jsx';
@@ -287,8 +287,8 @@ export function PurchaseOrders() {
               total={total}
               pageStart={pageStart}
               pageEnd={pageEnd}
-              onPage={setPage}
-              onPageSize={(n) => { setPageSize(n); setPage(0); }}
+              onPageChange={setPage}
+              onPageSizeChange={(n) => { setPageSize(n); setPage(0); }}
             />
           )}
         </>
@@ -347,92 +347,91 @@ function NewPOModal({ suppliers, onCancel, onCreate }) {
   const canSubmit = supplierId && (currency === 'USD' ? true : Number(exchangeRateToUsd) > 0);
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal modal--md" onClick={(e) => e.stopPropagation()}>
-        <header className="modal__header">
-          <h2>New purchase order</h2>
-          <button className="modal__close" aria-label="Close (Esc)" title="Close (Esc)" onClick={onCancel}>×</button>
-        </header>
-        <div className="modal__body">
-          <div className="form-grid">
-            <label className="field">
-              <span className="field__label">Supplier *</span>
-              <Select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-                <option value="">Choose…</option>
-                {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </Select>
-            </label>
-            <label className="field">
-              <span className="field__label">PO number</span>
-              <Input
-                value={poNumber}
-                onChange={(e) => setPoNumber(e.target.value)}
-                placeholder="e.g. PO-2026-001"
-              />
-            </label>
-            <label className="field">
-              <span className="field__label">Currency</span>
-              <Select value={currency} onChange={(e) => {
-                const v = e.target.value;
-                setCurrency(v);
-                if (v === 'USD') setExchangeRateToUsd(1);
-                else if (exchangeRateToUsd === 1) setExchangeRateToUsd('');
-              }}>
-                {['USD','CNY','THB','VND','KHR','EUR','JPY','KRW','INR','IDR','MYR','SGD'].map((c) =>
-                  <option key={c} value={c}>{c}</option>)}
-              </Select>
-            </label>
-            <label className="field">
-              <span className="field__label">
-                Exchange rate (1 {currency} = ? USD)
-              </span>
-              <Input
-                type="number"
-                step="0.0001"
-                min="0"
-                value={exchangeRateToUsd}
-                disabled={currency === 'USD'}
-                onChange={(e) => setExchangeRateToUsd(e.target.value)}
-                placeholder={currency === 'USD' ? '1.0000' : 'e.g. 0.14 for THB→USD'}
-              />
-              <span className="field__hint">
-                Locks the FX rate for this PO. All landed-cost numbers convert to USD using this rate.
-              </span>
-            </label>
-            <label className="field">
-              <span className="field__label">Incoterm</span>
-              <Select value={incoterm} onChange={(e) => setIncoterm(e.target.value)}>
-                <option value="EXW">EXW — ex-works</option>
-                <option value="FOB">FOB — free on board</option>
-                <option value="CFR">CFR / CNF — cost & freight</option>
-                <option value="CIF">CIF — cost, insurance, freight</option>
-              </Select>
-            </label>
-            <label className="field">
-              <span className="field__label">Container</span>
-              <Select value={containerType} onChange={(e) => setContainerType(e.target.value)}>
-                <option value="20">20' standard (33.2 CBM)</option>
-                <option value="40">40' standard (67.7 CBM)</option>
-                <option value="40HQ">40' high cube (76.4 CBM)</option>
-                <option value="LCL">LCL — less than container load</option>
-              </Select>
-            </label>
-            <label className="field">
-              <span className="field__label">Ordered on</span>
-              <Input
-                type="date"
-                value={orderedAt}
-                onChange={(e) => setOrderedAt(e.target.value)}
-              />
-            </label>
-          </div>
-        </div>
-        <footer className="modal__footer">
+    <Modal
+      open
+      onClose={onCancel}
+      title="New purchase order"
+      size="md"
+      footer={
+        <>
           <Button variant="ghost" onClick={onCancel}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={!canSubmit}>Create</Button>
-        </footer>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <div className="form-grid">
+        <label className="field">
+          <span className="field__label">Supplier *</span>
+          <Select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+            <option value="">Choose…</option>
+            {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </Select>
+        </label>
+        <label className="field">
+          <span className="field__label">PO number</span>
+          <Input
+            value={poNumber}
+            onChange={(e) => setPoNumber(e.target.value)}
+            placeholder="e.g. PO-2026-001"
+          />
+        </label>
+        <label className="field">
+          <span className="field__label">Currency</span>
+          <Select value={currency} onChange={(e) => {
+            const v = e.target.value;
+            setCurrency(v);
+            if (v === 'USD') setExchangeRateToUsd(1);
+            else if (exchangeRateToUsd === 1) setExchangeRateToUsd('');
+          }}>
+            {['USD','CNY','THB','VND','KHR','EUR','JPY','KRW','INR','IDR','MYR','SGD'].map((c) =>
+              <option key={c} value={c}>{c}</option>)}
+          </Select>
+        </label>
+        <label className="field">
+          <span className="field__label">
+            Exchange rate (1 {currency} = ? USD)
+          </span>
+          <Input
+            type="number"
+            step="0.0001"
+            min="0"
+            value={exchangeRateToUsd}
+            disabled={currency === 'USD'}
+            onChange={(e) => setExchangeRateToUsd(e.target.value)}
+            placeholder={currency === 'USD' ? '1.0000' : 'e.g. 0.14 for THB→USD'}
+          />
+          <span className="field__hint">
+            Locks the FX rate for this PO. All landed-cost numbers convert to USD using this rate.
+          </span>
+        </label>
+        <label className="field">
+          <span className="field__label">Incoterm</span>
+          <Select value={incoterm} onChange={(e) => setIncoterm(e.target.value)}>
+            <option value="EXW">EXW — ex-works</option>
+            <option value="FOB">FOB — free on board</option>
+            <option value="CFR">CFR / CNF — cost & freight</option>
+            <option value="CIF">CIF — cost, insurance, freight</option>
+          </Select>
+        </label>
+        <label className="field">
+          <span className="field__label">Container</span>
+          <Select value={containerType} onChange={(e) => setContainerType(e.target.value)}>
+            <option value="20">20' standard (33.2 CBM)</option>
+            <option value="40">40' standard (67.7 CBM)</option>
+            <option value="40HQ">40' high cube (76.4 CBM)</option>
+            <option value="LCL">LCL — less than container load</option>
+          </Select>
+        </label>
+        <label className="field">
+          <span className="field__label">Ordered on</span>
+          <Input
+            type="date"
+            value={orderedAt}
+            onChange={(e) => setOrderedAt(e.target.value)}
+          />
+        </label>
+  </div>
+    </Modal>
   );
 }
 

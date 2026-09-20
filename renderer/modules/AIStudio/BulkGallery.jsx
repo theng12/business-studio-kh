@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Badge, Button, EmptyState, Pagination } from '../../components/ui.jsx';
+import { Badge, Button, EmptyState, Pagination, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PromoteToProductDialog } from './PromoteToProductDialog.jsx';
 
@@ -86,16 +86,26 @@ export function BulkGallery({ refreshKey, addToast }) {
     }
   }
 
-  const pageStart = page * pageSize;
-  const pageEnd = Math.min(pageStart + pageSize, total);
-  const maxPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+  /* v0.1.27: use the shared helper, which CLAMPS. This block computed the
+   * bounds by hand and never clamped `page`, so deleting the last tile on the
+   * last page left `page` past the end: the current slice came back empty, the
+   * empty-state branch rendered "No bulk results yet", and the pager (which
+   * lives in the other branch) disappeared with it — a dead end with rows still
+   * in the gallery. */
+  const { currentPage, maxPage, pageStart, pageEnd } = paginate(total, page, pageSize);
+
+  // If the list shrank under us, pull the state back in range so the offset
+  // used for the next fetch matches what is displayed.
+  useEffect(() => {
+    if (currentPage !== page) setPage(currentPage);
+  }, [currentPage, page]);
 
   return (
     <section className="ai-card ai-card--gallery">
       <h3 className="ai-card__title">Bulk gallery <span className="ai-card__title-count">{total}</span></h3>
       {loading && rows.length === 0 ? (
         <p className="muted">Loading…</p>
-      ) : rows.length === 0 ? (
+      ) : total === 0 ? (
         <EmptyState
           title="No bulk results yet"
           body="Queue some images above. Finished results show up here, ready to favorite, export, or promote to a product."
@@ -147,7 +157,7 @@ export function BulkGallery({ refreshKey, addToast }) {
               total={total}
               pageStart={pageStart}
               pageEnd={pageEnd}
-              currentPage={page}
+              currentPage={currentPage}
               maxPage={maxPage}
               pageSize={pageSize}
               onPageChange={setPage}

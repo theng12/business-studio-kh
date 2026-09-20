@@ -19,7 +19,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { ipcMain, app, dialog, shell } = require('electron');
+const { app, dialog, shell } = require('electron');
 const config = require('../config');
 
 /**
@@ -47,8 +47,8 @@ function looksLikeOurDataDir(p) {
   );
 }
 
-function register({ expose }) {
-  ipcMain.handle('settings:getAll', () => {
+function register({ expose, exposeLocal }) {
+  exposeLocal('settings:getAll', () => {
     // v0.13.0: enrich the config response with a computed
     // `dataDirIsCloud` flag so the renderer can show an iCloud
     // badge + best-practices banner without re-implementing the
@@ -60,20 +60,20 @@ function register({ expose }) {
 
   /* v0.14.2: server-mode status + control. The renderer polls
      server:status to keep the Settings page in sync. */
-  ipcMain.handle('server:status', () => {
+  exposeLocal('server:status', () => {
     const { getStatus } = require('../server');
     return getStatus();
   });
-  ipcMain.handle('server:addresses', () => {
+  exposeLocal('server:addresses', () => {
     const { collectLocalAddresses } = require('../server');
     return collectLocalAddresses();
   });
-  ipcMain.handle('server:stop', async () => {
+  exposeLocal('server:stop', async () => {
     const { stopServer } = require('../server');
     await stopServer();
     return { ok: true };
   });
-  ipcMain.handle('server:start', async () => {
+  exposeLocal('server:start', async () => {
     const { bootServer } = require('../server');
     const cfg = config.loadConfig();
     return bootServer({ port: cfg.serverPort || 13180, dataDir: cfg.dataDir });
@@ -85,9 +85,14 @@ function register({ expose }) {
      v0.26.34: pre-validates URL shape + surfaces err.cause so the
      user can see the real reason ("Server refused the connection on
      port 13180" instead of the opaque "fetch failed"). */
-  ipcMain.handle('client:testConnection', async (_e, { url, token }) => {
+  exposeLocal('client:testConnection', async ({ url, token }) => {
     const { validateServerUrl, analyzeFetchError } = require('../util/fetchErrors');
-    const urlCheck = validateServerUrl(url);
+    /* v0.1.31: test the NORMALISED address, so "Test connection" reports on
+     * exactly what the client will use. Pasting the mobile-viewer address
+     * (`…:13180/m`) used to pass validation and then fail every real request;
+     * normalising first means the test and the runtime agree. */
+    const { normalizeServerUrl } = require('../util/fetchErrors');
+    const urlCheck = validateServerUrl(normalizeServerUrl(url));
     if (!urlCheck.ok) throw new Error(urlCheck.error);
     if (!token || !String(token).trim()) {
       throw new Error('User token is empty. Ask the server admin to give you the long random string from their Settings → Multi-Mac → Users page.');
@@ -105,7 +110,7 @@ function register({ expose }) {
       });
     } catch (err) {
       const analyzed = analyzeFetchError(err, base);
-      throw new Error(analyzed.message);
+      throw new Error(analyzed.message, { cause: err });
     }
     if (res.status === 401) throw new Error('Token rejected by server. Ask the admin to regenerate it (their Settings → Multi-Mac → Users → ↻ button), then paste the new one here.');
     if (!res.ok) throw new Error(`Server returned ${res.status}. The address is reachable but isn't speaking the Business Studio KH protocol — is this URL pointing at a different app?`);
@@ -117,7 +122,7 @@ function register({ expose }) {
      whoami and returns each layer's result so the user can see
      exactly where the chain breaks (vs. the single "Test connection"
      which just throws on the first failure). */
-  ipcMain.handle('client:diagnoseServer', async (_e, { url, token } = {}) => {
+  exposeLocal('client:diagnoseServer', async ({ url, token } = {}) => {
     const { diagnoseServer } = require('../util/fetchErrors');
     return diagnoseServer({ url, token });
   });
@@ -126,7 +131,7 @@ function register({ expose }) {
      restart-required because the boot path differs (client mode
      skips local DB init, server mode boots HTTP). Persist the new
      mode then relaunch. */
-  ipcMain.handle('settings:setMode', async (_e, nextMode) => {
+  exposeLocal('settings:setMode', async (nextMode) => {
     if (!['standalone', 'server', 'client'].includes(nextMode)) {
       throw new Error(`Invalid mode: ${nextMode}`);
     }
@@ -138,10 +143,19 @@ function register({ expose }) {
     return { ok: true, mode: nextMode };
   });
 
-  ipcMain.handle('settings:setOne',  (_e, { key, value }) => config.updateConfig({ [key]: value }));
-  ipcMain.handle('settings:setMany', (_e, patch) => config.updateConfig(patch ?? {}));
+  // v0.1.18: the unknown-key guard lives in main/config.js so client mode —
+  // which has its own settings handlers — enforces exactly the same rule.
+  exposeLocal('settings:setOne', ({ key, value }) => {
+    config.assertKnownConfigKeys({ [key]: value });
+    return config.updateConfig({ [key]: value });
+  });
+  exposeLocal('settings:setMany', (patch) => {
+    const next = patch ?? {};
+    config.assertKnownConfigKeys(next);
+    return config.updateConfig(next);
+  });
 
-  ipcMain.handle('settings:pickAndSetDataFolder', async () => {
+  exposeLocal('settings:pickAndSetDataFolder', async () => {
     const res = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
       title: 'Choose data folder',
@@ -162,7 +176,7 @@ function register({ expose }) {
    * partial move doesn't leave data orphaned. The original stays
    * until the copy succeeds.
    */
-  ipcMain.handle('settings:changeDataFolder', async (_e, { newPath, move }) => {
+  exposeLocal('settings:changeDataFolder', async ({ newPath, move }) => {
     if (!newPath || typeof newPath !== 'string') throw new Error('newPath required');
     if (!fs.existsSync(newPath)) {
       fs.mkdirSync(newPath, { recursive: true });
@@ -233,7 +247,7 @@ function register({ expose }) {
    * Uses `shell.trashItem` rather than `fs.rmSync` so the user
    * can recover from Finder if anything turns out to be missing.
    */
-  ipcMain.handle('settings:trashFolder', async (_e, { path: targetPath } = {}) => {
+  exposeLocal('settings:trashFolder', async ({ path: targetPath } = {}) => {
     if (!targetPath || typeof targetPath !== 'string') {
       throw new Error('path required');
     }

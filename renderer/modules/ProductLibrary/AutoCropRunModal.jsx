@@ -24,10 +24,10 @@
  * so up front and the preview is the safety net.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Modal, Button, Field, Select } from '../../components/ui.jsx';
-import { appImageSrc } from '../../lib/imageUrl.js';
 import { useAppStore } from '../../store/index.js';
+import { useBulkPreview } from './useBulkPreview.js';
 
 export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
@@ -42,16 +42,10 @@ export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
   // In-session only: always starts OFF (preview shown) on open, not remembered.
   const [skipPreview, setSkipPreview] = useState(false);
 
-  // Sample image for the preview = first selected product's main image.
-  const [sample, setSample] = useState(null); // { productId, filepath, contentHash, sku }
-  const [afterUrl, setAfterUrl] = useState(null);
-  const [previewBusy, setPreviewBusy] = useState(false);
-  const afterUrlRef = useRef(null);
-  const debounceRef = useRef(null);
-
   const count = productIds?.length ?? 0;
 
-  // Reset to sensible defaults + load the sample image each time we open.
+  // Reset the controls each time we open. The sample image + preview state are
+  // owned by useBulkPreview, which resets them on the same trigger.
   useEffect(() => {
     if (!open) return;
     setFillPct(88);
@@ -60,68 +54,30 @@ export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
     setFillColor('#FFFFFF');
     setSubmitting(false);
     setSkipPreview(false);
-    setSample(null);
-    setAfterUrl(null);
+  }, [open]);
 
-    const firstId = productIds && productIds[0];
-    if (!firstId) return;
-    let cancelled = false;
-    window.api.images.listByProduct(firstId)
-      .then((imgs) => {
-        if (cancelled) return;
-        const main = imgs && imgs[0];
-        if (main) {
-          setSample({
-            productId: firstId,
-            filepath: main.filepath,
-            contentHash: main.contentHash,
-            sku: main.sku,
-          });
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [open, productIds]);
+  // v0.1.16: the preview request, the debounce and the blob-URL lifecycle all
+  // live in useBulkPreview now (shared with AutoEnhanceRunModal). This is just
+  // the crop-specific request; it must stay a useCallback so the hook knows
+  // when a control changed.
+  const requestPreview = useCallback(async (sample) => {
+    const res = await window.api.images.reframePreview({
+      productId: sample.productId,
+      filepath: sample.filepath,
+      scale: fillPct / 100,
+      offsetX: 0,
+      offsetY: 0,
+      fillMode,
+      fillColor,
+      autoCrop: true,
+      trimThreshold: tolerance,
+    });
+    return res?.bytes;
+  }, [fillPct, tolerance, fillMode, fillColor]);
 
-  const renderPreview = useCallback(async () => {
-    if (!open || skipPreview || !sample) return;
-    setPreviewBusy(true);
-    try {
-      const res = await window.api.images.reframePreview({
-        productId: sample.productId,
-        filepath: sample.filepath,
-        scale: fillPct / 100,
-        offsetX: 0,
-        offsetY: 0,
-        fillMode,
-        fillColor,
-        autoCrop: true,
-        trimThreshold: tolerance,
-      });
-      const bytes = res?.bytes;
-      if (!bytes) return;
-      const blob = new Blob([bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)], { type: 'image/png' });
-      const url = URL.createObjectURL(blob);
-      if (afterUrlRef.current) URL.revokeObjectURL(afterUrlRef.current);
-      afterUrlRef.current = url;
-      setAfterUrl(url);
-    } catch (err) {
-      addToast(`Preview failed: ${err.message}`, 'error');
-    } finally {
-      setPreviewBusy(false);
-    }
-  }, [open, skipPreview, sample, fillPct, tolerance, fillMode, fillColor, addToast]);
-
-  // Debounced live preview whenever the controls (or sample) change.
-  useEffect(() => {
-    if (!open || skipPreview) return undefined;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(renderPreview, 240);
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [open, skipPreview, renderPreview]);
-
-  // Revoke the blob URL on close/unmount.
-  useEffect(() => () => { if (afterUrlRef.current) URL.revokeObjectURL(afterUrlRef.current); }, []);
+  const { sample, beforeUrl, afterUrl, previewBusy } = useBulkPreview({
+    open, productIds, skipPreview, requestPreview, addToast,
+  });
 
   async function handleSubmit() {
     if (count === 0) { addToast('No products selected', 'info'); return; }
@@ -157,8 +113,6 @@ export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
   }
 
   if (!open) return null;
-
-  const beforeUrl = sample ? appImageSrc(sample.filepath, sample.contentHash) : null;
 
   return (
     <Modal open={open} title="Auto-crop to product" onClose={onClose}>

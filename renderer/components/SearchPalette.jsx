@@ -48,6 +48,8 @@ export function SearchPalette({ open, onClose }) {
   const [searching, setSearching] = useState(false);
   const inputRef = useRef(null);
   const debounceRef = useRef(null);
+  /** Monotonic id for the newest search, so an older response can be ignored. */
+  const searchSeq = useRef(0);
 
   // Reset state every time the palette opens, and focus the input.
   useEffect(() => {
@@ -62,6 +64,18 @@ export function SearchPalette({ open, onClose }) {
   useEffect(() => {
     if (!open) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    /* v0.1.27: every effect run claims a new sequence number, and a response
+     * is only committed if it is still the newest.
+     *
+     * The previous guard was `if (query.trim() === q)` — but `q` is derived
+     * from `query` in the SAME render closure, so it compared a value with
+     * itself and was always true. An in-flight search for an earlier query
+     * could therefore land after a newer one and overwrite it with staler
+     * results (and clear the "searching" indicator while the new one was still
+     * running). Claiming the number up front also covers the empty-query path,
+     * which returns early and used to leave any pending search able to resolve. */
+    const seq = (searchSeq.current += 1);
+    const fresh = () => seq === searchSeq.current;
     const q = query.trim();
     if (!q) {
       setResults([]);
@@ -72,18 +86,15 @@ export function SearchPalette({ open, onClose }) {
     debounceRef.current = setTimeout(async () => {
       try {
         const hits = await window.api.search.global(q, 30);
-        // Only commit if the query hasn't changed since we issued
-        // the search — guards against an out-of-order resolve that
-        // would otherwise stomp newer results with older ones.
-        if (query.trim() === q) {
+        if (fresh()) {
           setResults(Array.isArray(hits) ? hits : []);
           setHighlight(0);
         }
       } catch (_err) {
         // Search failures are non-fatal; just show no results.
-        setResults([]);
+        if (fresh()) setResults([]);
       } finally {
-        setSearching(false);
+        if (fresh()) setSearching(false);
       }
     }, DEBOUNCE_MS);
     return () => debounceRef.current && clearTimeout(debounceRef.current);

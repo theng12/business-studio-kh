@@ -5,6 +5,7 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { TemplateList } from './TemplateList.jsx';
 import { TemplateEditor } from './TemplateEditor.jsx';
 import { ExternalWatermarkModal } from './ExternalWatermarkModal.jsx';
+import { NewTemplateModal } from './NewTemplateModal.jsx';
 
 /**
  * Overlay Studio router.
@@ -23,17 +24,22 @@ import { ExternalWatermarkModal } from './ExternalWatermarkModal.jsx';
  */
 export function OverlayStudio() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
-  const setActiveModule = useAppStore((s) => s.setActiveModule);
   const addToast = useAppStore((s) => s.addToast);
 
-  // v0.49.53: "Watermark external photos" — local-only batch tool, so
-  // hidden in client mode (file paths live on the host's disk).
-  const appMode = useAppStore((s) => s.appMode);
+  // v0.1.19: "Watermark external photos" used to be hidden in client mode,
+  // because the composing ran on the server while the file paths pointed at
+  // THIS Mac's disk. It now runs here (main/client/index.js →
+  // templates:applyToExternal) with the template's logo fetched from the
+  // server, so the tool works in both modes.
   const [externalOpen, setExternalOpen] = useState(false);
 
   const [templates, setTemplates] = useState([]);
   const [editingId, setEditingId] = useState(null);  // null = list view; uuid = editor view
   const [loading, setLoading] = useState(true);
+  // v0.1.23: creating a template asks for a name and a canvas size first — the
+  // size is much harder to change later than the name, because every element
+  // position is stored as a fraction of the canvas.
+  const [createOpen, setCreateOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +54,6 @@ export function OverlayStudio() {
         const list = await window.api.templates.list();
         if (!cancelled) setTemplates(Array.isArray(list) ? list : []);
       } catch (err) {
-        // eslint-disable-next-line no-console
         console.error('[OverlayStudio] failed to load templates:', err);
         if (!cancelled) addToast(err.message, 'error');
       } finally {
@@ -67,17 +72,18 @@ export function OverlayStudio() {
     }
   }
 
-  async function handleCreate() {
+  async function handleCreate({ name, canvasWidth, canvasHeight }) {
     try {
       const t = await window.api.templates.create({
-        name: 'Untitled template',
-        canvasWidth: 2000,
-        canvasHeight: 2000,
+        name: name?.trim() || 'Untitled template',
+        canvasWidth,
+        canvasHeight,
         elements: [],
         tags: [],
       });
       await refresh();
-      setEditingId(t.id);   // jump straight into the editor for a fresh one
+      setCreateOpen(false);
+      setEditingId(t.id);            // jump straight into the editor
     } catch (err) {
       addToast(err.message, 'error');
     }
@@ -136,12 +142,12 @@ export function OverlayStudio() {
         subtitle={subtitleList}
         actions={
           <div style={{ display: 'flex', gap: 8 }}>
-            {appMode !== 'client' && templates.length > 0 && (
+            {templates.length > 0 && (
               <Button variant="ghost" onClick={() => setExternalOpen(true)}>
                 Watermark external photos…
               </Button>
             )}
-            <Button variant="primary" onClick={handleCreate}>
+            <Button variant="primary" onClick={() => setCreateOpen(true)}>
               + New template
             </Button>
           </div>
@@ -149,14 +155,19 @@ export function OverlayStudio() {
       />
 
       <ExternalWatermarkModal open={externalOpen} onClose={() => setExternalOpen(false)} />
+      <NewTemplateModal open={createOpen} onClose={() => setCreateOpen(false)} onCreate={handleCreate} />
 
       {loading ? (
         <EmptyState title="Loading templates…" />
       ) : templates.length === 0 ? (
+        // v0.1.25: the action used to be onClick={handleCreate}, which handed the
+        // CLICK EVENT to a function expecting {name, canvasWidth, canvasHeight} —
+        // so it silently created "Untitled template" at the server defaults,
+        // exactly what the name/size dialog was added to prevent.
         <EmptyState
           title="No templates yet"
           body="Templates compose text, barcodes, and logos onto your product photos. Create one to get started — you can apply it to a batch of products from the Library afterwards."
-          action={<Button variant="primary" onClick={handleCreate}>+ New template</Button>}
+          action={<Button variant="primary" onClick={() => setCreateOpen(true)}>+ New template</Button>}
         />
       ) : (
         <TemplateList

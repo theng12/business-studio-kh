@@ -36,7 +36,7 @@ import { BulkOverlayRunModal } from '../ProductLibrary/BulkOverlayRunModal.jsx';
  *
  * Auto-save: every change debounces to 500ms; the save-status pill in
  * the header surfaces the state. Explicit Save button forces a flush.
- * Per CLAUDE.md §6 (updated 2026-05-20).
+ * Per AGENTS.md §6 (updated 2026-05-20).
  *
  * Backdrop: optional. The user picks a product whose main image is shown
  * behind the elements so they can design in context. With nothing picked,
@@ -67,6 +67,13 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
   // for a different template, defaulting back to "snap on" is the right
   // help most of the time.
   const [snapToGrid, setSnapToGrid] = useState(true);
+  // v0.1.24: design view (placeholders) vs the real preview.
+  //
+  // Always starts OFF, so you open a template and see the real thing. The
+  // preview is the viewing mode; placeholders are a design aid you switch on
+  // while placing elements, and switching it back off returns you to the
+  // preview. Not persisted, so every template opens the same way.
+  const [placeholders, setPlaceholders] = useState(false);
   // v0.29.0: "Show bounds" outlines every element's box (not just the
   // selected one) so you can see the whole overlay footprint at once and
   // spot where elements will land on the product — a safe-zone guide.
@@ -283,9 +290,14 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
 
   function scheduleSave(next) {
     const json = JSON.stringify(stripEphemeral(next));
-    if (json === lastSavedJSON.current) return;  // no-op
-    setSaveStatus((s) => ({ ...s, state: 'saving' }));
+    /* v0.1.25: cancel the pending timer BEFORE the no-op return. Otherwise the
+     * earlier timer is still queued holding the previous snapshot, and typing a
+     * character then deleting it within 500 ms saved the abandoned text — the UI
+     * and the "saved" pill showed the corrected value while the database kept
+     * the typo. */
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (json === lastSavedJSON.current) return;  // genuinely nothing to save
+    setSaveStatus((s) => ({ ...s, state: 'saving' }));
     saveTimer.current = setTimeout(() => {
       saveNow(next, /* showToast */ false);
     }, 500);
@@ -589,6 +601,15 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
           >
             {showBounds ? '⧉ Bounds on' : '⧉ Bounds off'}
           </button>
+          <button
+            type="button"
+            className={`segment${placeholders ? ' is-active' : ''}`}
+            onClick={() => setPlaceholders((v) => !v)}
+            aria-pressed={placeholders}
+            title="Show a labelled box for each element instead of the product photo and the real render — handy while you are placing things. Off = the real preview (the default)."
+          >
+            {placeholders ? '▢ Placeholders on' : '▢ Placeholders off'}
+          </button>
         </div>
         {/* v0.27.0: bulk inset. Shrinks the base image to leave a safe
             margin so overlay elements (logo, SKU) never collide with a
@@ -718,6 +739,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
           backdropProductId={backdropProductId}
           snapToGrid={snapToGrid}
           showBounds={showBounds}
+          placeholders={placeholders}
         />
       </div>
 

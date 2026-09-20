@@ -10,7 +10,19 @@ export function LabelGenerate() {
   const [outputFolder, setOutputFolder] = useState(''); const [format, setFormat] = useState('pdf'); const [mode, setMode] = useState('sheet'); const [pageSize, setPageSize] = useState('A4'); const [orientation, setOrientation] = useState('portrait');
   const [marginMm, setMarginMm] = useState(8); const [gapMm, setGapMm] = useState(2); const [copies, setCopies] = useState(1); const [printers, setPrinters] = useState([]); const [printer, setPrinter] = useState('');
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [phase, setPhase] = useState(0); const [detail, setDetail] = useState(''); const [previewHtml, setPreviewHtml] = useState('');
-  useEffect(() => { if (!companyId) return; window.api.labels.listTemplates(companyId).then((rows) => { setTemplates(rows); if (rows[0]) setTemplateId((v) => v || rows[0].id); }); window.api.labels.listPrinters().then(setPrinters).catch(() => {}); }, [companyId]);
+  useEffect(() => { if (!companyId) return; window.api.labels.listTemplates(companyId)
+      .then((rows) => { setTemplates(rows); if (rows[0]) setTemplateId((v) => v || rows[0].id); })
+      // v0.1.28: the sibling printer call below explains why failures must be
+      // surfaced; this one still swallowed them, leaving an empty dropdown
+      // with no reason given.
+      .catch((err) => addToast(`Could not load label templates — ${err.message}`, 'error')); // v0.1.21: this used to swallow the failure, so on a Mac where the printer
+    // list could not be read the dropdown just stayed empty with no explanation.
+    window.api.labels.listPrinters()
+      .then(setPrinters)
+      .catch((err) => addToast(`Could not read the printer list — ${err.message}`, 'error')); },
+    // addToast is a Zustand action — a stable reference, so listing it cannot
+    // make this effect re-run.
+    [companyId, addToast]);
   useEffect(() => {
     const off = window.api.events.onProgress((ev) => { if (ev?.kind !== 'labels' || ev.complete) return; setProgress(ev.total ? ev.done / ev.total * 82 + 12 : 15); setPhase(ev.phase === 'finishing' ? 3 : 2); setDetail(ev.label || ''); });
     return () => { if (typeof off === 'function') off(); };

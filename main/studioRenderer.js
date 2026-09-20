@@ -1,7 +1,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const bwipjs = require('bwip-js');
-const { getDataDir } = require('./db');
+
+/* v0.1.25: resolved lazily rather than at module load.
+ *
+ * `require('./db')` pulls in better-sqlite3, which is compiled for Electron's
+ * ABI — so a top-level require here made every module that merely BUILDS HTML
+ * unloadable under plain `node --test`. The Social Grid's HTML builder is
+ * imported by test/socialGridRenderer.test.js and has no use for a database,
+ * so the dependency is deferred until a caller actually resolves an asset
+ * path. Same pattern as getAudit() in main/db/products.js. */
+let _db = null;
+function getDataDir() { return (_db ?? (_db = require('./db'))).getDataDir(); }
 
 function fontRoot() {
   const candidates = [
@@ -12,6 +22,9 @@ function fontRoot() {
 }
 
 function embeddedFontCss(text) {
+  // The control-character range is intentional: this asks "is any character
+  // outside plain ASCII?" so we know whether to embed a Unicode font.
+  // eslint-disable-next-line no-control-regex
   if (!/[^\x00-\x7f]/.test(text || '')) return '';
   const root = fontRoot(); if (!root) return '';
   const faces = [
@@ -193,4 +206,9 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
   </style></head><body>${cover}<main class="grid">${cards || '<p>No products have been added to this catalog yet.</p>'}</main></body></html>`;
 }
 
-module.exports = { labelsDocument, buildCatalogHtml, barcodeUri, assetDataUri };
+/* v0.1.25: `embeddedFontCss` and `esc` are exported for socialGridRenderer.js.
+ * A square social post must render its text in the SAME fonts a catalog does —
+ * including the Khmer/Thai/JP/SC fallbacks — and the offscreen render window
+ * cannot reach `assets/fonts` on its own, so the font CSS has to be inlined.
+ * Re-exporting beats copying: one place decides which scripts get embedded. */
+module.exports = { labelsDocument, buildCatalogHtml, barcodeUri, assetDataUri, embeddedFontCss, esc };

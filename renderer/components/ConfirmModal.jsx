@@ -12,7 +12,7 @@ import { Button, Modal } from './ui.jsx';
  *
  * Or render <ConfirmModal /> directly when you want declarative control.
  *
- * Per CLAUDE.md §2 "destructive confirmations" are the documented opt-out
+ * Per AGENTS.md §2 "destructive confirmations" are the documented opt-out
  * from backdrop-click dismissal — `closeOnBackdrop` defaults to false here
  * to avoid accidental deletes when the user clicks outside the dialog.
  */
@@ -24,7 +24,13 @@ export function ConfirmModal({
   message,
   detail,
   confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
+  // v0.1.20: the "no" button is labelled by what it DOES, not by what it
+  // dismisses. On a destructive confirm the choice is "destroy it" or "don't",
+  // and "Cancel" was ambiguous — cancel the dialog, or cancel the action that
+  // was already under way? "Keep" answers that in one word and reads as the
+  // safe option next to "Delete". Error dialogs, where nothing is destroyed
+  // either way, keep "Cancel" — the plain dismissal it has always meant.
+  cancelLabel,
   danger = false,
   busy = false,
   closeOnBackdrop = false,
@@ -40,6 +46,11 @@ export function ConfirmModal({
   // confirm button label so the shortcut is discoverable.
   hotkey,
 }) {
+  // The safe-action label. One rule, so the component default and the
+  // imperative `confirm()` helper cannot drift apart: destructive → "Keep",
+  // otherwise → "Cancel".
+  const cancelText = cancelLabel ?? (danger ? 'Keep' : 'Cancel');
+
   // Register the window-level keydown handler ONLY while the modal
   // is open. Capture-phase so we beat any other Esc / shortcut
   // handlers further down the tree (same pattern Lightbox uses).
@@ -70,7 +81,7 @@ export function ConfirmModal({
       closeOnBackdrop={closeOnBackdrop}
       footer={
         <>
-          <Button onClick={onCancel} disabled={busy}>{cancelLabel}</Button>
+          <Button onClick={onCancel} disabled={busy}>{cancelText}</Button>
           <Button
             variant={danger ? 'danger' : 'primary'}
             onClick={onConfirm}
@@ -193,11 +204,17 @@ export function confirm(opts) {
         <ConfirmModal
           open
           title={opts.title || 'Confirm'}
-          message={opts.message}
+          /* v0.1.25: `body` and `destructive` are accepted as aliases.
+           * Six call sites (Purchase Orders line/PO removal, TT records, Roles)
+           * pass those names, and this helper silently ignored them — so the
+           * warning text explaining an IRREVERSIBLE action never appeared, and
+           * the dialog lost its danger styling. Accepting both spellings fixes
+           * all six at once and keeps the older calls working. */
+          message={opts.message ?? opts.body}
           detail={opts.detail}
-          confirmLabel={opts.confirmLabel ?? (opts.danger ? 'Delete' : 'Confirm')}
-          cancelLabel={opts.cancelLabel ?? 'Cancel'}
-          danger={!!opts.danger}
+          confirmLabel={opts.confirmLabel ?? ((opts.danger ?? opts.destructive) ? 'Delete' : 'Confirm')}
+          cancelLabel={opts.cancelLabel}
+          danger={!!(opts.danger ?? opts.destructive)}
           busy={busy}
           closeOnBackdrop={!!opts.closeOnBackdrop}
           extra={opts.extra ?? null}

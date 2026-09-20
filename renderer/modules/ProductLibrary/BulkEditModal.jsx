@@ -13,7 +13,7 @@
  */
 
 import { useState } from 'react';
-import { Modal, Button, Field, Select, Input, Textarea } from '../../components/ui.jsx';
+import { Modal, Button, Select, Input, Textarea } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 
 const STATUS_OPTIONS = [
@@ -56,13 +56,16 @@ export function BulkEditModal({ open, count, productIds, onClose, onDone }) {
     if (enabled.colorFinish) patch.colorFinish  = values.colorFinish.trim() || null;
     if (enabled.variant)     patch.variant      = values.variant.trim() || null;
     if (enabled.unit)        patch.unit         = values.unit.trim() || null;
+    /* v0.1.25: Number('') is 0, so ticking a price field and leaving the box EMPTY
+     * set every selected product's price to 0 — the opposite of the modal's own
+     * "leave blank to clear" copy. Blank means null. */
     if (enabled.priceRetail) {
-      const n = Number(values.priceRetail);
-      patch.priceRetail = Number.isFinite(n) ? n : null;
+      const raw = values.priceRetail.trim();
+      patch.priceRetail = raw === '' ? null : (Number.isFinite(Number(raw)) ? Number(raw) : null);
     }
     if (enabled.priceWholesale) {
-      const n = Number(values.priceWholesale);
-      patch.priceWholesale = Number.isFinite(n) ? n : null;
+      const raw = values.priceWholesale.trim();
+      patch.priceWholesale = raw === '' ? null : (Number.isFinite(Number(raw)) ? Number(raw) : null);
     }
     if (enabled.description) patch.description  = values.description.trim() || null;
     return patch;

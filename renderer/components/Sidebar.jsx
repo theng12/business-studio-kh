@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/index.js';
+// v0.1.22: shared with Settings — see renderer/lib/capabilities.js.
+import { hasCap, hasAnyCap } from '../lib/capabilities.js';
 import { WhatsNewModal } from './WhatsNewModal.jsx';
 import { PresenceModal } from './PresenceModal.jsx';
 import { ConnectionLegendModal } from './ConnectionLegendModal.jsx';
@@ -29,7 +31,12 @@ function saveSidebarCollapsed(v) {
 // shown. Omitted = visible to everyone. Hierarchy: viewer < photographer <
 // editor < admin. Standalone / server-host renderers always run as admin
 // since local IPC isn't gated.
-const NAV = [
+/* v0.1.25: exported so App.jsx can DERIVE its keyboard shortcuts from the same
+ * list the sidebar renders. They used to be two hand-kept lists, and they drifted:
+ * the sidebar advertised ⌘7/⌘8/⌘9 for History/Suppliers/Purchase Orders while
+ * App.jsx's SHORTCUTS map simply did not contain them, so those keys did nothing.
+ * Deriving the map removes the class of bug rather than fixing one instance. */
+export const NAV = [
   {
     label: 'Workspace',
     items: [
@@ -74,6 +81,15 @@ const NAV = [
     ],
   },
   {
+    // v0.1.25: Social Grid — square product grids for Facebook / Instagram.
+    // Gated on catalog.design because it is the same job as a catalog (lay
+    // products out for an audience), just sized for a post instead of a page.
+    label: 'Social',
+    items: [
+      { id: 'socialgrid', name: 'Social Grid', icon: IconExport, caps: ['catalog.design'] },
+    ],
+  },
+  {
     // v0.49.46: OPERATIONS section. Visible to any role with the
     // 'View costs, suppliers & POs' capability (costing.view). The whole
     // section is dropped if every item inside it is gated out.
@@ -98,14 +114,7 @@ const NAV = [
 
 // v0.49.51: capability helpers. `caps` is the current user's capability
 // array (the server attaches it to the connection; the host is all-access).
-function hasCap(caps, key) {
-  if (!Array.isArray(caps)) return false;
-  return caps.includes('*') || caps.includes(key);
-}
-function hasAnyCap(caps, keys) {
-  if (!Array.isArray(keys) || keys.length === 0) return true; // ungated item
-  return keys.some((k) => hasCap(caps, k));
-}
+
 
 // Derive a legacy CSS tier (viewer/photographer/editor/admin) from a
 // capability set, so the existing body[data-role] CSS that hides write
@@ -621,22 +630,6 @@ function IconBrand({ className }) {
     <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
       <path d="M8.5 2.5h6V8.5L8.5 14.5L2.5 8.5L8.5 2.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
       <circle cx="11" cy="6" r="1" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
-
-// v0.22.13: folder-stack glyph — fitting for "category" (a grouping
-// concept). Kept stroke-only for visual parity with IconBrand etc.
-function IconCategory({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path
-        d="M2.5 6V5a1 1 0 0 1 1-1h3l1.4 1.6h5.6a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V6z"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinejoin="round"
-      />
-      <path d="M5 9h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   );
 }

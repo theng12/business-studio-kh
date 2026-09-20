@@ -262,7 +262,7 @@ async function previewBundle(bundlePath) {
     try {
       manifest = JSON.parse(manifestText);
     } catch (err) {
-      throw new Error(`Bundle manifest is malformed JSON: ${err.message}`);
+      throw new Error(`Bundle manifest is malformed JSON: ${err.message}`, { cause: err });
     }
     // Size of the bundle itself for the renderer.
     const stat = await fsp.stat(bundlePath);
@@ -314,6 +314,15 @@ async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
   // looksLikeOurDataDir guard is in settings.js; we recreate the
   // check inline because we don't want to depend on the running
   // app's settings module.
+  //
+  // v0.1.25: `bakPath` is hoisted out of the block below so the catch further
+  // down can put the folder back. It used to be scoped inside the `if`, which
+  // meant a failure during extraction left the live data folder renamed to
+  // `.bak.<ts>` and an EMPTY folder in its place — the app kept running on its
+  // open database handle, so nothing looked wrong until the next launch, which
+  // saw an empty data dir and created a brand-new empty database. The user's
+  // library appeared to have vanished.
+  let bakPath = null;
   if (fs.existsSync(targetDataDir)) {
     const stat = await fsp.stat(targetDataDir);
     if (stat.isDirectory()) {
@@ -323,7 +332,7 @@ async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
       );
       if (looksLikeData) {
         onProgress?.('backup');
-        const bakPath = `${targetDataDir}.bak.${Date.now()}`;
+        bakPath = `${targetDataDir}.bak.${Date.now()}`;
         await fsp.rename(targetDataDir, bakPath);
         // recreate the empty target dir so extraction has somewhere
         // to land
@@ -395,6 +404,27 @@ async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
       importedManifest: manifest,
       targetDataDir,
     };
+  } catch (err) {
+    /* v0.1.25: roll back. If we moved the live data folder aside and then
+     * failed — a full disk while extracting a multi-GB bundle, a corrupt or
+     * unexpected archive, an interrupted move — put the original back. Without
+     * this the user is left with an empty data folder and their library only
+     * in a `.bak.<ts>` sibling they have no way to know about.
+     *
+     * The `!database.sqlite` test is the same guard backupManager.restoreBackup
+     * uses: if the import got far enough to produce a real database, the new
+     * data is probably the one the user wants, so leave it and let the error
+     * surface on its own. */
+    if (bakPath && fs.existsSync(bakPath) && !fs.existsSync(path.join(targetDataDir, 'database.sqlite'))) {
+      try {
+        await fsp.rm(targetDataDir, { recursive: true, force: true });
+        await fsp.rename(bakPath, targetDataDir);
+        process.stderr.write(`[bundle import] failed (${err.message}) — your original data folder was restored.\n`);
+      } catch (rollbackErr) {
+        process.stderr.write(`[bundle import] failed (${err.message}) AND the rollback failed (${rollbackErr.message}). Your original data is in ${bakPath}.\n`);
+      }
+    }
+    throw err;
   } finally {
     try { await fsp.rm(tmpRoot, { recursive: true, force: true }); } catch (_) {}
   }

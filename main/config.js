@@ -130,14 +130,54 @@ function saveConfig(cfg) {
 }
 
 function updateConfig(patch) {
-  const next = { ...loadConfig(), ...patch };
-  return saveConfig(next);
+  const merged = { ...loadConfig(), ...patch };
+  /* v0.1.31: store the server address as an ORIGIN.
+   *
+   * Settings shows the desktop-app address and the mobile-viewer address
+   * (`…:13180` vs `…:13180/m`) side by side, and pasting the wrong one used to
+   * be accepted and then break every request. Normalising here — rather than in
+   * an IPC handler — means both modes get it, because client mode writes
+   * config through this same function (AGENTS.md §15: a rule both modes must
+   * agree on cannot live inside one mode's handler). Anything already stored
+   * with a path is corrected the next time it is written, and `baseUrl()` also
+   * normalises on read so an existing bad value works immediately. */
+  if (typeof merged.clientServerUrl === 'string') {
+    merged.clientServerUrl = require('./util/fetchErrors').normalizeServerUrl(merged.clientServerUrl);
+  }
+  return saveConfig(merged);
+}
+
+/**
+ * v0.1.18: throw if `patch` names a config key that does not exist.
+ *
+ * `updateConfig` merges its patch straight into config.json with no key filter,
+ * so `setOne('theem', 'dark')` — a typo, or a key left behind by a removed
+ * feature — wrote a junk entry that then persisted forever and reappeared on
+ * every Settings render. This is the guard for the two paths a USER can reach;
+ * the backup / server-bundle restore paths deliberately do NOT use it, because
+ * they legitimately carry whatever keys the backup held.
+ *
+ * The known-key set is the LOADED config — `defaultConfig()` merged with the
+ * keys the user already has. So it can never block a key that is already in
+ * use, only a never-before-seen one.
+ *
+ * Lives here rather than in the IPC handler so client mode gets it too: client
+ * mode has its own settings handlers (main/client/index.js) and they call
+ * `updateConfig` from this module.
+ */
+function assertKnownConfigKeys(patch) {
+  const known = new Set(Object.keys(loadConfig()));
+  const unknown = Object.keys(patch ?? {}).filter((k) => !known.has(k));
+  if (unknown.length) {
+    throw new Error(`Unknown setting${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}`);
+  }
 }
 
 module.exports = {
   loadConfig,
   saveConfig,
   updateConfig,
+  assertKnownConfigKeys,
   configPath,
   defaultDataDir,
   legacyDataDir,

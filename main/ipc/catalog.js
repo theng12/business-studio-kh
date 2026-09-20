@@ -11,14 +11,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { ipcMain } = require('electron');
 
 const companies = require('../db/companies');
 const brands = require('../db/brands');
 const categories = require('../db/categories');
 const imageManager = require('../imageManager');
 
-function register({ expose, emitCatalogChange, assertEntityInActiveCompany, SAFE_BRAND_EXTS }) {
+function register({ expose, emitCatalogChange, assertEntityInActiveCompany, SAFE_BRAND_EXTS, exposeLocal }) {
   /* ─── Companies ─── */
 
   // v0.14.2: company read channels migrated to `expose` so clients
@@ -82,7 +81,7 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, SAFE
     return r;
   });
 
-  ipcMain.handle('brands:uploadIcon', async (_e, { sourcePath, name }) => {
+  exposeLocal('brands:uploadIcon', async ({ sourcePath, name }) => {
     if (!sourcePath) throw new Error('Source path required');
     // v0.12.0: brand icons now live at
     //   `assets/<company>/_brand-icons/<brand-slug>.<ext>`

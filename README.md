@@ -55,7 +55,7 @@ If you don't run step 3 you'll see "Business Studio KH is damaged and can't be o
 - Smart filename matching: scan a folder, auto-import matching files into existing products by SKU.
 
 **Image Workspace**
-- Background removal via local ONNX model (`@imgly/background-removal`) or remove.bg API.
+- Background removal via a local ONNX model (`@imgly/background-removal`) — runs on this Mac, no cloud service and no API key. (corrected 2026-09-19: this line used to offer a remove.bg cloud fallback, which was removed from the app.)
 - Sharp pipeline: rotate, crop, resize-to-preset, format-convert, color-profile, watermark composite.
 - Per-image processed-vs-raw view with split slider, alignment guides, zoom controls.
 - Auto-save per-image settings; explicit "Process" button commits the run.

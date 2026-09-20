@@ -13,7 +13,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { ipcMain } = require('electron');
 
 const companies = require('../db/companies');
 const brands = require('../db/brands');
@@ -23,7 +22,7 @@ const exportRunner = require('../exportRunner');
 const { broadcast } = require('../events');
 const { emitCatalogChange } = require('./helpers');
 
-function register({ expose, assertEntityInActiveCompany, assertProductInActiveCompany }) {
+function register({ expose, assertEntityInActiveCompany, assertProductInActiveCompany, exposeLocal }) {
   // v0.14.4: read paths portable to clients.
   expose('exports:listProfiles', (companyId) => {
     if (companyId && companyId !== companies.getActiveId()) return [];
@@ -93,7 +92,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
    * and a 1700-product preview only takes ~30ms because it's pure
    * existsSync calls, no sharp pipeline.
    */
-  expose('exports:checkCollisions', ({ profileId, productIds, outputRoot } = {}) => {
+  exposeLocal('exports:checkCollisions', ({ profileId, productIds, outputRoot } = {}) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) assertProductInActiveCompany(pid);
     return exportRunner.previewCollisions({ profile, productIds, outputRoot });
@@ -117,7 +116,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     return exportRunner.expectedOutputs({ profile, productIds });
   });
 
-  ipcMain.handle('exports:run', async (_e, { profileId, productIds, outputRoot, onExisting, saveToLibrary }) => {
+  exposeLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary }) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     // Block any productId that doesn't belong to the active company.
     for (const pid of (productIds ?? [])) {

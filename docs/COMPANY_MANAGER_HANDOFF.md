@@ -59,9 +59,9 @@ A shared `Modal`, `Button`, `Input`, `Field`, `Textarea`, `EmptyState` component
 ```
 main/
   db.js                    # companies table + CRUD + addColumnIfMissing
-  ipc.js                   # companies:* + images:importForCompany handlers
+  ipc.js                   # companies:* handlers
   imageManager.js          # importCompanyLogo (sharp pipeline, SHA-1 dedup)
-  preload.js               # window.api.companies + images.importForCompany
+  preload.js               # window.api.companies
 
 renderer/
   store/index.js           # companies state + active-company tracking
@@ -310,7 +310,7 @@ All channels follow `domain:action`. Main throws `new Error('…')` on failure.
 | `companies:create` | `Partial<Company> & { name }` | new `Company` |
 | `companies:update` | `{ id, patch: Partial<Company> }` | updated `Company` |
 | `companies:remove` | `id` | `true` |
-| `images:importForCompany` | `{ sourcePath, companyName }` | `relativePath: string` |
+| _(none — never implemented)_ | — | Company logos are not a feature; `companies` has no logo column. Brand icons use `brands:uploadIcon`. |
 | `state:get` | `key` | `string \| null` |
 | `state:set` | `{ key, value }` | `true` |
 
@@ -330,8 +330,8 @@ contextBridge.exposeInMainWorld('api', {
     remove: (id)         => invoke('companies:remove', id),
   },
   images: {
-    importForCompany: (sourcePath, companyName) =>
-      invoke('images:importForCompany', { sourcePath, companyName }),
+    // NOTE: no company-logo import channel exists. Brand icons use
+    // window.api.brands.uploadIcon(sourcePath, name) -> 'brands:uploadIcon'.
   },
   files: {
     pickImage: () => invoke('files:pickImage'),
@@ -783,7 +783,9 @@ For secondary / accent colors in the Branding section, the same full-width swatc
 6. `Section` + `DynamicRow` + `EmptyRow` helpers.
 7. Price groups section with +/× rows; verify save persists the array.
 8. Custom fields section, identical pattern + 10-cap.
-9. Branding (logo + secondary/accent + font). Logo import via `images:importForCompany`.
+9. Branding (logo + secondary/accent + font). **Logo import was never built** — there is no
+   `images:importForCompany` channel and no logo column on `companies`. Brand-level icons exist
+   via `brands:uploadIcon`.
 10. Variants toggle + display-mode select.
 11. New-entity draft flow (`creating` boolean + dashed placeholder).
 12. Active-company handling (badge, Switch-to button, auto-activate on create).

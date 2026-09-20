@@ -36,7 +36,7 @@ const Thumb = memo(function Thumb({ abs }) {
  * AIStudio knows about the model/prompt; BulkSourcePanel only knows about
  * sources.
  */
-export function BulkSourcePanel({ files, onFilesChange, onError, exportDir, onExportDirChange }) {
+export function BulkSourcePanel({ files, onFilesChange, onError, exportDir, onExportDirChange, isClient = false }) {
   const [scanning, setScanning] = useState(false);
   const [isOver, setIsOver] = useState(false);
 
@@ -169,10 +169,24 @@ export function BulkSourcePanel({ files, onFilesChange, onError, exportDir, onEx
         </div>
       </div>
 
-      {/* v0.11.5: optional external export folder. When set, the runner
-          also copies each result to this folder using the source image's
-          basename, so users can match outputs back to their inputs at a
-          glance and skip the export-by-tile workflow on the bulk gallery. */}
+      {/* v0.1.27: hidden on a client Mac. The folder here would be chosen with
+          THIS Mac's picker but the copy is performed by the queue runner on the
+          SERVER, so results landed in a directory tree on the other computer
+          while the folder the user picked stayed empty. Results still come back
+          through the internal gallery, which works in client mode. */}
+      {isClient ? (
+        <div className="ai-bulk-source__export">
+          <div className="ai-bulk-source__export-label">Export to folder</div>
+          <p className="ai-bulk-source__export-hint">
+            Not available while this Mac is connected to a server — generations are
+            processed on the server Mac, so it cannot write into a folder on this one.
+            Results appear in the gallery below and can be saved from there.
+          </p>
+        </div>
+      ) : (
+      /* v0.11.5: optional external export folder. When set, the runner also
+         copies each result here using the source image's basename, so users can
+         match outputs back to their inputs at a glance. */
       <div className="ai-bulk-source__export">
         <div className="ai-bulk-source__export-label">Export to folder</div>
         <div className="ai-bulk-source__export-row">
@@ -196,6 +210,7 @@ export function BulkSourcePanel({ files, onFilesChange, onError, exportDir, onEx
           Each result is also saved here using the input file&apos;s name (e.g. <code>cat.jpg</code> → <code>cat.png</code>). Internal gallery copies are kept as well, so you can still favorite / promote results in AI Studio.
         </p>
       </div>
+      )}
 
       {files.length === 0 ? (
         <div className="ai-bulk-source__dropzone" aria-hidden>
