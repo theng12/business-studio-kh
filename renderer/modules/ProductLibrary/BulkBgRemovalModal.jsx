@@ -106,6 +106,8 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
               : `removing background… ${Math.round(ratio * 100)}%`;
             setProgress({ i: done, n: count, label: `${sku} · ${label}`.trim() });
           },
+          // v0.1.27: stamp the cache so a rewritten image cannot reuse an old cutout.
+          main.contentHash || main.id,
         );
         if (cancelRef.current) return;
 

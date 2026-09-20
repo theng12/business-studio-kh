@@ -17,10 +17,10 @@ Build a "Product Library" module inside an Electron + React desktop app. It must
 5. **Pagination** (default page size 50; options 25/50/100/200; resets on filter change).
 6. **Excel/CSV import** with three steps: pick file → map columns → review results. Partial-update upsert by SKU.
 7. **Sample workbook download** pre-configured for the active parent entity (price groups + custom fields columns).
-8. **Auto-match images** from a folder, with smart filename matching, recursive scan, per-SKU subfolders, content-hash dedup, and a 20-image cap per product.
+8. **Auto-match images** from a folder, with smart filename matching, recursive scan, per-SKU subfolders, content-hash dedup, and a 50-image cap per product.
 9. **Manual image upload** (file picker) and **clipboard paste** (⌘V / Ctrl+V).
 10. **Multi-image** support: ordered array, position 0 = main. UI to set as main, reorder ←/→, remove.
-11. **20-image hard cap** per product, enforced in main-process IPC.
+11. **50-image hard cap** per product, enforced in main-process IPC.
 12. **Content-addressed dedup**: same file bytes → same on-disk filename → no duplicates.
 
 Everything is **local-first**: SQLite + on-disk asset folder, no network calls.
@@ -340,7 +340,7 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const KIND_MAX_DIMENSION = { products: 1600, brands: 512, companies: 1024 };
 const HASH_PREFIX_LEN = 10;
 const SCAN_MAX_DEPTH = 5;
-const MAX_IMAGES_PER_PRODUCT = 20;
+const MAX_IMAGES_PER_PRODUCT = 50;
 
 function slugify(str, fallback = 'asset') {
   return (String(str ?? '')
@@ -622,12 +622,12 @@ The sample handler runs `dialog.showSaveDialog` internally, then writes the work
   productsTouched: number,    // products that received at least one new image
   imagesImported: number,
   imagesSkippedDup: number,   // already on disk (hash match) OR already on this product's array
-  imagesSkippedCap: number,   // dropped because they would push the product past 20
+  imagesSkippedCap: number,   // dropped because they would push the product past 50
   unmatchedFiles: number,     // files in folder that didn't match any SKU
   scannedFiles: number,       // total images found in the folder tree
   totalProducts: number,
   matchedSkus: number,
-  maxImagesPerProduct: 20,
+  maxImagesPerProduct: 50,
 }
 ```
 
@@ -951,7 +951,7 @@ Then a **Custom fields** section: one text input per `company.customFields[i].na
 
 Then an **Images** section (full-width):
 
-- Header reads `Images  3 / 20` (current count / cap).
+- Header reads `Images  3 / 50` (current count / cap).
 - `+ Add image` button (disabled at cap), and a tip line:
   > Tip: with the product open, you can paste an image directly from the clipboard (⌘V). Re-importing the same image is detected and skipped automatically.
 - Empty state if no images.
@@ -1160,7 +1160,7 @@ A bulleted **Matching rules** card. Display these exactly (or close to it):
 4. **Duplicates are skipped.** Every image is hashed by content. The same file imported twice is detected and only stored once.
 5. **Subfolders scanned up to 5 levels deep.** Hidden folders (starting with `.`) are skipped.
 6. **Existing images stay.** Matched images go to the start of the product's image list (so `-1` becomes the new main). Manually-added images that didn't match anything in this run stay at the end.
-7. **Max 20 images per product.** Any extras for a single SKU are skipped and reported in the results.
+7. **Max 50 images per product.** Any extras for a single SKU are skipped and reported in the results.
 
 Bottom buttons: `Cancel` and `Choose folder…` (calls `files.pickFolder()`, then `images.autoMatchBySku(companyId, folderPath)`).
 
@@ -1178,7 +1178,7 @@ A grid of stat tiles:
 - Duplicates skipped
 - Unmatched files
 - Products touched
-- Over the 20-image cap (amber, only when > 0)
+- Over the 50-image cap (amber, only when > 0)
 
 If `unmatchedFiles > 0`, a small amber explainer:
 > N file(s) didn't match any SKU. Common reasons: filename doesn't include the SKU, the file lives in a subfolder whose name isn't a SKU, or the SKU doesn't exist in this company yet.
@@ -1194,7 +1194,7 @@ Bottom: `Done` button.
 3. **Prices and customFields merge.** Updating one key never blanks the others.
 4. **Tags replace if supplied, preserve otherwise.** Setting an empty tags array via import does *not* clear existing tags (only an explicit non-empty array does).
 5. **Images and variants are never touched by import.** Manual flows only.
-6. **`MAX_IMAGES_PER_PRODUCT = 20` enforced in all three image add paths:** `importForProduct`, `importFromBytes`, `autoMatchBySku`.
+6. **`MAX_IMAGES_PER_PRODUCT = 50` enforced in all three image add paths:** `importForProduct`, `importFromBytes`, `autoMatchBySku`.
 7. **Content hash is the source-file SHA-1**, not the post-sharp output. Re-importing the same source bytes always returns the same `relativePath`.
 8. **Reorder validates a permutation.** `images:reorderImages` rejects payloads that aren't the same set as the existing array.
 9. **Asset paths in the DB are always relative** (e.g. `products/abc-001-a1b2c3d4ef.jpg`). Never absolute paths.

@@ -101,13 +101,36 @@ export function LabelTemplates() {
   const load = useCallback(async () => { if (!companyId) return; try { setItems(await window.api.labels.listTemplates(companyId)); } catch (e) { addToast(e.message, 'error'); } }, [companyId, addToast]);
   useEffect(() => { load(); }, [load]);
   const save = useCallback(async (value = draft) => { if (!value) return; clearTimeout(timer.current); setSaveState('saving'); try { const row = await window.api.labels.updateTemplate(value.id, value); setDraft(row); setEditing(row.id); setSaveState('saved'); setSavedAt(Date.now()); setItems((all) => all.map((x) => x.id === row.id ? row : x)); } catch (e) { setSaveState('dirty'); addToast(e.message, 'error'); } }, [draft, addToast]);
-  function change(patch) { const next = { ...draft, ...patch }; setDraft(next); setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }
+  /* v0.1.27: `pending` holds the not-yet-saved value so leaving the screen can
+   * FLUSH it rather than discard it. The debounce below waits 550 ms, and the
+   * Back button used to just clear the timer — so an edit made in that window
+   * vanished with no indication. */
+  const pending = useRef(null);
+  const saveRef = useRef(null);
+  saveRef.current = save;
+  function change(patch) { const next = { ...draft, ...patch }; setDraft(next); pending.current = next; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => { pending.current = null; save(next); }, 550); }
   function changeElement(id, patch) { change({ elements: draft.elements.map((x) => x.id === id ? { ...x, ...patch } : x) }); }
   function duplicateElement() { if (!selected) return; const copy = { ...selected, id: `${selected.type}-${Date.now()}`, x: selected.x + 2, y: selected.y + 2 }; change({ elements: [...draft.elements, copy] }); setSelectedId(copy.id); }
   function layerElement(direction) { if (!selected) return; const index = draft.elements.findIndex((x) => x.id === selected.id); const target = Math.max(0, Math.min(draft.elements.length - 1, index + direction)); if (target === index) return; const next = [...draft.elements]; const [item] = next.splice(index, 1); next.splice(target, 0, item); change({ elements: next }); }
   async function pickElementImage() { try { const source = await window.api.files.pickImageFile(); if (!source) return; const imported = await window.api.labels.importAsset(source, draft.name); changeElement(selected.id, { src: imported.relativePath }); } catch (e) { addToast(e.message, 'error'); } }
   async function createTemplate() { try { const row = await window.api.labels.createTemplate({ companyId, name: newName || 'Untitled label', widthMm: 60, heightMm: 40, backgroundColor: '#ffffff', elements: [] }); setItems((x) => [row, ...x]); setDraft(row); setEditing(row.id); setNewOpen(false); setNewName(''); } catch (e) { addToast(e.message, 'error'); } }
-  async function open(item) { setEditing(item.id); setDraft(await window.api.labels.getTemplate(item.id)); setSelectedId(null); setSaveState('saved'); setSavedAt(item.updatedAt); }
+  /* v0.1.27: fetch BEFORE switching which template the editor shows.
+   * `setEditing(item.id)` used to run first, so if the fetch failed the editor
+   * stayed open on the PREVIOUS template's content while its header said the
+   * new one — and the next autosave would then write the old design over the
+   * newly selected template. */
+  async function open(item) {
+    try {
+      const full = await window.api.labels.getTemplate(item.id);
+      setEditing(item.id);
+      setDraft(full);
+      setSelectedId(null);
+      setSaveState('saved');
+      setSavedAt(item.updatedAt);
+    } catch (e) {
+      addToast(`Couldn't open "${item.name}": ${e.message}`, 'error');
+    }
+  }
   useEffect(() => {
     if (!editing || !selectedId) return undefined;
     const key = (e) => {
@@ -123,13 +146,20 @@ export function LabelTemplates() {
     };
     window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
   }, [editing, selectedId, selected, draft]);
-  if (editing && draft) return <section className="page label-designer-page"><PageHeader title={draft.name} subtitle={`${draft.widthMm} × ${draft.heightMm} mm · Label Designer`} actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={() => save()} /><Button variant="ghost" onClick={() => { clearTimeout(timer.current); setEditing(null); setDraft(null); load(); }}>Back to templates</Button></>} />
+  if (editing && draft) return <section className="page label-designer-page"><PageHeader title={draft.name} subtitle={`${draft.widthMm} × ${draft.heightMm} mm · Label Designer`} actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={() => save()} /><Button variant="ghost" onClick={() => {
+      /* v0.1.27: save what is owed before leaving. */
+      clearTimeout(timer.current);
+      const owed = pending.current;
+      pending.current = null;
+      if (owed) void saveRef.current?.(owed);
+      setEditing(null); setDraft(null); load();
+    }}>Back to templates</Button></>} />
     <div className="designer-toolbar"><div className="designer-toolbar__brand"><Input value={draft.name} onChange={(e) => change({ name: e.target.value })} /></div><div className="designer-toolbar__tools">{TYPES.map(([type, label]) => <button type="button" key={type} onClick={() => { const el = makeElement(type, draft.elements.length); change({ elements: [...draft.elements, el] }); setSelectedId(el.id); }}><span>+</span>{label}</button>)}</div><div className="designer-toolbar__size"><Input type="number" value={draft.widthMm} onChange={(e) => change({ widthMm: Number(e.target.value) })} /><span>×</span><Input type="number" value={draft.heightMm} onChange={(e) => change({ heightMm: Number(e.target.value) })} /><span>mm</span><Input type="color" value={draft.backgroundColor} onChange={(e) => change({ backgroundColor: e.target.value })} /></div></div>
     <div className="designer-shell"><LabelCanvas template={draft} selectedId={selectedId} onSelect={setSelectedId} onMove={changeElement} sample={products[0]} /><Inspector element={selected} onChange={(patch) => changeElement(selected.id, patch)} onRemove={() => { change({ elements: draft.elements.filter((x) => x.id !== selected.id) }); setSelectedId(null); }} onPickImage={pickElementImage} onDuplicate={duplicateElement} onLayer={layerElement} /></div>
   </section>;
   return <section className="page"><PageHeader title="Label Templates" subtitle="Design once, generate and print from the shared Product Library." actions={<Button onClick={() => setNewOpen(true)}>+ New label template</Button>} />
     <div className="studio-intro"><div><span className="studio-intro__icon">L</span><div><strong>Print-ready labels, connected to every product</strong><p>Templates use live product fields and support retail labels, shelf cards, QR codes, barcodes and multilingual text.</p></div></div><span className="studio-intro__badge">Autosave on</span></div>
-    <div className="template-grid">{items.length ? items.map((item) => <TemplateCard key={item.id} item={item} onOpen={() => open(item)} onDuplicate={async () => { const row = await window.api.labels.duplicateTemplate(item.id); setItems((x) => [row, ...x]); }} onDelete={async () => { if (!confirm(`Delete “${item.name}”?`)) return; await window.api.labels.deleteTemplate(item.id); load(); }} />) : <EmptyState title="No label templates" body="Create your first template to begin." action={<Button onClick={() => setNewOpen(true)}>Create template</Button>} />}</div>
+    <div className="template-grid">{items.length ? items.map((item) => <TemplateCard key={item.id} item={item} onOpen={() => open(item)} onDuplicate={async () => { try { const row = await window.api.labels.duplicateTemplate(item.id); setItems((x) => [row, ...x]); } catch (e) { addToast(e.message, 'error'); } }} onDelete={async () => { if (!(await confirm({ title: `Delete “${item.name}”?`, message: 'This cannot be undone.', danger: true }))) return; try { await window.api.labels.deleteTemplate(item.id); load(); } catch (e) { addToast(e.message, 'error'); } }} />) : <EmptyState title="No label templates" body="Create your first template to begin." action={<Button onClick={() => setNewOpen(true)}>Create template</Button>} />}</div>
     <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New label template" footer={<><Button variant="ghost" onClick={() => setNewOpen(false)}>Cancel</Button><Button onClick={createTemplate}>Create</Button></>}><label className="field"><span className="field__label">Template name</span><Input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Retail price label" /></label></Modal>
   </section>;
 }

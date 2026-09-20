@@ -116,7 +116,6 @@ function registerImageProtocol(dataDir) {
   const assetsRoot = path.normalize(path.join(dataDir, 'assets'));
   const processedRoot = path.normalize(path.join(dataDir, 'processed'));
   const aiGalleryRoot = path.normalize(path.join(dataDir, 'ai-gallery'));
-  const dataDirNorm = path.normalize(dataDir);
 
   protocol.handle('app-image', async (request) => {
     try {

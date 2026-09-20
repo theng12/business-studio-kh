@@ -15,23 +15,30 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { ipcMain, app, shell } = require('electron');
+const os = require('node:os');
+const { app, shell } = require('electron');
+const { openPathOrThrow } = require('../util/openPath');
 const { getDataDir } = require('../db');
 
-function register({ expose, URL_ALLOW }) {
+function register({ expose, URL_ALLOW, exposeLocal }) {
   expose('app:getVersion', () => app.getVersion());
   expose('app:getPlatform', () => process.platform);
 
-  ipcMain.handle('app:getVersionInfo', () => ({
+  exposeLocal('app:getVersionInfo', () => ({
     app: app.getVersion(),
     platform: process.platform,
     arch: process.arch,
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node,
+    // v0.1.22: which Mac this is. Some work leaves a file behind on the Mac that
+    // ran it (a generated label, for instance) while the HISTORY of that work
+    // lives with the data — so the renderer needs to be able to tell whether a
+    // recorded path belongs to the Mac looking at it.
+    hostname: os.hostname(),
   }));
 
-  ipcMain.handle('app:openExternal', async (_e, target) => {
+  exposeLocal('app:openExternal', async (target) => {
     if (typeof target !== 'string') {
       throw new Error('Disallowed URL scheme');
     }
@@ -58,15 +65,14 @@ function register({ expose, URL_ALLOW }) {
     return true;
   });
 
-  ipcMain.handle('app:openDataFolder', async () => {
-    await shell.openPath(getDataDir());
-    return true;
-  });
+  /* v0.1.25: both of these used to `await shell.openPath(...)` and return true
+   * regardless. openPath RESOLVES WITH AN ERROR STRING rather than rejecting, so
+   * a missing or unmounted folder made the button do nothing at all, silently.
+   * openPathOrThrow turns that string back into a thrown error the toast can
+   * show. */
+  exposeLocal('app:openDataFolder', () => openPathOrThrow(getDataDir(), 'data folder'));
 
-  ipcMain.handle('app:openLogsFolder', async () => {
-    await shell.openPath(app.getPath('userData'));
-    return true;
-  });
+  exposeLocal('app:openLogsFolder', () => openPathOrThrow(app.getPath('userData'), 'logs folder'));
 
   /**
    * v0.19.0: return the last N lines of crash.log so a beta user
@@ -78,7 +84,7 @@ function register({ expose, URL_ALLOW }) {
    * (boot, app:ready, render-process-gone, uncaughtException, etc.)
    * so reading the tail is the highest-signal-per-byte thing.
    */
-  ipcMain.handle('app:readCrashLog', async (_e, { lines = 100 } = {}) => {
+  exposeLocal('app:readCrashLog', async ({ lines = 100 } = {}) => {
     const logPath = path.join(app.getPath('userData'), 'crash.log');
     try {
       const content = await fs.promises.readFile(logPath, 'utf8');
@@ -93,7 +99,7 @@ function register({ expose, URL_ALLOW }) {
     }
   });
 
-  ipcMain.handle('app:relaunch', () => {
+  exposeLocal('app:relaunch', () => {
     app.relaunch();
     app.exit(0);
   });
@@ -107,8 +113,8 @@ function register({ expose, URL_ALLOW }) {
    * NEVER be proxied to the server.
    */
   const { readCacheInfo, clearAppCache } = require('../util/appCache');
-  ipcMain.handle('app:getCacheInfo', () => readCacheInfo());
-  ipcMain.handle('app:clearCache', () => clearAppCache());
+  exposeLocal('app:getCacheInfo', () => readCacheInfo());
+  exposeLocal('app:clearCache', () => clearAppCache());
 }
 
 module.exports = { register };

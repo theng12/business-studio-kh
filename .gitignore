@@ -19,7 +19,7 @@ release
 webclient
 
 # User-facing data folder (catalog DB + assets) lives at <dataDir> per
-# CLAUDE.md §8. This entry catches the legacy `data/` runtime path.
+# AGENTS.md §8. This entry catches the legacy `data/` runtime path.
 data
 
 # Logs, secrets, OS junk
@@ -28,8 +28,11 @@ data
 .env
 .env.local
 
-# Local Claude Code settings (per-Mac config; shared rules go in CLAUDE.md
+# Local Claude Code settings (per-Mac config; shared rules go in AGENTS.md
 # at the repo root). Keep the .claude/ directory itself trackable so we
 # can commit non-local settings later without un-ignoring the whole tree.
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# graphify knowledge-graph output (regenerate with the graphify skill)
+graphify-out

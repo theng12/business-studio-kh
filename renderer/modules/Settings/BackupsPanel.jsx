@@ -34,6 +34,9 @@ function SettingRow({ label, hint, children }) {
 export function BackupsPanel({ config }) {
   const addToast = useAppStore((s) => s.addToast);
   const [list, setList] = useState({ backupsDir: null, backups: [], loading: true });
+  // v0.1.22: see the Backups folder row — two of the controls only make sense
+  // on the Mac that owns the folder.
+  const isClient = config?.mode === 'client';
   const [creating, setCreating] = useState(false);
   const [restoringPath, setRestoringPath] = useState(null);
 
@@ -82,7 +85,7 @@ export function BackupsPanel({ config }) {
   async function handleRestore(backup) {
     // Read + validate the manifest first so the confirm can show what's
     // inside before the user commits to replacing their data.
-    let preview = null;
+    let preview;
     try {
       preview = await window.api.backups.preview(backup.backupPath);
     } catch (err) {
@@ -141,12 +144,23 @@ export function BackupsPanel({ config }) {
 
       <SettingRow
         label="Backups folder"
-        hint="Where backups are written. Defaults to a `backups` folder inside your data folder; point it at an external drive to keep backups off the working disk."
+        hint={isClient
+          ? 'Where backups are written. The folder is on the Mac holding your data — a `backups` folder inside its data folder by default.'
+          : 'Where backups are written. Defaults to a `backups` folder inside your data folder; point it at an external drive to keep backups off the working disk.'}
       >
         <div className="setting-control-row">
           <code className="backups-dir-path">{list.backupsDir ?? '—'}</code>
-          <Button onClick={() => window.api.backups.openFolder()}>Open</Button>
-          <Button onClick={handlePickFolder}>Change…</Button>
+          {/* v0.1.22: these two open a Finder window and a folder picker. Both
+              would appear on the OTHER Mac, and the folder they name is on the
+              other Mac's disk, so from here they are pointless rather than
+              merely unhelpful — hidden, with the path still shown. Creating,
+              listing, previewing and restoring a backup all work from here. */}
+          {!isClient && (
+            <>
+              <Button onClick={() => window.api.backups.openFolder().catch((e) => addToast(e.message, 'error'))}>Open</Button>
+              <Button onClick={handlePickFolder}>Change…</Button>
+            </>
+          )}
         </div>
       </SettingRow>
 

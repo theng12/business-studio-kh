@@ -29,6 +29,40 @@
  */
 
 /**
+ * v0.1.31 — reduce a pasted server address to the ORIGIN we actually talk to.
+ *
+ * WHY THIS EXISTS. Settings shows two lists of the same addresses that differ
+ * only by a path:
+ *
+ *   client connection   http://100.118.161.120:13180      (the desktop app)
+ *   mobile web viewer   http://100.118.161.120:13180/m    (a phone browser)
+ *
+ * Pasting the second one into the client's Connection field looked fine —
+ * `validateServerUrl` checks the scheme, host and protocol but never the PATH —
+ * and then every request went to `/m/api/rpc`, which the server does not serve.
+ * The result was a client that accepted its settings and could not load a single
+ * thing, with an error that mentioned neither the path nor the `/m`.
+ *
+ * So: keep the scheme, host and port; drop any path, query or fragment. The port
+ * matters — 13180 is not 80 — and `new URL()` keeps it in `.host` for us.
+ *
+ * Returns the trimmed input unchanged when it does not parse, so the caller's
+ * validation still gets to produce its own message rather than this silently
+ * turning a typo into something plausible.
+ */
+function normalizeServerUrl(raw) {
+  if (typeof raw !== 'string') return raw;
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  try {
+    const parsed = new URL(trimmed);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch (_err) {
+    return trimmed;
+  }
+}
+
+/**
  * Validate a user-supplied server URL. Returns `{ ok: true }` on
  * success, or `{ ok: false, error: string }` with a one-line message
  * describing exactly what's wrong + how to fix it.
@@ -224,8 +258,7 @@ async function diagnoseServer({ url, token } = {}) {
   // (returns { ok: true, app, version }) — failure here means
   // "network or server process is wrong," cleanly separated from
   // any token issue.
-  let serverVersion = null;
-  let pingOk = false;
+  let serverVersion;
   try {
     const res = await fetch(`${base}/api/ping`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) {
@@ -239,7 +272,6 @@ async function diagnoseServer({ url, token } = {}) {
     }
     const body = await res.json().catch(() => ({}));
     serverVersion = body?.version ?? null;
-    pingOk = true;
     steps.push({
       name: 'ping',
       label: 'Server reachable',
@@ -314,6 +346,7 @@ async function diagnoseServer({ url, token } = {}) {
 }
 
 module.exports = {
+  normalizeServerUrl,
   validateServerUrl,
   analyzeFetchError,
   diagnoseServer,

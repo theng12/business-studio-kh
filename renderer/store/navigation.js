@@ -15,6 +15,7 @@
 // v0.49.47: 'purchaseorders' + 'costcalc' added — OPERATIONS Phase 2-4.
 const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'export', 'aistudio', 'overlay',
   'labeltemplates', 'labelgenerate', 'barcodes', 'labeljobs', 'catalogtemplates', 'catalogprojects', 'catalogstudio',
+  'socialgrid',
   'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the
@@ -49,8 +50,10 @@ export function createNavigationSlice(set, get) {
         // entry here, and the silent return made it invisible. The console
         // line costs nothing in prod and saves hours when a route is
         // mistyped or forgotten.
-        // eslint-disable-next-line no-console
-        console.warn(`[store] setActiveModule("${name}") ignored — module not in allowlist. Update MODULES in store/index.js.`);
+        // v0.1.25: the message used to say "Update MODULES in store/index.js",
+        // which is the wrong file — the allowlist is at the top of THIS file.
+        // A breadcrumb that points at the wrong place costs more than none.
+        console.warn(`[store] setActiveModule("${name}") ignored — not in the MODULES allowlist at the top of renderer/store/navigation.js. Add it there, or the click keeps doing nothing silently.`);
         return;
       }
       set({ activeModule: name });

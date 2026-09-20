@@ -51,7 +51,6 @@ const {
   backupStamp,
   backupFilename,
   isBackupFilename,
-  entriesLookLikeDataDir,
   validateManifest,
   resolveSafeDest,
 } = require('./util/backupSafety');
@@ -215,7 +214,7 @@ async function listBackups() {
   const config = require('./config');
   const cfg = config.loadConfig();
   const backupsDir = resolveBackupsDir(cfg);
-  let names = [];
+  let names;
   try {
     names = await fsp.readdir(backupsDir);
   } catch (err) {
@@ -273,7 +272,7 @@ async function previewBackup(backupPath) {
     try {
       parsed = JSON.parse(manifestText);
     } catch (err) {
-      throw new Error(`Backup manifest is malformed JSON: ${err.message}`);
+      throw new Error(`Backup manifest is malformed JSON: ${err.message}`, { cause: err });
     }
     const check = validateManifest(parsed);
     if (!check.ok) throw new Error(check.error);

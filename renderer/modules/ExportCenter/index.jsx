@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { appImageSrc } from '../../lib/imageUrl.js';
 import { useAppStore } from '../../store/index.js';
 import { Button, Badge, EmptyState, Modal, Pagination, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -171,18 +172,12 @@ export function ExportCenter() {
     [filteredProducts, queuePager.pageStart, queuePager.pageEnd],
   );
 
-  if (!activeCompanyId) {
-    return (
-      <div className="page">
-        <PageHeader title="Export Center" />
-        <EmptyState
-          title="No company selected"
-          body="Create or select a company before exporting."
-          action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
-        />
-      </div>
-    );
-  }
+  /* v0.1.11: this was an early `return`, which made every hook declared
+   * below it conditional. React requires the same hooks in the same order on
+   * every render, so switching to (or away from) a company with no active
+   * selection changed the hook count and React threw. The empty state now
+   * branches inside the single return, below all hooks. */
+  const noCompanySelected = !activeCompanyId;
 
   async function handleSubmitProfile(payload) {
     if (editing && editing.id) {
@@ -288,6 +283,17 @@ export function ExportCenter() {
   }
 
   return (
+    noCompanySelected ? (
+      <div className="page">
+        <PageHeader title="Export Center" />
+        <EmptyState
+          title="No company selected"
+          body="Create or select a company before exporting."
+          action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
+        />
+      </div>
+    ) : (
+      <>
     <div className="page page--export">
       <PageHeader
         title="Export Center"
@@ -496,7 +502,9 @@ export function ExportCenter() {
                             />
                             <div className="export-queue__thumb">
                               {p.mainImagePath
-                                ? <img src={`app-image://local/${encodeURIComponent(p.mainImagePath)}`} alt="" />
+                                // v0.1.27: cache-bust (§12) — a re-exported or
+                                // edited main image kept showing the old pixels here.
+                                ? <img src={appImageSrc(p.mainImagePath, p.contentHash || p.updatedAt)} alt="" />
                                 : <div className="thumb-placeholder">·</div>}
                             </div>
                             <div className="export-queue__col">
@@ -569,6 +577,8 @@ export function ExportCenter() {
         />
       ) : null}
     </div>
+      </>
+    )
   );
 }
 
@@ -802,12 +812,15 @@ function ProfilePreview({ profile, products, queueSet }) {
   //   1. First queued product that has any image
   //   2. Otherwise the first product in the company with any image
   //   3. Otherwise fall back to the abstract SVG placeholder.
+  /* Returns { path, version } rather than a bare path, so the <img> can carry a
+   * cache-busting stamp (§12). The version is the product row's updatedAt, which
+   * changes whenever its images do. */
   const previewSrc = useMemo(() => {
     if (!products?.length) return null;
     const queued = products.find((p) => queueSet?.has(p.id) && p.mainImagePath);
-    if (queued) return queued.mainImagePath;
+    if (queued) return { path: queued.mainImagePath, version: queued.contentHash || queued.updatedAt };
     const any = products.find((p) => p.mainImagePath);
-    return any?.mainImagePath ?? null;
+    return any ? { path: any.mainImagePath, version: any.contentHash || any.updatedAt } : null;
   }, [products, queueSet]);
 
   return (
@@ -822,7 +835,7 @@ function ProfilePreview({ profile, products, queueSet }) {
         {previewSrc ? (
           <img
             className="profile-preview__image"
-            src={`app-image://local/${encodeURIComponent(previewSrc)}`}
+            src={appImageSrc(previewSrc.path, previewSrc.version)}
             alt=""
           />
         ) : (

@@ -22,6 +22,7 @@ function disposeAiSubscriptions() {
 // in client mode; never subscribe otherwise).
 let _clientUnsub = null;
 function disposeClientSubscription() {
+      // way — the drag state below is reset regardless.
   if (_clientUnsub) { try { _clientUnsub(); } catch (_) {} _clientUnsub = null; }
 }
 

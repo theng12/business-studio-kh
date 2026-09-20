@@ -16,6 +16,15 @@ import { Button } from '../../components/ui.jsx';
 
 export function AboutCard({ versionInfo }) {
   const openExternal = (url) => window.api?.app.openExternal(url);
+  /* v0.1.25: the main-process handler now THROWS when the OS refuses to open
+   * the folder (it used to report success regardless — see
+   * main/util/openPath.js). An uncaught rejection here would be invisible, so
+   * surface it. */
+  const openFolder = (call) => {
+    Promise.resolve()
+      .then(call)
+      .catch((err) => useAppStore.getState().addToast(err.message, 'error'));
+  };
   return (
     <section className="about-card">
       <header className="about-card__head">
@@ -36,8 +45,8 @@ export function AboutCard({ versionInfo }) {
 
       <p className="about-card__updates">When a new build is available it'll appear in <strong>What's new</strong>. Auto-update prompts coming in a future release.</p>
       <footer className="about-card__actions">
-        <Button onClick={() => window.api?.app.openDataFolder()}>Open data folder</Button>
-        <Button onClick={() => window.api?.app.openLogsFolder()}>Open logs folder</Button>
+        <Button onClick={() => openFolder(() => window.api?.app.openDataFolder())}>Open data folder</Button>
+        <Button onClick={() => openFolder(() => window.api?.app.openLogsFolder())}>Open logs folder</Button>
         <Button onClick={() => openExternal('https://github.com/sponsors')}>Sponsor</Button>
         <Button onClick={() => useAppStore.getState().addToast(`You're on v${versionInfo?.app ?? '?'} — the latest dev build.`, 'info')}>
           Check for updates

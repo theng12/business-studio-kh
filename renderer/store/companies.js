@@ -19,7 +19,16 @@ export function createCompaniesSlice(set, get) {
     },
 
     async setActiveCompany(id) {
-      await window.api.companies.setActive(id);
+      /* v0.1.28: surface a failure. The server rejects when the company no
+       * longer exists, or when a client's link is down — and the caller in the
+       * sidebar and the Companies page did not catch, so "Set active" simply
+       * did nothing with no explanation. */
+      try {
+        await window.api.companies.setActive(id);
+      } catch (err) {
+        get().addToast(`Couldn't switch company: ${err.message}`, 'error');
+        return;
+      }
       // v0.26.48: preserve the user's persisted sort choice across
       // company switches. Pre-fix this reset productSort to
       // DEFAULT_SORT every time, defeating the localStorage persistence.
@@ -39,6 +48,15 @@ export function createCompaniesSlice(set, get) {
         get().refreshAllProducts(),
         get().refreshDashboard(),
         get().refreshExportProfiles(),
+        /* v0.1.27: also clear/refill the AI queue.
+         *
+         * This list omitted aiTasks, and the AI Studio page loads its queue
+         * once on mount with an empty dependency list — so after switching
+         * company the previous company's tasks (and their prompt text) stayed
+         * on screen. Every button on them then failed server-side with "Task
+         * belongs to a different company", which was silent until the previous
+         * release made those failures raise a toast. */
+        get().refreshAiTasks(),
       ]);
     },
 

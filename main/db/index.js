@@ -231,6 +231,20 @@ function initDb(dataDir) {
   addColumnIfMissing(db, 'products', 'reorder_point', 'TEXT');
   addColumnIfMissing(db, 'products', 'reorder_quantity', 'TEXT');
   addColumnIfMissing(db, 'products', 'track_inventory', 'INTEGER NOT NULL DEFAULT 0');
+  /* v0.1.25: how many units are actually on hand.
+   *
+   * The inventory columns above (track_inventory / reorder_point /
+   * reorder_quantity) have existed for a while, but they describe a POLICY
+   * (should we track this? at what level do we reorder?) and never held a
+   * count. There was a "Track inventory for this product" checkbox with
+   * nowhere to enter the number it was supposedly tracking. Social Grid
+   * needs a real quantity to filter and sort by, so this is that number.
+   *
+   * REAL, not INTEGER: `unit` is free text (kg, m, litre), so a product may
+   * legitimately be held in fractional units. NULL means "not counted",
+   * which is different from 0 ("counted, none left") — every filter below
+   * treats those two differently on purpose. */
+  addColumnIfMissing(db, 'products', 'stock_qty', 'REAL');
   addColumnIfMissing(db, 'products', 'variant_attributes', 'TEXT');
   addColumnIfMissing(db, 'products', 'country_of_origin', 'TEXT');
   addColumnIfMissing(db, 'products', 'hs_code',            'TEXT');
@@ -872,6 +886,34 @@ function runMigrations(database) {
       created_at  INTEGER NOT NULL,
       updated_at  INTEGER NOT NULL
     );
+
+    /* ── v0.1.25: Social Grid — saved post presets ──────────────────
+     *
+     * A saved post is a RECIPE, not a result: "Brand X, sorted by name,
+     * square, price shown". The products it selects are recomputed on every
+     * run, so a preset made last month automatically picks up this month's
+     * new products and current stock instead of freezing a stale list.
+     *
+     * Additive - no schema_version bump. A bump runs wipeStructuralTables()
+     * and would drop the real product/image data; a brand-new table needs no
+     * bump at all (same reasoning as catalog_projects and the OPERATIONS
+     * tables above). The config column is JSON so new grid options never
+     * require a migration, and main/util/socialGridModel.js normalizes
+     * whatever it reads back, including configs written by an older version.
+     *
+     * (No backticks in this comment: it lives inside a JS template literal
+     * and one would close it early. Same reason as the v0.49.46 note above.) */
+    CREATE TABLE IF NOT EXISTS social_grid_presets (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      config TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_exported_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_social_grid_presets_company_updated
+      ON social_grid_presets(company_id, updated_at DESC);
   `);
 
   database

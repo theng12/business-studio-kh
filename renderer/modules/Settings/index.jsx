@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
+import { hasCap } from '../../lib/capabilities.js';
 import { Button, Input, Modal, Select } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
@@ -30,8 +31,10 @@ const SETTINGS_TABS = [
   // belongs alongside the other settings tabs.
   { key: 'categories',  label: 'Categories' },
   { key: 'ai',          label: 'AI Generation' },
-  // v0.49.31: local backup / restore. Hidden in client mode (a client
-  // has no local data folder to back up — see visibleTabs below).
+  // v0.49.31: local backup / restore. Hidden in client mode — a client has no
+  // local data folder to back up. The hiding happens in the render's tab filter
+  // (search for `t.key !== 'backups'`), not in a separate list; an earlier
+  // comment here referred to a `visibleTabs` that was never written.
   { key: 'backups',     label: 'Backups' },
   { key: 'multi-mac',   label: 'Multi-Mac' },
   // v0.49.51: custom roles + permission matrix.
@@ -102,6 +105,22 @@ export function Settings() {
     if (activeCompanyId) refreshExportProfiles();
   }, [activeCompanyId, refreshExportProfiles]);
 
+  // v0.1.21: which Mac is this? Several settings belong to the Mac that holds
+  // the data, not the one showing the screen — see the AI tab and the data-folder
+  // row. `config.mode` is the app mode from the local config, the same value the
+  // tab filter below already uses.
+  const isClient = config?.mode === 'client';
+  // The current user's capabilities — the same source the sidebar reads, so the
+  // nav and these tabs cannot disagree about who may do what.
+  const clientConnection = useAppStore((s) => s.clientConnection);
+  const caps = isClient ? (clientConnection?.user?.caps || ['*']) : ['*'];
+  const canManageUsers = hasCap(caps, 'users.manage');
+  // The same capability the SERVER requires for `backups:*` (see the map in
+  // main/util/capabilities.js). Without this the Backups tab was offered to an
+  // editor and then refused by the server — a dead control, which is the exact
+  // thing this round set out to remove.
+  const canManageSystem = hasCap(caps, 'system.manage');
+
   if (!config) {
     return (
       <div className="page">
@@ -112,7 +131,17 @@ export function Settings() {
   }
 
   async function patch(key, value) {
-    const next = await window.api.settings.setOne(key, value);
+    /* v0.1.28: a rejected settings write used to be invisible.
+     * Every control on this page calls patch() directly from an onChange, and
+     * nothing awaited or caught it, so a failure meant the toggle silently
+     * sprang back. One catch here covers all of them. */
+    let next;
+    try {
+      next = await window.api.settings.setOne(key, value);
+    } catch (err) {
+      addToast(err.message, 'error');
+      return;
+    }
     setConfig(next);
     // v0.49.33: the only keys we used to mirror in the Zustand store
     // (`bgRemovalEngine`, `removeBgApiKey`) were removed with the paid
@@ -223,7 +252,18 @@ export function Settings() {
             doesn't lose your place. */}
         <nav className="settings-tabs" aria-label="Settings sections">
           {SETTINGS_TABS
-            .filter((t) => t.key !== 'backups' || config.mode !== 'client')
+            // v0.1.22: Backups is offered everywhere now — creating, listing,
+            // previewing and restoring a backup all act on the data folder, so
+            // they work from a client Mac (the server owns the file). Roles stays
+            // admin-only: on a client Mac it appears only for a user who may
+            // actually manage users, rather than being offered and then refused
+            // by the server.
+            .filter((t) => {
+              if (!isClient) return true;                       // the host Mac owns everything
+              if (t.key === 'roles') return canManageUsers;
+              if (t.key === 'backups') return canManageSystem;
+              return true;
+            })
             .map((t) => (
             <button
               key={t.key}
@@ -250,8 +290,8 @@ export function Settings() {
           <ModeSegment config={config} addToast={addToast} />
         </SettingRow>
 
-        {config.mode === 'server' ? (
-          <ServerModePanel config={config} addToast={addToast} />
+        {config.mode === 'server' || (config.mode === 'client' && canManageUsers) ? (
+          <ServerModePanel config={config} addToast={addToast} clientMode={config.mode === 'client'} />
         ) : null}
 
         {config.mode === 'client' ? (
@@ -325,6 +365,14 @@ export function Settings() {
           label="Data folder"
           hint="SQLite database and image assets live here. Changing the folder restarts the app. Point at a folder on iCloud Drive (or any cloud-synced folder) to share data across Macs — see notes below."
         >
+          {isClient ? (
+            <div className="settings-note" role="note">
+              <strong>Your data lives on the server Mac.</strong> This Mac has no
+              local data folder to show or change — it reads everything from the
+              Mac you connected to in Settings → Multi-Mac. To move the data, do it
+              on that Mac.
+            </div>
+          ) : (
           <div className="setting-control-row">
             <Input value={config.dataDir} readOnly onChange={() => {}} />
             {config.dataDirIsCloud ? (
@@ -332,9 +380,10 @@ export function Settings() {
             ) : (
               <span className="data-folder-tag data-folder-tag--local" title="This folder is on local disk only">📁 Local</span>
             )}
-            <Button onClick={() => window.api.app.openDataFolder()}>Open</Button>
+            <Button onClick={() => window.api.app.openDataFolder().catch((e) => addToast(e.message, 'error'))}>Open</Button>
             <Button onClick={handleChangeDataFolder}>Change…</Button>
           </div>
+          )}
           {config.dataDirIsCloud ? (
             <div className="cloud-sync-note">
               <strong>iCloud sync mode active.</strong> Media Studio KH switched SQLite into a sync-friendly journal mode automatically. To avoid corruption:
@@ -434,6 +483,22 @@ export function Settings() {
         <div className="settings-page">
         <h2 className="settings-section-heading">AI Generation</h2>
 
+        {/* v0.1.21: API keys and concurrency belong to whichever Mac RUNS the
+            generations — in client mode that is the server Mac, so editing them
+            here would change a number nobody reads. The model defaults below are
+            different: this Mac picks the model and sends it, so they stay. */}
+        {isClient && (
+          <div className="settings-note" role="note">
+            <strong>AI keys live on the server Mac.</strong> In this setup the Mac
+            holding your data runs the generations, so it uses its own kie.ai /
+            fal.ai keys and its own concurrency limits. Change them there
+            (Settings → AI Generation on that Mac). The defaults below are yours —
+            they decide which model this Mac asks for.
+          </div>
+        )}
+
+        {!isClient && (
+        <>
         <SettingRow
           label="kie.ai API key"
           hint="Required for kie.ai models (gpt4o-image, flux-kontext). Get a key at kie.ai/api-key."
@@ -457,7 +522,11 @@ export function Settings() {
             style={{ width: 100 }}
           />
         </SettingRow>
+        </>
+        )}
 
+        {!isClient && (
+        <>
         <SettingRow
           label="fal.ai API key"
           hint="Required for fal.ai models. Get a key at fal.ai/dashboard/keys."
@@ -481,6 +550,8 @@ export function Settings() {
             style={{ width: 100 }}
           />
         </SettingRow>
+        </>
+        )}
 
         <SettingRow
           label="Default filename separator"
@@ -548,7 +619,12 @@ export function Settings() {
         </div>
         )}
 
-        {tab === 'backups' && config.mode !== 'client' && (
+        {/* v0.1.25: the `config.mode !== 'client'` guard was wrong — BackupsPanel
+            is written to work on a client (it only hides the Open/Change-folder
+            buttons, which are server-disk operations). The tab is offered by the
+            capability filter above, so blocking the render left an admin on a
+            client staring at a highlighted tab and an empty pane. */}
+        {tab === 'backups' && (
           <BackupsPanel config={config} />
         )}
 

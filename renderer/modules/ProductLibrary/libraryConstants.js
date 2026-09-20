@@ -15,6 +15,14 @@ export const STATUS_OPTIONS = [
   { value: 'draft',    label: 'Draft',    tone: 'amber' },
 ];
 
+// v0.1.16: the "which images does this bulk op touch" list. It was copy-pasted
+// verbatim into the Convert, Compress and Resize modals; it lives here now so
+// the three can't drift apart in wording.
+export const SCOPE_OPTIONS = [
+  { value: 'main', label: 'Main image of each product' },
+  { value: 'all',  label: 'All images of each product' },
+];
+
 export function findOption(options, value) {
   return options.find((o) => o.value === value);
 }

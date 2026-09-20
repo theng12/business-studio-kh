@@ -16,6 +16,8 @@ export function createAppSlice(set, _get) {
     // v0.14.0: app mode (standalone/server/client). Mirrored from config
     // so the sidebar chip + any mode-conditional UI can react.
     appMode: 'standalone',
+    /** v0.1.31: the configured server address, '' when client mode has none yet. */
+    clientServerUrl: '',
     // v0.14.3: client-mode connection state. Pushed by main via the
     // `client:connectionState` IPC event whenever the ping loop or an
     // RPC call updates it. Only meaningful when appMode === 'client'.
@@ -75,6 +77,10 @@ export function createAppSlice(set, _get) {
         appConfig: {},
         dataDirIsCloud: !!cfg?.dataDirIsCloud,
         appMode: cfg?.mode ?? 'standalone',
+        // v0.1.31: mirrored so the app can tell "client mode, not yet pointed
+        // at a server" apart from "client mode, server unreachable". The first
+        // is a setup step, the second is a fault, and they need different words.
+        clientServerUrl: cfg?.clientServerUrl ?? '',
       });
     },
   };

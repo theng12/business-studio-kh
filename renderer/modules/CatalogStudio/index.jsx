@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, EmptyState, Input, Modal, Select } from '../../components/ui.jsx';
+import { confirm } from '../../components/ConfirmModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { GenerationExperience } from '../../components/GenerationExperience.jsx';
@@ -157,14 +158,24 @@ function CatalogEditor({ projectId, onBack }) {
   const products = useAppStore((s) => s.products); const addToast = useAppStore((s) => s.addToast);
   const [project, setProject] = useState(null); const [preview, setPreview] = useState(''); const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null);
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [tab, setTab] = useState('products'); const timer = useRef(null);
-  useEffect(() => { let cancelled = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled) { setProject(p); setSavedAt(p.updatedAt); } }).catch((e) => addToast(e.message, 'error')); return () => { cancelled = true; clearTimeout(timer.current); }; }, [projectId, addToast]);
+  /* v0.1.27: the pending edit is FLUSHED on unmount, not thrown away. The
+   * autosave waits 550 ms, so "tweak a setting, click ← Catalog projects"
+   * discarded the change silently — the debounce timer was merely cleared. */
+  const pending = useRef(null);
+  const saveRef = useRef(null);
+  useEffect(() => { let cancelled = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled) { setProject(p); setSavedAt(p.updatedAt); } }).catch((e) => addToast(e.message, 'error')); return () => { cancelled = true; clearTimeout(timer.current); if (pending.current) void saveRef.current?.(pending.current); }; }, [projectId, addToast]);
   const refreshPreview = useCallback(async () => { try { const r = await window.api.catalogStudio.preview(projectId); setPreview(r.html); } catch (e) { addToast(e.message, 'error'); } }, [projectId, addToast]);
   useEffect(() => { if (!project) return undefined; const id = setTimeout(refreshPreview, 260); return () => clearTimeout(id); }, [project?.updatedAt, refreshPreview]);
   const save = useCallback(async (value = project) => { if (!value) return; clearTimeout(timer.current); setSaveState('saving'); try { const row = await window.api.catalogStudio.update(value.id, value); setProject(row); setSavedAt(Date.now()); setSaveState('saved'); } catch (e) { setSaveState('dirty'); addToast(e.message, 'error'); } }, [project, addToast]);
-  function change(patch) { const next = { ...project, ...patch }; setProject(next); setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }
+  saveRef.current = save;
+  function change(patch) { const next = { ...project, ...patch }; setProject(next); pending.current = next; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => { pending.current = null; save(next); }, 550); }
   function updateConfig(patch) { change({ config: { ...project.config, ...patch } }); }
   async function exportPdf() {
-    const folder = await window.api.files.pickFolder(); if (!folder) return;
+    // v0.1.27: inside a try — a failing dialog used to reject out of the
+    // click handler with no toast, so the button looked dead.
+    let folder;
+    try { folder = await window.api.files.pickFolder(); } catch (e) { addToast(e.message, 'error'); return; }
+    if (!folder) return;
     setWorking(true); setProgress(8); let pulse = null;
     try { pulse = setInterval(() => setProgress((x) => Math.min(88, x + 7)), 180); const res = await window.api.catalogStudio.exportPdf(project.id, folder); setProgress(100); await new Promise((r) => setTimeout(r, 650)); addToast(`Catalog exported to ${res.outputPath}`, 'success'); setProject(await window.api.catalogStudio.get(project.id)); }
     catch (e) { addToast(e.message, 'error'); } finally { if (pulse) clearInterval(pulse); setWorking(false); }
@@ -209,7 +220,7 @@ export function CatalogProjects() {
   if (editing) return <CatalogEditor projectId={editing} onBack={() => { setEditing(null); void load(); }} />;
   return <section className="page"><PageHeader title="Catalog Projects" subtitle="Manage saved catalogs and continue where you left off." actions={<Button onClick={() => setActiveModule('catalogtemplates')}>+ New from template</Button>} />
     <div className="studio-intro studio-intro--catalog"><div><span className="studio-intro__icon">C</span><div><strong>Your catalog workspace</strong><p>Open a project to manage its products, ordering, layout and PDF output.</p></div></div><span className="studio-intro__badge">{projects.length} project{projects.length === 1 ? '' : 's'}</span></div>
-    <div className="catalog-project-grid">{projects.length ? projects.map((p) => <ProjectCard key={p.id} project={p} onOpen={() => setEditing(p.id)} onDuplicate={async () => { await window.api.catalogStudio.duplicate(p.id); void load(); }} onDelete={async () => { if (!confirm(`Delete “${p.name}”?`)) return; await window.api.catalogStudio.remove(p.id); void load(); }} />) : <EmptyState title="No catalog projects" body="Choose a template, then add products from your library." action={<Button onClick={() => setActiveModule('catalogtemplates')}>Browse catalog templates</Button>} />}</div>
+    <div className="catalog-project-grid">{projects.length ? projects.map((p) => <ProjectCard key={p.id} project={p} onOpen={() => setEditing(p.id)} onDuplicate={async () => { try { await window.api.catalogStudio.duplicate(p.id); void load(); } catch (e) { addToast(e.message, 'error'); } }} onDelete={async () => { if (!(await confirm({ title: `Delete “${p.name}”?`, message: 'The catalog project is removed. Products and images are not affected.', danger: true }))) return; try { await window.api.catalogStudio.remove(p.id); void load(); } catch (e) { addToast(e.message, 'error'); } }} />) : <EmptyState title="No catalog projects" body="Choose a template, then add products from your library." action={<Button onClick={() => setActiveModule('catalogtemplates')}>Browse catalog templates</Button>} />}</div>
   </section>;
 }
 

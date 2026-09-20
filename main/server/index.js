@@ -21,6 +21,7 @@
  */
 
 const http = require('node:http');
+const { logSoftFailure } = require('../util/softFailure');
 const path = require('node:path');
 const fs = require('node:fs');
 // v0.15.1: WebSocket support for live-update push to clients.
@@ -259,7 +260,7 @@ async function handleRequest(req, res, dataDir) {
   // `webViewerEnabled` config flag (read per-request, default ON, so the
   // Settings toggle takes effect with no restart). Served from a compiled
   // string (require('../webclientHtml')), never a source-tree file, so it
-  // survives packaging (CLAUDE.md §21).
+  // survives packaging (AGENTS.md §21).
   if (req.method === 'GET' && (urlPath === '/m' || urlPath === '/m/')) {
     let enabled = true;
     try { enabled = require('../config').loadConfig().webViewerEnabled !== false; } catch (_) {}
@@ -268,7 +269,7 @@ async function handleRequest(req, res, dataDir) {
       res.end('The mobile web viewer is turned off.');
       return;
     }
-    let html = '';
+    let html;
     try { html = require('../webclientHtml'); } catch (_) { html = ''; }
     if (!html) { res.writeHead(500); res.end('viewer unavailable'); return; }
     // v0.49.4: `no-cache` was a footgun — it tells the browser "you MAY cache,
@@ -279,12 +280,19 @@ async function handleRequest(req, res, dataDir) {
     // SAME server. `no-store` is the universally-respected "do not cache".
     // The Pragma + Expires lines exist for older proxies that still gate on
     // HTTP/1.0 semantics — cheap belt-and-braces.
-    // CLAUDE.md §21: version comes from `app.getVersion()`, NEVER from
+    // AGENTS.md §21: version comes from `app.getVersion()`, NEVER from
     // `require('../../package.json')` — the relative path resolves in dev but
     // breaks in the packaged build (the compiled file moves to
     // `dist-electron/main/server/index.js`). Same trap as the v0.26.52 bug.
     let version = '';
-    try { version = require('electron').app.getVersion() || ''; } catch (_) {}
+    try {
+      version = require('electron').app.getVersion() || '';
+    } catch (err) {
+      // v0.1.12: an empty version here means clients show "v0.0.0" in the
+      // sidebar and the diagnostics chip can't compare builds — the exact
+      // symptom of the v0.26.52 packaging bug. Never let it be silent.
+      logSoftFailure('server', 'read app version for /api/ping', err);
+    }
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store, max-age=0, must-revalidate',
@@ -405,6 +413,7 @@ function bootServer({ port, dataDir }) {
     const srv = http.createServer((req, res) => {
       handleRequest(req, res, dataDir).catch((err) => {
         process.stderr.write(`[server] unhandled: ${err.stack || err.message}\n`);
+          // Last-seen / presence bookkeeping. Failing to stamp a timestamp must not
         try { sendJson(res, 500, { error: 'Internal server error' }); } catch (_) {}
       });
     });
@@ -570,7 +579,7 @@ function collectLocalAddresses() {
       const ip = iface.address;
       // Categorize: Tailscale gets priority because it's the
       // recommended transport.
-      let kind = 'lan';
+      let kind;
       if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)) kind = 'tailscale';
       else if (/^192\.168\./.test(ip)) kind = 'lan';
       else if (/^10\./.test(ip)) kind = 'lan';

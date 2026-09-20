@@ -100,7 +100,7 @@ export async function prefetchLocalModel(onProgress) {
   try {
     blob = await makeWarmupBlob();
   } catch (err) {
-    throw new Error(`Failed to build warm-up image: ${err.message}`);
+    throw new Error(`Failed to build warm-up image: ${err.message}`, { cause: err });
   }
   if (!blob) throw new Error('Failed to build warm-up image (canvas returned null)');
   try {
@@ -114,7 +114,7 @@ export async function prefetchLocalModel(onProgress) {
     // Reuse the same friendly translator the workspace uses so users get
     // the actionable "check internet" / "CSP" hints instead of the raw
     // ONNX-backend jargon.
-    throw new Error(friendlyLocalEngineError(err));
+    throw new Error(friendlyLocalEngineError(err), { cause: err });
   }
 }
 
@@ -138,7 +138,7 @@ async function removeViaLocal(filepath, onProgress) {
     const bytes = await outBlob.arrayBuffer();
     return { blob: outBlob, bytes };
   } catch (err) {
-    throw new Error(friendlyLocalEngineError(err));
+    throw new Error(friendlyLocalEngineError(err), { cause: err });
   }
 }
 
@@ -205,29 +205,48 @@ function friendlyLocalEngineError(err) {
  * @param {string} filepath
  * @param {(stage: string, ratio: number) => void} [onProgress]
  */
-export async function removeBackground(filepath, onProgress /* , _opts */) {
-  if (cutoutCache.has(filepath)) return cutoutCache.get(filepath);
-  if (inFlight.has(filepath)) return inFlight.get(filepath);
+export async function removeBackground(filepath, onProgress, version) {
+  /* v0.1.27: the cache key includes a `version` stamp.
+   *
+   * It used to be keyed by filepath alone, and image files are rewritten IN
+   * PLACE — flipping, cropping to source, or the server renumbering positions
+   * after a delete all change the bytes behind the same relative path. So the
+   * second background removal for that path silently reused the FIRST one's
+   * cutout and composited it onto the new pixels, producing an output that
+   * mixed two different images.
+   *
+   * Callers pass the row's `contentHash`, which the server recomputes on every
+   * byte-changing edit (see main/ipc/images.js), so a stale entry can no longer
+   * be reached. Passing nothing keeps the old filepath-only behaviour rather
+   * than breaking, which matters for any caller added later that has no hash. */
+  const key = version ? `${filepath}::${version}` : filepath;
+  if (cutoutCache.has(key)) return cutoutCache.get(key);
+  if (inFlight.has(key)) return inFlight.get(key);
 
   const job = (async () => {
     const result = await removeViaLocal(filepath, onProgress);
-    cutoutCache.set(filepath, result);
+    cutoutCache.set(key, result);
     return result;
   })();
 
-  inFlight.set(filepath, job);
+  inFlight.set(key, job);
   try {
     return await job;
   } finally {
-    inFlight.delete(filepath);
+    inFlight.delete(key);
   }
 }
 
+/**
+ * Drop cached cutouts. Optional now: because the cache is keyed by
+ * (filepath, contentHash), a changed image is simply a different entry and the
+ * stale one can no longer be hit. Kept for callers that want to free the
+ * memory of a large blob explicitly.
+ */
 export function clearCutoutCache(filepath) {
-  if (filepath) {
-    cutoutCache.delete(filepath);
-  } else {
-    cutoutCache.clear();
+  if (!filepath) { cutoutCache.clear(); return; }
+  for (const key of [...cutoutCache.keys()]) {
+    if (key === filepath || key.startsWith(`${filepath}::`)) cutoutCache.delete(key);
   }
 }
 

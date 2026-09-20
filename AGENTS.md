@@ -4,6 +4,14 @@ These are durable conventions for any desktop or web app you build with me. Appl
 
 This file is intentionally short and rule-shaped, not aspirational. Treat each section as a contract.
 
+**Last full fact-check: 2026-09-19.** Every section was verified against the
+codebase on that date — file paths, dependency names, component names, numeric
+defaults. A rule that makes a *checkable* claim (a path, a package, a function,
+a default) carries its own `(verified YYYY-MM-DD)` marker where it's worth
+singling out; anything without one falls back to the date above. See §22 for
+why: rules that name files and packages go stale silently, and this file had
+drifted badly before this check.
+
 ---
 
 ## 1. Navigation — left sidebar, never top tabs
@@ -38,14 +46,21 @@ Top-tab navigation across feature areas is forbidden. Sub-tabs *inside* a single
 ## 4. Support / donate — always present
 
 - A **"Support this app"** button in the sidebar footer (heart icon).
-- Opens a modal with a short blurb + 1–2 CTAs (Sponsor, Buy-me-a-coffee, etc.).
+- Opens a short blurb + 1–2 CTAs (Sponsor, Buy-me-a-coffee, etc.). A modal is
+  fine, but this app grew past that: support is now a full page at
+  `renderer/modules/Support/index.jsx`, reached from the sidebar footer, so
+  the copy has room to breathe. Either shape satisfies the rule.
 - External links open via Electron's `shell.openExternal` through an IPC bridge with an `http(s)` / `mailto` allow-list. Never let arbitrary URLs through.
+- In this app that is `window.api.app.openExternal(url)`; the allow-list
+  (`URL_ALLOW`) and the scheme check live in `main/ipc/app.js`.
 
 ## 5. Settings — always accessible
 
 - "Settings" is always reachable, even when no business/company/workspace is selected.
 - Houses: data folder location, app preferences, reset-to-default actions, and other global config.
-- Mark it `alwaysAvailable` in nav config so the "select a workspace first" gate doesn't block it.
+- Leave it ungated in the nav config so the "select a workspace first" gate doesn't block it. In
+  this app that means giving the nav item no `caps` key — capability gating only hides an item
+  when it *has* a `caps` array the user fails (see `hasAnyCap` in `renderer/components/Sidebar.jsx`).
 
 ## 6. Saves are automatic — show a status indicator AND keep an explicit Save button
 
@@ -80,8 +95,18 @@ For desktop apps:
 ## 9. Asset storage — content-addressed, deduplicated
 
 - All user-imported files (images, logos, icons) are **copied** into `<dataDir>/assets/<kind>/<file>`. Never reference absolute paths from the user's disk in the database.
-- Filename pattern: `<slug>-<hash10>.<ext>` where `hash10` is the first 10 hex chars of the source file's SHA-1.
-- Identical content → identical hash → identical filename → automatic dedup. No two copies on disk.
+- Filename pattern: `<slug>.<ext>`, with `-2`, `-3`, … appended when that name
+  is already taken. (verified 2026-09-19)
+  - This rule previously specified `<slug>-<hash10>.<ext>`. That is **not** what
+    this app does and never was: `main/imageManager.js` deliberately writes a
+    clean name with no hash suffix — the code comment says so — and falls back to
+    a numeric suffix on collision.
+- Dedup is by **content**, not by name: before writing, the existing file at that
+  name is hashed and compared, and identical content reuses it instead of
+  copying. So identical content does not always produce an identical filename —
+  two different source files named `logo.png` coexist as `logo.png` and
+  `logo-2.png`, while a re-import of the *same* bytes reuses whichever slot
+  already holds them. (verified 2026-09-19)
 - Renderer accesses these via a custom protocol (e.g. `app-image://local/<relpath>`). Resolve in main process; serve via `protocol.handle()` (not the deprecated `registerFileProtocol`).
 - Auto-import-on-pick: when a user picks a file in a form, copy it to assets immediately. Form state stores the *relative* path returned by the importer, not the absolute pick path.
 
@@ -109,9 +134,22 @@ When products / entities can have multiple images:
   - **Set as main** (move to position 0)
   - **Reorder** (← and → arrows on hover, or drag-to-reorder)
   - **Remove** (X in corner)
-- Display current count vs cap (e.g. `3 / 20`).
-- Hard cap per entity (default: 20) enforced server-side in IPC.
+- Display current count vs cap (e.g. `3 / 50`).
+- Hard cap per entity (**50**, not 20) enforced server-side in IPC. This app
+  uses `MAX_IMAGES_PER_PRODUCT = 50` in `main/imageManager.js`; 50 is the
+  house default, so a new app should start there too.
 - Support **clipboard paste** (`⌘V` / `Ctrl+V`): listen for paste events with image MIME types, send `ArrayBuffer` over IPC, write to temp file, run through normal import pipeline.
+- **Filenames on disk get renumbered after a remove or a reorder** — the
+  stored paths stay contiguous (`001.jpg`, `002.jpg`, …) so position N always
+  means the same filename. That is a trap: the browser caches images by URL,
+  and the bytes behind `.../003.jpg` can change while the URL does not. The
+  user deletes image C from `[A, B, C, D, E]`, the server reindexes to
+  `[A, B, D, E]`, and the cached pixels for position 3 still show C — so it
+  looks like the wrong image was deleted. Any image URL the renderer renders
+  must carry a cache-busting stamp that changes when the bytes do: for a
+  product image use its content hash, otherwise the parent row's
+  `updated_at`. See `renderer/lib/imageUrl.js` for the helper and the full
+  write-up. Anything that mutates an image must also bump that stamp.
 
 ## 13. Smart filename matching for batch image import
 
@@ -135,6 +173,12 @@ When auto-matching a folder of images to records by some key (e.g. SKU):
 - Indexes on every foreign key + every column commonly filtered.
 - `UNIQUE (parent_id, natural_key)` for natural-key uniqueness scoped within parents (e.g. `UNIQUE (company_id, sku)`).
 - Migrations are **additive** by default (`ALTER TABLE ADD COLUMN`). Bump `schema_version` only when you need structural changes; bumping wipes existing pre-release data.
+  - Be careful here — this is destructive and easy to trip. In `main/db/index.js`
+    a version bump runs `wipeStructuralTables()`, which drops the real content
+    tables. Everything added since the last bump (via `addColumnIfMissing`) is
+    therefore the *safe* path and needs no version change at all. Reach for a
+    bump only when you genuinely need new tables or changed column types, and
+    say so in the changelog so the data loss is not a surprise.
 - Use an `app_state` table for kv storage (active selection IDs, schema version, etc.).
 - Use a `addColumnIfMissing(db, table, col, type)` helper that checks `PRAGMA table_info` — keep migrations idempotent.
 
@@ -146,48 +190,153 @@ When auto-matching a folder of images to records by some key (e.g. SKU):
 - Handlers `throw new Error('…')` on failure. Catch in renderer with try/catch; surface via toast.
 - For binary data (clipboard images, etc.), pass `ArrayBuffer` via the structured-clone IPC.
 
+**Register every channel with `expose()` or `exposeLocal()` — never a bare
+`ipcMain.handle`.** There are exactly two registration styles, and both
+validate the argument shape before the handler runs (see `main/ipc/helpers.js`
+and `main/util/validateArgs.js`):
+
+| Helper | Reachable from a remote client? | Use for |
+|---|---|---|
+| `expose(channel, handler)` | yes (RPC registry) | anything that acts on the *data* |
+| `exposeLocal(channel, handler)` | no | anything that acts on the *machine running the handler* |
+
+`exposeLocal()` is for native dialogs (`files:pickFolder`), absolute paths on
+this Mac (`files:readImageThumb`, `watermarks:upload`), and this Mac's own
+settings and database file (`settings:changeDataFolder`, `backups:restore`). A
+remote client calling one of those through `expose()` would act on the wrong
+computer.
+
+The trap this rule exists to prevent: "local-only" was once implemented as a
+bare `ipcMain.handle`, which *also* meant "unvalidated". 57 channels were
+written that way — 42 of them called by the screens — and the coverage test
+didn't see any of them, because it only scanned `expose()` calls. It reported
+full coverage. Local-only and unvalidated are two separate decisions; keep them
+separate.
+
+`test/validatorCoverage.test.js` enforces it: every channel registered either
+way needs a validator or an `EXEMPT` entry with a written reason, and a bare
+`ipcMain.handle` with a channel name anywhere in `main/**` fails the suite. A
+bad argument must produce `Bad request: <reason>` on **both** paths, with the
+same wording.
+
+**Client mode is the third registration style**, and it has its own copy of the
+local-only handlers because the dialog must open on the *client's* Mac. Those go
+through `handleLocal()` in `main/client/index.js` — same `(args) => result`
+contract and the same validators, via `main/util/validateArgs.js` (which exists
+precisely so a module with no DB and no server registry can still validate).
+
+The consequence to remember: **a rule that both modes must agree on cannot live
+inside one mode's handler.** Client mode has its own implementation of
+`files:readImageThumb` and `settings:setOne`, so a check written only in
+`main/ipc/files.js` or `main/ipc/settings.js` does not exist there. Shared rules
+belong in `main/util/fileKinds.js`, in `main/config.js`, or in the validators —
+all of which both modes can reach. This was found the hard way: the file-kind
+rule and the unknown-setting guard both had to be moved after client mode turned
+out not to have them.
+
 ## 16. Stack defaults (apply unless told otherwise)
 
 | Layer | Choice |
 |---|---|
 | Desktop shell | Electron + `vite-plugin-electron/simple` |
 | UI framework | React 18 + Vite |
-| Styling | Tailwind CSS |
+| Styling | Plain hand-written CSS in one `renderer/index.css` (see note) |
 | State | Zustand (one store, action methods) |
 | Local DB | better-sqlite3 |
 | Excel/CSV | SheetJS (`xlsx`) |
 | Images | `sharp` |
-| PDF | Puppeteer |
+| PDF | Electron's built-in `webContents.printToPDF()` (see note) |
+| Barcodes / QR | `bwip-js` (main process) |
+| Background removal | `@imgly/background-removal` (local ONNX, renderer) |
 | Icons | Inline SVG, no library |
 
 Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
 
+**Note on styling (corrected 2026-09-19).** This table used to say Tailwind
+CSS and Puppeteer. Neither is true of this app and hasn't been for a long
+time: there is no `tailwindcss` dependency and no Tailwind or PostCSS config,
+and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~10k
+lines) plus small per-feature CSS blocks in the same file, and PDFs are
+produced by Electron's own `webContents.printToPDF()` in
+`main/renderWindow.js` — no bundled Chromium, no extra download. Both
+replacements are deliberate: the print path costs nothing extra, and the CSS
+has no build step to go wrong. If a future app wants Tailwind, that's a
+per-app choice, not the house default.
+
 ## 17. File layout (Electron apps)
 
+*(Counts re-verified 2026-09-20.)*
+
+The shape below is what this app actually uses. Two things to note, because
+they're the parts newcomers get wrong: `db` and `ipc` are **directories with
+one file per table / per domain**, not single files, and the main process is
+**CommonJS** while the renderer is **ESM**.
+
 ```
-main/                  # main process, CommonJS
-  index.js             # app entry, BrowserWindow, lifecycle logging
-  config.js            # config.json read/write
-  db.js                # schema, migrations, queries
-  ipc.js               # ipcMain handlers
-  preload.js           # contextBridge surface
-  fileHandler.js       # spreadsheet IO
-  imageManager.js      # sharp, hashing, dedup
-  pdfExporter.js       # Puppeteer wrapper
-renderer/              # React + Vite, ESM
-  App.jsx
-  index.css
-  store/index.js       # Zustand
-  components/
-    ui.jsx             # Button, Input, Modal, Field, Toast, Badge, EmptyState
-    Sidebar.jsx
-    SupportModal.jsx
-    WhatsNewModal.jsx
-  modules/<Name>/      # one folder per feature module
-    index.jsx
-assets/                # bundled (fonts, theme JSON)
-data/                  # runtime userData (gitignored)
+main/                    # main process — CommonJS (require/module.exports)
+  index.js               # app entry, BrowserWindow, lifecycle logging
+  config.js              # config.json read/write (userData, not the DB)
+  preload.js             # contextBridge surface — the ONLY api entry point
+  ipc.js                 # barrel: registers every domain module in ipc/
+  ipc/                   # 23 files, one per domain (products.js, images.js, …)
+  db/                    # 27 files: index.js owns the schema + migrations,
+                         # then one file per table (products.js, brands.js, …)
+  util/                  # 20 pure helpers (slug, capabilities, landedCost,
+                         # socialGridModel.js — pure selection/sort/pagination)
+  ai/                    # provider adapters + queue runner
+  server/                # HTTP + WebSocket server for multi-Mac mode
+  client/                # client-mode RPC proxy (connects to a server Mac)
+  fileHandler.js         # spreadsheet IO (SheetJS)
+  imageManager.js        # sharp pipeline, hashing, content dedup
+  templateRenderer.js    # overlay composition (sharp + bwip-js)
+  renderWindow.js        # offscreen window: printToPDF + direct printing
+  exportRunner.js        # batch export
+  backupManager.js       # backup / restore
+renderer/                # React + Vite — ESM (import/export)
+  main.jsx               # entry; mounts App
+  App.jsx                # PAGES map + module routing (no router library)
+  index.css              # ALL styling lives here — one hand-written file
+  store/                 # Zustand: index.js composes ~16 slice files
+  lib/                   # renderer-only helpers (imageUrl, presets…)
+  components/            # shared UI (22 files)
+    ui.jsx               # Button Input Textarea Select Field Badge
+                         # SliderField Modal EmptyState Pagination paginate
+    Toast.jsx            # toasts (own file, NOT in ui.jsx)
+    ConfirmModal.jsx     # confirm() helper + destructive-confirm wrapper
+    SaveStatus.jsx       # §6 auto-save pill
+    Sidebar.jsx          # nav config + footer (version, What's new, Support)
+    WhatsNewModal.jsx    # the §3 changelog array
+    PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
+  modules/<Name>/        # 18 feature modules, one folder each
+    index.jsx            #   named export, e.g. `export function Brands()`
+test/                    # 32 files — `node --test test/**/*.test.js`
+scripts/                 # build-icon.js, build-webclient.js,
+                         # probe-overlay-renderer.js, probe-render-paint.js
+                         #   (`npm run check:render` — needs a real Electron app)
+assets/                  # bundled resources that ship in the DMG (fonts/)
 ```
+
+**Tests that touch the database need Electron's Node, not the system one.**
+`better-sqlite3` is compiled for Electron's ABI (§20 — `native:host` /
+`predist` rebuild it), so `node --test` cannot load it: you get
+`ERR_DLOPEN_FAILED ... NODE_MODULE_VERSION`. Anything that calls `initDb()`
+therefore lives behind a second script:
+
+    npm test          # `node --test 'test/**/*.test.js'` — pure JS, always runs
+    npm run test:native   # ELECTRON_RUN_AS_NODE=1 electron --test <the DB test>
+
+A DB test guards itself with a `try { new Database(':memory:') } catch` probe
+(the binding loads lazily, so `require` alone does not throw) and reports
+`skip` with that command as the reason — so `npm test` stays green while the
+case still runs for real under `test:native`. See
+`test/productImageFilename.test.js` for the pattern.
+
+Deliberately **not** here: `main/db.js` and `main/pdfExporter.js`. The
+database is a directory (§14), and PDFs come from Electron's own
+`printToPDF()` via `renderWindow.js` — there is no Puppeteer wrapper (§16).
+
+There is also no `tailwind.config.js` / `postcss.config.js`: styling is plain
+CSS in `renderer/index.css`, so there is no CSS build step.
 
 ## 18. Tone & copy
 
@@ -204,18 +353,23 @@ Every Electron app must:
 - Mirror those events to stdout too so they're visible in `npm run dev`.
 - Set `ELECTRON_ENABLE_LOGGING=1` in the dev script so Chromium logs are not swallowed.
 
-## 20. Build for both arm64 AND x64 on macOS
+## 20. Build for arm64 only (Apple Silicon)
 
-Every `npm run dist` must produce TWO DMGs — one for Apple Silicon (`arm64`) and one for Intel (`x64`). Configured in `package.json` under `build.mac.target[].arch: ["arm64", "x64"]`.
+Every `npm run dist` produces **one** DMG: `Media Studio KH-X.Y.Z-arm64.dmg`.
+Configured in `package.json` under `build.mac.target[].arch: ["arm64"]`.
 
-Why:
-- I have both Apple Silicon and Intel Macs on the test fleet (older Intel MacBook Pros are still kicking around as client-only machines)
-- Building both at once means I always have the right DMG for whichever Mac I'm pushing to next; no "wait, this is the wrong arch" surprise
-- electron-builder rebuilds native deps (better-sqlite3, sharp, @img/*) per arch automatically via @electron/rebuild — works fine on an Apple Silicon host
-- Output filenames are auto-suffixed: `Media Studio KH-X.Y.Z-arm64.dmg` and `Media Studio KH-X.Y.Z-x64.dmg` side-by-side in `dist/`
-- Build time is roughly 1.5× a single-arch build (native rebuild is the slow part; the rest is shared)
+**Superseded 2026-09-19 (v0.1.9).** This rule previously required BOTH arm64
+and x64. The Intel Macs left the test fleet, so the x64 DMG was pure cost:
+roughly 1.5× the build time, a second ~222 MB artifact to copy around, and a
+second native-dependency rebuild every release — for a build nobody installed.
+The `dist:x64` / `dist:all` scripts and the x64 `@img/sharp-darwin-x64`
+download were removed with it.
 
-Do NOT use `arch: ["universal"]` — universal binaries double the file size by bundling both arches in one app, and rebuild times are longer. Two separate DMGs is the simpler shipping model.
+- Build time is now a single native rebuild, not two.
+- `predist` installs only the arm64 `sharp` / `@img` binaries (`install:sharp`).
+- Do NOT use `arch: ["universal"]` — a universal binary bundles both slices into
+  one app, roughly doubling the file size. If Intel support is ever needed
+  again, prefer adding `"x64"` back to the arch array over going universal.
 
 ## 21. Packaging-safe paths — dev layout ≠ packaged layout
 
@@ -233,14 +387,78 @@ When something new becomes a durable preference, **edit this file** in-place. Do
 
 If a rule here is wrong or out of date, propose the correction in chat — don't silently violate it.
 
+**Rules that name a file, a dependency or a version go stale silently, so mark
+them as verified.** A rule can be perfectly correct the day it is written and
+wrong six months later with nobody touching it — a file gets split, a library
+gets swapped, a version resets. This file drifted exactly that way: it claimed
+Tailwind and Puppeteer (neither installed), described `main/db.js` and
+`main/pdfExporter.js` (neither exists), and cited a `MEMORY` file that was
+never in this repo.
+
+So when a rule makes a **checkable claim** — a path, a package name, a function
+name, a numeric default — append `(verified YYYY-MM-DD)` to it and confirm it
+by actually looking. When you change code that one of those claims describes,
+update the rule in the same change; the marker is the reminder. Prefer naming
+the real symbol (`MAX_IMAGES_PER_PRODUCT` in `main/imageManager.js`) over
+restating a number, so the code stays the source of truth.
+
+**`CLAUDE.md` is a symlink to this file — do not replace it with a copy.** Two byte-identical
+copies used to sit side by side (`AGENTS.md` and `CLAUDE.md`, both 16,801 bytes, same mtime).
+They drifted the moment anyone edited one of them, because nothing forced them to agree. A doc
+audit on 2026-09-19 found the damage: §16 claimed Tailwind and Puppeteer (neither installed),
+§17 described a file layout that didn't exist (`main/db.js`, `main/pdfExporter.js`), §4 described
+support as a modal after it became a page, and §23 cited a `MEMORY` file that isn't in this repo.
+The symlink keeps both entry points working — Claude Code reads `CLAUDE.md`, other agents read
+`AGENTS.md` — while making drift structurally impossible. If a tool ever needs real-file
+semantics, fix that tool rather than un-linking this.
+
 ## 23. Version bumps — patch only, by default
 
-When the release cadence rule in MEMORY says "bump the version after every fix or feature," that means **patch bump** — the third number. `0.49.0 → 0.49.1 → 0.49.2 → …`. Don't reach for the middle (minor) number just because the change feels big.
+Bump the version after every fix or feature — and that means a **patch bump**: the third number. `0.1.9 → 0.1.10 → 0.1.11`. Don't reach for the middle (minor) number just because the change feels big.
 
 - **Default:** increment the PATCH (`0.x.y → 0.x.(y+1)`). Use this for every fix, polish, and ordinary feature, even substantial ones like the AI mobile flow or role-based permissions.
 - **Minor bump (`0.x.0 → 0.(x+1).0`):** only when I explicitly ask for it, or for a coordinated batch of releases shipped as a single milestone. Default = don't.
 - **Major bump:** never without an explicit ask.
 
-Reasoning: a "v0.49.0 just shipped, v0.50.0 already" cadence is misleading for a beta-tester reading WhatsNew — it implies milestones that aren't there. Patches are the honest framing for "this is the next iteration." The number that *should* feel meaningful is the minor; spending it freely empties it of signal.
+Reasoning: a "v0.1.9 shipped, v0.2.0 already" cadence is misleading for a beta-tester reading WhatsNew — it implies milestones that aren't there. Patches are the honest framing for "this is the next iteration." The number that *should* feel meaningful is the minor; spending it freely empties it of signal.
 
-History note (so this doesn't get re-litigated): from v0.34 → v0.49 we bumped the minor on every release for ~15 consecutive versions. v0.49 is the last of that pattern; v0.49.1 starts the new convention. Don't retro-renumber.
+History note (so this doesn't get re-litigated): the versions quoted here used
+to read 0.49.x because they were written while this codebase was still Image
+Studio KH, before the Media Studio KH fork reset it to 0.1.0. The convention
+carried over unchanged; only the numbers moved. Don't retro-renumber.
+
+## 24. Changelog entries are plain text, and a bump updates both places
+
+- A version bump means **two** edits: `package.json` `version`, and a new top entry in
+  `CHANGELOG` in `renderer/components/WhatsNewModal.jsx`. One without the other is a bug —
+  a bumped package with a stale changelog leaves the "What's new" modal pointing at the
+  previous release.
+- Changelog bullets render as **plain text** (`{item}` in a `<li>`), not markdown. No `**bold**`,
+  no `_italics_`, no `[links](…)` — the user sees the raw characters. Use the `NEW —` /
+  `FIX —` / `POLISH —` / `Internal —` prefixes the existing entries use for emphasis instead.
+- Because the top entry is what the user reads after updating, keep bullets about the *user-visible*
+  effect first and put implementation notes behind an `Internal —` bullet at the end.
+
+
+## 25. Closed decisions — do not re-propose
+
+Two things were raised, looked at, and **deliberately dropped by Theng on
+2026-09-20**. They are settled, not backlog. Do not propose them again, do not
+"helpfully" fix them in passing, and do not list them as remaining work.
+
+**1. The three remaining bulk modals stay as they are.** `renderer/modules/ProductLibrary/`
+has a shared `BulkOpModal.jsx` + `useBulkPreview.js`, used by five modals:
+`BulkCompressModal`, `BulkConvertModal`, `BulkResizeModal`, `AutoCropRunModal`,
+`AutoEnhanceRunModal`. Three do not use it and will not be migrated:
+`BulkBgRemovalModal.jsx` (Remove background), `BulkOverlayRunModal.jsx`
+(Apply overlay), `BulkProductsAIRunModal.jsx` (Bulk AI). They work. Migrating
+them is churn for consistency's own sake, not a fix, and it risks breaking
+working screens to make the code tidier.
+
+**2. The `watermarks` asset folder is not being renamed.** Watermark artwork is
+imported under the asset kind `watermarks` — `imageManager.importAsset('watermarks', …)`
+in `main/ipc/images.js` — which places it in `<dataDir>/assets/watermarks/`. The
+name is a little narrow for what actually lives there (brand logos and stamps,
+not only watermarks), but renaming the kind means migrating every existing
+user's files on disk, for a cosmetic gain. Leave both the folder and the asset
+kind alone.

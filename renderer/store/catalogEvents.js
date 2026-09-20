@@ -10,11 +10,17 @@
  * timer handle for the pending refetch.
  */
 const _catalogRefreshTimers = new Map();
+function logSoft(what, err) {
+  // Not fatal — the in-memory state is still correct — but a silent stale
+  // value is how "the app is showing the wrong thing" bugs start.
+  console.warn(`[soft-failure] ${what}:`, err?.message || err);
+}
+
 export function scheduleSliceRefresh(slice, fn) {
   if (_catalogRefreshTimers.has(slice)) return; // already queued
   const t = setTimeout(() => {
     _catalogRefreshTimers.delete(slice);
-    try { fn(); } catch (_) {}
+    try { fn(); } catch (err) { logSoft('catalog refresh', err); }
   }, 250);
   _catalogRefreshTimers.set(slice, t);
 }

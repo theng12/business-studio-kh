@@ -37,6 +37,10 @@ export function createAiSlice(set, get) {
 
     async refreshAiCredits() {
       if (!window.api) return;
+      // v0.1.22: in client mode the generations run on the server Mac with ITS
+      // keys, so there is nothing here to read. This used to fire anyway and fail
+      // silently on every AI Studio mount and refresh.
+      if (get().appMode === 'client') return;
       try { set({ aiCredits: await window.api.ai.getCredits() }); }
       catch { /* keep last known */ }
     },
@@ -65,13 +69,27 @@ export function createAiSlice(set, get) {
     },
     setAiSourceImage(filepath) { set({ aiSourceImagePath: filepath }); },
     setAiSelectedModel(key) {
-      set({ aiSelectedModelKey: key });
+      /* v0.1.27: reset the per-task count when the model changes.
+       *
+       * The count control is shown conditionally — a `nVariants` dropdown for
+       * models that declare one, a `numImages` box for fal models — but the
+       * value itself lives in `aiOptions` and survived a model switch. So
+       * picking 4 images on a fal model and then switching to a kie model left
+       * `numImages: 4` in state with no control to change it, and the
+       * confirmation dialog quoted 4 generations and 4× the cost for a run that
+       * would produce one image (fal honours `numImages`, kie honours
+       * `nVariants` — see main/ai/providers/). Clearing both on switch means a
+       * count can never outlive the model it was chosen for. */
+      set({ aiSelectedModelKey: key, aiOptions: { ...get().aiOptions, numImages: undefined, nVariants: undefined } });
       // Persist as the default for the next app launch — covers the common
       // case where a user picks (say) nano-banana-pro once and wants it to
       // stick. Best-effort: if the IPC write fails (file lock, etc.) the
       // user's session keeps the new selection in memory; only the persistence
       // is lost.
-      try { window.api?.settings?.setOne?.('aiDefaultModel', key); } catch (_) {}
+      try { window.api?.settings?.setOne?.('aiDefaultModel', key); } catch (err) {
+        // Selection still applies this session; only the saved default is lost.
+        console.warn('[soft-failure] persist aiDefaultModel:', err?.message || err);
+      }
     },
     setAiPrompt(text) { set({ aiPromptText: text }); },
     setAiOptions(patch) { set((s) => ({ aiOptions: { ...s.aiOptions, ...patch } })); },

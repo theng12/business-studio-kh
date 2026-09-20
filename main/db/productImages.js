@@ -14,10 +14,6 @@ let _companies;
 function getCompanies() { return _companies ?? (_companies = require('./companies')); }
 let _imageManager;
 function getImageManager() { return _imageManager ?? (_imageManager = require('../imageManager')); }
-// v0.22.6: audit log
-let _audit;
-function getAudit() { return _audit ?? (_audit = require('./auditLog')); }
-function basename(p) { return p ? String(p).split('/').pop() : null; }
 
 function rowToImage(row) {
   if (!row) return null;
@@ -402,6 +398,14 @@ function setContentHash(productId, filepath, hash) {
  * the format conversion changes the file extension (e.g. PNG → JPEG); the
  * file on disk gets a new name and the row needs to follow it. Returns the
  * refreshed row.
+ *
+ * v0.1.16: also update `filename`. `filename` is the CURRENT on-disk basename
+ * everywhere else in this file — it is `path.posix.basename(filepath)` on
+ * insert (see addImage/addRow) and the renumber pass updates both columns
+ * together. Leaving it behind meant a converted image kept advertising its old
+ * extension: convert `DEMO-001-001.jpg` to WebP and the Lightbox caption, the
+ * History modal and the AI source label still said `.jpg` while the bytes on
+ * disk were WebP.
  */
 function setFilepath(productId, oldFilepath, newFilepath) {
   let size = null;
@@ -409,10 +413,10 @@ function setFilepath(productId, oldFilepath, newFilepath) {
   getDb()
     .prepare(
       `UPDATE product_images
-       SET filepath = ?, file_size = ?
+       SET filepath = ?, filename = ?, file_size = ?
        WHERE product_id = ? AND filepath = ?`,
     )
-    .run(newFilepath, size, productId, oldFilepath);
+    .run(newFilepath, path.posix.basename(newFilepath), size, productId, oldFilepath);
   return getByFilepath(productId, newFilepath);
 }
 
