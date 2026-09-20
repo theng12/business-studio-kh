@@ -30,12 +30,27 @@ test('web viewer normalizes saved viewer URLs to the API origin', () => {
 test('web viewer guards session, company, and image-cache responses by generation', () => {
   assert.match(source, /var sessionGeneration = 0/);
   assert.match(source, /var companyGeneration = 0/);
-  assert.match(source, /requestSession !== sessionGeneration/);
-  assert.match(source, /requestCompany !== companyGeneration/);
+  assert.match(source, /var imageCacheGeneration = 0/);
+  assert.match(source, /var companySwitchChain = Promise\.resolve\(\)/);
+  assert.match(source, /function sessionRequestCurrent\(request\)/);
+  assert.match(source, /function imageRequestCurrent\(request\)/);
+  assert.match(source, /request\.cache === imageCacheGeneration/);
+  assert.match(source, /request\.session === sessionGeneration/);
+  assert.match(source, /request\.company === companyGeneration/);
   assert.match(source, /function switchCompany\(id\)/);
-  assert.match(source, /return rpc\('companies:setActive', id\)/);
-  assert.match(source, /generation !== companyGeneration \|\| state\.companyId !== companyId/);
+  assert.match(source, /rpcAt\(request\.baseUrl, request\.token, 'companies:setActive', request\.id\)/);
+  assert.match(source, /lastConfirmedCompany = companySnapshot\(request\.id, \[\], \[\]\)/);
+  assert.match(source, /function loadCompanyData\(request\)/);
+  assert.match(source, /if \(!imageRequestCurrent\(request\)\) return null/);
+  assert.match(source, /if \(currentDetail && currentDetail\.id !== productId\) return;/);
+  assert.match(source, /!imageRequestCurrent\(request\) \|\| \(currentDetail && currentDetail\.id !== productId\)/);
+  assert.equal((source.match(/for \(var k in blobCache\)/g) || []).length, 1);
+  assert.doesNotMatch(source, /delete imgListCache\[(?:productId|pid|ctx\.productId)\]; delete mainImgCache\[/);
+  assert.match(source, /clearImageCaches\(productId\);/);
+  assert.match(source, /clearImageCaches\(ctx\.productId\);/);
+  assert.match(source, /clearImageCaches\(pid\);/);
   assert.match(source, /clearImageCaches\(\);/);
+  assert.match(source, /companySwitchChain = Promise\.resolve\(\);/);
   assert.match(source, /if \(u !== baseUrl \|\| t !== token\) resetSessionState\(\)/);
 });
 

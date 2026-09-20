@@ -63,6 +63,7 @@ const {
   snapshotDataTrees,
   copyDataTrees,
 } = require('./util/dataSnapshot');
+const { SCHEMA_VERSION } = require('./db');
 
 // Keep this list in lockstep with the comment above. Any new config
 // keys added later need an explicit decision here — silently bundling
@@ -292,7 +293,7 @@ async function previewBundle(bundlePath) {
  * SQLite connection holds a file handle to the old DB; the new one
  * doesn't take effect until next launch.
  */
-async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
+async function importBundle({ bundlePath, targetDataDir, onProgress, runReplacement } = {}) {
   if (!bundlePath || !fs.existsSync(bundlePath)) {
     throw new Error('Bundle file not found');
   }
@@ -315,6 +316,7 @@ async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
   await fsp.mkdir(targetParent, { recursive: true });
   const tmpRoot = await fsp.mkdtemp(path.join(targetParent, '.iskh-bundle-extract-'));
   let bakPath = null;
+  let previousPortableConfig = null;
   try {
     await runCommand('tar', ['-xzf', bundlePath, '-C', tmpRoot]);
     const tmpEntries = await fsp.readdir(tmpRoot);
@@ -322,94 +324,115 @@ async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
       throw new Error('Bundle structure unexpected (expected a single top-level folder)');
     }
     const bundleRoot = path.join(tmpRoot, tmpEntries[0]);
-    await validateExtractedTree(bundleRoot);
+    await validateExtractedTree(bundleRoot, { expectedSchemaVersion: SCHEMA_VERSION });
 
-    // Back up the existing target if it has data we'd otherwise lose.
-    // looksLikeOurDataDir guard is in settings.js; we recreate the check
-    // inline because we don't want to depend on the running app's settings
-    // module.
-    if (fs.existsSync(targetDataDir)) {
-      const stat = await fsp.stat(targetDataDir);
-      if (stat.isDirectory()) {
-        const entries = await fsp.readdir(targetDataDir);
-        const looksLikeData = entries.some((e) =>
-          e === 'database.sqlite' || e === 'assets' || e === 'processed' || e === 'ai-gallery'
-        );
-        if (looksLikeData) {
-          onProgress?.('backup');
-          bakPath = `${targetDataDir}.bak.${Date.now()}`;
-          await fsp.rename(targetDataDir, bakPath);
-          // recreate the empty target dir so extraction has somewhere
-          // to land
-          await fsp.mkdir(targetDataDir, { recursive: true });
+    const install = async () => {
+      // Back up the existing target if it has data we'd otherwise lose.
+      // looksLikeOurDataDir guard is in settings.js; we recreate the check
+      // inline because we don't want to depend on the running app's settings
+      // module.
+      if (fs.existsSync(targetDataDir)) {
+        const stat = await fsp.stat(targetDataDir);
+        if (stat.isDirectory()) {
+          const entries = await fsp.readdir(targetDataDir);
+          const looksLikeData = entries.some((e) =>
+            e === 'database.sqlite' || e === 'assets' || e === 'processed' || e === 'ai-gallery'
+          );
+          if (looksLikeData) {
+            onProgress?.('backup');
+            bakPath = `${targetDataDir}.bak.${Date.now()}`;
+            await fsp.rename(targetDataDir, bakPath);
+            // recreate the empty target dir so extraction has somewhere
+            // to land
+            await fsp.mkdir(targetDataDir, { recursive: true });
+          }
         }
+      } else {
+        await fsp.mkdir(targetDataDir, { recursive: true });
       }
-    } else {
-      await fsp.mkdir(targetDataDir, { recursive: true });
-    }
 
-    // Move every entry under bundleRoot → targetDataDir/<same name>.
-    for (const ent of await fsp.readdir(bundleRoot)) {
-      const src = path.join(bundleRoot, ent);
-      const dst = resolveSafeDest(targetDataDir, ent);
-      if (fs.existsSync(dst)) {
-        // Shouldn't happen because we either backed up or created
-        // empty target above, but defensive.
-        await fsp.rm(dst, { recursive: true, force: true });
-      }
-      await fsp.rename(src, dst);
-    }
-
-    // Merge the portable config into the live config.json. NEVER
-    // overwrites mode/dataDir/network keys.
-    onProgress?.('merge-config');
-    const portableCfgPath = path.join(targetDataDir, 'config.partial.json');
-    if (fs.existsSync(portableCfgPath)) {
-      // v0.26.40: harden the parse — a corrupted config.partial.json
-      // shouldn't break the whole import. Treat parse failure as
-      // "no portable config to merge" and continue with the new DB
-      // + assets (the user can manually re-enter AI keys etc.).
-      let portableCfg = null;
-      try {
-        portableCfg = JSON.parse(await fsp.readFile(portableCfgPath, 'utf8'));
-      } catch (err) {
-        process.stderr.write(`[bundle import] config.partial.json was malformed (${err.message}) — skipping config merge. You may need to re-enter API keys in Settings.\n`);
-      }
-      const config = require('./config');
-      const merged = {};
-      if (portableCfg && typeof portableCfg === 'object') {
-        for (const k of PORTABLE_CONFIG_KEYS) {
-          if (portableCfg[k] !== undefined) merged[k] = portableCfg[k];
+      // Move every entry under bundleRoot → targetDataDir/<same name>.
+      for (const ent of await fsp.readdir(bundleRoot)) {
+        const src = path.join(bundleRoot, ent);
+        const dst = resolveSafeDest(targetDataDir, ent);
+        if (fs.existsSync(dst)) {
+          // Shouldn't happen because we either backed up or created
+          // empty target above, but defensive.
+          await fsp.rm(dst, { recursive: true, force: true });
         }
+        await fsp.rename(src, dst);
       }
-      if (Object.keys(merged).length > 0) config.updateConfig(merged);
-      // The partial file contains plaintext API keys by design so they can
-      // travel in the bundle. Once the merge succeeds it must not become a
-      // second credential store under the live data directory.
-      await fsp.rm(portableCfgPath, { force: true });
-    }
 
-    onProgress?.('done');
-    return {
-      success: true,
-      importedManifest: manifest,
-      targetDataDir,
+      // Merge the portable config into the live config.json. NEVER
+      // overwrites mode/dataDir/network keys.
+      onProgress?.('merge-config');
+      const portableCfgPath = path.join(targetDataDir, 'config.partial.json');
+      if (fs.existsSync(portableCfgPath)) {
+        // v0.26.40: harden the parse — a corrupted config.partial.json
+        // shouldn't break the whole import. Treat parse failure as
+        // "no portable config to merge" and continue with the new DB
+        // + assets (the user can manually re-enter AI keys etc.).
+        let portableCfg = null;
+        try {
+          portableCfg = JSON.parse(await fsp.readFile(portableCfgPath, 'utf8'));
+        } catch (err) {
+          process.stderr.write(`[bundle import] config.partial.json was malformed (${err.message}) — skipping config merge. You may need to re-enter API keys in Settings.\n`);
+        }
+        const config = require('./config');
+        const merged = {};
+        if (portableCfg && typeof portableCfg === 'object') {
+          for (const k of PORTABLE_CONFIG_KEYS) {
+            if (portableCfg[k] !== undefined) merged[k] = portableCfg[k];
+          }
+        }
+        if (Object.keys(merged).length > 0) {
+          const previous = config.loadConfig();
+          previousPortableConfig = Object.fromEntries(Object.keys(merged).map((key) => [key, previous[key]]));
+          config.updateConfig(merged);
+        }
+        // The partial file contains plaintext API keys by design so they can
+        // travel in the bundle. Once the merge succeeds it must not become a
+        // second credential store under the live data directory.
+        await fsp.rm(portableCfgPath, { force: true });
+      }
+
+      onProgress?.('done');
+      return {
+        success: true,
+        importedManifest: manifest,
+        targetDataDir,
+      };
     };
-  } catch (err) {
-    /* Roll back any incomplete install after the live folder was moved aside.
-     * The staged tree is fully validated before this point, but a later move
-     * or config merge can still fail. Restore the complete safety copy rather
-     * than leaving a partial database/assets mix in place. */
-    if (bakPath && fs.existsSync(bakPath)) {
+    // Recovery belongs inside the replacement callback: maintenance may only
+    // reopen SQLite after both the folder and portable preferences are restored.
+    const replace = async () => {
       try {
-        await fsp.rm(targetDataDir, { recursive: true, force: true });
-        await fsp.rename(bakPath, targetDataDir);
-        process.stderr.write(`[bundle import] failed (${err.message}) — your original data folder was restored.\n`);
-      } catch (rollbackErr) {
-        process.stderr.write(`[bundle import] failed (${err.message}) AND the rollback failed (${rollbackErr.message}). Your original data is in ${bakPath}.\n`);
+        return await install();
+      } catch (err) {
+        const failures = [];
+        if (bakPath && fs.existsSync(bakPath)) {
+          try {
+            await fsp.rm(targetDataDir, { recursive: true, force: true });
+            await fsp.rename(bakPath, targetDataDir);
+          } catch (rollbackErr) { failures.push(rollbackErr.message); }
+        }
+        if (previousPortableConfig) {
+          try { require('./config').updateConfig(previousPortableConfig); }
+          catch (rollbackErr) { failures.push(rollbackErr.message); }
+        }
+        if (failures.length) {
+          const originalPath = bakPath && fs.existsSync(bakPath) ? bakPath : targetDataDir;
+          const recoveryError = new Error(
+            `${err.message} Recovery failed: ${failures.join('; ')}. Original data: ${originalPath}. Quit and recover the original data and settings before reopening.`,
+            { cause: err },
+          );
+          recoveryError.code = 'MAINTENANCE_ROLLBACK_FAILED';
+          throw recoveryError;
+        }
+        throw err;
       }
-    }
-    throw err;
+    };
+    return await (runReplacement ? runReplacement(replace) : replace());
   } finally {
     try { await fsp.rm(tmpRoot, { recursive: true, force: true }); } catch (_) {}
   }

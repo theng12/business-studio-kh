@@ -12,12 +12,17 @@ async function inventoryTree(rootDir, treeNames) {
   const entries = [];
 
   async function walk(absPath, relPath) {
-    const stat = await fsp.lstat(absPath);
+    const stat = await fsp.lstat(absPath, { bigint: true });
     if (stat.isSymbolicLink()) {
       throw new Error(`Data folder contains a symbolic link: ${relPath}`);
     }
+    const identity = {
+      dev: stat.dev.toString(),
+      ino: stat.ino.toString(),
+      ctimeNs: stat.ctimeNs.toString(),
+    };
     if (stat.isDirectory()) {
-      entries.push({ kind: 'directory', path: relPath });
+      entries.push({ kind: 'directory', path: relPath, ...identity });
       for (const child of await fsp.readdir(absPath)) {
         await walk(path.join(absPath, child), path.join(relPath, child));
       }
@@ -29,8 +34,9 @@ async function inventoryTree(rootDir, treeNames) {
     entries.push({
       kind: 'file',
       path: relPath,
-      size: stat.size,
+      size: Number(stat.size),
       sha256: await hashFile(absPath),
+      ...identity,
     });
   }
 
@@ -48,8 +54,11 @@ async function inventoryTree(rootDir, treeNames) {
   return entries;
 }
 
-function sameInventory(expected, actual) {
-  return JSON.stringify(expected) === JSON.stringify(actual);
+function sameInventory(expected, actual, { includeIdentity = true } = {}) {
+  const comparable = (entries) => includeIdentity
+    ? entries
+    : entries.map(({ dev, ino, ctimeNs, ...entry }) => entry);
+  return JSON.stringify(comparable(expected)) === JSON.stringify(comparable(actual));
 }
 
 async function snapshotDataTrees(dataDir, treeNames) {
@@ -79,7 +88,7 @@ async function copyDataTrees(dataDir, stagingRoot, treeNames, expected) {
   }
   await assertSnapshotUnchanged(dataDir, treeNames, expected, 'asset copy');
   const staged = await inventoryTree(stagingRoot, treeNames);
-  if (!sameInventory(expected, staged)) {
+  if (!sameInventory(expected, staged, { includeIdentity: false })) {
     throw new Error('Staged data does not match the source snapshot; retry when writes are idle');
   }
   return treeNames.filter((name) => expected.some((entry) => entry.path === name));

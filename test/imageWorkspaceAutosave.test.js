@@ -181,9 +181,9 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
   const calls = [];
   const api = {
     workspace: {
-      saveSettings: (productId, filepath, settings) => {
+      saveSettings: (productId, imageId, expectedContentHash, settings) => {
         const gate = deferred();
-        calls.push({ productId, filepath, settings, gate });
+        calls.push({ productId, imageId, expectedContentHash, settings, gate });
         return gate.promise;
       },
       processImage: async () => ({}),
@@ -214,7 +214,8 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
   store.setState({ workspaceImages: [imageB] });
   await hook.settle(Component);
   assert.equal(calls.length, 1, 'leaving A flushes the pending A edit once');
-  assert.equal(calls[0].filepath, 'a.jpg');
+  assert.equal(calls[0].imageId, 'a');
+  assert.equal(calls[0].expectedContentHash, 'hash-a');
   assert.equal(calls[0].settings.brightness, 11);
 
   calls[0].gate.resolve();
@@ -228,7 +229,8 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
   await hook.settle(Component);
   await delay(550);
   assert.equal(calls.length, 2, 'B edit is saved after its own debounce');
-  assert.equal(calls[1].filepath, 'b.jpg');
+  assert.equal(calls[1].imageId, 'b');
+  assert.equal(calls[1].expectedContentHash, 'hash-b');
   assert.equal(calls[1].settings.brightness, 22);
 
   store.setState({ workspaceImages: [imageC] });
@@ -245,7 +247,8 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
   settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
   await delay(550);
   assert.equal(calls.length, 3, 'C edit is saved after its own debounce');
-  assert.equal(calls[2].filepath, 'c.jpg');
+  assert.equal(calls[2].imageId, 'c');
+  assert.equal(calls[2].expectedContentHash, 'hash-c');
   assert.equal(calls[2].settings.brightness, 33);
   settingsPanel.props.onSave();
   await Promise.resolve();
@@ -269,9 +272,9 @@ test('ImageWorkspace serializes a newer manual save behind an in-flight autosave
   let persistedBrightness = 1;
   const api = {
     workspace: {
-      saveSettings: (productId, filepath, settings) => {
+      saveSettings: (productId, imageId, expectedContentHash, settings) => {
         const gate = deferred();
-        calls.push({ productId, filepath, settings, gate });
+        calls.push({ productId, imageId, expectedContentHash, settings, gate });
         gate.promise.then(() => { persistedBrightness = settings.brightness; });
         return gate.promise;
       },
@@ -315,6 +318,306 @@ test('ImageWorkspace serializes a newer manual save behind an in-flight autosave
     await delay(0);
     await hook.settle(Component);
     assert.equal(persistedBrightness, 3, 'the older autosave must not persist after the newer manual save');
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('ImageWorkspace does not mark a newer editor errored when an older autosave rejects', async () => {
+  const firstSave = deferred();
+  const api = {
+    workspace: {
+      saveSettings: () => firstSave.promise,
+      processImage: async () => ({}),
+    },
+    products: { get: async () => ({ sku: 'SKU', name: 'Product' }) },
+    images: { listByProduct: async () => [] },
+  };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    const imageA = { id: 'a', filepath: 'a.jpg', contentHash: 'hash-a', workspaceSettings: { brightness: 1 } };
+    const imageB = { id: 'b', filepath: 'b.jpg', contentHash: 'hash-b', workspaceSettings: { brightness: 2 } };
+    store.setState({
+      activeProductId: 'product-1',
+      workspaceImages: [imageA],
+      workspaceImageIndex: 0,
+      workspaceLoading: false,
+      loadWorkspaceForProduct: async () => {},
+    });
+    await hook.settle(Component);
+
+    const settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
+    settingsPanel.props.onChange({ ...settingsPanel.props.settings, brightness: 11 });
+    await hook.settle(Component);
+    await delay(550);
+
+    store.setState({ workspaceImages: [imageB] });
+    await hook.settle(Component);
+    firstSave.reject(new Error('stale image'));
+    await delay(0);
+    await hook.settle(Component);
+
+    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    assert.equal(status.props.status.state, 'idle');
+    assert.deepEqual(store.getState().toasts, [], 'the old failure must not toast in the newer editor');
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('ImageWorkspace does not toast when an older manual save rejects after switching editors', async () => {
+  const calls = [];
+  const api = {
+    workspace: {
+      saveSettings: (productId, imageId, expectedContentHash, settings) => {
+        const gate = deferred();
+        calls.push({ productId, imageId, expectedContentHash, settings, gate });
+        return gate.promise;
+      },
+      processImage: async () => ({}),
+    },
+    products: { get: async () => ({ sku: 'SKU', name: 'Product' }) },
+    images: { listByProduct: async () => [] },
+  };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    const imageA = { id: 'a', filepath: 'a.jpg', contentHash: 'hash-a', workspaceSettings: { brightness: 1 } };
+    const imageB = { id: 'b', filepath: 'b.jpg', contentHash: 'hash-b', workspaceSettings: { brightness: 2 } };
+    store.setState({
+      activeProductId: 'product-1',
+      workspaceImages: [imageA],
+      workspaceImageIndex: 0,
+      workspaceLoading: false,
+      loadWorkspaceForProduct: async () => {},
+    });
+    await hook.settle(Component);
+
+    let settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
+    settingsPanel.props.onChange({ ...settingsPanel.props.settings, brightness: 11 });
+    await hook.settle(Component);
+    settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
+    const manualSave = settingsPanel.props.onSave();
+    await delay(0);
+    assert.equal(calls.length, 1, 'manual Save starts a deferred write for image A');
+
+    store.setState({ workspaceImages: [imageB] });
+    await hook.settle(Component);
+    calls[0].gate.reject(new Error('stale image'));
+    await manualSave;
+    await hook.settle(Component);
+
+    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    assert.equal(status.props.status.state, 'idle');
+    assert.deepEqual(store.getState().toasts, [], 'the stale manual-save failure must not toast in the newer editor');
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('ImageWorkspace surfaces a current manual save failure', async () => {
+  const gate = deferred();
+  const api = {
+    workspace: {
+      saveSettings: async () => gate.promise,
+      processImage: async () => ({}),
+    },
+    products: { get: async () => ({ sku: 'SKU', name: 'Product' }) },
+    images: { listByProduct: async () => [] },
+  };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    const image = { id: 'a', filepath: 'a.jpg', contentHash: 'hash-a', workspaceSettings: { brightness: 1 } };
+    store.setState({
+      activeProductId: 'product-1',
+      workspaceImages: [image],
+      workspaceImageIndex: 0,
+      workspaceLoading: false,
+      loadWorkspaceForProduct: async () => {},
+    });
+    await hook.settle(Component);
+
+    let settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
+    settingsPanel.props.onChange({ ...settingsPanel.props.settings, brightness: 11 });
+    await hook.settle(Component);
+    settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
+    const manualSave = settingsPanel.props.onSave();
+    await delay(0);
+    gate.reject(new Error('current save unavailable'));
+    await manualSave;
+    await hook.settle(Component);
+
+    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    assert.equal(status.props.status.state, 'error');
+    assert.deepEqual(
+      store.getState().toasts.map(({ message, variant }) => ({ message, variant })),
+      [{ message: 'Save failed: current save unavailable', variant: 'error' }],
+    );
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('ImageWorkspace flushes a pending save for the old context without updating the new context', async () => {
+  const calls = [];
+  const api = {
+    workspace: {
+      saveSettings: (productId, imageId, expectedContentHash, settings) => {
+        const gate = deferred();
+        calls.push({ productId, imageId, expectedContentHash, settings, gate });
+        return gate.promise;
+      },
+      processImage: async () => ({}),
+    },
+    products: { get: async () => ({ sku: 'SKU', name: 'Product' }) },
+    images: { listByProduct: async () => [] },
+  };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    const oldImage = { id: 'old-image', filepath: 'old.jpg', contentHash: 'old-hash', workspaceSettings: { brightness: 1 } };
+    const newImage = { id: 'new-image', filepath: 'new.jpg', contentHash: 'new-hash', workspaceSettings: { brightness: 2 } };
+    store.setState({
+      activeProductId: 'old-product',
+      workspaceImages: [oldImage],
+      workspaceImageIndex: 0,
+      workspaceLoading: false,
+      loadWorkspaceForProduct: async () => {},
+    });
+    await hook.settle(Component);
+
+    const settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
+    settingsPanel.props.onChange({ ...settingsPanel.props.settings, brightness: 11 });
+    await hook.settle(Component);
+
+    store.setState({ activeProductId: 'new-product', workspaceImages: [newImage] });
+    await hook.settle(Component);
+    assert.equal(calls.length, 1, 'leaving the old context flushes its pending draft once');
+    assert.deepEqual(
+      {
+        productId: calls[0].productId,
+        imageId: calls[0].imageId,
+        expectedContentHash: calls[0].expectedContentHash,
+        brightness: calls[0].settings.brightness,
+      },
+      {
+        productId: 'old-product',
+        imageId: 'old-image',
+        expectedContentHash: 'old-hash',
+        brightness: 11,
+      },
+    );
+
+    calls[0].gate.reject(new Error('old context unavailable'));
+    await delay(0);
+    await hook.settle(Component);
+
+    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    assert.equal(status.props.status.state, 'idle');
+    assert.deepEqual(store.getState().toasts, [], 'old-context failure stays out of the new context UI');
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('ImageWorkspace unmount flushes its pending save without affecting a remounted editor', async () => {
+  const calls = [];
+  const api = {
+    workspace: {
+      saveSettings: (productId, imageId, expectedContentHash, settings) => {
+        const gate = deferred();
+        calls.push({ productId, imageId, expectedContentHash, settings, gate });
+        return gate.promise;
+      },
+      processImage: async () => ({}),
+    },
+    products: { get: async () => ({ sku: 'SKU', name: 'Product' }) },
+    images: { listByProduct: async () => [] },
+  };
+  const oldHook = hookHarness();
+  const oldWorkspace = await loadWorkspace(api, oldHook);
+  const oldImage = { id: 'old-image', filepath: 'old.jpg', contentHash: 'old-hash', workspaceSettings: { brightness: 1 } };
+  oldWorkspace.store.setState({
+    activeProductId: 'old-product',
+    workspaceImages: [oldImage],
+    workspaceImageIndex: 0,
+    workspaceLoading: false,
+    loadWorkspaceForProduct: async () => {},
+  });
+  await oldHook.settle(oldWorkspace.Component);
+  const oldSettings = findNode(oldHook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
+  oldSettings.props.onChange({ ...oldSettings.props.settings, brightness: 11 });
+  await oldHook.settle(oldWorkspace.Component);
+  oldHook.cleanup();
+  await Promise.resolve();
+
+  assert.equal(calls.length, 1, 'unmount flushes the pending old draft once');
+  assert.equal(calls[0].productId, 'old-product');
+  assert.equal(calls[0].settings.brightness, 11);
+
+  const newHook = hookHarness();
+  const newWorkspace = await loadWorkspace(api, newHook);
+  try {
+    const newImage = { id: 'new-image', filepath: 'new.jpg', contentHash: 'new-hash', workspaceSettings: { brightness: 2 } };
+    newWorkspace.store.setState({
+      activeProductId: 'new-product',
+      workspaceImages: [newImage],
+      workspaceImageIndex: 0,
+      workspaceLoading: false,
+      loadWorkspaceForProduct: async () => {},
+    });
+    await newHook.settle(newWorkspace.Component);
+
+    calls[0].gate.reject(new Error('old unmounted context unavailable'));
+    await delay(0);
+    await newHook.settle(newWorkspace.Component);
+
+    const status = findNode(newHook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    assert.equal(status.props.status.state, 'idle');
+    assert.deepEqual(newWorkspace.store.getState().toasts, []);
+  } finally {
+    newHook.cleanup();
+  }
+});
+
+test('ImageWorkspace processes the selected image by immutable identity', async () => {
+  const calls = [];
+  const api = {
+    workspace: {
+      saveSettings: async () => [],
+      processImage: async (...args) => {
+        calls.push(args);
+        return {};
+      },
+    },
+    products: { get: async () => ({ sku: 'SKU', name: 'Product' }) },
+    images: { listByProduct: async () => [] },
+  };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    const image = {
+      id: 'selected-image',
+      filepath: 'old-position.jpg',
+      contentHash: 'hash-selected',
+      workspaceSettings: { removeBackground: false },
+    };
+    store.setState({
+      activeProductId: 'product-1',
+      workspaceImages: [image],
+      workspaceImageIndex: 0,
+      workspaceLoading: false,
+      loadWorkspaceForProduct: async () => {},
+      refreshProducts: async () => {},
+    });
+    await hook.settle(Component);
+
+    const settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
+    await settingsPanel.props.onApplyThis();
+
+    assert.deepEqual(calls[0].slice(0, 3), ['product-1', 'selected-image', 'hash-selected']);
   } finally {
     hook.cleanup();
   }

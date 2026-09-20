@@ -118,16 +118,32 @@ export async function prefetchLocalModel(onProgress) {
   }
 }
 
-export async function fetchImageBlob(filepath) {
-  const url = `app-image://local/${encodeURIComponent(filepath)}`;
+export async function fetchImageBlob(filepath, version) {
+  const stamp = version ? `?v=${encodeURIComponent(version)}` : '';
+  const url = `app-image://local/${encodeURIComponent(filepath)}${stamp}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to load image (${res.status})`);
   return res.blob();
 }
 
-async function removeViaLocal(filepath, onProgress) {
+async function sha1Blob(blob) {
+  const digest = await crypto.subtle.digest('SHA-1', await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function verifySource(inputBlob, { expectedSourceHash, validateSource } = {}) {
+  const sourceHash = await sha1Blob(inputBlob);
+  if (expectedSourceHash && sourceHash !== expectedSourceHash) {
+    throw new Error('Image changed; reload and try again');
+  }
+  await validateSource?.(sourceHash);
+  return sourceHash;
+}
+
+async function removeViaLocal(filepath, onProgress, version, sourceIdentity) {
+  const inputBlob = await fetchImageBlob(filepath, version);
+  const sourceHash = await verifySource(inputBlob, sourceIdentity);
   const engine = await loadLocalEngine();
-  const inputBlob = await fetchImageBlob(filepath);
   try {
     const outBlob = await engine(inputBlob, {
       output: { format: 'image/png' },
@@ -136,7 +152,7 @@ async function removeViaLocal(filepath, onProgress) {
         : undefined,
     });
     const bytes = await outBlob.arrayBuffer();
-    return { blob: outBlob, bytes };
+    return { blob: outBlob, bytes, sourceHash };
   } catch (err) {
     throw new Error(friendlyLocalEngineError(err), { cause: err });
   }
@@ -204,8 +220,10 @@ function friendlyLocalEngineError(err) {
  *
  * @param {string} filepath
  * @param {(stage: string, ratio: number) => void} [onProgress]
+ * @param {string} [version] cache stamp for mutable positional paths
+ * @param {{expectedSourceHash?: string, validateSource?: (sourceHash: string) => Promise<void>}} [sourceIdentity]
  */
-export async function removeBackground(filepath, onProgress, version) {
+export async function removeBackground(filepath, onProgress, version, sourceIdentity) {
   /* v0.1.27: the cache key includes a `version` stamp.
    *
    * It used to be keyed by filepath alone, and image files are rewritten IN
@@ -220,11 +238,25 @@ export async function removeBackground(filepath, onProgress, version) {
    * be reached. Passing nothing keeps the old filepath-only behaviour rather
    * than breaking, which matters for any caller added later that has no hash. */
   const key = version ? `${filepath}::${version}` : filepath;
-  if (cutoutCache.has(key)) return cutoutCache.get(key);
-  if (inFlight.has(key)) return inFlight.get(key);
+  if (cutoutCache.has(key)) {
+    const cached = cutoutCache.get(key);
+    if (sourceIdentity?.expectedSourceHash && cached.sourceHash !== sourceIdentity.expectedSourceHash) {
+      throw new Error('Image changed; reload and try again');
+    }
+    await sourceIdentity?.validateSource?.(cached.sourceHash);
+    return cached;
+  }
+  if (inFlight.has(key)) {
+    const result = await inFlight.get(key);
+    if (sourceIdentity?.expectedSourceHash && result.sourceHash !== sourceIdentity.expectedSourceHash) {
+      throw new Error('Image changed; reload and try again');
+    }
+    await sourceIdentity?.validateSource?.(result.sourceHash);
+    return result;
+  }
 
   const job = (async () => {
-    const result = await removeViaLocal(filepath, onProgress);
+    const result = await removeViaLocal(filepath, onProgress, version, sourceIdentity);
     cutoutCache.set(key, result);
     return result;
   })();

@@ -52,11 +52,15 @@ if (!skipReason) {
   ({ importBundle } = require('../main/serverBundle'));
 }
 
-function writeDb(file, value) {
+function writeDb(file, value, schemaVersion = 2) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
   db.exec('CREATE TABLE fixture (value TEXT);');
   db.prepare('INSERT INTO fixture (value) VALUES (?)').run(value);
+  db.exec('CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT);');
+  if (schemaVersion !== null) {
+    db.prepare('INSERT INTO app_state (key, value) VALUES (?, ?)').run('schema_version', String(schemaVersion));
+  }
   db.close();
 }
 
@@ -84,10 +88,10 @@ async function liveData(dataDir, marker = 'live') {
   await fsp.writeFile(path.join(dataDir, 'live-marker.txt'), marker);
 }
 
-function makeArchive(root, kind, value, mutate) {
+function makeArchive(root, kind, value, mutate, schemaVersion = 2) {
   const stageParent = fs.mkdtempSync(path.join(root, 'stage-'));
   const archiveRoot = path.join(stageParent, 'bundle');
-  writeDb(path.join(archiveRoot, 'database.sqlite'), value);
+  writeDb(path.join(archiveRoot, 'database.sqlite'), value, schemaVersion);
   const manifest = kind === 'backup'
     ? { kind: 'media-studio-kh-backup', backupFormatVersion: 1, appVersion: 'test', createdAt: Date.now(), includes: ['database.sqlite', 'assets/'] }
     : { bundleFormatVersion: 1, appVersion: 'test', createdAt: Date.now(), includes: ['database.sqlite', 'assets/'] };
@@ -145,6 +149,32 @@ test('backup restore rejects symlink and corrupt DB before touching live data', 
     assert.equal(await fsp.readFile(path.join(env.dataDir, 'live-marker.txt'), 'utf8'), 'symlink-live');
     assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), 'symlink-live');
     assert.deepEqual(await siblingNames(env.dataDir), []);
+  } finally {
+    await fsp.rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test('restore and import reject unsupported database schemas before touching live data', { skip: skipReason }, async () => {
+  const env = await fixture();
+  try {
+    for (const schemaVersion of [1, 3, '2junk', '2.5', '2.0', '', null]) {
+      await liveData(env.dataDir, `live-before-v${schemaVersion}`);
+      const backup = makeArchive(env.root, 'backup', `backup-v${schemaVersion}`, null, schemaVersion);
+      await assert.rejects(
+        () => restoreBackup({ backupPath: backup }),
+        /schema.*not supported|expected.*schema|schema.*version/i,
+      );
+      assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), `live-before-v${schemaVersion}`);
+      assert.deepEqual(await siblingNames(env.dataDir), []);
+
+      const bundle = makeArchive(env.root, 'bundle', `bundle-v${schemaVersion}`, null, schemaVersion);
+      await assert.rejects(
+        () => importBundle({ bundlePath: bundle, targetDataDir: env.dataDir }),
+        /schema.*not supported|expected.*schema|schema.*version/i,
+      );
+      assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), `live-before-v${schemaVersion}`);
+      assert.deepEqual(await siblingNames(env.dataDir), []);
+    }
   } finally {
     await fsp.rm(env.root, { recursive: true, force: true });
   }

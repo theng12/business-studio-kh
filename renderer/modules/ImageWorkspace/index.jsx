@@ -197,12 +197,12 @@ export function ImageWorkspace() {
    * Note this is deliberately NOT the whole `activeImage` object: that
    * reference changes after every save, and using it as a dependency would loop
    * (save → store update → new object → re-seed → save again). */
-  const imageIdentity = (img) => (img ? `${img.filepath}::${img.contentHash || img.id}` : null);
+  const imageIdentity = (img) => (img ? `${img.id}::${img.contentHash ?? ''}` : null);
 
-  function enqueueWorkspaceSave(productId, filepath, settings) {
-    const key = `${productId}::${filepath}::${JSON.stringify(settings)}`;
+  function enqueueWorkspaceSave(productId, imageId, expectedContentHash, settings) {
+    const key = `${productId}::${imageId}::${expectedContentHash ?? ''}::${JSON.stringify(settings)}`;
     if (queuedSaveRef.current?.key === key) return queuedSaveRef.current.promise;
-    const save = () => window.api.workspace.saveSettings(productId, filepath, settings);
+    const save = () => window.api.workspace.saveSettings(productId, imageId, expectedContentHash, settings);
     const next = saveChainRef.current.then(save, save);
     // A failed write must not permanently block later saves. Keep the
     // returned promise rejecting so each caller still reports its own error.
@@ -263,7 +263,8 @@ export function ImageWorkspace() {
     const saveGeneration = ++saveGenerationRef.current;
     pendingSaveRef.current = {
       productId: activeProductId,
-      filepath: image.filepath,
+      imageId: image.id,
+      expectedContentHash: image.contentHash ?? null,
       settings,
       key,
       identity,
@@ -275,7 +276,7 @@ export function ImageWorkspace() {
       saveDebounceRef.current = null;
       if (!owed) return;
       try {
-        await enqueueWorkspaceSave(owed.productId, owed.filepath, owed.settings);
+        await enqueueWorkspaceSave(owed.productId, owed.imageId, owed.expectedContentHash, owed.settings);
         if (!mountedRef.current || saveGenerationRef.current !== owed.saveGeneration ||
           activeProductIdRef.current !== owed.productId ||
           imageIdentity(activeImageRef.current) !== owed.identity) return;
@@ -285,8 +286,10 @@ export function ImageWorkspace() {
         const stillCurrent = mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
           activeProductIdRef.current === owed.productId &&
           imageIdentity(activeImageRef.current) === owed.identity;
-        if (stillCurrent) setSaveStatus({ state: 'error', lastSavedAt: null });
-        addToast(`Save failed: ${err.message}`, 'error');
+        if (stillCurrent) {
+          setSaveStatus({ state: 'error', lastSavedAt: null });
+          addToast(`Save failed: ${err.message}`, 'error');
+        }
       }
     }, 500);
     saveDebounceRef.current = handle;
@@ -304,7 +307,7 @@ export function ImageWorkspace() {
     const owed = pendingSaveRef.current;
     pendingSaveRef.current = null;
     if (!owed) return;
-    enqueueWorkspaceSave(owed.productId, owed.filepath, owed.settings)
+    enqueueWorkspaceSave(owed.productId, owed.imageId, owed.expectedContentHash, owed.settings)
       .then(() => {
         if (mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
           activeProductIdRef.current === owed.productId &&
@@ -312,7 +315,12 @@ export function ImageWorkspace() {
           lastSavedKeyRef.current = owed.key;
         }
       })
-      .catch((err) => addToast(`Save failed: ${err.message}`, 'error'));
+      .catch((err) => {
+        const stillCurrent = mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
+          activeProductIdRef.current === owed.productId &&
+          imageIdentity(activeImageRef.current) === owed.identity;
+        if (stillCurrent) addToast(`Save failed: ${err.message}`, 'error');
+      });
   }, [activeImageFilepath, activeImageContentHash, activeImageId, activeProductId, addToast]);
 
   // Refresh the "X min ago" display every 30s without re-fetching anything —
@@ -351,12 +359,15 @@ export function ImageWorkspace() {
      * matches, keeps the screen consistent. (The product switcher is also
      * disabled while a run is in flight; this is the belt to that braces.) */
     const runProductId = activeProductId;
+    if (!image.contentHash) {
+      throw new Error('Image identity unavailable; re-import the image and try again');
+    }
     let foregroundBytes = null;
     if (settings.removeBackground) {
       // v0.49.33: only one engine remains — the bundled local @imgly
       // WASM. The remove.bg cloud path (and its upload/download progress
       // states) were removed.
-      const { bytes } = await removeBackground(
+      const { bytes, sourceHash } = await removeBackground(
         image.filepath,
         (stage, ratio) => {
           if (stage.startsWith('fetch:')) {
@@ -367,14 +378,24 @@ export function ImageWorkspace() {
         },
         // v0.1.27: stamp the cutout cache so a flipped/cropped image
         // (same path, new bytes) cannot reuse the previous cutout.
-        image.contentHash || image.id,
+        image.contentHash,
+        {
+          validateSource: async () => {
+            const current = (await window.api.images.listByProduct(runProductId))
+              .find((candidate) => candidate.id === image.id);
+            if (!current || current.filepath !== image.filepath || current.contentHash !== image.contentHash) {
+              throw new Error('Image changed; reload and try again');
+            }
+          },
+        },
       );
-      foregroundBytes = bytes;
+      foregroundBytes = { bytes, sourceHash };
     }
     setProcessingLabel('Compositing…');
     const res = await window.api.workspace.processImage(
       runProductId,
-      image.filepath,
+      image.id,
+      image.contentHash ?? null,
       settings,
       foregroundBytes,
     );
@@ -414,7 +435,7 @@ export function ImageWorkspace() {
     const saveGeneration = ++saveGenerationRef.current;
     setSaveStatus((s) => ({ ...s, state: 'saving' }));
     try {
-      await enqueueWorkspaceSave(productId, image.filepath, settings);
+      await enqueueWorkspaceSave(productId, image.id, image.contentHash ?? null, settings);
       const stillCurrent = mountedRef.current && saveGenerationRef.current === saveGeneration &&
         activeProductIdRef.current === productId &&
         imageIdentity(activeImageRef.current) === identity;
@@ -427,8 +448,10 @@ export function ImageWorkspace() {
       const stillCurrent = mountedRef.current && saveGenerationRef.current === saveGeneration &&
         activeProductIdRef.current === productId &&
         imageIdentity(activeImageRef.current) === identity;
-      if (stillCurrent) setSaveStatus({ state: 'error', lastSavedAt: null });
-      addToast(`Save failed: ${err.message}`, 'error');
+      if (stillCurrent) {
+        setSaveStatus({ state: 'error', lastSavedAt: null });
+        addToast(`Save failed: ${err.message}`, 'error');
+      }
     }
   }
 

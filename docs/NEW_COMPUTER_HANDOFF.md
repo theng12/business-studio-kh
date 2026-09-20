@@ -1,12 +1,62 @@
 # Business Studio KH — new-computer handoff
 
-Updated: 2026-09-20. Purpose: continue development on another computer without losing the completed server/client work or repeating the old audit. The 0.1.34 pass below records the implemented fixes, evidence and remaining environment-only limitations.
+Updated: 2026-09-21. Purpose: continue development without losing completed server/client work or repeating historical audits. The current 0.1.35 ledger below supersedes the historical 0.1.34 conclusions and original pre-fix evidence.
+
+## Current follow-up — 0.1.35
+
+The owner-approved [follow-up plan](superpowers/plans/2026-09-20-handoff-followup.md) starts from main commit `54616464153b4960a4e75e0f77e39f189549f0a3` (0.1.34). The requested handoff commit `c31d7afc9af5d50c48819698f70df21bddd35cc3` is present in history. Implementation uses isolated branch `codex/handoff-followup`, fresh synthetic data and dummy credentials; no historical data or credential transfer is needed.
+
+- **H1/H2 — browser context:** company setters are serialized and session-bound; delayed image lists, blob fetches and gallery paints cannot publish into another session/product. Per-product revisions avoid cancelling an unrelated product's valid request. Final review additionally reproduced an earlier failed switch undoing a newer queued selection; the retained regression and latest-generation rollback guard now pass independent re-review.
+- **H3/H4 — URL and packaging commands:** the existing 0.1.34 origin normalization and canonical `dist` aliases remain in place; no redundant rewrite.
+- **H5 — moves and live replacement:** canonical path checks reject symlink aliases/overlaps. Maintenance gates new IPC/RPC/HTTP/assets and drains accepted work and AI jobs before closing SQLite and replacing files. Real WAL tests cover the previously confirmed write-to-old-database failure. Archive schema checks are exact; ordinary fixes do not change schema version. Recovery restores files and portable config before reopening SQLite. Failed rollback/reopen remains blocked; failed restart scheduling retains a committed new target. Main owns restart after the existing UI consent. Source files are retained; no source-Trash eligibility is offered.
+- **H6 — client identity and lifecycle:** authenticated hello refreshes the main client's authoritative user; ping and stale whoami cannot overwrite it. Custom-role edits disconnect affected users. Existing revocation/shutdown fixes remain; HTTP authorization is still authoritative.
+- **H7/H8 — tenant and config boundaries:** existing PO company enforcement and atomic config/recovery fixes remain verified, not repeated.
+- **H9 — unknown mutation outcomes:** real RPC tests cover both pre-header and response-body timeouts after a mutation commits. Bulk/filter overlays reuse operation UUIDs and existing run history for bounded 30-second outcome lookup without replay. This is operation-specific reconciliation, not a global exactly-once framework.
+- **H10 — workspace identity:** save/process calls carry immutable image IDs and expected identity tokens. The server resolves and synchronously opens the selected file before reading asynchronously, then revalidates before attaching a unique per-attempt output. Tests reproduce pathname A→B→A, same-SKU cross-company output collisions and stale output overwrite. Cutout bytes carry an acquired-source hash checked by the server. Autosave, explicit Save, context flush and error/status callbacks retain editor ownership.
+- **H11/H12 — other editor responses:** four actual deferred-component tests cover Cost Calculator, Suppliers and Purchase Orders, with guard-removal mutation tests proving sensitivity. No additional production defect was confirmed in these screens.
+- **H13 — archive consistency:** an impossible pause inside a synchronous reorder was rejected as evidence. A later real reproduction completed whole A→B→A reorders around awaited SQLite backup boundaries, producing mismatched DB/image archives in both paths. Source inventories now compare device/inode/ctime alongside content; staged copies omit only copy-specific identity metadata. Independent review reproduced both baseline failures and passed six focused archive checks. Two idle production archive round trips also verify WAL rows, image references, original bytes and processed bytes.
+- **H14/H15 — hosted compute and credentials:** obsolete hosted release configuration remains removed and Actions disabled. Extracted partial credentials are removed after import, and portable configuration participates in rollback. Dummy keys only were used in tests.
+
+Every material implementation batch received independent review and corrections before integration. Final whole-branch review approved the corrected tree with no open P1/P2 findings; independent re-review passed 23 focused checks, including the original H1 reproduction. Retained regression tests, rather than ignored agent reports, carry the proving cases to another computer.
+
+Image identity note: `content_hash` is an identity/change token, not necessarily the SHA-1 of the current stored bytes. Normal JPEG imports record the source hash before Sharp re-encodes the stored asset. A real JPEG regression verifies this distinction. Workspace processing now resolves the immutable row and opens its file in the same synchronous server turn, reads that pinned descriptor asynchronously, and revalidates the row before attaching a fresh per-attempt output. A two-read pathname alternative was rejected after an A→B→A reorder reproduced wrong pixels. Cutout uploads carry a separate acquired-source byte hash for server comparison; legacy rows without an identity token are rejected for processing rather than silently guessed or migrated.
+
+### Remaining limitations, not reopened historical fixes
+
+- Physical second-Mac LAN, sleep/wake, printer, iPad Safari and a macOS 12 device still need hardware validation. Local two-process loopback checks are not two-Mac evidence.
+- Workspace lifetime/identity checks do not prove distributed conflict handling in every Catalog, Social or Label editor. Their cross-device same-draft behavior remains an investigation, not a confirmed defect or permission to rewrite those editors.
+- Paid AI providers and the downloaded local background-removal model were not exercised. Source/hash/IPC ownership is tested without paid calls or model downloads.
+- Overlay outcome history cannot recover lost Save-to-Folder response bytes; a process crash or failure before the run record may leave an unknown outcome. Never automatically replay an unknown mutation.
+- Archive checks validate the current APFS target, not an atomic filesystem snapshot or hostile-filesystem guarantee. Coarse/nonstandard ctime may weaken A→B→A detection. Keep writes quiet for deliberate snapshots/cutovers.
+- Legacy image rows without identity tokens require reimport for processing; no old-data migration is promised. Previously referenced processed outputs are retained; no speculative garbage collector was added.
+- No historical-data transfer, release publication, signing purchase, deployment or hosted workflow is part of this work. Closed bulk-modal and watermarks-folder decisions remain closed.
+
+### Local verification
+
+Environment: Apple Silicon macOS 27, Xcode Command Line Tools, isolated Node 24.15.0, fresh `npm ci`, Electron 44.4.3. The untouched 0.1.34 baseline passed 429 tests and lint. Ponytail kept changes within existing helpers and architecture. The refreshed ignored Graphify code-only map has 3,186 nodes / 7,708 edges and used zero model API tokens; graph claims were checked against source. Impeccable informed existing editor/error-state ownership, without a redesign.
+
+| Local check | Final result |
+| --- | --- |
+| `npm run check` | 511 passed, zero failures/skips; lint clean |
+| `npm run test:native` | 74 passed, zero failures/skips; overlapping cases, not 74 additional unique tests |
+| `npm run check:client-server` | Actual SQLite/RPC, attribution, WebSocket events/reconnect, image upload/download, URL normalization and token/capability checks passed |
+| `npm run check:render` | ASCII and Khmer: 2,280 dark pixels each; Khmer embeds 1,975,648 bytes of font CSS |
+| Electron image-cache probe | Six requests; unchanged bytes revalidated, revoked token rejected, changed token/version/server fetch correct |
+| `node scripts/probe-webclient-context.js` | 3 real Chromium fixture cases passed: A/B/A, delayed gallery list/blob, second server with same filename/different pixels |
+| `node scripts/probe-packaged-client-server.js --app <built-app> --expected-version 0.1.35` | 5 checks passed using real packaged BrowserWindows/preloads, visible Product Library navigation, client edit/server observation, image protocol and reconnect after server restart |
+| `npm audit`, `npm audit --omit=dev` | Zero vulnerabilities each |
+| `npm run dist` | Unsigned arm64 DMG built; no publication/signing |
+| `hdiutil verify` and read-only mount | Checksum valid; version 0.1.35, arm64 executable, minimum macOS 12.0.0; mounted app.asar equals the tested built app |
+
+Final HTML source SHA-256: `29b2776467ebdbc974f09b147130e89e23b2baffe308a9bef2406d128e63ec43`. The visible browser probe uses loopback synthetic fixtures, not a physical mobile browser. The packaged probe edits through the actual renderer/preload API and checks visible navigation; it is not a manual end-to-end exercise of every editor. The historical 0.1.34 packaged-module smoke must not be confused with these real-renderer checks.
+
+Local installer: `dist/Business Studio KH-0.1.35-arm64.dmg` in `$HOME/.codex/worktrees/handoff-followup/media-studio-kh`, 245,034,685 bytes, SHA-256 `07b756c5821c58850ba852ed38f2187ca828b764a935b373a46b5c9ddbc455d2`. Tested/mounted app.asar SHA-256: `e5c132d8feaa240746fb325305c162e4795d77fa966f227900b61c2a7255000e`. Build artifacts, profiles, graph and agent reports remain outside Git. GitHub Actions was verified disabled before integration.
 
 ## Repository and baseline
 
 - Private repository: https://github.com/theng12/media-studio-kh
 - Base branch: `main`. Authenticate with a GitHub account that can access this repository.
-- Application baseline before this pass: **0.1.33**, merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [merged PR #1](https://github.com/theng12/media-studio-kh/pull/1). This pass is **0.1.34**; clone the latest `main` and verify the final merge commit rather than relying on this historical SHA.
+- Original application baseline: **0.1.33**, merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [merged PR #1](https://github.com/theng12/media-studio-kh/pull/1). The follow-up starts from **0.1.34**, [merged PR #3](https://github.com/theng12/media-studio-kh/pull/3), and prepares **0.1.35**. Clone latest `main`; do not reset to a historical SHA.
 - Before this handoff, a fresh fetch and GitHub API check confirmed that local and remote `main` both pointed to that merge. GitHub Actions was disabled. Keep hosted compute disabled; run checks locally.
 - Scope: personal/internal standalone and Mac server/client use. No Apple Developer subscription, public distribution, deployment, signing, or paid AI calls are required for this work.
 
@@ -41,13 +91,13 @@ For a local installer:
 
 ```bash
 npm run dist
-hdiutil verify "dist/Business Studio KH-0.1.33-arm64.dmg"
-shasum -a 256 "dist/Business Studio KH-0.1.33-arm64.dmg"
+hdiutil verify "dist/Business Studio KH-0.1.35-arm64.dmg"
+shasum -a 256 "dist/Business Studio KH-0.1.35-arm64.dmg"
 ```
 
 Adjust the filename after future patch bumps. Prefer `npm run dist`, which runs the web-viewer generation and native preparation hooks. See the release-script finding below before using alternative release commands. This build is unsigned and needs no paid Apple account. A rebuilt DMG need not have the same hash as an earlier build.
 
-The previously verified installer exists only on the old Mac at `dist/Business Studio KH-0.1.33-arm64.dmg`, SHA-256 `c773c44cdcd03403dcdf60722ad9fe7426f266828cfec9b650e4c7ff1125f64f`. It was not uploaded as a GitHub Release. Copy that file privately and verify its hash, or rebuild from source. Only remove quarantine from an installer/app you built or have verified as your own trusted copy.
+The current local installer is built in the isolated follow-up worktree under `dist/Business Studio KH-0.1.35-arm64.dmg`; it is not uploaded as a GitHub Release. Rebuild from source on another Mac. Only remove quarantine from an installer/app you built or have verified as your own trusted copy.
 
 ## What a clone does and does not transfer
 
@@ -63,25 +113,25 @@ On the old computer, `.serena/` remains untracked and a safety stash named `Pres
 
 **Development only:** clone and install dependencies. No live data migration is needed to continue coding. Use synthetic fixtures for tests.
 
-**An additional client:** keep the existing server and its data on the old Mac. In Settings → Multi-Mac, configure the server address and a user token issued by that server, test the connection, then switch/apply Client mode and restart as prompted. Use a separate user for independent per-device company selections. The active company is per user, so two devices sharing one token also share that user's selection. The server listens on HTTP port 13180 by default; use the existing trusted LAN/Tailscale connection. Do not expose the port publicly as part of this handoff. Check both machines report 0.1.34 before comparing behavior.
+**An additional client:** keep the existing server and its data on the old Mac. In Settings → Multi-Mac, configure the server address and a user token issued by that server, test the connection, then switch/apply Client mode and restart as prompted. Use a separate user for independent per-device company selections. The active company is per user, so two devices sharing one token also share that user's selection. The server listens on HTTP port 13180 by default; use the existing trusted LAN/Tailscale connection. Do not expose the port publicly as part of this handoff. Check both machines report 0.1.35 before comparing behavior.
 
 **Move the data-owning server:** this is a separate operation from cloning code. The handoff does not perform it.
 
 1. Finish writes and save editors. Stop client edits, imports, exports, and AI jobs before taking the transfer snapshot; the archive now rejects detected changes, but quiescing writes still makes the migration boundary easiest to reason about. Keep writes stopped until cutover completes; an exported SQLite snapshot alone does not freeze independently changing image trees.
-2. On the old data-owning Mac, use Settings → Multi-Mac → Migration → Export bundle. Transfer the `.iskhbundle` privately. It includes database users/tokens and portable AI API keys in ordinary archive contents; it is not encrypted. The 0.1.34 importer removes the extracted credential-bearing `config.partial.json` after a successful merge, but keep the archive private and never put it in GitHub.
-3. On the new Mac, start with a fresh/disposable standalone installation and use its current/default data directory. If a different target is essential, choose a verified empty directory with **Move existing data OFF**, restart, and confirm the selected path before import; never select valuable/pre-existing data. Use Migration → Pick bundle to import, inspect its version/date and target, then Replace and restart. Use a bundle made by the same 0.1.34 app for this migration; historical/future-schema compatibility needs a separate check. This replaces that Mac's current data; existing recognized data is moved to a timestamped sibling backup.
+2. On the old data-owning Mac, use Settings → Multi-Mac → Migration → Export bundle. Transfer the `.iskhbundle` privately. It includes database users/tokens and portable AI API keys in ordinary archive contents; it is not encrypted. The importer removes the extracted credential-bearing `config.partial.json` after a successful merge, but keep the archive private and never put it in GitHub.
+3. On the new Mac, start with a fresh/disposable standalone installation and use its current/default data directory. If a different target is essential, choose a verified empty directory with **Move existing data OFF**, restart, and confirm the selected path before import; never select valuable/pre-existing data. Use Migration → Pick bundle to import, inspect its version/date and target, then Replace and restart. Use a bundle made by the same 0.1.35 app; unsupported schema markers are rejected, not migrated. This replaces that Mac's current data; existing recognized data is moved to a timestamped sibling backup.
 4. Mode, network address/port, machine-local `clientServerUrl`/`clientToken`, and backup destination do not travel. Server-side user/token rows do travel inside the database, so existing user tokens remain valid unless deliberately changed. Set the new Mac to Server mode, restart, and update clients to its address. Keep the old server inactive as a writer once clients switch.
 5. Compare company/product/image counts, open original and processed images, inspect templates and AI gallery, and perform one reversible product edit from a client. Confirm it appears on the server and a second client; then test reconnect. Check backup destination and printer settings. Keep the old data and transfer bundle until verification is complete.
 
-Do not hot-copy an open SQLite file by itself, delete the old data, rotate tokens, run paid jobs, or import a bundle over valuable data merely to test this handoff. Bundle import on an active server still has the lifecycle/schema limitations below; use the fresh standalone destination path for migration testing.
+Do not hot-copy an open SQLite file by itself, delete the old data, rotate tokens, run paid jobs, or import a bundle over valuable data merely to test this handoff. The 0.1.35 maintenance lifecycle and schema checks supersede the original import limitations below. The optional real-data transfer procedure is historical operational guidance, not an assigned task; this development pass uses only disposable destinations.
 
 ## Verified baseline and audit limits
 
 The completed 0.1.33 validation recorded: `npm run check` **409 passed**, zero failures/skips and clean lint; `test:native` **22 passed** (overlapping cases, not 22 extra unique tests); real disposable RPC/WebSocket/reconnect checks; Electron image-cache/auth checks; photo/Khmer render checks; full and production dependency audits with **zero vulnerabilities**; unsigned arm64 DMG build and integrity checks. A disposable two-process packaged server/client smoke loaded both real renderers and round-tripped a product edit. See the [validation record](INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md) for measurements and limitations.
 
-This handoff audit freshly reconfirmed GitHub synchronization and full/production `npm audit` results with **0 vulnerabilities**. It used isolated Node VM probes of actual browser/workspace functions to reproduce stale-company, cross-session cache and wrong-product image behavior, plus temporary filesystem/settings-handler probes of the conflicting data-folder move, archive boundary and config recovery. No real catalog or OS Trash content was used. The current pass added disposable regression tests for every implemented batch. Previous build/test results are historical evidence for the unchanged app baseline; the current host is Node 26 without a downloaded Electron binary, so Electron-dependent checks are reported separately below.
+The original handoff audit used isolated Node VM probes of browser/workspace functions and temporary filesystem/settings-handler probes. No real catalog or OS Trash content was used. The current 0.1.35 follow-up adds real SQLite, deferred-component, HTTP and Electron evidence as recorded above; old host-Node/Electron availability limitations no longer describe this computer.
 
-The prior computer had an existing Graphify map, but Graphify is unavailable on this computer and no graph artifact was present. This pass therefore used direct source inspection and verified callers against current code; no graph was generated or committed. Ponytail favored existing helpers and narrowly scoped fixes. No speculative cleanup or dependency replacement is proposed.
+Graphify is available on this computer. Its local code-only map is ignored and was refreshed after structural changes. Ponytail favored existing helpers and narrowly scoped fixes; no dependency replacement or speculative cleanup was added.
 
 This is a broad, risk-focused audit, not proof that every possible bug has been found. Physical second-Mac LAN behavior, sleep/wake, a real printer, a real migration, iPad Safari, and paid-provider execution still need their own checks. Findings below distinguish reproduced defects, source-confirmed behavior, and investigation-only risks.
 
@@ -89,7 +139,9 @@ This is a broad, risk-focused audit, not proof that every possible bug has been 
 
 H5 was implemented first. P1 items cover data integrity or wrong-context behavior; P2 covers reliability/build workflow; P3 is dormant maintenance. IDs remain stable for follow-up tracking. The detailed evidence and acceptance text below is retained as audit history; the resolution ledger is authoritative for this pass.
 
-### Resolution ledger — 0.1.34
+### Historical resolution ledger — 0.1.34 (qualified by follow-up above)
+
+These are the prior pass's recorded conclusions, not blanket claims about the current tree. The follow-up above reopens H1/H2/H5/H9/H10 and adds reproduced lifecycle, role-cache and image-output defects. Do not repeat other completed historical fixes merely because the original evidence below describes the pre-fix code.
 
 - **H1–H3 resolved:** the browser now serializes company activation, guards company/session generations, clears stale image state on disconnect or credential/server changes, and normalizes saved/pasted server origins. `test/webclientFreshness.test.js` passes against the generated HTML.
 - **H4 resolved:** `dist:arm64` delegates to canonical `dist`; misleading release aliases were removed. The package remains arm64-only and patch/changelog updates are explicit. `test/releaseScripts.test.js` checks the retained packaging contract.
@@ -255,17 +307,17 @@ H5 was implemented first. P1 items cover data integrity or wrong-context behavio
 
 ## Investigation-only risks and hardware checks
 
-These are not additional confirmed bugs. Reproduce before changing behavior.
+These are not additional confirmed bugs. Reproduce before changing behavior. The two resolved investigations are explicitly closed here to prevent repeated work.
 
-- **Live import lifecycle and schema compatibility:** bundle import replaces the active directory before the renderer asks for restart (`main/ipc/serverBundle.js:142–205`); the old DB handle can remain open during that interval. Reproduce concurrent writes/relaunch failure before expanding the supported migration path beyond a fresh, idle standalone destination. Archive validation checks SQLite integrity and the new file inventory, not app schema compatibility; test old/future schema fixtures before importing historical bundles. `initDb` can wipe older structural schemas. Use matching 0.1.34 source/destination for the current move; do not treat a readable archive as proof that every historic version is safe.
+- **Live import lifecycle/schema — resolved in 0.1.35:** real WAL, rollback, restart-failure and unsupported-schema cases are retained as tests. Main owns close/install/restart; unsupported schema markers reject before replacement. Historical data migration remains out of scope.
 - **Editor lifetime/concurrent editing:** Catalog/Social/Label/Image Workspace save queues are per mounted editor. Test navigating away and immediately back while an old save is in flight, switching companies while typing during the flush, and two Macs editing the same draft. Preserve Product Library's existing conflict flow; do not infer that every editor has distributed revision checking.
-- **Image identity after renumbering:** deleting/reordering images changes numbered paths. Test a remote reorder while another client has image settings open, then saves. Check stable image identity and byte revision throughout; existing cache/save-order tests are not proof of this interaction.
+- **Image identity after renumbering — resolved in 0.1.35:** actual DB/handler tests cover reorder, removal, wrong product, changed content, pinned byte acquisition and isolated output attachment. Real Chromium checks separately cover stale displayed images. Physical cross-Mac latency remains a hardware check, not an unimplemented identity fix.
 - **Large binary transfers:** JSON/base64 RPC has a 100 MiB encoded ceiling. A 75 MiB raw fixture exceeded it; near-limit retained memory grew roughly 370–376 MiB. Normal 1–5 MiB encoding took roughly 2–14 ms. Keep the clear size error; introduce streaming only after a real workload justifies it.
 - **Hardware/network:** install the same version on two physical Macs; check connect/reconnect after server restart, Wi-Fi loss and sleep/wake, changed DHCP address, company switching, original/processed image refresh and one edit in each direction. Measure actual LAN response times before claiming an app-wide speedup.
 - **Print/render:** verify a real selected printer, Khmer/ASCII text, label physical dimensions/margins, PDF export and cancellation. The existing render probe covers output rendering, not printer hardware.
 - **Paid AI:** use stubs/fixtures first for queue recovery, duplicate submission, cancellation and repair. Real paid requests require explicit authority; none were made in this audit.
 
-## 0.1.34 verification ledger
+## Historical 0.1.34 verification ledger
 
 - `npm run check`: **429 passed**, 0 failed/cancelled; lint clean. Node emitted one existing module-type warning while importing an ESM renderer fixture.
 - `npm run test:native`: **22 passed** under the Electron 44 runtime bundled by the local install.
@@ -278,7 +330,7 @@ These are not additional confirmed bugs. Reproduce before changing behavior.
 
 ## Historical execution order
 
-The owner asked for orchestration with cost-conscious executors. The following table records the completed bounded batches and their proof; it is retained for provenance, not as an unfinished backlog. No subagent executor was available in this session, so the orchestrator performed the same bounded work and independent checks locally.
+The following table records the prior 0.1.34 pass, retained for provenance rather than as an unfinished backlog. No subagent executor was available in that historical session. The current 0.1.35 follow-up did use bounded Luna/Terra/Sol workers, independent reviewers and Astra integration; its plan and current ledger are above.
 
 | Batch | Work | Suggested executor | Completion proof |
 | --- | --- | --- | --- |
@@ -293,7 +345,7 @@ At dispatch, record branch/base SHA, owned files, deliverable and proving comman
 
 For each accepted fix, first reproduce, apply the smallest root-cause correction and retain one meaningful runnable check. Use existing events, validators, DB helpers and UI patterns. Keep security/data-loss protection. Do not rewrite synchronization, add a new state framework, or remove runtime-reachable behavior for cosmetic consistency.
 
-After material fixes run `npm run check`, `npm run test:native`, `npm run check:client-server`, relevant Electron/render checks, both dependency audits, and `npm run dist` when packaging/runtime paths changed or creating the required local release. Independently review the final tree. This pass bumped the package/lock and top plain-text changelog entry to **0.1.34**. On the current Node 26 host, Electron download/bootstrap prevented the Electron-dependent portions of those commands; the exact results are recorded in the final verification ledger before integration.
+After material fixes run `npm run check`, `npm run test:native`, `npm run check:client-server`, relevant Electron/render checks, both dependency audits, and `npm run dist` when packaging/runtime paths changed or creating a local release. Independently review the final tree. The current follow-up bumped package/lock and the top plain-text changelog entry to **0.1.35**; its completed verification is recorded above.
 
 Before pushing/creating a PR, verify `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` returns `false`. Never dispatch hosted workflows. Under the owner's standing integration rule, commit/push a `codex/` branch, create/review/merge the PR when local checks and mergeability are resolved, then fast-forward local `main`. Do not force-push, publish, deploy, tag, charge, or delete real data. Preserve unrelated work. Never bump `SCHEMA_VERSION` for ordinary additive fixes: existing startup behavior can wipe structural tables after a version bump.
 
@@ -301,4 +353,4 @@ Closed decisions remain closed: do not migrate the three intentionally separate 
 
 ## Paste into the first task on the new computer
 
-> Read AGENTS.md and docs/NEW_COMPUTER_HANDOFF.md on the latest main of theng12/media-studio-kh. Verify Git status and the 0.1.34 baseline/merged history. Continue only the unresolved investigation-only and physical-hardware checks. Act as orchestrator: delegate bounded independent work when executors are available, retain focused regression checks, and follow the standing local-verification/GitHub code-only integration rules. Preserve live data, keys and unrelated work; use disposable fixtures. Do not repeat resolved H1–H15 fixes or turn investigation-only risks into speculative rewrites. Record outcomes and remaining checks back into the handoff.
+> Read AGENTS.md and docs/NEW_COMPUTER_HANDOFF.md on the latest main of theng12/media-studio-kh. Verify Git status and the 0.1.35 follow-up/merged history without discarding newer work. Act as orchestrator: own planning, independent review, verification and integration; delegate bounded work with base commit, owned files, deliverable and proving checks. Prefer Luna for simple work, Terra for cross-file work and Sol at no more than high reasoning for data/security/lifecycle work. Parallelize disjoint tasks, use Ponytail and Graphify, and verify source rather than trusting stale reports. Use disposable data. Continue only the unresolved investigations or explicitly assigned work; do not repeat resolved H1–H15 fixes, reopen closed decisions or make speculative rewrites. Keep GitHub code-only and record evidence and limitations in the handoff.

@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const sharp = require('sharp');
 const { getDataDir } = require('./db');
 const { slugify } = require('./util/slug');
@@ -288,7 +289,10 @@ async function processImage({ sku, originalFilename, foregroundBuffer, settings 
   /* ── 6. Save ───────────────────────────────────────────────── */
 
   const baseName = path.basename(originalFilename, path.extname(originalFilename));
-  const outFilename = `${baseName}.png`;
+  // A processing attempt must never write through another row's referenced
+  // output. SKU + positional source names are shared across companies and are
+  // mutable after reorders, so give every attempt its own uncommitted file.
+  const outFilename = `${baseName}-${crypto.randomUUID()}.png`;
   const { dir: outDir, safeSku } = processedDirForSku(sku);
   const outAbs = path.join(outDir, outFilename);
 
