@@ -3,16 +3,15 @@
  *
  * Only relevant in server mode (and the bootstrap flow that creates
  * a default owner the first time someone flips a Mac to server).
- * Clients never call the mutation channels — they talk to the
- * server's HTTP API via RPC instead, and admin UI lives only on
- * the server Mac.
+ * Remote administration uses the server's HTTP RPC API and requires
+ * the users.manage capability, just like the user-management list.
  *
  * Two safe-subset channels are exposed for clients:
  *   - users:listForAttribution → id + name + role (no tokens)
  *   - users:presence → currently-connected WebSocket users
  *
- * Tokens never leak. They're returned only when a user is
- * created or regenerated (one-time display in the admin UI).
+ * Tokens are returned to authorized user managers by the management
+ * list and create/regenerate operations. Attribution reads omit them.
  */
 
 

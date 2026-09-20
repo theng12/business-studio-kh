@@ -67,7 +67,7 @@ const BASELINE_READS = new Set([
   // dashboard
   'dashboard:stats', 'dashboard:completeness', 'dashboard:recentBrands', 'dashboard:recentProducts',
   // identity / presence / attribution
-  'users:list', 'users:listForAttribution', 'users:presence', 'users:whoami',
+  'users:listForAttribution', 'users:presence', 'users:whoami',
   // roles — needed so the renderer can resolve role names + the current
   // user's capabilities; listing roles leaks no data.
   'roles:list', 'roles:get', 'roles:capabilities',
@@ -133,7 +133,7 @@ const CHANNEL_RULES = [
   [/^audit:/,                                           'history.view'],
 
   // — Users & roles
-  [/^users:(create|update|remove|regenerateToken|ensureOwner)$/, 'users.manage'],
+  [/^users:(list|create|update|remove|regenerateToken|ensureOwner)$/, 'users.manage'],
   [/^roles:(create|update|remove)$/,                    'users.manage'],
 
   // — System / data / structural
