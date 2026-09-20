@@ -1,0 +1,216 @@
+/**
+ * Native archive boundary fixtures. These use real tar, real temporary folders,
+ * and real better-sqlite3 because helper-only tests cannot prove that a failed
+ * move leaves the original data folder usable.
+ *
+ * Plain `npm test` skips this file's cases when better-sqlite3 is compiled for
+ * Electron's ABI. Run it with `ELECTRON_RUN_AS_NODE=1 electron --test
+ * test/archiveRestore.test.js` (or include it in test:native).
+ */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const fsp = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const Module = require('node:module');
+
+let Database = null;
+let skipReason = false;
+try {
+  Database = require('better-sqlite3');
+  new Database(':memory:').close();
+} catch (err) {
+  if (err?.code === 'ERR_DLOPEN_FAILED') {
+    skipReason = "better-sqlite3 is built for Electron's ABI — run `npm run test:native`";
+  } else {
+    throw err;
+  }
+}
+
+let userDataRoot = '';
+const fakeElectron = {
+  app: {
+    getPath(name) {
+      assert.equal(name, 'userData');
+      return userDataRoot;
+    },
+    getVersion: () => 'test',
+  },
+};
+
+let restoreBackup;
+let importBundle;
+if (!skipReason) {
+  const originalLoad = Module._load;
+  Module._load = function(request, parent, isMain) {
+    if (request === 'electron') return fakeElectron;
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  ({ restoreBackup } = require('../main/backupManager'));
+  ({ importBundle } = require('../main/serverBundle'));
+}
+
+function writeDb(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const db = new Database(file);
+  db.exec('CREATE TABLE fixture (value TEXT);');
+  db.prepare('INSERT INTO fixture (value) VALUES (?)').run(value);
+  db.close();
+}
+
+function dbValue(file) {
+  const db = new Database(file, { readonly: true, fileMustExist: true });
+  const value = db.prepare('SELECT value FROM fixture').get().value;
+  db.close();
+  return value;
+}
+
+async function fixture() {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-task4-native-'));
+  userDataRoot = path.join(root, 'user-data');
+  const dataDir = path.join(root, 'live-data');
+  await fsp.mkdir(userDataRoot, { recursive: true });
+  await fsp.mkdir(dataDir, { recursive: true });
+  await fsp.writeFile(path.join(userDataRoot, 'config.json'), JSON.stringify({ dataDir }));
+  return { root, dataDir };
+}
+
+async function liveData(dataDir, marker = 'live') {
+  await fsp.rm(dataDir, { recursive: true, force: true });
+  await fsp.mkdir(dataDir, { recursive: true });
+  writeDb(path.join(dataDir, 'database.sqlite'), marker);
+  await fsp.writeFile(path.join(dataDir, 'live-marker.txt'), marker);
+}
+
+function makeArchive(root, kind, value, mutate) {
+  const stageParent = fs.mkdtempSync(path.join(root, 'stage-'));
+  const archiveRoot = path.join(stageParent, 'bundle');
+  writeDb(path.join(archiveRoot, 'database.sqlite'), value);
+  const manifest = kind === 'backup'
+    ? { kind: 'media-studio-kh-backup', backupFormatVersion: 1, appVersion: 'test', createdAt: Date.now(), includes: ['database.sqlite', 'assets/'] }
+    : { bundleFormatVersion: 1, appVersion: 'test', createdAt: Date.now(), includes: ['database.sqlite', 'assets/'] };
+  fs.writeFileSync(path.join(archiveRoot, 'manifest.json'), JSON.stringify(manifest));
+  fs.mkdirSync(path.join(archiveRoot, 'assets'), { recursive: true });
+  mutate?.(archiveRoot);
+  const ext = kind === 'backup' ? '.iskhbackup' : '.iskhbundle';
+  const archive = path.join(root, `${kind}-${value}${ext}`);
+  execFileSync('/usr/bin/tar', ['-czf', archive, '-C', stageParent, 'bundle']);
+  return archive;
+}
+
+async function siblingNames(dataDir) {
+  const parent = path.dirname(dataDir);
+  const prefix = `${path.basename(dataDir)}.`;
+  return (await fsp.readdir(parent)).filter((name) => name.startsWith(prefix));
+}
+
+test('backup restore accepts a valid archive and retains the safety copy', { skip: skipReason }, async () => {
+  const env = await fixture();
+  try {
+    await liveData(env.dataDir, 'old');
+    const archive = makeArchive(env.root, 'backup', 'new');
+    const result = await restoreBackup({ backupPath: archive });
+    assert.equal(result.success, true);
+    assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), 'new');
+    assert.equal(await fsp.readFile(path.join(result.safetyDir, 'live-marker.txt'), 'utf8'), 'old');
+  } finally {
+    await fsp.rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test('backup restore rejects symlink and corrupt DB before touching live data', { skip: skipReason }, async () => {
+  const env = await fixture();
+  try {
+    await liveData(env.dataDir, 'symlink-live');
+    const symlinkArchive = makeArchive(env.root, 'backup', 'symlink', (archiveRoot) => {
+      fs.symlinkSync('/tmp', path.join(archiveRoot, 'assets', 'link'));
+    });
+    await assert.rejects(() => restoreBackup({ backupPath: symlinkArchive }), /unsupported entry type|link entry/);
+    assert.equal(await fsp.readFile(path.join(env.dataDir, 'live-marker.txt'), 'utf8'), 'symlink-live');
+    assert.deepEqual(await siblingNames(env.dataDir), []);
+
+    const corruptArchive = makeArchive(env.root, 'backup', 'corrupt', (archiveRoot) => {
+      fs.writeFileSync(path.join(archiveRoot, 'database.sqlite'), 'not sqlite');
+    });
+    await assert.rejects(() => restoreBackup({ backupPath: corruptArchive }), /not a SQLite database|invalid/);
+    assert.equal(await fsp.readFile(path.join(env.dataDir, 'live-marker.txt'), 'utf8'), 'symlink-live');
+    assert.deepEqual(await siblingNames(env.dataDir), []);
+
+    const missingArchive = makeArchive(env.root, 'backup', 'missing', (archiveRoot) => {
+      fs.rmSync(path.join(archiveRoot, 'database.sqlite'));
+    });
+    await assert.rejects(() => restoreBackup({ backupPath: missingArchive }), /incomplete|database.sqlite/);
+    assert.equal(await fsp.readFile(path.join(env.dataDir, 'live-marker.txt'), 'utf8'), 'symlink-live');
+    assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), 'symlink-live');
+    assert.deepEqual(await siblingNames(env.dataDir), []);
+  } finally {
+    await fsp.rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test('backup restore rolls back after a post-database move failure', { skip: skipReason }, async () => {
+  const env = await fixture();
+  const originalRename = fsp.rename;
+  try {
+    await liveData(env.dataDir, 'rollback-live');
+    const archive = makeArchive(env.root, 'backup', 'partial');
+    let databaseMoved = false;
+    fsp.rename = async (from, to) => {
+      if (databaseMoved && path.basename(from) === 'manifest.json') {
+        throw new Error('fixture move failure after DB');
+      }
+      const result = await originalRename(from, to);
+      if (path.basename(from) === 'database.sqlite') databaseMoved = true;
+      return result;
+    };
+    await assert.rejects(() => restoreBackup({ backupPath: archive }), /fixture move failure/);
+    assert.equal(await fsp.readFile(path.join(env.dataDir, 'live-marker.txt'), 'utf8'), 'rollback-live');
+    assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), 'rollback-live');
+    assert.deepEqual(await siblingNames(env.dataDir), []);
+  } finally {
+    fsp.rename = originalRename;
+    await fsp.rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test('bundle import accepts valid data and protects live data on link or move failure', { skip: skipReason }, async () => {
+  const env = await fixture();
+  const originalRename = fsp.rename;
+  try {
+    await liveData(env.dataDir, 'bundle-live');
+    const valid = makeArchive(env.root, 'bundle', 'bundle-new');
+    const result = await importBundle({ bundlePath: valid, targetDataDir: env.dataDir });
+    assert.equal(result.success, true);
+    assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), 'bundle-new');
+
+    await liveData(env.dataDir, 'bundle-link-live');
+    const beforeLinkSiblings = await siblingNames(env.dataDir);
+    const link = makeArchive(env.root, 'bundle', 'bundle-link', (archiveRoot) => {
+      fs.symlinkSync('/tmp', path.join(archiveRoot, 'assets', 'link'));
+    });
+    await assert.rejects(() => importBundle({ bundlePath: link, targetDataDir: env.dataDir }), /unsupported entry type|link entry/);
+    assert.equal(await fsp.readFile(path.join(env.dataDir, 'live-marker.txt'), 'utf8'), 'bundle-link-live');
+    assert.deepEqual(await siblingNames(env.dataDir), beforeLinkSiblings);
+
+    const partial = makeArchive(env.root, 'bundle', 'bundle-partial');
+    const beforeMoveFailureSiblings = await siblingNames(env.dataDir);
+    let databaseMoved = false;
+    fsp.rename = async (from, to) => {
+      if (databaseMoved && path.basename(from) === 'manifest.json') {
+        throw new Error('fixture bundle move failure after DB');
+      }
+      const result = await originalRename(from, to);
+      if (path.basename(from) === 'database.sqlite') databaseMoved = true;
+      return result;
+    };
+    await assert.rejects(() => importBundle({ bundlePath: partial, targetDataDir: env.dataDir }), /fixture bundle move failure/);
+    assert.equal(await fsp.readFile(path.join(env.dataDir, 'live-marker.txt'), 'utf8'), 'bundle-link-live');
+    assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), 'bundle-link-live');
+    assert.deepEqual(await siblingNames(env.dataDir), beforeMoveFailureSiblings);
+  } finally {
+    fsp.rename = originalRename;
+    await fsp.rm(env.root, { recursive: true, force: true });
+  }
+});

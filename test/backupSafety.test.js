@@ -45,9 +45,8 @@ test('isPathInside — false for a sibling or parent escape', () => {
 
 /* ── safeArchiveEntry ──────────────────────────────────────────── */
 
-test('safeArchiveEntry — passes normal relative paths and strips leading slash', () => {
+test('safeArchiveEntry — passes normal relative paths', () => {
   assert.equal(safeArchiveEntry('assets/products/a.jpg'), 'assets/products/a.jpg');
-  assert.equal(safeArchiveEntry('/database.sqlite'), 'database.sqlite');
   assert.equal(safeArchiveEntry('manifest.json'), 'manifest.json');
 });
 
@@ -69,12 +68,10 @@ test('safeArchiveEntry — rejects empty / non-string input', () => {
   assert.throws(() => safeArchiveEntry(undefined));
 });
 
-test('safeArchiveEntry — a leading-slash absolute is normalized to a safe relative', () => {
-  // We strip leading slashes rather than reject — so an entry like
-  // "/database.sqlite" lands at <root>/database.sqlite, never at the
-  // filesystem root. The traversal check still guards the dangerous case.
-  assert.equal(safeArchiveEntry('/database.sqlite'), 'database.sqlite');
-  assert.throws(() => safeArchiveEntry('/../../etc/passwd'), /traversal/);
+test('safeArchiveEntry — rejects absolute paths', () => {
+  assert.throws(() => safeArchiveEntry('/database.sqlite'), /absolute/);
+  assert.throws(() => safeArchiveEntry('C:\\Windows\\system32\\config'), /absolute/);
+  assert.throws(() => safeArchiveEntry('/../../etc/passwd'), /absolute/);
 });
 
 /* ── resolveSafeDest ───────────────────────────────────────────── */
