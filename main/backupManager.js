@@ -11,7 +11,8 @@
  *   - SQLite snapshot via better-sqlite3 .backup() — consistent even
  *     while the live connection is writing (no torn WAL pages).
  *   - tar.gz via the system `tar` (zero dependencies on macOS).
- *   - staging dir + symlinked asset trees so we don't copy GBs twice.
+ *   - staging dir + copied asset trees with inventory checks so an archive
+ *     never follows a live source tree while it is being changed.
  *
  * Where it differs from serverBundle:
  *   - Backups capture the FULL config.json (not just the portable
