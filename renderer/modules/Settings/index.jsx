@@ -3,7 +3,6 @@ import { useAppStore } from '../../store/index.js';
 import { hasCap } from '../../lib/capabilities.js';
 import { Button, Input, Modal, Select } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
-import { confirm } from '../../components/ConfirmModal.jsx';
 import { MARKETPLACE_PRESETS } from '../../lib/presets.js';
 import { prefetchLocalModel } from '../../lib/bgRemoval.js';
 import { loadHoverPreview, saveHoverPreview } from '../ProductLibrary/index.jsx';
