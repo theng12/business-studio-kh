@@ -12,7 +12,6 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const aiTasks = require('../db/aiTasks');
 const aiGallery = require('../db/aiGallery');
 const products = require('../db/products');

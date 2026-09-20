@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const { safeFileExt } = require('./util/fileKinds');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
@@ -13,7 +14,6 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 // pro, GPT-Image-2 high) get full-res inputs. Products stay capped at 1600
 // because they're meant for catalog display sizes.
 const KIND_MAX_DIMENSION = { products: 1600, brands: 512, watermarks: 1024, 'ai-source': 2048 };
-const HASH_PREFIX_LEN = 10;
 const SCAN_MAX_DEPTH = 5;
 const MAX_IMAGES_PER_PRODUCT = 50;
 
@@ -160,55 +160,73 @@ async function importAsset(kind, sourcePath, slugHint, opts = {}) {
   if (!sourcePath || !fs.existsSync(sourcePath)) {
     throw new Error('Asset source not found: ' + sourcePath);
   }
-  const destDir = getAssetsDir(kind);
-  const ext = path.extname(sourcePath).toLowerCase();
-  const hashFull = await sha1Hex(sourcePath);
-  const slug = slugify(slugHint, kind);
+  // v0.1.4: HEIC/HEIF (iPhone photos) can't be decoded by our sharp build.
+  // importProductImage has transcoded them since v0.41.0, and
+  // files:pickImageFile has always offered them in its filter, but this
+  // generic asset importer never learned the trick — so picking an iPhone
+  // photo for a brand icon / watermark / overlay graphic failed with
+  // "Unsupported image type: .heic". Same fix, same helper: transcode to a
+  // temp JPEG up front and import THAT. Non-HEIC inputs pass straight
+  // through (cleanup is null). Temp file removed in `finally`.
+  const heicConv = await ensureDecodablePath(sourcePath);
+  const src = heicConv.path;
+  try {
+    const destDir = getAssetsDir(kind);
+    // Extension of the DECODABLE file — that's the format we actually read.
+    const ext = path.extname(src).toLowerCase();
+    // Hash the ORIGINAL bytes on purpose: dedup should key on what the user
+    // picked, so a HEIC and its transcoded JPEG of the same photo don't
+    // import as two different assets across runs.
+    const hashFull = await sha1Hex(sourcePath);
+    const slug = slugify(slugHint, kind);
 
-  if (ext === '.svg') {
+    if (ext === '.svg') {
+      const plan = await planFileName({
+        destDir, kind, slug, ext: '.svg', hashFull,
+        existingHashLookup: opts.existingHashLookup,
+      });
+      const destAbs = path.join(destDir, plan.fileName);
+      if (!plan.reused) {
+        fs.copyFileSync(src, destAbs);
+      }
+      return { relativePath: plan.relativePath, skipped: plan.reused, hash: hashFull };
+    }
+
+    if (!IMAGE_EXTS.has(ext)) {
+      throw new Error(`Unsupported image type: ${ext}`);
+    }
+
+    const outExt = ext === '.png' ? '.png' : ext === '.webp' ? '.webp' : '.jpg';
     const plan = await planFileName({
-      destDir, kind, slug, ext: '.svg', hashFull,
+      destDir, kind, slug, ext: outExt, hashFull,
       existingHashLookup: opts.existingHashLookup,
     });
     const destAbs = path.join(destDir, plan.fileName);
-    if (!plan.reused) {
-      fs.copyFileSync(sourcePath, destAbs);
+
+    if (plan.reused) {
+      return { relativePath: plan.relativePath, skipped: true, hash: hashFull };
     }
-    return { relativePath: plan.relativePath, skipped: plan.reused, hash: hashFull };
+
+    const max = KIND_MAX_DIMENSION[kind] ?? 1600;
+    const pipeline = sharp(src).rotate().resize({
+      width: max,
+      height: max,
+      fit: 'inside',
+      withoutEnlargement: true,
+    });
+
+    if (outExt === '.png') {
+      await pipeline.png({ compressionLevel: 9 }).toFile(destAbs);
+    } else if (outExt === '.webp') {
+      await pipeline.webp({ quality: 88 }).toFile(destAbs);
+    } else {
+      await pipeline.jpeg({ quality: 88, mozjpeg: true }).toFile(destAbs);
+    }
+
+    return { relativePath: plan.relativePath, skipped: false, hash: hashFull };
+  } finally {
+    heicConv.cleanup?.();
   }
-
-  if (!IMAGE_EXTS.has(ext)) {
-    throw new Error(`Unsupported image type: ${ext}`);
-  }
-
-  const outExt = ext === '.png' ? '.png' : ext === '.webp' ? '.webp' : '.jpg';
-  const plan = await planFileName({
-    destDir, kind, slug, ext: outExt, hashFull,
-    existingHashLookup: opts.existingHashLookup,
-  });
-  const destAbs = path.join(destDir, plan.fileName);
-
-  if (plan.reused) {
-    return { relativePath: plan.relativePath, skipped: true, hash: hashFull };
-  }
-
-  const max = KIND_MAX_DIMENSION[kind] ?? 1600;
-  const pipeline = sharp(sourcePath).rotate().resize({
-    width: max,
-    height: max,
-    fit: 'inside',
-    withoutEnlargement: true,
-  });
-
-  if (outExt === '.png') {
-    await pipeline.png({ compressionLevel: 9 }).toFile(destAbs);
-  } else if (outExt === '.webp') {
-    await pipeline.webp({ quality: 88 }).toFile(destAbs);
-  } else {
-    await pipeline.jpeg({ quality: 88, mozjpeg: true }).toFile(destAbs);
-  }
-
-  return { relativePath: plan.relativePath, skipped: false, hash: hashFull };
 }
 
 /**
@@ -317,7 +335,10 @@ async function importProductImage(sourcePath, { destDirRel, baseName, existingHa
 
 async function importProductImageFromBytes(buffer, ext, { destDirRel, baseName, existingHashLookup } = {}) {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'iskh-paste-'));
-  const safeExt = (ext || '.png').toLowerCase().replace(/^([^.])/, '.$1');
+  // v0.1.25: was a partial sanitise + path.join, which `..` walks straight
+  // through (`'.png/../../../../tmp/x.jpg'` -> /var/tmp/x.jpg). KEEP THIS
+  // USING safeFileExt — it rejects anything that is not a plain extension.
+  const safeExt = safeFileExt(ext);
   const tmpPath = path.join(tmpDir, `paste${safeExt}`);
   fs.writeFileSync(tmpPath, Buffer.from(buffer));
   try {

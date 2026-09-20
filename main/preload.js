@@ -387,8 +387,11 @@ contextBridge.exposeInMainWorld('api', {
     update:    (id, patch)        => invoke('templates:update', { id, patch }),
     remove:    (id)               => invoke('templates:remove', id),
     duplicate: (id)               => invoke('templates:duplicate', id),
-    renderPreview: ({ templateId, template, productId } = {}) =>
-      invoke('templates:renderPreview', { templateId, template, productId }),
+    // v0.1.4: `maxPx` caps the rendered preview's longest side. The editor
+    // passes a small bound (it displays the result at a few hundred px);
+    // omit it to render at full design resolution (export paths do).
+    renderPreview: ({ templateId, template, productId, maxPx } = {}) =>
+      invoke('templates:renderPreview', { templateId, template, productId, maxPx }),
     // v0.27.0: eyedropper — sample a product image's background colour
     // so the inset margin fill can match it for a seamless seam.
     sampleBgColor: (productId) => invoke('templates:sampleBgColor', { productId }),
@@ -432,6 +435,19 @@ contextBridge.exposeInMainWorld('api', {
     duplicate: (id) => invoke('catalogStudio:duplicate', { id }),
     preview: (id) => invoke('catalogStudio:preview', { id }),
     exportPdf: (id, outputFolder) => invoke('catalogStudio:export', { id, outputFolder }),
+  },
+  /* v0.1.25: Social Grid — square product-grid images for social posts.
+   * These channel names are what the server-mode reachability test reads out
+   * of this file, so they must match main/ipc/socialGrid.js exactly. */
+  socialGrid: {
+    list: (companyId) => invoke('socialGrid:list', { companyId }),
+    get: (id) => invoke('socialGrid:get', { id }),
+    create: (input) => invoke('socialGrid:create', input),
+    update: (id, patch) => invoke('socialGrid:update', { id, patch }),
+    remove: (id) => invoke('socialGrid:delete', { id }),
+    duplicate: (id) => invoke('socialGrid:duplicate', { id }),
+    preview: (config, pageIndex) => invoke('socialGrid:preview', { config, pageIndex }),
+    exportImages: (config, outputFolder, presetId) => invoke('socialGrid:export', { config, outputFolder, presetId }),
   },
   ai: {
     listModels:    ()                                 => invoke('ai:listModels'),

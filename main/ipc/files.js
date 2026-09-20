@@ -5,15 +5,24 @@
  * parsing on disk paths, thumbnail generation from absolute paths.
  * In client mode the same channel names are re-registered in
  * main/client/index.js so the dialog runs on the client's Mac.
+ *
+ * v0.1.17: these were registered with a bare `ipcMain.handle`, which meant
+ * "local-only" also silently meant "unvalidated". They now go through
+ * `exposeLocal()` — still local-only, but the argument shape is checked. The
+ * absolute paths these handlers take are the reason it matters: see
+ * `files:readImageThumb` below.
  */
 
 const fs = require('node:fs');
-const path = require('node:path');
-const { ipcMain, dialog } = require('electron');
+const { dialog } = require('electron');
 const fileHandler = require('../fileHandler');
+// v0.1.18: the accepted file kinds live in a shared module because the
+// VALIDATORS enforce the same rule (so it applies in client mode too, which has
+// its own copy of these handlers). See main/util/fileKinds.js.
+const { IMAGE_EXTS, isAbsolutePath, isImagePath, isWorkbookPath, scanImageFilesIn } = require('../util/fileKinds');
 
-function register(/* helpers — unused */) {
-  ipcMain.handle('files:pickFolder', async () => {
+function register({ exposeLocal }) {
+  exposeLocal('files:pickFolder', async () => {
     const res = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
     });
@@ -27,9 +36,19 @@ function register(/* helpers — unused */) {
    * so it can preview files the user picked but hasn't queued yet
    * (those files haven't been imported into assets/ai-source/ yet,
    * so app-image:// can't serve them).
+   *
+   * v0.1.17: the path is now restricted to an absolute path with an image
+   * extension. Previously this accepted ANY absolute path and handed it to
+   * sharp, so a compromised renderer could turn any image on the Mac into a
+   * base64 JPEG it could read back — which is exactly what main/protocol.js
+   * refuses to do for `app-image://` ("a malicious renderer payload could
+   * otherwise walk outside the asset trees"). This is that same rule applied
+   * to the one other channel that reads by path. The picker above can only
+   * return these extensions, so no working flow loses anything.
    */
-  ipcMain.handle('files:readImageThumb', async (_e, absPath) => {
-    if (!absPath || typeof absPath !== 'string') throw new Error('absPath required');
+  exposeLocal('files:readImageThumb', async (absPath) => {
+    if (!isAbsolutePath(absPath)) throw new Error('An absolute image path is required');
+    if (!isImagePath(absPath)) throw new Error('Only image files can be previewed');
     if (!fs.existsSync(absPath)) throw new Error('File not found');
     const sharp = require('sharp');
     const buf = await sharp(absPath)
@@ -40,7 +59,7 @@ function register(/* helpers — unused */) {
     return `data:image/jpeg;base64,${buf.toString('base64')}`;
   });
 
-  ipcMain.handle('files:pickImageFile', async (_e, { multiple = false } = {}) => {
+  exposeLocal('files:pickImageFile', async ({ multiple = false } = {}) => {
     const res = await dialog.showOpenDialog({
       properties: ['openFile', ...(multiple ? ['multiSelections'] : [])],
       filters: [
@@ -58,26 +77,12 @@ function register(/* helpers — unused */) {
    * external photos" batch tool so a user can drop a whole folder in
    * rather than multi-selecting files. Skips hidden files/dotfolders.
    */
-  ipcMain.handle('files:scanImageFiles', async (_e, folderPath) => {
-    if (!folderPath || typeof folderPath !== 'string') throw new Error('folderPath required');
-    const IMG = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']);
-    const out = [];
-    function scan(dir, depth) {
-      let entries;
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        if (e.name.startsWith('.')) continue;
-        const full = path.join(dir, e.name);
-        if (e.isDirectory()) { if (depth < 1) scan(full, depth + 1); }
-        else if (IMG.has(path.extname(e.name).toLowerCase())) out.push(full);
-      }
-    }
-    scan(folderPath, 0);
-    out.sort();
-    return out;
+  exposeLocal('files:scanImageFiles', async (folderPath) => {
+    if (!isAbsolutePath(folderPath)) throw new Error('An absolute folder path is required');
+    return scanImageFilesIn(folderPath);
   });
 
-  ipcMain.handle('files:pickWorkbook', async () => {
+  exposeLocal('files:pickWorkbook', async () => {
     const res = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [
@@ -88,11 +93,21 @@ function register(/* helpers — unused */) {
     return res.filePaths[0];
   });
 
-  ipcMain.handle('files:parseWorkbook', (_e, filePath) => {
+  /**
+   * v0.1.17: the path must be absolute and look like a workbook. Previously
+   * anything was passed to SheetJS, which reports a parse failure for a
+   * non-spreadsheet but only after reading the file — the same
+   * read-any-file-by-path shape as `files:readImageThumb`.
+   */
+  exposeLocal('files:parseWorkbook', (filePath) => {
+    if (!isAbsolutePath(filePath)) throw new Error('An absolute workbook path is required');
+    if (!isWorkbookPath(filePath)) {
+      throw new Error('Only .xlsx, .xls, .csv and .tsv files can be imported');
+    }
     return fileHandler.readWorkbook(filePath);
   });
 
-  ipcMain.handle('samples:generateProductSheet', async () => {
+  exposeLocal('samples:generateProductSheet', async () => {
     const res = await dialog.showSaveDialog({
       title: 'Save sample workbook',
       defaultPath: 'media-studio-kh-products-sample.xlsx',
@@ -104,4 +119,4 @@ function register(/* helpers — unused */) {
   });
 }
 
-module.exports = { register };
+module.exports = { register, IMAGE_EXTS };

@@ -26,8 +26,12 @@ export function PromoteToProductDialog({ entry, onClose, onPromoted, onError }) 
   const [tab, setTab] = useState('existing'); // 'existing' | 'new'
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState(null);
-  const [activeIdx, setActiveIdx] = useState(0);
   const listRef = useRef(null);
+  // Arrow-key cursor for the product list. Only the setter is bound: the value
+  // is read exclusively through the updater form below (`setActiveIdx((i) => …)`
+  // needs the previous index to move by one), so naming it would be a dead
+  // binding — but the STATE must stay, or arrow navigation loses its position.
+  const [, setActiveIdx] = useState(0);
 
   const [newSku, setNewSku] = useState('');
   const [newName, setNewName] = useState('');

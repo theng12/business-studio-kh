@@ -2,11 +2,10 @@
  * v0.49.31: pure path-safety + manifest helpers for the local
  * backup/restore feature (main/backupManager.js).
  *
- * Everything here is dependency-free (only node:path) so it can be
- * unit-tested without booting Electron or opening a database — the
- * same reason main/util/slug.js, phash.js, etc. live as standalone
- * helpers. The Electron-coupled orchestration (tar, db.backup(),
- * dialogs) lives in main/backupManager.js and imports these.
+ * The path and archive checks are kept here so backup and bundle restore
+ * share one boundary. SQLite validation opens the staged database read-only;
+ * the Electron-coupled orchestration (tar, db.backup(), dialogs) stays in
+ * main/backupManager.js and main/serverBundle.js.
  *
  * The whole point of pulling these out: a restore EXTRACTS an archive
  * over the user's data folder. If an attacker (or a corrupted archive)
@@ -15,6 +14,7 @@
  * most worth a regression test.
  */
 
+const fsp = require('node:fs/promises');
 const path = require('node:path');
 
 // Bump when the on-disk backup layout changes incompatibly. Restore
@@ -57,24 +57,165 @@ function isPathInside(parent, child) {
 /**
  * Validate a single archive-entry relative path before extraction.
  * Rejects absolute paths, empty strings, and anything containing a
- * `..` traversal segment. Returns the cleaned relative path (leading
- * slashes stripped) or throws.
+ * `..` traversal segment. Returns the cleaned relative path or throws.
  */
 function safeArchiveEntry(relPath) {
   if (typeof relPath !== 'string' || relPath.trim() === '') {
     throw new Error('Archive entry path is empty');
   }
-  const cleaned = relPath.replace(/^[/\\]+/, '');
+  const trimmed = relPath.trim();
+  if (path.isAbsolute(trimmed) || /^[A-Za-z]:[\\/]/.test(trimmed)) {
+    throw new Error(`Unsafe archive entry (absolute path): ${relPath}`);
+  }
+  const cleaned = trimmed.replace(/^[/\\]+/, '');
   // Split on either separator so a Windows-style entry can't sneak a
   // `..` past a posix-only check.
   const segments = cleaned.split(/[/\\]/);
   if (segments.some((s) => s === '..')) {
     throw new Error(`Unsafe archive entry (path traversal): ${relPath}`);
   }
-  if (path.isAbsolute(cleaned)) {
-    throw new Error(`Unsafe archive entry (absolute path): ${relPath}`);
-  }
   return cleaned;
+}
+
+const ARCHIVE_TOP_LEVEL_FILES = new Set([
+  'database.sqlite',
+  'manifest.json',
+  'config.json',
+  'config.partial.json',
+]);
+const ARCHIVE_TOP_LEVEL_DIRS = new Set(['assets', 'processed', 'ai-gallery', 'overlays']);
+
+function archivePathSupported(relPath) {
+  const cleaned = relPath.replace(/\/$/, '');
+  if (ARCHIVE_TOP_LEVEL_FILES.has(cleaned)) return true;
+  const slash = cleaned.indexOf('/');
+  const top = slash === -1 ? cleaned : cleaned.slice(0, slash);
+  return ARCHIVE_TOP_LEVEL_DIRS.has(top);
+}
+
+/**
+ * Validate the name/type listings produced by the native tar implementation.
+ * The two listings are paired by archive order; this avoids parsing filenames
+ * containing spaces out of tar's human-readable verbose format.
+ */
+function validateTarListing(namesText, verboseText) {
+  const names = String(namesText || '').split('\n').filter(Boolean);
+  const verbose = String(verboseText || '').split('\n').filter(Boolean);
+  if (names.length === 0 || names.length !== verbose.length) {
+    throw new Error('Archive listing is missing or inconsistent');
+  }
+
+  const first = safeArchiveEntry(names[0]).replace(/\/$/, '');
+  const rootName = first;
+  if (!rootName || names[0] !== `${rootName}/`) {
+    throw new Error('Archive structure unexpected (expected a single top-level folder)');
+  }
+
+  const entries = [];
+  for (let i = 0; i < names.length; i += 1) {
+    const raw = safeArchiveEntry(names[i]);
+    if (raw !== rootName && !raw.startsWith(`${rootName}/`)) {
+      throw new Error(`Archive contains multiple top-level entries: ${names[i]}`);
+    }
+    const relPath = raw === rootName ? '' : raw.slice(rootName.length + 1);
+    const type = verbose[i][0];
+    if (!['d', '-'].includes(type)) {
+      throw new Error(`Archive contains unsupported entry type: ${names[i]}`);
+    }
+    if (i === 0 && type !== 'd') {
+      throw new Error(`Archive root is not a directory: ${names[i]}`);
+    }
+    const cleanRelPath = relPath.replace(/\/$/, '');
+    if (ARCHIVE_TOP_LEVEL_DIRS.has(cleanRelPath) && type !== 'd') {
+      throw new Error(`Archive directory has the wrong entry type: ${names[i]}`);
+    }
+    if (ARCHIVE_TOP_LEVEL_FILES.has(cleanRelPath) && type !== '-') {
+      throw new Error(`Archive file has the wrong entry type: ${names[i]}`);
+    }
+    if (relPath && !archivePathSupported(relPath)) {
+      throw new Error(`Archive contains unsupported path: ${names[i]}`);
+    }
+    entries.push({ name: names[i], relPath, type });
+  }
+
+  const relPaths = new Set(entries.map((e) => e.relPath.replace(/\/$/, '')));
+  if (!relPaths.has('manifest.json') || !relPaths.has('database.sqlite')) {
+    throw new Error('Archive is incomplete — manifest.json and database.sqlite are required');
+  }
+  return { rootName, entries };
+}
+
+async function validateExtractedTree(rootDir, { openDatabase } = {}) {
+  const rootAbs = path.resolve(rootDir);
+  const rootStat = await fsp.lstat(rootAbs).catch(() => null);
+  if (!rootStat || !rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error('Archive root is not a regular directory');
+  }
+  const walk = async (dir) => {
+    const children = await fsp.readdir(dir, { withFileTypes: true });
+    for (const child of children) {
+      const abs = path.join(dir, child.name);
+      const rel = path.relative(rootAbs, abs).replace(/\\/g, '/');
+      resolveSafeDest(rootAbs, rel);
+      const stat = await fsp.lstat(abs);
+      if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1)) {
+        throw new Error(`Archive contains a link entry: ${rel}`);
+      }
+      if (stat.isDirectory()) {
+        if (!archivePathSupported(rel)) throw new Error(`Archive contains unsupported path: ${rel}`);
+        await walk(abs);
+      } else if (!stat.isFile()) {
+        throw new Error(`Archive contains a special entry: ${rel}`);
+      } else if (!archivePathSupported(rel)) {
+        throw new Error(`Archive contains unsupported path: ${rel}`);
+      }
+      const cleanRel = rel.replace(/\/$/, '');
+      if (ARCHIVE_TOP_LEVEL_DIRS.has(cleanRel) && !stat.isDirectory()) {
+        throw new Error(`Archive directory has the wrong entry type: ${rel}`);
+      }
+      if (ARCHIVE_TOP_LEVEL_FILES.has(cleanRel) && !stat.isFile()) {
+        throw new Error(`Archive file has the wrong entry type: ${rel}`);
+      }
+    }
+  };
+  await walk(rootAbs);
+  const dbPath = path.join(rootAbs, 'database.sqlite');
+  await validateSQLiteDatabase(dbPath, { openDatabase });
+  return true;
+}
+
+/** Verify regular-file identity and SQLite's own consistency check. */
+async function validateSQLiteDatabase(filePath, { openDatabase } = {}) {
+  const stat = await fsp.lstat(filePath).catch(() => null);
+  if (!stat || !stat.isFile() || stat.nlink > 1) {
+    throw new Error('Archive database.sqlite is not a regular file');
+  }
+  const handle = await fsp.open(filePath, 'r');
+  try {
+    const header = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    if (bytesRead !== 16 || header.toString('ascii') !== 'SQLite format 3\u0000') {
+      throw new Error('Archive database.sqlite is not a SQLite database');
+    }
+  } finally {
+    await handle.close();
+  }
+
+  const Database = openDatabase || require('better-sqlite3');
+  let db;
+  try {
+    db = new Database(filePath, { readonly: true, fileMustExist: true });
+    const result = db.prepare('PRAGMA quick_check').get();
+    if (!result || result.quick_check !== 'ok') {
+      throw new Error('Archive database.sqlite failed SQLite quick_check');
+    }
+  } catch (err) {
+    if (/Archive database/.test(err.message)) throw err;
+    throw new Error(`Archive database.sqlite is invalid: ${err.message}`, { cause: err });
+  } finally {
+    try { db?.close(); } catch (_) {}
+  }
+  return true;
 }
 
 /**
@@ -175,6 +316,9 @@ module.exports = {
   isPathInside,
   safeArchiveEntry,
   resolveSafeDest,
+  validateTarListing,
+  validateExtractedTree,
+  validateSQLiteDatabase,
   backupStamp,
   backupFilename,
   isBackupFilename,

@@ -62,7 +62,7 @@ test('reframe — color fill leaves the expected margin colour in the corner', {
     inputImage: src, canvasW: 600, canvasH: 600, scale: 0.4,
     fillMode: 'color', fillColor: '#FFFFFF',
   });
-  const { data, info } = await sharp(out).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { data } = await sharp(out).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   // Top-left pixel.
   const r = data[0]; const g = data[1]; const b = data[2];
   assert.ok(r > 250 && g > 250 && b > 250, `corner should be white, got ${r},${g},${b}`);

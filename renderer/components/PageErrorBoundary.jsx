@@ -25,7 +25,6 @@ export class PageErrorBoundary extends Component {
   componentDidCatch(error, info) {
     // Surface to the console (devtools) and Electron's stderr — anything
     // that lands here is something we'd want to fix in a follow-up.
-    // eslint-disable-next-line no-console
     console.error(`[page:${this.props.pageKey}] render crashed:`, error, info?.componentStack);
     this.setState({ error, info });
   }

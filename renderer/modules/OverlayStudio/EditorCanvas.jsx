@@ -3,6 +3,15 @@ import { elementBox } from './elementDefaults.js';
 import { renderBarcodeSVG, formatBarcodeText } from './barcodePreview.js';
 
 /**
+ * v0.1.4: longest side of the server-rendered "truthful" preview, in px.
+ * The editor displays the canvas at roughly 450–700px depending on the
+ * window, so rendering beyond ~800px buys nothing visible while costing
+ * real time (compose scales with pixel count). Exports are unaffected —
+ * they never go through this path.
+ */
+const PREVIEW_MAX_PX = 800;
+
+/**
  * Editor canvas. Renders the template's elements as absolutely-positioned
  * DOM overlays inside a fixed-aspect-ratio container, on top of an
  * optional backdrop image. Drag-to-move on each element body updates
@@ -33,6 +42,12 @@ export function EditorCanvas({
   // v0.29.0: outline every element box (safe-zone guide), not just the
   // selected one. Driven by the toolbar's "Bounds" toggle.
   showBounds = false,
+  // v0.1.23: design view. Shows a neutral backdrop and a labelled box per
+  // element instead of the real product photo and the real composited render —
+  // a template is applied to many products, so previewing it against one of them
+  // is noise while you are placing things. See ElementContent's placeholder
+  // branch for what each element shows.
+  placeholders = false,
 }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
@@ -56,31 +71,36 @@ export function EditorCanvas({
    *     and returns a PNG. We display that PNG on top of the backdrop
    *     so what the user sees IS what the export will produce.
    *
-   * When to show which:
-   *   - During active interaction (pointer-down on the canvas — drag,
-   *     resize, anything) → HTML approximation. The PNG is
-   *     instantaneously stale the moment a handle moves; chasing it
-   *     would feel laggy.
-   *   - When settled (no interaction + 400 ms since last template edit)
-   *     → fire `templates:renderPreview`, replace the canvas content
-   *     with the returned PNG. Element selection boxes + handles stay
-   *     visible on top so the user can still select/drag.
+   * v0.1.8: ONE view, always truthful.
    *
-   * Implementation:
+   * This used to alternate between two renderers — an HTML approximation
+   * and the real server-rendered PNG — swapping on `isInteracting`. In
+   * practice that produced two pictures that did not agree: fonts, barcode
+   * bars and image fitting all differed slightly, so the canvas appeared to
+   * jump the moment you let go of an element, and clicking showed a
+   * selection box around one rendering while the other was on screen.
+   *
+   * Now the server PNG is the only thing drawn, always. It is scaled to
+   * fit the canvas (object-fit: contain), so it is literally the export
+   * zoomed to the available space — no second interpretation to disagree
+   * with it. The per-element DOM nodes still exist, but they are
+   * transparent and exist purely to receive clicks and to draw the
+   * selection outline, resize handles and rotation knob.
+   *
+   * During a drag the PNG is one frame behind. That is deliberate: it is
+   * re-rendered as soon as the interaction ends, and refreshing mid-drag
+   * would mean a server round-trip per pointer-move.
+   *
    *   - `truthfulPng` holds the latest rendered PNG blob URL (or null
    *     before the first render lands).
-   *   - `isInteracting` flips true on any pointer-down inside the
-   *     canvas, false on the window-level pointer-up. Window-level
-   *     because pointer captures sometimes release outside the
-   *     canvas (e.g. handle resize past the canvas edge).
+   *   - `isInteracting` still tracks drags, but only to defer the render —
+   *     it no longer changes WHAT is drawn.
    *   - `previewBusy` shows a small "Updating preview…" indicator in
    *     the meta line so users know the visible result is mid-update.
    *
-   * The truthful PNG is added/removed via a CSS class on the canvas
-   * div (`ovl-canvas--truthful`). When that class is present, CSS
-   * hides the inner content of every ElementOverlay (text / barcode /
-   * image), leaving only the selection rect + handles. The PNG fills
-   * the same area so the user sees the actual composition.
+   * The PNG is added/removed via a CSS class on the canvas div
+   * (`ovl-canvas--truthful`), which also hides the HTML content of every
+   * ElementOverlay so only the selection rect + handles remain visible.
    */
   const [truthfulPng, setTruthfulPng] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -105,11 +125,22 @@ export function EditorCanvas({
 
   // Debounced truthful render. Re-fires whenever the template, the
   // backdrop product, or the canvas dimensions change, but only after
-  // the user has been idle for 400 ms. During interaction we DON'T
-  // bother firing — the in-flight render would just be wasted work
-  // (its output would be stale by the time it arrived). Once
-  // interaction ends, the next template change (or this effect's
-  // re-run from `isInteracting` flipping) schedules a render.
+  // the user has been idle. During interaction we DON'T bother firing —
+  // the in-flight render would just be wasted work (its output would be
+  // stale by the time it arrived). Once interaction ends, the next
+  // template change (or this effect's re-run from `isInteracting`
+  // flipping) schedules a render.
+  //
+  // v0.1.4: two changes to make the preview feel responsive.
+  //   1. `maxPx` — the server used to compose at the template's full
+  //      design size (2000×2000) for a canvas we display at a few hundred
+  //      px. Capping the long side to PREVIEW_MAX_PX cuts the pixel count
+  //      ~7× and the measured compose time from ~150-480 ms to a few tens
+  //      of ms. Layout is unaffected: element geometry is fractional, so a
+  //      smaller base scales the whole design proportionally.
+  //   2. Debounce down from 400 ms. That value was chosen when each render
+  //      was expensive; at the new cost a shorter idle window makes the
+  //      preview track edits much more closely.
   useEffect(() => {
     if (!template || !backdropProductId) return undefined;
     if (isInteracting) return undefined;
@@ -126,6 +157,7 @@ export function EditorCanvas({
           // — see main/ipc/templates.js.
           template,
           productId: backdropProductId,
+          maxPx: PREVIEW_MAX_PX,
         });
         const bytes = result?.bytes;
         if (!bytes) return;
@@ -150,7 +182,7 @@ export function EditorCanvas({
       } finally {
         setPreviewBusy(false);
       }
-    }, 400);
+    }, 250);
     return () => {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     };
@@ -164,10 +196,12 @@ export function EditorCanvas({
     truthfulPngRef.current = null;
   }, []);
 
-  // Whether the truthful PNG should currently be VISIBLE. False during
-  // interaction (we show HTML approx for responsiveness), false if no
-  // PNG has landed yet, false if the user just hasn't picked a product.
-  const showTruthful = !!truthfulPng && !isInteracting && !!backdropProductId;
+  // v0.1.8: the truthful PNG is ALWAYS the visible picture whenever one has
+  // landed. It no longer disappears during interaction — that swap was what
+  // made the canvas look like it had two disagreeing modes. While dragging,
+  // the previous frame stays on screen for a beat until the debounced
+  // re-render replaces it.
+  const showTruthful = !!truthfulPng && !!backdropProductId && !placeholders;
 
   // v0.26.2: compute canvas DOM size from the WRAP's available area
   // + template aspect ratio, then apply as inline width/height. Pure-
@@ -271,7 +305,7 @@ export function EditorCanvas({
     <div ref={wrapRef} className="ovl-canvas-wrap">
       <div
         ref={canvasRef}
-        className={`ovl-canvas${snapToGrid ? ' ovl-canvas--gridded' : ''}${showBounds ? ' ovl-canvas--bounds' : ''}${showTruthful ? ' ovl-canvas--truthful' : ''}`}
+        className={`ovl-canvas${snapToGrid ? ' ovl-canvas--gridded' : ''}${showBounds ? ' ovl-canvas--bounds' : ''}${showTruthful ? ' ovl-canvas--truthful' : ''}${placeholders ? ' ovl-canvas--placeholders' : ''}${backdropSrc && !placeholders ? '' : ' ovl-canvas--empty'}`}
         // v0.26.2: explicit pixel size from the JS fit math above.
         // The earlier `aspect-ratio + width:100% + max-height:100%`
         // combo was unreliable in a flex column wider than tall — see
@@ -282,7 +316,7 @@ export function EditorCanvas({
         // interacting" signal.
         onPointerDownCapture={handleCanvasPointerDown}
       >
-        {backdropSrc ? (
+        {backdropSrc && !placeholders ? (
           inset ? (
             <div
               className="ovl-canvas__backdrop ovl-canvas__inset"
@@ -335,10 +369,13 @@ export function EditorCanvas({
             element={el}
             canvasW={canvasSize.w}
             canvasH={canvasSize.h}
+            designW={template.canvasWidth}
+            designH={template.canvasHeight}
             selected={el.id === selectedId}
             onSelect={() => onSelectElement(el.id)}
             onChange={(patch) => onChangeElement(el.id, patch)}
             productContext={productContext}
+            placeholders={placeholders}
             // Phase 2: hooks for snap + guides.
             snapToGrid={snapToGrid}
             siblings={template.elements.filter((x) => x.id !== el.id)}
@@ -364,7 +401,11 @@ export function EditorCanvas({
             knowing whether what they see is the real export render
             (truthful) or the fast HTML approximation (during
             interaction or before the first server render lands). */}
-        {backdropProductId ? (
+        {placeholders ? (
+          <span className="ovl-canvas__preview-status">
+            {' '}· <span className="ovl-canvas__preview-dot ovl-canvas__preview-dot--approx" /> Placeholders — layout only
+          </span>
+        ) : backdropProductId ? (
           <span className="ovl-canvas__preview-status">
             {previewBusy
               ? <>· <span className="ovl-canvas__preview-dot ovl-canvas__preview-dot--busy" /> Updating preview…</>
@@ -420,11 +461,11 @@ export function EditorCanvas({
  * renderer applies the same rotation via `sharp().rotate()` so the
  * baked output matches the editor preview.
  */
-function ElementOverlay({ element, canvasW, canvasH, selected, onSelect, onChange, productContext, snapToGrid, siblings, onGuides }) {
+function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected, onSelect, onChange, productContext, placeholders, snapToGrid, siblings, onGuides }) {
   const filledContent = (element.type === 'text' || element.type === 'barcode')
     ? fillTokens(element.content ?? '', productContext)
     : null;
-  const box = elementBox(element, canvasW, canvasH, filledContent);
+  const box = elementBox(element, canvasW, canvasH, filledContent, designW, designH);
   const dragState = useRef(null);
   const rotation = Number(element.rotation ?? 0);
   // v0.26.0: layer flags. `visible: false` greys the element in the
@@ -549,8 +590,34 @@ function ElementOverlay({ element, canvasW, canvasH, selected, onSelect, onChang
     if (st.mode === 'move') {
       const mouseFracX = mouseX / canvasRect.width;
       const mouseFracY = mouseY / canvasRect.height;
-      let nx = Math.max(0, Math.min(1, mouseFracX - st.grabOffsetX));
-      let ny = Math.max(0, Math.min(1, mouseFracY - st.grabOffsetY));
+      let nx = mouseFracX - st.grabOffsetX;
+      let ny = mouseFracY - st.grabOffsetY;
+
+      // v0.1.5: clamp the element's BOX to the canvas, not its anchor point.
+      //
+      // The anchor is a point inside (or on the edge of) the box — `tl` sits
+      // at its top-left, `br` at its bottom-right, `c` in the middle. Clamping
+      // the anchor to [0,1] therefore still let most of the element travel
+      // off-canvas: drag a bottom-anchored element down and its anchor stayed
+      // pinned at the bottom edge while the body disappeared below it, with
+      // nothing left to grab. Keeping the whole box on-canvas is what makes
+      // an element reliably draggable back into view.
+      //
+      // If the element is larger than the canvas there is no position that
+      // satisfies the constraint, so fall back to clamping the anchor (the
+      // old behaviour) rather than fighting the user.
+      if (canvasW && canvasH && box.width <= canvasW && box.height <= canvasH) {
+        const live = anchorToBbox(nx, ny, box.width, box.height, element.anchor, canvasW, canvasH);
+        const clampedLeft = Math.max(0, Math.min(canvasW - box.width, live.left));
+        const clampedTop = Math.max(0, Math.min(canvasH - box.height, live.top));
+        const back = bboxToAnchor(clampedLeft, clampedTop, box.width, box.height, element.anchor, canvasW, canvasH);
+        nx = back.x;
+        ny = back.y;
+      } else {
+        nx = Math.max(0, Math.min(1, nx));
+        ny = Math.max(0, Math.min(1, ny));
+      }
+
       // v0.24.0: snap + smart guides. Predicate snap on the move's
       // resulting bounding box so the *visible* edges align, not the
       // anchor point. We compute the new bbox in canvas-pixel coords,
@@ -614,6 +681,7 @@ function ElementOverlay({ element, canvasW, canvasH, selected, onSelect, onChang
 
   function onPointerUp(e) {
     dragState.current = null;
+      // way — the drag state below is reset regardless.
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
     // v0.24.0: drop any live alignment guides as soon as the drag ends.
     onGuides?.([]);
@@ -637,7 +705,7 @@ function ElementOverlay({ element, canvasW, canvasH, selected, onSelect, onChang
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
     >
-      <ElementContent element={element} box={box} productContext={productContext} canvasW={canvasW} filledContent={filledContent} />
+      <ElementContent element={element} box={box} productContext={productContext} canvasW={canvasW} canvasH={canvasH} designW={designW} designH={designH} filledContent={filledContent} placeholders={placeholders} />
       {selected && !isLocked ? (
         <>
           <div className="ovl-element__anchor-dot" data-anchor={element.anchor} />
@@ -867,15 +935,55 @@ function applySnap(bbox, siblings, canvasW, canvasH, snapToGrid) {
  *  visually within reason — text uses inline CSS for the bg pill + font,
  *  barcode is generated client-side via bwip-js, image is rendered through
  *  the existing app-image protocol when a real product source is picked. */
-function ElementContent({ element, box, productContext, canvasW, filledContent }) {
+/**
+ * Exported ONLY so test/screens.smoke.test.js can render each element type
+ * directly. The v0.1.8 crash lived in here (a reference to an out-of-scope
+ * `canvasH` in the barcode branch) and was invisible to a screen-level render
+ * test, because a freshly opened editor has no elements yet — the barcode
+ * branch only runs once a barcode exists. Calling this with a real barcode
+ * element is what actually exercises that code.
+ */
+export function ElementContent({ element, box, productContext, canvasW, canvasH, designW, designH, filledContent, placeholders = false }) {
+  // v0.1.23: the design-view placeholder. One labelled box per element — what it
+  // IS and how big it is — instead of its real pixels. Sizes are shown as a % of
+  // the canvas because that is the unit the Inspector's Width/Height fields use,
+  // and because it stays meaningful at any zoom or canvas size.
+  if (placeholders) {
+    return (
+      <div className="ovl-element__placeholder">
+        <span className="ovl-element__placeholder-label">
+          {describeElementForPlaceholder(element)}
+        </span>
+        <span className="ovl-element__placeholder-size">
+          {Math.max(1, Math.round(((element.width ?? (box?.width ?? 0) / (canvasW || 1)) * 100)))}
+          {' × '}
+          {Math.max(1, Math.round(((element.height ?? (box?.height ?? 0) / (canvasH || 1)) * 100)))}
+          {' %'}
+        </span>
+      </div>
+    );
+  }
   if (element.type === 'text') {
     // Use the caller-provided token-filled content so this matches the box
     // sizing computed by elementBox() — keeps the bg pill and the text
     // perfectly synchronized.
     const filled = filledContent ?? fillTokens(element.content ?? '', productContext);
-    const fontPx = (element.font?.size ?? 48) * (canvasW / 2000);
-    const padding = (element.bg?.padding ?? 0) * (canvasW / 2000);
-    const radius  = (element.bg?.radius  ?? 0) * (canvasW / 2000);
+    // v0.1.8: font size, padding and radius are ABSOLUTE design pixels —
+    // no `canvasW / 2000` scaling factor.
+    //
+    // That factor was the source of a real preview-vs-export bug. The
+    // server renderer (main/templateRenderer.js renderTextElement) has
+    // always used `el.font.size`, `el.bg.padding` and `el.bg.radius`
+    // verbatim, with no canvas-width term. The canvas multiplied all three
+    // by `canvasW / 2000`, so on the default 2000px canvas the two agreed
+    // and nobody noticed — but on a 3000px canvas the editor drew text 50%
+    // larger than the exported file, and the selection box (sized from the
+    // same numbers as the renderer) no longer matched the text inside it.
+    // Because the divisor was a hardcoded 2000, widening the canvas also
+    // silently inflated every font by the same ratio.
+    const fontPx = (element.font?.size ?? 48);
+    const padding = (element.bg?.padding ?? 0);
+    const radius  = (element.bg?.radius  ?? 0);
     const align = element.align ?? 'left';
     const bgColor = element.bg?.color ?? null;
     return (
@@ -885,6 +993,12 @@ function ElementContent({ element, box, productContext, canvasW, filledContent }
           padding: `${padding}px`,
           background: bgColor ? hexWithOpacity(bgColor, element.bg?.opacity ?? 1) : 'transparent',
           borderRadius: `${radius}px`,
+          // v0.1.8: NO inline opacity here. The server bakes element opacity
+          // into the PNG, and this node is invisible anyway (the stylesheet
+          // hides all element content in truthful mode). An inline
+          // `opacity` would override that stylesheet rule — inline styles
+          // win over external CSS — and leak the HTML approximation back on
+          // top of the render. That is exactly what was happening.
           fontFamily: element.font?.family ?? 'Inter, sans-serif',
           fontSize: `${fontPx}px`,
           fontWeight: element.font?.weight ?? 'normal',
@@ -913,9 +1027,31 @@ function ElementContent({ element, box, productContext, canvasW, filledContent }
     const svg = renderBarcodeSVG(content, format, { showText: element.showText !== false });
     const showText = element.showText !== false;
     const humanText = showText ? formatBarcodeText(content, format) : '';
-    const padding = (element.bg?.padding ?? 0) * (canvasW / 2000);
-    const radius  = (element.bg?.radius  ?? 0) * (canvasW / 2000);
+    // v0.1.8: absolute, matching renderBarcodeElement on the server.
+    const padding = (element.bg?.padding ?? 0);
+    const radius  = (element.bg?.radius  ?? 0);
     const bgColor = element.bg?.color ?? '#fff';
+    // v0.1.8: derive the human-readable label's size the same way the
+    // export does, instead of a hardcoded 18px base.
+    //
+    // renderBarcodeElement sizes the digits from the element's own box:
+    //   targetH = el.height × imgH   (box height in design px)
+    //   barsH   = 78% of targetH when text is shown
+    //   textH   = the remainder
+    //   fontPx  = 70% of textH
+    // The editor used `18 × canvasW/2000`, which had no relationship to the
+    // box at all — so a tall barcode's digits were far too small in the
+    // preview, and a short one's too large.
+    // v0.1.10 FIX: this block referenced `canvasH`, which is NOT in scope
+    // here — ElementContent receives the already-computed `box`, not the
+    // canvas dimensions. That threw "canvasH is not defined" and dropped
+    // the entire Overlay Studio editor into its error boundary the moment
+    // anyone added a barcode. `box.height` IS this element's on-screen
+    // height, so no extra prop is needed.
+    const boxH = box.height;
+    const textPx = showText
+      ? Math.max(8, Math.round(Math.max(0, boxH - Math.round(boxH * 0.78)) * 0.7))
+      : 0;
     // v0.26.4: bars take ~78% of vertical space when text is shown,
     // text takes ~22%. When text is off, bars take 100%. The flex
     // column lets the user shrink the element box freely (Height
@@ -928,6 +1064,12 @@ function ElementContent({ element, box, productContext, canvasW, filledContent }
           padding: `${padding}px`,
           background: bgColor ? hexWithOpacity(bgColor, element.bg?.opacity ?? 1) : 'transparent',
           borderRadius: `${radius}px`,
+          // v0.1.8: NO inline opacity here. The server bakes element opacity
+          // into the PNG, and this node is invisible anyway (the stylesheet
+          // hides all element content in truthful mode). An inline
+          // `opacity` would override that stylesheet rule — inline styles
+          // win over external CSS — and leak the HTML approximation back on
+          // top of the render. That is exactly what was happening.
           width: '100%',
           height: '100%',
           display: 'flex',
@@ -950,9 +1092,8 @@ function ElementContent({ element, box, productContext, canvasW, filledContent }
               flex: '0 0 auto',
               textAlign: 'center',
               fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-              // Scale font from a 2000px design canvas so the editor
-              // preview matches the bake; clamp to a readable minimum.
-              fontSize: `${Math.max(8, 18 * (canvasW / 2000))}px`,
+              // v0.1.8: matches the export's formula (70% of the text band).
+              fontSize: `${Math.max(8, textPx)}px`,
               letterSpacing: '0.04em',
               color: '#000',
               lineHeight: 1.1,
@@ -971,18 +1112,26 @@ function ElementContent({ element, box, productContext, canvasW, filledContent }
 
   if (element.type === 'image') {
     const src = resolveImageSrc(element.source, productContext);
+    const why = src ? null : describeUnresolvedImage(element.source, productContext);
     return (
       <div
         className="ovl-element__image"
-        style={{ width: '100%', height: '100%', opacity: element.opacity ?? 1 }}
+        /* v0.1.8: no inline opacity — see the note on the text element. */
+        style={{ width: '100%', height: '100%' }}
       >
         {src ? (
           <img src={src} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
         ) : (
+          // v0.1.5: previously this just printed the raw source token
+          // ("brand-icon"), so an element that could not resolve read as a
+          // mysterious empty box. Say WHY it is empty and what to do — the
+          // most common case by far is a brand-icon element on a product
+          // that has no brand assigned.
           <div className="ovl-element__image-placeholder">
-            <span className="muted" style={{ fontSize: 11 }}>
-              {element.source ?? 'image'}
-            </span>
+            <span className="ovl-element__image-empty">{why}</span>
+            {element.source ? (
+              <span className="ovl-element__image-src">{element.source}</span>
+            ) : null}
           </div>
         )}
       </div>
@@ -990,6 +1139,52 @@ function ElementContent({ element, box, productContext, canvasW, filledContent }
   }
 
   return null;
+}
+
+/**
+ * v0.1.5: explain an image element that resolved to nothing.
+ *
+ * Returns short, actionable copy for the on-canvas placeholder. Without
+ * this the placeholder showed the raw source token, so a brand-icon
+ * element on a product with no brand looked like a broken app rather
+ * than a missing piece of data the user can supply in one click.
+ */
+/**
+ * v0.1.23: what to call an element in the design view. Deliberately says which
+ * KIND of thing it is rather than showing its content — that is the whole point
+ * of the mode.
+ */
+function describeElementForPlaceholder(element) {
+  if (element.type === 'text') return 'Text';
+  if (element.type === 'barcode') return `Barcode (${element.format || 'code128'})`;
+  const source = element.source || '';
+  if (source === 'brand-icon') return 'Brand icon';
+  if (source.startsWith('product-image:')) {
+    const n = Number(source.split(':')[1] ?? 0);
+    return `Product image ${n + 1}`;
+  }
+  if (source.startsWith('asset:')) {
+    const name = source.slice('asset:'.length).split('/').pop();
+    return name ? `Image (${name})` : 'Image';
+  }
+  return 'Image';
+}
+
+function describeUnresolvedImage(source, ctx) {
+  if (!ctx) return 'Pick a preview product above to see this image';
+  if (!source) return 'No image source chosen — pick one in the Inspector';
+  if (source === 'brand-icon') {
+    return ctx.brand && ctx.brand !== ''
+      ? 'This brand has no icon yet — add one in Brands'
+      : 'This product has no brand — assign one to use a brand icon';
+  }
+  if (source.startsWith('product-image:')) {
+    const n = Array.isArray(ctx.productImages) ? ctx.productImages.length : 0;
+    if (n === 0) return 'This product has no images yet';
+    return `This product has only ${n} image${n === 1 ? '' : 's'} — pick a lower number`;
+  }
+  if (source.startsWith('asset:')) return 'The imported file is missing — re-import it';
+  return 'No image resolved for this element';
 }
 
 /* ── helpers ──────────────────────────────────────────────────── */
@@ -1022,19 +1217,42 @@ function hexWithOpacity(hex, opacity) {
   return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
+/**
+ * v0.1.4: build an `app-image://` URL for an element's image source.
+ *
+ * These sources store paths WITH an `assets/` prefix — `brands.icon` and
+ * `productImages.filepath` both do (see main/db/productImages.js: the
+ * stored value is e.g. "assets/KT/ROYAL/001.jpg"), and `asset:<rel>` from
+ * `watermarks:upload` returns the kind-prefixed path without it.
+ *
+ * main/protocol.js resolves a non-`processed/` URL as
+ * `path.join(<dataDir>/assets, decoded)` — so the path we send must NOT
+ * carry its own `assets/` prefix, or it resolves to
+ * `<dataDir>/assets/assets/…` and 404s.
+ *
+ * This was sending the prefixed value verbatim, so brand-icon and
+ * product-image elements rendered as nothing on the editor canvas while
+ * still working in the exported PNG (the server-side renderer joins
+ * `assets/` + the prefixed path correctly — see renderImageElement).
+ * Normalising here makes the canvas agree with the export.
+ */
+function stripAssetsPrefix(rel) {
+  return String(rel).replace(/^\/?assets\//, '');
+}
+
 function resolveImageSrc(source, ctx) {
   if (!source || !ctx) return null;
   if (source === 'brand-icon' && ctx.brandIcon) {
-    return `app-image://local/${encodeURIComponent(ctx.brandIcon)}`;
+    return `app-image://local/${encodeURIComponent(stripAssetsPrefix(ctx.brandIcon))}`;
   }
   if (source.startsWith('product-image:')) {
     const idx = Number(source.split(':')[1] ?? 0);
     const img = ctx.productImages?.[idx];
-    if (img?.filepath) return `app-image://local/${encodeURIComponent(img.filepath)}`;
+    if (img?.filepath) return `app-image://local/${encodeURIComponent(stripAssetsPrefix(img.filepath))}`;
   }
   if (source.startsWith('asset:')) {
     const rel = source.slice('asset:'.length);
-    if (rel) return `app-image://local/${encodeURIComponent(rel)}`;
+    if (rel) return `app-image://local/${encodeURIComponent(stripAssetsPrefix(rel))}`;
   }
   return null;
 }

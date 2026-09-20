@@ -10,11 +10,17 @@
  * timer handle for the pending refetch.
  */
 const _catalogRefreshTimers = new Map();
+function logSoft(what, err) {
+  // Not fatal — the in-memory state is still correct — but a silent stale
+  // value is how "the app is showing the wrong thing" bugs start.
+  console.warn(`[soft-failure] ${what}:`, err?.message || err);
+}
+
 export function scheduleSliceRefresh(slice, fn) {
   if (_catalogRefreshTimers.has(slice)) return; // already queued
   const t = setTimeout(() => {
     _catalogRefreshTimers.delete(slice);
-    try { fn(); } catch (_) {}
+    try { fn(); } catch (err) { logSoft('catalog refresh', err); }
   }, 250);
   _catalogRefreshTimers.set(slice, t);
 }
@@ -42,7 +48,6 @@ export function applyCatalogEvent(get, evt) {
   switch (kind) {
     case 'product':
       scheduleSliceRefresh('products', () => get().refreshProducts());
-      scheduleSliceRefresh('allProducts', () => get().refreshAllProducts());
       scheduleSliceRefresh('dashboard', () => get().refreshDashboard());
       break;
     case 'images':
@@ -65,7 +70,6 @@ export function applyCatalogEvent(get, evt) {
       // + image count chip) and, if we happen to be viewing the same
       // product in the workspace, the workspace strip too.
       scheduleSliceRefresh('products', () => get().refreshProducts());
-      scheduleSliceRefresh('allProducts', () => get().refreshAllProducts());
       scheduleSliceRefresh('dashboard', () => get().refreshDashboard());
       if (evt.id && evt.id === get().activeProductId) {
         scheduleSliceRefresh('workspaceImages', () => {
@@ -78,12 +82,10 @@ export function applyCatalogEvent(get, evt) {
       scheduleSliceRefresh('dashboard', () => get().refreshDashboard());
       // Brand rename/delete affects product rows that reference it.
       scheduleSliceRefresh('products', () => get().refreshProducts());
-      scheduleSliceRefresh('allProducts', () => get().refreshAllProducts());
       break;
     case 'category':
       scheduleSliceRefresh('categories', () => get().refreshCategories());
       scheduleSliceRefresh('products', () => get().refreshProducts());
-      scheduleSliceRefresh('allProducts', () => get().refreshAllProducts());
       break;
     case 'company':
       scheduleSliceRefresh('companies', () => get().refreshCompanies());
@@ -101,7 +103,6 @@ export function applyCatalogEvent(get, evt) {
         // Promotion writes a new product image; refresh products too.
         if (evt.op === 'promote') {
           scheduleSliceRefresh('products', () => get().refreshProducts());
-          scheduleSliceRefresh('allProducts', () => get().refreshAllProducts());
         }
       }
       break;

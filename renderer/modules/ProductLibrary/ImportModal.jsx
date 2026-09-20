@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Button, Modal, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 
@@ -32,6 +32,8 @@ const PRODUCT_FIELDS = [
   { key: 'cartonHCm',       label: 'Carton height (cm)' },
   { key: 'cartonDCm',       label: 'Carton length/depth (cm)' },
   { key: 'weightPerUnitKg', label: 'Weight per unit (kg)' },
+  // v0.1.25: units on hand, for the Social Grid filters + sorting.
+  { key: 'stockQty',        label: 'Stock on hand' },
 ];
 
 function autoGuess(header) {
@@ -55,6 +57,11 @@ function autoGuess(header) {
   // number into weight-based cost allocation.
   if (h === 'unit weight' || h === 'weight per unit' || h === 'weight/pc' || h === 'weight per pc' || h === 'net weight per pc' || h.includes('weight per unit') || h.includes('weight/unit')) return 'weightPerUnitKg';
   if (h.startsWith('secondary') || h === 'alt sku' || h === 'alt code' || h.startsWith('supplier')) return 'secondaryCode';
+  // v0.1.25: stock on hand. Deliberately placed AFTER the carton rules above,
+  // so "qty/ctn" and "units per carton" still resolve to cartonQty rather
+  // than being read as on-hand stock — those two numbers mean opposite things
+  // and silently swapping them would corrupt the PO cost allocation.
+  if (h === 'stock' || h === 'stock on hand' || h === 'stock qty' || h === 'stock quantity' || h === 'on hand' || h === 'inventory' || h === 'qty' || h === 'quantity' || h === 'available' || h.includes('on hand')) return 'stockQty';
   if (h === 'category') return 'category';
   if (h === 'subcategory' || h === 'sub-category') return 'subcategory';
   if (h.includes('color') || h.includes('colour') || h.includes('finish')) return 'colorFinish';
@@ -97,6 +104,17 @@ export function ImportModal({ open, onClose }) {
   // Cached row payload so we don't rebuild it when re-previewing under a
   // different conflict policy.
   const [cachedRows, setCachedRows] = useState(null);
+  /* v0.1.27: the parsed rows are cached so "Preview" then "Apply" does not
+   * re-read the workbook — but they are a snapshot of ONE column mapping, and
+   * the cache was never invalidated when the mapping changed. So: preview,
+   * click Back, remap a column, preview again → the second preview (and the
+   * import itself) still used the FIRST mapping, quietly putting the old
+   * column's values into the new field. Any change to the mapping now drops the
+   * cache. */
+  function applyMapping(next) {
+    setCachedRows(null);
+    setMapping(next);
+  }
 
   function reset() {
     setStep('pick');
@@ -195,7 +213,11 @@ export function ImportModal({ open, onClose }) {
         } else if (field === 'priceRetail' || field === 'priceWholesale'
           // v0.49.49: numeric logistics fields coerce the same way.
           || field === 'cartonQty' || field === 'cartonWCm' || field === 'cartonHCm'
-          || field === 'cartonDCm' || field === 'weightPerUnitKg') {
+          || field === 'cartonDCm' || field === 'weightPerUnitKg'
+          // v0.1.25: stock on hand. A blank cell is skipped above, so an
+          // unmapped/empty stock column leaves the existing count alone
+          // instead of wiping it to zero.
+          || field === 'stockQty') {
           out[field] = toNumber(raw);
         } else if (field === 'status') {
           const v = String(raw).trim().toLowerCase();
@@ -356,7 +378,7 @@ export function ImportModal({ open, onClose }) {
                   const headers = workbook.sheets[next].headers;
                   const guessed = {};
                   headers.forEach((h) => { guessed[h] = autoGuess(h); });
-                  setMapping(guessed);
+                  applyMapping(guessed);
                 }}
               >
                 {workbook.sheets.map((s, i) => (
@@ -391,7 +413,7 @@ export function ImportModal({ open, onClose }) {
                       <td>
                         <Select
                           value={mapping[h] ?? '__skip__'}
-                          onChange={(e) => setMapping((m) => ({ ...m, [h]: e.target.value }))}
+                          onChange={(e) => applyMapping({ ...mapping, [h]: e.target.value })}
                         >
                           {PRODUCT_FIELDS.map((f) => (
                             <option key={f.key} value={f.key}>{f.label}</option>
@@ -487,7 +509,9 @@ function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy }) {
       </div>
 
       <p className="muted import-preview__hint">
-        Click <strong>Apply</strong> below to commit. Nothing has been written yet.
+        Click <strong>Apply</strong> below to commit. No products have been written yet
+        — but any new brand or category named in your file has already been added, so
+        the preview can show you the right names.
       </p>
 
       {inserts.length > 0 ? (

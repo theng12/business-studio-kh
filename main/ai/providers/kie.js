@@ -53,7 +53,7 @@ async function uploadSource(apiKey, { absPath, mimeType }) {
   try {
     bytes = await fs.promises.readFile(absPath);
   } catch (err) {
-    if (err.code === 'ENOENT') throw new Error('Source image missing');
+    if (err.code === 'ENOENT') throw new Error('Source image missing', { cause: err });
     throw err;
   }
   const ext = (path.extname(absPath) || '.png').slice(1).toLowerCase();

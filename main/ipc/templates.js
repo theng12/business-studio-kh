@@ -25,6 +25,8 @@ const companies = require('../db/companies');
 const imageTemplates = require('../db/imageTemplates');
 const imageTemplateRuns = require('../db/imageTemplateRuns');
 const templateRenderer = require('../templateRenderer');
+const { writeUniqueFile } = require('../util/exclusiveFile');
+const { applyTemplateToFiles, validateExternalRequest } = require('../util/externalOverlay');
 const { getDataDir } = require('../db');
 
 /* ─── v0.49.52: multi-image overlay apply helpers ───────────────────
@@ -106,14 +108,27 @@ async function applyOverlayToProductImages({ template, product, scope, destinati
       const updated = await overwriteImageInPlace(product.id, img, bytes);
       outputs.push({ outputFilepath: img.filepath, image: updated, overwritten: true });
     } else if (destination.kind === 'saveToFolder') {
+      const base = `${slugify(product.sku || 'product', 'product')}-${slugify(template.name || 'overlay', 'overlay')}`;
+      if (destination.collect) {
+        /* v0.1.27: hand the bytes BACK instead of writing them.
+         *
+         * A client Mac cannot see this machine's disk, so when it asked to
+         * "save to folder" the write happened HERE, into a path taken from the
+         * client's own folder picker — the images ended up in a directory tree
+         * on the server while the folder the user chose stayed empty, and
+         * nothing said so. The client now asks for the bytes and writes them
+         * itself, which is the same "render where the data is, save where you
+         * are sitting" handover the label, catalog, grid and watermark
+         * features already use.
+         *
+         * The final filename is deliberately left to the caller: only the
+         * client can see which names are already taken in ITS folder. */
+        outputs.push({ name: `${base}.png`, bytes, collected: true });
+        continue;
+      }
       const folder = destination.folder;
       await fs.promises.mkdir(folder, { recursive: true });
-      const base = `${slugify(product.sku || 'product', 'product')}-${slugify(template.name || 'overlay', 'overlay')}`;
-      let name = `${base}.png`;
-      let n = 2;
-      while (fs.existsSync(path.join(folder, name)) && n < 9999) { name = `${base}-${n}.png`; n += 1; }
-      const absOut = path.join(folder, name);
-      await fs.promises.writeFile(absOut, bytes);
+      const absOut = await writeUniqueFile(folder, `${base}.png`, bytes);
       outputs.push({ outputFilepath: absOut, savedTo: absOut });
     } else {
       // append / appendAsMain / replaceMain → add an overlaid copy.
@@ -136,7 +151,7 @@ async function applyOverlayToProductImages({ template, product, scope, destinati
   return { outputs };
 }
 
-function register({ expose, emitCatalogChange }) {
+function register({ expose, exposeLocal, emitCatalogChange }) {
   expose('templates:list',      (opts) => imageTemplates.list(opts ?? {}));
   expose('templates:get',       (id) => imageTemplates.get(id));
   // v0.15.0: template mutations exposed. Templates are global (no
@@ -157,11 +172,32 @@ function register({ expose, emitCatalogChange }) {
    * 3's batch runner reuses the underlying compose() function, not
    * this IPC handler.
    */
-  expose('templates:renderPreview', async ({ templateId, template: inline, productId } = {}) => {
+  expose('templates:renderPreview', async ({ templateId, template: inline, productId, maxPx } = {}) => {
     const template = inline || (templateId ? imageTemplates.get(templateId) : null);
     if (!template) throw new Error('Template not found');
     const product = productId ? products.get(productId) : null;
     if (!product && productId) throw new Error('Product not found');
+
+    /* v0.1.4: bounded preview resolution.
+     *
+     * The editor canvas is a few hundred px wide, but this handler used to
+     * always compose at the template's full design size (typically
+     * 2000×2000). Measured cost of that compose: ~150-480 ms, producing a
+     * ~49 KB PNG across IPC, for an image the canvas then scales down to
+     * ~600px. Compose cost and memory scale with pixel count, so rendering
+     * an 11× larger image than can be displayed was pure waste — and it is
+     * paid again after every debounced edit, which is what made the
+     * preview feel laggy.
+     *
+     * `maxPx` lets the caller cap the LONGEST side. Every element position
+     * and size is fractional (resolved against the base image's own
+     * width/height inside templateRenderer.compose), so rendering a
+     * smaller base scales the whole design proportionally — the preview is
+     * pixel-identical in layout, just lower resolution. Omit `maxPx` (as
+     * the real export paths do) and this behaves exactly as before. */
+    const capPx = Number.isFinite(Number(maxPx)) && Number(maxPx) >= 64
+      ? Math.round(Number(maxPx))
+      : null;
 
     // Pick the best base image: processed wins over raw. Falls back
     // to a blank canvas if there's nothing to overlay onto (useful
@@ -183,14 +219,27 @@ function register({ expose, emitCatalogChange }) {
       // the user still sees their elements rendered for
       // editor/preview work.
       const sharp = require('sharp');
+      const designW = template.canvasWidth || 2000;
+      const designH = template.canvasHeight || 2000;
+      // Shrink the synthetic canvas too, preserving aspect, so the
+      // no-product preview gets the same speed-up.
+      let w = designW, h = designH;
+      if (capPx && Math.max(designW, designH) > capPx) {
+        const s = capPx / Math.max(designW, designH);
+        w = Math.max(32, Math.round(designW * s));
+        h = Math.max(32, Math.round(designH * s));
+      }
       inputImage = await sharp({
-        create: {
-          width: template.canvasWidth || 2000,
-          height: template.canvasHeight || 2000,
-          channels: 4,
-          background: { r: 255, g: 255, b: 255, alpha: 1 },
-        },
+        create: { width: w, height: h, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } },
       }).png().toBuffer();
+    } else if (capPx) {
+      // Downscale the source photo to the preview bound before compositing.
+      // `withoutEnlargement` keeps small sources at their natural size.
+      const sharp = require('sharp');
+      inputImage = await sharp(inputImage, { failOn: 'none' })
+        .resize({ width: capPx, height: capPx, fit: 'inside', withoutEnlargement: true })
+        .png()
+        .toBuffer();
     }
 
     const ctx = product ? buildTemplateContext(product) : {};
@@ -298,81 +347,44 @@ function register({ expose, emitCatalogChange }) {
    * v0.49.53: apply a template to arbitrary image FILES on disk — no
    * products involved (e.g. watermarking a folder of personal photos).
    * Composes each input, re-encodes to the source format, writes to an
-   * output folder. Local-only: file paths are on this machine's disk, so
-   * the renderer gates this to standalone / host mode.
+   * output folder.
+   *
+   * v0.1.19: the composing itself moved to main/util/externalOverlay.js, because
+   * client mode has to run the SAME work on the client's own disk (the photos are
+   * there) with the template's assets pulled from this Mac. Assets resolve
+   * through the default resolver, i.e. this machine's data folder.
    *
    *   { templateId, inputPaths: [abs file paths], outputFolder }
    * Returns { done, failed, total, outputFolder }.
    */
-  expose('templates:applyToExternal', async ({ templateId, inputPaths, outputFolder } = {}) => {
+  exposeLocal('templates:applyToExternal', async ({ templateId, inputPaths, outputFolder } = {}) => {
     if (!templateId) throw new Error('templateId required');
-    if (!Array.isArray(inputPaths) || inputPaths.length === 0) throw new Error('Pick at least one image');
-    if (inputPaths.length > 2000) throw new Error('Too many files (max 2000 per batch).');
-    if (typeof outputFolder !== 'string' || !outputFolder.trim()) throw new Error('Pick an output folder');
+    validateExternalRequest({ inputPaths, outputFolder });
 
     const template = imageTemplates.get(templateId);
     if (!template) throw new Error('Template not found');
 
     const events = require('../events');
-    const { slugify } = require('../util/slug');
-    await fs.promises.mkdir(outputFolder, { recursive: true });
-
-    // External images have no product, so token-based text/barcode
-    // elements (SKU, barcode, brand) render empty — a watermark template
-    // (logo / static text) is the intended use. Neutral context.
-    const ctx = {
-      sku: '', name: '', brand: '', brandIcon: null, barcode: '',
-      colorFinish: '', category: '', description: '', priceRetail: null, priceWholesale: null,
-    };
-
-    const done = [];
-    const failed = [];
-    const total = inputPaths.length;
     const opId = `overlay-external-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    const label = template.name || 'Watermark';
-    events.broadcast('progress:event', { id: opId, kind: 'overlay-external', done: 0, total, phase: 'applying', label });
-    const tmplSlug = slugify(template.name || 'overlay', 'overlay');
+    events.broadcast('progress:event', {
+      id: opId, kind: 'overlay-external', done: 0, total: inputPaths.length,
+      phase: 'applying', label: template.name || 'Watermark',
+    });
 
     try {
-      for (let i = 0; i < inputPaths.length; i++) {
-        const src = inputPaths[i];
-        try {
-          if (!fs.existsSync(src)) {
-            failed.push({ src, error: 'file not found' });
-          } else {
-            const bytes = await templateRenderer.compose({ inputImage: src, template, context: ctx });
-            // Re-encode to the source format so a JPG photo stays a JPG
-            // (PNG output would balloon photo file sizes).
-            const sharp = require('sharp');
-            let ext = path.extname(src).toLowerCase();
-            if (ext === '.heic' || ext === '.heif' || ext === '') ext = '.jpg'; // HEIC out isn't well supported
-            let pipe = sharp(bytes, { failOn: 'none' });
-            if (ext === '.png')        pipe = pipe.png({ compressionLevel: 9 });
-            else if (ext === '.webp')  pipe = pipe.webp({ quality: 90 });
-            else                       { ext = ext === '.jpeg' ? '.jpeg' : '.jpg'; pipe = pipe.jpeg({ quality: 92, mozjpeg: true }); }
-            const outBytes = await pipe.toBuffer();
-
-            const baseName = slugify(path.basename(src, path.extname(src)) || 'photo', 'photo');
-            let name = `${baseName}-${tmplSlug}${ext}`;
-            let n = 2;
-            while (fs.existsSync(path.join(outputFolder, name)) && n < 9999) { name = `${baseName}-${tmplSlug}-${n}${ext}`; n += 1; }
-            const absOut = path.join(outputFolder, name);
-            await fs.promises.writeFile(absOut, outBytes);
-            done.push({ src, outputFilepath: absOut });
-          }
-        } catch (err) {
-          failed.push({ src, error: err.message });
-        }
-        events.broadcast('progress:event', {
-          id: opId, kind: 'overlay-external', done: i + 1, total, phase: 'applying',
-          label: `${label} · ${path.basename(src)}`,
-        });
-      }
+      return await applyTemplateToFiles({
+        template,
+        inputPaths,
+        outputFolder,
+        onProgress: ({ done, total, label }) => {
+          events.broadcast('progress:event', {
+            id: opId, kind: 'overlay-external', done, total, phase: 'applying', label,
+          });
+        },
+      });
     } finally {
       events.broadcast('progress:event', { id: opId, complete: true });
     }
-
-    return { done: done.length, failed, total, outputFolder };
   });
 
   expose('templates:applyBulk', async ({ templateId, productIds, destination, scope } = {}) => {
@@ -451,6 +463,16 @@ async function applyBulkInternal({ templateId, productIds, destination, companyI
   const done = [];
   const failed = [];
   const skipped = [];
+  /* v0.1.29: the collected bytes for a CLIENT to write.
+   *
+   * When destination.collect is set, applyOverlayToProductImages hands back the
+   * composed bytes instead of writing them (see the saveToFolder branch there).
+   * The loop below used to keep only `outputFilepath` and drop everything else,
+   * so a client asking for the bytes received "done" entries with no bytes at
+   * all and wrote nothing — the export appeared to succeed and produced no
+   * files. Collected outputs are now returned under the same `outputs` key that
+   * templates:applyToProduct already uses, so the client has ONE shape to read. */
+  const collected = [];
   const total = productIds.length;
   // v0.26.18: use the SHARED progress:event channel (same one
   // auto-match / bulk export / bulk AI use) so the existing global
@@ -483,7 +505,13 @@ async function applyBulkInternal({ templateId, productIds, destination, companyI
           continue;
         }
         for (const o of outputs) {
-          done.push({ productId: pid, sku: product.sku, outputFilepath: o.outputFilepath });
+          done.push({
+            productId: pid,
+            sku: product.sku,
+            outputFilepath: o.outputFilepath,
+            ...(o.collected ? { name: o.name, collected: true } : {}),
+          });
+          if (o.collected && o.bytes) collected.push({ name: o.name, bytes: o.bytes, collected: true });
         }
         if (destination.kind !== 'saveToFolder' && outputs.length > 0) {
           const promoted = (destination.kind === 'replaceMain' || destination.kind === 'appendAsMain') && outputs.some((o) => o.image);
@@ -516,7 +544,11 @@ async function applyBulkInternal({ templateId, productIds, destination, companyI
     });
   } catch (_) {/* swallow log errors */}
 
-  return { done, failed, skipped, total };
+  // `outputs` is present only when bytes were collected, so every other caller
+  // sees exactly the payload it saw before.
+  return collected.length
+    ? { done, failed, skipped, total, outputs: collected }
+    : { done, failed, skipped, total };
 }
 
 /**

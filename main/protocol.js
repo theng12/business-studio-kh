@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const url = require('node:url');
+const { createHash } = require('node:crypto');
 
 /**
  * v0.26.42: async existence probe. Used in place of `fs.existsSync`
@@ -17,6 +18,11 @@ async function fileExists(p) {
     await fsp.access(p, fs.constants.F_OK);
     return true;
   } catch { return false; }
+}
+
+function isPathWithinRoot(root, candidate) {
+  const rel = path.relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
 }
 
 /**
@@ -38,7 +44,7 @@ function registerRendererProtocol(distRendererDir) {
       if (!rel) rel = 'index.html';
 
       const targetAbs = path.normalize(path.join(distRendererDir, rel));
-      if (!targetAbs.startsWith(baseAbs)) {
+      if (!isPathWithinRoot(baseAbs, targetAbs)) {
         return new Response(null, { status: 403 });
       }
       // v0.26.42: async existence check. See fileExists() above for
@@ -74,7 +80,9 @@ function registerClientImageProtocol(getClient) {
   protocol.handle('app-image', async (request) => {
     try {
       const stripped = request.url.replace(/^app-image:\/\/local\//, '');
-      const noQuery = stripped.split('?')[0];
+      const queryAt = stripped.indexOf('?');
+      const noQuery = queryAt === -1 ? stripped : stripped.slice(0, queryAt);
+      const query = queryAt === -1 ? '' : stripped.slice(queryAt);
       const decoded = decodeURIComponent(noQuery);
       if (path.isAbsolute(decoded) || decoded.includes('..')) {
         return new Response(null, { status: 403 });
@@ -88,8 +96,18 @@ function registerClientImageProtocol(getClient) {
 
       let upstream;
       try {
-        upstream = await fetch(`${url}/assets/${decoded}`, {
+        const upstreamUrl = new URL(`${url}/assets/${encodeURI(decoded)}${query}`);
+        // Chromium's HTTP cache revalidates an authorized response across a
+        // changed Authorization header despite Vary: Authorization. Add only a
+        // non-secret token fingerprint to the cache key so credentials never
+        // share cached bytes; server origin already separates server switches.
+        upstreamUrl.searchParams.set(
+          '_auth',
+          createHash('sha256').update(auth).digest('hex').slice(0, 16),
+        );
+        upstream = await net.fetch(upstreamUrl.toString(), {
           headers: { Authorization: auth },
+          cache: 'no-cache',
         });
       } catch (err) {
         process.stderr.write(`[app-image client] fetch error: ${err.message}\n`);
@@ -100,7 +118,10 @@ function registerClientImageProtocol(getClient) {
       const ct = upstream.headers.get('content-type') || 'application/octet-stream';
       return new Response(upstream.body, {
         status: upstream.status,
-        headers: { 'Content-Type': ct, 'Cache-Control': 'no-cache' },
+        // The outer app-image URL does not contain the active server or token.
+        // Keep it out of Chromium's response cache; net.fetch above can safely
+        // revalidate its full server URL with Authorization and version query.
+        headers: { 'Content-Type': ct, 'Cache-Control': 'no-store' },
       });
     } catch (err) {
       process.stderr.write(`[app-image client] handler error: ${err.message}\n`);
@@ -116,7 +137,6 @@ function registerImageProtocol(dataDir) {
   const assetsRoot = path.normalize(path.join(dataDir, 'assets'));
   const processedRoot = path.normalize(path.join(dataDir, 'processed'));
   const aiGalleryRoot = path.normalize(path.join(dataDir, 'ai-gallery'));
-  const dataDirNorm = path.normalize(dataDir);
 
   protocol.handle('app-image', async (request) => {
     try {
@@ -146,9 +166,9 @@ function registerImageProtocol(dataDir) {
       // Belt-and-braces: even relative input could traverse via `..`. Confirm
       // the resolved path falls inside one of the three allowed roots.
       if (
-        !normalized.startsWith(assetsRoot) &&
-        !normalized.startsWith(processedRoot) &&
-        !normalized.startsWith(aiGalleryRoot)
+        !isPathWithinRoot(assetsRoot, normalized) &&
+        !isPathWithinRoot(processedRoot, normalized) &&
+        !isPathWithinRoot(aiGalleryRoot, normalized)
       ) {
         return new Response(null, { status: 403 });
       }
@@ -169,4 +189,9 @@ function registerImageProtocol(dataDir) {
   });
 }
 
-module.exports = { registerImageProtocol, registerClientImageProtocol, registerRendererProtocol };
+module.exports = {
+  isPathWithinRoot,
+  registerImageProtocol,
+  registerClientImageProtocol,
+  registerRendererProtocol,
+};

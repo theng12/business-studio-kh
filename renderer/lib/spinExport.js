@@ -70,9 +70,10 @@ export async function exportSpinVideo(imageUrls, opts = {}) {
   if (!mimeType) throw new Error('This build can\'t record video — no supported MediaRecorder codec.');
 
   // Preload all frames first so the recording loop never blocks on network.
+  // Sequential on purpose: a spin is a small, ordered frame set, and loading
+  // them concurrently would just contend for the same decoder.
   const imgs = [];
   for (let i = 0; i < imageUrls.length; i += 1) {
-    // eslint-disable-next-line no-await-in-loop -- sequential is fine; small N
     imgs.push(await loadImage(imageUrls[i]));
     onProgress?.('load', (i + 1) / imageUrls.length);
   }
@@ -126,7 +127,8 @@ export async function exportSpinVideo(imageUrls, opts = {}) {
     ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
     if (track.requestFrame) track.requestFrame();
     onProgress?.('render', (f + 1) / totalFrames);
-    // eslint-disable-next-line no-await-in-loop -- we WANT one frame per tick
+    // One frame per tick, deliberately: the recorder captures the canvas as it
+    // is painted, so yielding here is what makes each frame distinct.
     await new Promise((r) => setTimeout(r, frameMs));
   }
   rec.stop();

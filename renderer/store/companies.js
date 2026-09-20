@@ -5,6 +5,59 @@
 // persisted globally and survives company switches, so the slice
 // doesn't need to reset it. See store/products.js + productsDefaults.js.
 import { DEFAULT_FILTERS } from './productsDefaults.js';
+import { flushCompanySwitches } from '../lib/companySwitch.js';
+
+let switchSeq = 0;
+let switchChain = Promise.resolve();
+let pendingSwitches = 0;
+let reconcileSeq = 0;
+
+function companyContextPatch(id) {
+  return {
+    activeCompanyId: id ?? null,
+    productFilters: { ...DEFAULT_FILTERS },
+    page: 0,
+    brands: [],
+    brandsLoading: !!id,
+    categories: [],
+    products: [],
+    allProducts: [],
+    productsLoading: !!id,
+    dashboardStats: null,
+    dashboardRecentBrands: [],
+    dashboardRecentProducts: [],
+    dashboardCompleteness: null,
+    exportProfiles: [],
+    exportQueueIds: [],
+    selectedExportProfileId: null,
+    exportLastResult: null,
+    aiPrompts: [],
+    aiTasks: [],
+    aiGalleryByProduct: {},
+    aiSourceProductId: null,
+    aiSourceImagePath: null,
+    activeProductId: null,
+    workspaceImages: [],
+    workspaceImageIndex: 0,
+    workspaceProductSku: '',
+    workspaceProductName: '',
+    pendingPoId: null,
+    pendingPoSupplierId: null,
+    pendingCatalogProjectId: null,
+  };
+}
+
+function refreshCompanyData(get) {
+  return Promise.all([
+    get().refreshBrands(),
+    get().refreshCategories(),
+    get().refreshProducts(),
+    get().refreshDashboard(),
+    get().refreshExportProfiles(),
+    get().refreshAiPrompts(),
+    get().refreshAiTasks(),
+  ]);
+}
 
 export function createCompaniesSlice(set, get) {
   return {
@@ -18,28 +71,56 @@ export function createCompaniesSlice(set, get) {
       catch (err) { get().addToast(err.message, 'error'); }
     },
 
+    applyActiveCompanyContext(id) {
+      if ((id ?? null) !== get().activeCompanyId) set(companyContextPatch(id));
+    },
+
     async setActiveCompany(id) {
-      await window.api.companies.setActive(id);
+      const seq = ++switchSeq;
+      pendingSwitches += 1;
+      const write = switchChain.then(async () => {
+        await flushCompanySwitches();
+        return window.api.companies.setActive(id);
+      });
+      switchChain = write.catch(() => {});
+      /* v0.1.28: surface a failure. The server rejects when the company no
+       * longer exists, or when a client's link is down — and the caller in the
+       * sidebar and the Companies page did not catch, so "Set active" simply
+       * did nothing with no explanation. */
+      try {
+        await write;
+      } catch (err) {
+        pendingSwitches -= 1;
+        if (seq !== switchSeq) return;
+        get().addToast(`Couldn't switch company: ${err.message}`, 'error');
+        try {
+          const activeId = await window.api.companies.getActiveId();
+          if (seq === switchSeq) {
+            get().applyActiveCompanyContext(activeId);
+            await refreshCompanyData(get);
+          }
+        } catch (_) { /* keep the last known context */ }
+        return;
+      }
+      pendingSwitches -= 1;
+      if (seq !== switchSeq) return;
       // v0.26.48: preserve the user's persisted sort choice across
       // company switches. Pre-fix this reset productSort to
       // DEFAULT_SORT every time, defeating the localStorage persistence.
       // Filters DO reset (search/brand/category are intrinsically
       // per-company), but sort preference is global UI ergonomics.
-      set({
-        activeCompanyId: id,
-        productFilters: { ...DEFAULT_FILTERS },
-        page: 0,
-        exportQueueIds: [],
-        selectedExportProfileId: null,
-      });
-      await Promise.all([
-        get().refreshBrands(),
-        get().refreshCategories(),
-        get().refreshProducts(),
-        get().refreshAllProducts(),
-        get().refreshDashboard(),
-        get().refreshExportProfiles(),
-      ]);
+      get().applyActiveCompanyContext(id);
+      await refreshCompanyData(get);
+    },
+
+    async reconcileActiveCompany() {
+      const seq = ++reconcileSeq;
+      const switchAtStart = switchSeq;
+      const switchWasPending = pendingSwitches > 0;
+      const id = await window.api.companies.getActiveId();
+      if (seq !== reconcileSeq || switchAtStart !== switchSeq || switchWasPending || pendingSwitches > 0) return;
+      get().applyActiveCompanyContext(id);
+      await Promise.all([get().refreshCompanies(), refreshCompanyData(get)]);
     },
 
     async createCompany(input) {
@@ -63,18 +144,8 @@ export function createCompaniesSlice(set, get) {
       await window.api.companies.remove(id);
       await get().refreshCompanies();
       const activeId = await window.api.companies.getActiveId();
-      set({ activeCompanyId: activeId });
-      if (activeId) {
-        await Promise.all([
-          get().refreshBrands(),
-          get().refreshCategories(),
-          get().refreshProducts(),
-          get().refreshAllProducts(),
-          get().refreshDashboard(),
-        ]);
-      } else {
-        set({ brands: [], categories: [], products: [], allProducts: [], dashboardStats: null });
-      }
+      get().applyActiveCompanyContext(activeId);
+      await refreshCompanyData(get);
     },
   };
 }

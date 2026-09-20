@@ -35,10 +35,41 @@
 const { ipcMain, app, BrowserWindow } = require('electron');
 // v0.49.43: 429 retry/backoff math (pure helper — no electron dep).
 const { retryWaitMs, shouldRetry } = require('../util/rateLimitRetry');
+// v0.1.18: the shared argument check, so client-mode local channels validate
+// exactly like the server/standalone ones do.
+const { validateArgs } = require('../util/validateArgs');
+const { writeExclusiveFile, writeUniqueFile } = require('../util/exclusiveFile');
 // v0.15.1: WebSocket client (same `ws` lib as the server). Used in
 // client mode to subscribe to live update events. Loaded lazily so
 // standalone / server mode doesn't pay the import cost.
 let WebSocket = null;
+
+/**
+ * v0.1.18: register a LOCAL-ONLY client channel, with the same argument
+ * checking the server/standalone path uses.
+ *
+ * These 35 channels exist on the client because they have to act on the
+ * CLIENT's Mac — the dialog opens here, the folder is scanned here, the
+ * spreadsheet is parsed here. That also means they can't go through
+ * `expose()` in main/ipc/helpers.js (which would publish them to a server
+ * this process doesn't have) and they can't use `exposeLocal()` either,
+ * because helpers.js pulls in the DB and the server registry at module
+ * scope and client mode has neither.
+ *
+ * So they call the shared rule directly. `validateArgs` lives in
+ * main/util/validateArgs.js precisely so both processes can reach it — see
+ * the note there. Until v0.1.18 these were bare `ipcMain.handle` calls, which
+ * is how "local-only" quietly also meant "unvalidated".
+ *
+ * Signature contract is `(args) => result`, identical to `exposeLocal()`, so
+ * a handler body can be moved between the two without edits.
+ */
+function handleLocal(channel, handler) {
+  ipcMain.handle(channel, (_e, ...args) => {
+    validateArgs(channel, args[0]);
+    return handler(args[0]);
+  });
+}
 
 /* ─── HTTP RPC ─────────────────────────────────────────────────── */
 
@@ -49,7 +80,7 @@ let _connectionState = {
   // HTTP layer is up; something inside the server hiccuped. Distinct
   // from 'disconnected' (truly unreachable) so the user can tell the
   // two failure modes apart at a glance.
-  status: 'unknown',     // 'unknown' | 'connecting' | 'connected' | 'degraded' | 'disconnected'
+  status: 'unknown',     // 'unknown' | 'unconfigured' | 'connecting' | 'connected' | 'degraded' | 'disconnected'
   lastOkAt: 0,
   lastError: null,
   user: null,
@@ -57,6 +88,25 @@ let _connectionState = {
 };
 let _pollTimer = null;
 let _pollBackoffMs = 2000;
+// ponytail: JSON/base64 keeps the 100 MiB encoded ceiling and buffers the
+// payload. Add streaming only for an operation whose normal workload needs it.
+const MAX_RPC_BODY_BYTES = 100 * 1024 * 1024;
+const DRAG_PREP_TTL_MS = 5 * 60 * 1000;
+const issuedDragPaths = new Map();
+
+function takeIssuedDragPaths(paths) {
+  const now = Date.now();
+  for (const [filePath, expiresAt] of issuedDragPaths) {
+    if (expiresAt < now) issuedDragPaths.delete(filePath);
+  }
+  const allowed = [];
+  for (const filePath of paths) {
+    const expiresAt = issuedDragPaths.get(filePath);
+    issuedDragPaths.delete(filePath);
+    if (expiresAt >= now) allowed.push(filePath);
+  }
+  return allowed;
+}
 // v0.26.38: debounce counter for the ping loop. We only flip the
 // chip red after N consecutive failures — a single transient ping
 // failure (slow GC, momentary packet loss, server's HTTP layer
@@ -90,7 +140,12 @@ function setConnectionState(patch) {
 
 function baseUrl() {
   if (!_config?.clientServerUrl) return null;
-  return _config.clientServerUrl.replace(/\/+$/, '');
+  /* v0.1.31: normalise on read as well as on write. A config saved BEFORE the
+   * write-side fix may still carry a path (the `…/m` mobile-viewer address),
+   * and stripping it here means that Mac connects correctly on this build
+   * rather than needing the user to retype the address. */
+  const { normalizeServerUrl } = require('../util/fetchErrors');
+  return normalizeServerUrl(_config.clientServerUrl).replace(/\/+$/, '');
 }
 
 function authHeader() {
@@ -227,8 +282,15 @@ async function rpc(channel, args) {
 
   let res;
   let responseBytes = 0;
-  let body = null;
+  let body;
   try {
+    if (requestBytes > MAX_RPC_BODY_BYTES) {
+      _syncStats.errorCount += 1;
+      throw new Error(
+        'This transfer exceeds the server’s 100 MiB request limit. ' +
+        'Binary data expands during transfer encoding, so keep raw files or batches below 75 MiB.',
+      );
+    }
     // v0.49.43: retry loop for HTTP 429. The server's /api/rpc limiter
     // (120 calls / 10s per token) returns a 429 + Retry-After when a
     // burst — e.g. a post-bulk-op refetch — exceeds it. Previously we
@@ -260,7 +322,7 @@ async function rpc(channel, args) {
         const analyzed = analyzeFetchError(err, url);
         setConnectionState({ status: 'disconnected', lastError: analyzed.message });
         _syncStats.errorCount += 1;
-        throw new Error(analyzed.message);
+        throw new Error(analyzed.message, { cause: err });
       }
 
       // Read response body as text first so we know its byte count, then
@@ -497,8 +559,16 @@ function startPolling() {
   async function tick() {
     const url = baseUrl();
     if (!url) {
-      // No URL configured yet — just keep waiting; user is probably
-      // about to fill it in.
+      /* No URL configured yet — keep waiting, the user is probably about to
+       * fill it in.
+       *
+       * v0.1.31: also PUBLISH that fact. The renderer needs to tell "this Mac
+       * is a client with no server set" apart from "the server is down" — the
+       * first is a setup step, the second is a fault — and it cannot work that
+       * out from a mirrored config value that goes stale the moment the user
+       * types an address. This is pushed live, every tick, so the banner
+       * disappears on its own once an address is saved. */
+      setConnectionState({ status: 'unconfigured', lastError: null });
       _pollTimer = setTimeout(tick, 5000);
       return;
     }
@@ -688,10 +758,20 @@ const PROXIED_CHANNELS = [
   'ai:favoriteGallery','ai:removeGallery','ai:promoteGalleryToProduct',
   'exports:createProfile','exports:updateProfile','exports:removeProfile','exports:duplicateProfile',
   'templates:create','templates:update','templates:remove','templates:duplicate','templates:renderPreview',
+  // v0.1.27: templates:applyToProduct / applyBulk / applyByFilter are NO LONGER
+  // proxied verbatim — they have a local bridge below (see
+  // registerOverlayApplyBridges). Leaving them here as well would register
+  // ipcMain.handle twice for the same channel, which Electron rejects at boot.
   'labels:createTemplate','labels:updateTemplate','labels:deleteTemplate','labels:duplicateTemplate','labels:deleteRun',
   'catalogStudio:create','catalogStudio:update','catalogStudio:delete','catalogStudio:duplicate',
+  // v0.1.25: Social Grid's preset CRUD + resolve + preview all run on the
+  // server — the products, their stock counts and their image files live
+  // there. Only the EXPORT is local (below), because the finished PNGs have to
+  // land on this Mac's disk; the server renders them and ships the bytes.
+  'socialGrid:list','socialGrid:get','socialGrid:create','socialGrid:update',
+  'socialGrid:delete','socialGrid:duplicate','socialGrid:preview',
+  'socialGrid:markExported',
   // v0.26.15: apply-template handlers (single + bulk + by-filter).
-  'templates:applyToProduct','templates:applyBulk','templates:applyByFilter',
   'images:setMainImage','images:reorderImages','images:removeFromProduct','images:flipSource',
   'images:importFromBytes','watermarks:uploadFromBytes',
   // v0.28.0: near-duplicate scan/merge/revert. All run server-side (the
@@ -740,30 +820,20 @@ const PROXIED_CHANNELS = [
   // v0.15.3 — attribution + presence.
   'users:listForAttribution',
   'users:presence',
-];
 
-/**
- * Channels we deliberately stub out in client mode because they're
- * either irrelevant (settings:getAll → use the client's local config)
- * or destined to be locally handled (app:openExternal — the client
- * has its own shell).
- *
- * The "throw clearly" pattern is intentional: if a future feature
- * tries to call one of these we want it to fail loud in dev, not
- * mysteriously hang or return undefined.
- */
-const LOCAL_STUBS = new Set([
-  'app:openExternal',
-  'app:openDataFolder',
-  'app:openLogsFolder',
-  'app:relaunch',
-  'app:getVersionInfo',
-  'settings:getAll',
-  'settings:setOne',
-  'settings:setMany',
-  'settings:setMode',
-  'client:testConnection',
-]);
+  // v0.1.22: server-owned operations, now reachable from a client Mac.
+  //
+  // These act on the DATA (accounts, tokens, the backup archive), not on the Mac
+  // showing the screen, so they belong on the server — and the server already
+  // gates every one of them by capability (users.manage for accounts,
+  // system.manage for backups). Proxying them therefore does not widen access:
+  // an editor on a client Mac is still refused, by the server, with a clear
+  // message. What it removes is the need to walk to the data Mac to add a user
+  // or take a backup.
+  'users:list','users:create','users:update','users:remove','users:regenerateToken','users:ensureOwner',
+  'roles:list','roles:get','roles:capabilities','roles:create','roles:update','roles:remove',
+  'backups:create','backups:list','backups:last','backups:preview','backups:restore',
+];
 
 /**
  * Channels NOT yet portable to client mode. We register an
@@ -781,10 +851,8 @@ const NOT_YET_PORTABLE = [
   // these reads must stay local.
   'ai:testKie','ai:testFal','ai:getCredits',
   // Users / server controls — admin runs these on the server's own
-  // Settings page, not on a client.
-  'users:list','users:create','users:update','users:remove','users:regenerateToken','users:ensureOwner',
-  // v0.49.51: roles + permission matrix (admin manages on the server).
-  'roles:list','roles:get','roles:capabilities','roles:create','roles:update','roles:remove',
+  // Settings page, not on a client.'users:create','users:update','users:remove','users:regenerateToken','users:ensureOwner',
+  // v0.49.51: roles + permission matrix (admin manages on the server).'roles:get','roles:capabilities','roles:create','roles:update','roles:remove',
   'server:status','server:addresses','server:start','server:stop',
   // Settings — data folder lives locally.
   'settings:pickAndSetDataFolder','settings:changeDataFolder',
@@ -799,13 +867,12 @@ const NOT_YET_PORTABLE = [
   // a clear message instead of "No handler registered".
   'settings:trashFolder',
   'servers:exportBundle','servers:importBundle','servers:previewBundle','servers:applyImportedDataDir',
-  // v0.49.31: local backup/restore operates on a LOCAL data folder,
-  // which a client doesn't have. Stubbed so a stray call fails with a
-  // clear message instead of "No handler registered".
-  'backups:create','backups:list','backups:last','backups:preview',
-  'backups:reveal','backups:openFolder','backups:pickFolder','backups:restore',
-  'labels:listPrinters','labels:generate','labels:print','labels:openOutput','labels:importAsset','labels:saveBarcode',
-  'catalogStudio:export',
+  // v0.1.22: creating, listing, previewing and restoring a backup now WORK on a
+  // client — they act on the server's data folder, so they are proxied (see
+  // PROXIED_CHANNELS above). The three below are the exceptions, because they
+  // open a Finder window or a folder picker: those must appear on the Mac the
+  // user is looking at, and the folder they would open is on the other one.
+  'backups:reveal','backups:openFolder','backups:pickFolder',
 ];
 
 /**
@@ -822,7 +889,8 @@ function registerClientProxies(loadConfigFn) {
     try { _config = loadConfigFn(); } catch (_) { /* ignore */ }
   }
 
-  /* RPC-proxied channels — forward args verbatim to the server. */
+  /* RPC-proxied channels — forward args verbatim to the server. The server's
+   * dispatcher validates these on arrival, which is the only path they have. */
   for (const channel of PROXIED_CHANNELS) {
     ipcMain.handle(channel, (_e, arg) => rpc(channel, arg));
   }
@@ -840,8 +908,8 @@ function registerClientProxies(loadConfigFn) {
   // get stuck on v0.0.0 forever until they fixed connection AND
   // relaunched. Trivial to make local; the server's version is
   // surfaced separately via `serverVersion` in the connection state.
-  ipcMain.handle('app:getVersion',  () => app.getVersion());
-  ipcMain.handle('app:getPlatform', () => process.platform);
+  handleLocal('app:getVersion',  () => app.getVersion());
+  handleLocal('app:getPlatform', () => process.platform);
 
   // v0.26.51: model-cache panel handlers. These inspect / clear THIS
   // Mac's Electron HTTP cache (where the ~80 MB @imgly model lives),
@@ -852,8 +920,8 @@ function registerClientProxies(loadConfigFn) {
   // helper both modes use.
   {
     const { readCacheInfo, clearAppCache } = require('../util/appCache');
-    ipcMain.handle('app:getCacheInfo', () => readCacheInfo());
-    ipcMain.handle('app:clearCache', () => clearAppCache());
+    handleLocal('app:getCacheInfo', () => readCacheInfo());
+    handleLocal('app:clearCache', () => clearAppCache());
   }
 
   // v0.26.51: crash-log tail reader. The About tab's "Recent crash
@@ -861,7 +929,7 @@ function registerClientProxies(loadConfigFn) {
   // — so a client opening it hit "No handler registered for
   // 'app:readCrashLog'". The crash.log on the CLIENT's disk is the
   // relevant one (its own lifecycle events), so this stays local.
-  ipcMain.handle('app:readCrashLog', async (_e, { lines = 100 } = {}) => {
+  handleLocal('app:readCrashLog', async ({ lines = 100 } = {}) => {
     const fsp = require('node:fs/promises');
     const path = require('node:path');
     const logPath = path.join(app.getPath('userData'), 'crash.log');
@@ -878,7 +946,7 @@ function registerClientProxies(loadConfigFn) {
     }
   });
 
-  ipcMain.handle('app:getVersionInfo', () => ({
+  handleLocal('app:getVersionInfo', () => ({
     app: app.getVersion(),
     platform: process.platform,
     arch: process.arch,
@@ -887,9 +955,12 @@ function registerClientProxies(loadConfigFn) {
     node: process.versions.node,
     mode: 'client',
     server: baseUrl(),
+    // v0.1.22: which Mac this is — see the note on the server-side handler in
+    // main/ipc/app.js.
+    hostname: require('node:os').hostname(),
   }));
 
-  ipcMain.handle('app:openExternal', async (_e, target) => {
+  handleLocal('app:openExternal', async (target) => {
     const { shell } = require('electron');
     if (typeof target !== 'string') throw new Error('Disallowed URL scheme');
     let parsed;
@@ -899,26 +970,26 @@ function registerClientProxies(loadConfigFn) {
     return true;
   });
 
-  ipcMain.handle('app:openDataFolder', async () => {
+  /* v0.1.25: same fix as the server-side handlers — openPath resolves with an
+   * error string, so the old versions reported success unconditionally. */
+  handleLocal('app:openDataFolder', async () => {
     // In client mode, "data folder" doesn't really exist. Open the
     // userData folder so the user can grab logs etc.
-    const { shell } = require('electron');
-    await shell.openPath(app.getPath('userData'));
-    return true;
+    const { openPathOrThrow } = require('../util/openPath');
+    return openPathOrThrow(app.getPath('userData'), 'app folder');
   });
 
-  ipcMain.handle('app:openLogsFolder', async () => {
-    const { shell } = require('electron');
-    await shell.openPath(app.getPath('userData'));
-    return true;
+  handleLocal('app:openLogsFolder', async () => {
+    const { openPathOrThrow } = require('../util/openPath');
+    return openPathOrThrow(app.getPath('userData'), 'logs folder');
   });
 
-  ipcMain.handle('app:relaunch', () => {
+  handleLocal('app:relaunch', () => {
     app.relaunch();
     app.exit(0);
   });
 
-  ipcMain.handle('settings:getAll', () => {
+  handleLocal('settings:getAll', () => {
     // The renderer needs at minimum: mode, the active company id (so
     // bootstrap doesn't hang waiting on getActiveId), and the small
     // bits the settings UI reads. Return a curated subset based on
@@ -933,19 +1004,22 @@ function registerClientProxies(loadConfigFn) {
     };
   });
 
-  ipcMain.handle('settings:setOne', (_e, { key, value }) => {
-    const { updateConfig } = require('../config');
+  handleLocal('settings:setOne', ({ key, value }) => {
+    const { updateConfig, assertKnownConfigKeys } = require('../config');
+    // v0.1.18: same unknown-key rule as the standalone handler.
+    assertKnownConfigKeys({ [key]: value });
     const next = updateConfig({ [key]: value });
     refreshConfig();
     return next;
   });
-  ipcMain.handle('settings:setMany', (_e, patch) => {
-    const { updateConfig } = require('../config');
+  handleLocal('settings:setMany', (patch) => {
+    const { updateConfig, assertKnownConfigKeys } = require('../config');
+    assertKnownConfigKeys(patch ?? {});
     const next = updateConfig(patch ?? {});
     refreshConfig();
     return next;
   });
-  ipcMain.handle('settings:setMode', async (_e, nextMode) => {
+  handleLocal('settings:setMode', async (nextMode) => {
     if (!['standalone', 'server', 'client'].includes(nextMode)) {
       throw new Error(`Invalid mode: ${nextMode}`);
     }
@@ -955,12 +1029,14 @@ function registerClientProxies(loadConfigFn) {
     return { ok: true, mode: nextMode };
   });
 
-  ipcMain.handle('client:testConnection', async (_e, { url, token }) => {
+  handleLocal('client:testConnection', async ({ url, token }) => {
     // v0.26.34: shared error analyser — see main/util/fetchErrors.js
     // for the full mapping table. Replaces the old `${err.message}`
     // pass-through that surfaced an opaque "fetch failed".
     const { validateServerUrl, analyzeFetchError } = require('../util/fetchErrors');
-    const urlCheck = validateServerUrl(url);
+    const { normalizeServerUrl } = require('../util/fetchErrors');
+    // v0.1.31: same normalisation as the runtime path — see baseUrl().
+    const urlCheck = validateServerUrl(normalizeServerUrl(url));
     if (!urlCheck.ok) throw new Error(urlCheck.error);
     if (!token || !String(token).trim()) {
       throw new Error('User token is empty. Ask the server admin to give you the long random string from their Settings → Multi-Mac → Users page.');
@@ -974,7 +1050,7 @@ function registerClientProxies(loadConfigFn) {
       });
     } catch (err) {
       const analyzed = analyzeFetchError(err, base);
-      throw new Error(analyzed.message);
+      throw new Error(analyzed.message, { cause: err });
     }
     if (res.status === 401) throw new Error('Token rejected by server. Ask the admin to regenerate it (their Settings → Multi-Mac → Users → ↻ button), then paste the new one here.');
     if (!res.ok) throw new Error(`Server returned ${res.status}. The address is reachable but isn't speaking the Business Studio KH protocol — is this URL pointing at a different app?`);
@@ -984,18 +1060,18 @@ function registerClientProxies(loadConfigFn) {
 
   /* v0.26.34: step-by-step network diagnostic. See ipc/settings.js
      for the standalone-mode twin handler. */
-  ipcMain.handle('client:diagnoseServer', async (_e, { url, token } = {}) => {
+  handleLocal('client:diagnoseServer', async ({ url, token } = {}) => {
     const { diagnoseServer } = require('../util/fetchErrors');
     return diagnoseServer({ url, token });
   });
 
   /* Connection-state IPC for the renderer's sidebar badge. */
-  ipcMain.handle('client:connectionState', () => getConnectionState());
+  handleLocal('client:connectionState', () => getConnectionState());
 
   /* v0.26.33: RPC activity stats — exposed as a one-shot snapshot for
      the sidebar chip + SyncOverlay seed. Continuous updates flow via
      the `client:rpcActivity` push channel (see broadcastRpcActivity). */
-  ipcMain.handle('client:syncStats', () => getSyncStats());
+  handleLocal('client:syncStats', () => getSyncStats());
 
   /* ─── v0.16.0: client-mode local handlers ──────────────────────
    * These channels run on the client's own Mac (the OS dialog is its
@@ -1038,7 +1114,7 @@ function registerClientFileHandlers() {
   // call getDataDir. Safe in client mode.
   const imageManager = require('../imageManager');
 
-  ipcMain.handle('files:pickFolder', async () => {
+  handleLocal('files:pickFolder', async () => {
     const res = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
     });
@@ -1046,7 +1122,7 @@ function registerClientFileHandlers() {
     return res.filePaths[0];
   });
 
-  ipcMain.handle('files:pickImageFile', async (_e, { multiple = false } = {}) => {
+  handleLocal('files:pickImageFile', async ({ multiple = false } = {}) => {
     const res = await dialog.showOpenDialog({
       properties: ['openFile', ...(multiple ? ['multiSelections'] : [])],
       filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
@@ -1055,7 +1131,7 @@ function registerClientFileHandlers() {
     return multiple ? res.filePaths : res.filePaths[0];
   });
 
-  ipcMain.handle('files:pickWorkbook', async () => {
+  handleLocal('files:pickWorkbook', async () => {
     const res = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [{ name: 'Spreadsheet', extensions: ['xlsx', 'xls', 'csv', 'tsv'] }],
@@ -1064,7 +1140,7 @@ function registerClientFileHandlers() {
     return res.filePaths[0];
   });
 
-  ipcMain.handle('files:parseWorkbook', (_e, filePath) => {
+  handleLocal('files:parseWorkbook', (filePath) => {
     // Spreadsheet parsing is pure (just reads the file with xlsx), so
     // it works the same on client or server. The file path is on the
     // client's disk — exactly where we want it for a client-mode flow
@@ -1073,8 +1149,18 @@ function registerClientFileHandlers() {
     return fileHandler.readWorkbook(filePath);
   });
 
-  ipcMain.handle('files:readImageThumb', async (_e, absPath) => {
-    if (!absPath || typeof absPath !== 'string') throw new Error('absPath required');
+  handleLocal('files:readImageThumb', async (absPath) => {
+    /* v0.1.29: match the server twin exactly.
+     *
+     * main/ipc/files.js rejects anything that is not an absolute path AND not
+     * an image, because this channel reads a file by a path the renderer chose.
+     * This copy only checked that it was a string, so the two modes disagreed
+     * about what was acceptable — the kind of divergence that lets a rule hold
+     * in one mode and quietly not exist in the other. The shared helpers live in
+     * main/util/fileKinds.js precisely so both can use them. */
+    const { isAbsolutePath, isImagePath } = require('../util/fileKinds');
+    if (!isAbsolutePath(absPath)) throw new Error('An absolute image path is required');
+    if (!isImagePath(absPath)) throw new Error('Only image files can be previewed');
     if (!fs.existsSync(absPath)) throw new Error('File not found');
     const sharp = require('sharp');
     const buf = await sharp(absPath)
@@ -1089,7 +1175,16 @@ function registerClientFileHandlers() {
   // a folder there). The result is a list of paths that we then read
   // bytes from before queueing AI tasks — that's handled separately
   // in v0.16.2.
-  ipcMain.handle('ai:scanBulkFolder', (_e, folderPath) => {
+  // v0.1.19: the folder scan has to run on the Mac that owns the folder, so
+  // client mode needs its own copy — same shared scanner as the server side, so
+  // both modes agree on what "scan this folder" returns.
+  handleLocal('files:scanImageFiles', (folderPath) => {
+    const { isAbsolutePath, scanImageFilesIn } = require('../util/fileKinds');
+    if (!isAbsolutePath(folderPath)) throw new Error('An absolute folder path is required');
+    return scanImageFilesIn(folderPath);
+  });
+
+  handleLocal('ai:scanBulkFolder', (folderPath) => {
     if (!folderPath) throw new Error('folderPath required');
     const paths = imageManager.scanImagesRecursive(folderPath);
     return paths.slice(0, 1000).map((abs) => {
@@ -1099,7 +1194,7 @@ function registerClientFileHandlers() {
     });
   });
 
-  ipcMain.handle('samples:generateProductSheet', async () => {
+  handleLocal('samples:generateProductSheet', async () => {
     // The sample workbook is a constant the renderer doesn't need
     // server data for. Local handler is fine.
     const res = await dialog.showSaveDialog({
@@ -1111,6 +1206,337 @@ function registerClientFileHandlers() {
     const fileHandler = require('../fileHandler');
     fileHandler.writeProductSampleWorkbook(res.filePath);
     return res.filePath;
+  });
+
+  /* ─── v0.1.21: labels, generated and printed on THIS Mac ──────────────
+   *
+   * A client Mac has no database and no assets — but it has the output folder
+   * the user picked and the printer they want to print on, which is the whole
+   * point of printing from this Mac. So the work splits: the server builds the
+   * label document from its data, and this process turns that document into
+   * files or paper.
+   *
+   * `labels:buildDocument` returns a complete, self-contained HTML string (all
+   * artwork already inlined as data URIs), so nothing else has to travel. The
+   * rendering and printing helpers are the same ones the server uses
+   * (`main/renderWindow.js`), which is why the output is identical either way.
+   */
+
+  handleLocal('labels:listPrinters', () => {
+    // Printers belong to THIS Mac. It has always been able to answer this;
+    // it was simply stubbed, so the printer list came back empty with no
+    // explanation.
+    return require('../renderWindow').listPrinters();
+  });
+
+  handleLocal('labels:openOutput', async ({ outputPath } = {}) => {
+    // The file is on this Mac's disk, so it must be opened here.
+    if (!outputPath || typeof outputPath !== 'string') throw new Error('Output path required');
+    const { openPathOrThrow } = require('../util/openPath');
+    return openPathOrThrow(outputPath, 'label file');
+  });
+
+  handleLocal('labels:saveBarcode', async ({ value, format, outputFolder } = {}) => {
+    // Barcode rendering is pure (bwip-js, no data), so this is entirely local.
+    const { barcodeUri } = require('../studioRenderer');
+    const { slugify } = require('../util/slug');
+    if (!outputFolder) throw new Error('Pick an output folder');
+    const dataUrl = await barcodeUri(value, format, true);
+    if (!dataUrl) throw new Error('The barcode value is not valid for that format');
+    await fsp.mkdir(outputFolder, { recursive: true });
+    const outputPath = path.join(outputFolder, `${slugify(value, 'barcode')}-${format || 'code128'}.png`);
+    await fsp.writeFile(outputPath, Buffer.from(dataUrl.split(',')[1], 'base64'));
+    return { outputPath };
+  });
+
+  handleLocal('labels:generate', async ({ companyId, templateId, productIds, outputFolder, format = 'pdf', layout = {} } = {}) => {
+    if (!outputFolder || typeof outputFolder !== 'string') throw new Error('Pick an output folder');
+    await fsp.mkdir(outputFolder, { recursive: true });
+
+    const renderer = require('../renderWindow');
+    const { slugify } = require('../util/slug');
+    const events = require('../events');
+    const ids = Array.isArray(productIds) ? productIds : [];
+    const opId = `label-${Date.now()}`;
+    const made = [];
+    let templateName;
+
+    try {
+      if (format === 'pdf') {
+        // The server holds the template, the products and the artwork; it builds
+        // the document. This Mac writes the file, because this is where the user
+        // asked for it. The document is self-contained (artwork inlined), so
+        // nothing else has to travel.
+        const built = await rpc('labels:buildDocument', { companyId, templateId, productIds, layout });
+        templateName = built.templateName;
+        events.broadcast('progress:event', { id: opId, kind: 'labels', done: 0, total: ids.length, phase: 'rendering', label: templateName });
+        const target = path.join(outputFolder, `${slugify(templateName, 'labels')}-${Date.now()}.pdf`);
+        await renderer.toPdf(built.html, target, { orientation: layout.orientation });
+        made.push({ filePath: target });
+        events.broadcast('progress:event', { id: opId, kind: 'labels', done: ids.length, total: ids.length, phase: 'finishing', label: templateName });
+      } else {
+        // One file per label. Ask for a document per product in a single call —
+        // a batch document is one page and cannot be split back into labels.
+        const built = await rpc('labels:buildDocument', { companyId, templateId, productIds, layout, perProduct: true });
+        templateName = built.templateName;
+        events.broadcast('progress:event', { id: opId, kind: 'labels', done: 0, total: built.documents.length, phase: 'rendering', label: templateName });
+        // Same pixel maths the server uses, so a label rendered here is the same
+        // size as one rendered there: mm → px at the chosen dpi.
+        const dpi = Math.max(72, Number(layout.dpi) || 203);
+        const scale = dpi / 25.4;
+        const ext = format === 'jpeg' ? 'jpg' : 'png';
+        for (let i = 0; i < built.documents.length; i += 1) {
+          const doc = built.documents[i];
+          const target = path.join(outputFolder, `${slugify(doc.sku, 'label')}-${slugify(templateName, 'label')}.${ext}`);
+          await renderer.toImage(doc.html, target, {
+            format,
+            width: Math.ceil(built.widthMm * scale),
+            height: Math.ceil(built.heightMm * scale),
+            quality: 92,
+            zoomFactor: dpi / 96,
+          });
+          made.push({ filePath: target, productId: doc.productId, sku: doc.sku });
+          events.broadcast('progress:event', { id: opId, kind: 'labels', done: i + 1, total: built.documents.length, phase: 'rendering', label: doc.sku });
+        }
+      }
+
+      // The history lives with the data, so the outcomes go back to the server.
+      // The file paths recorded are THIS Mac's — which is where the files are.
+      const { run } = await rpc('labels:recordRun', {
+        companyId,
+        templateId,
+        templateName,
+        format,
+        layoutMode: layout.mode || 'single',
+        outputPath: format === 'pdf' ? made[0]?.filePath : outputFolder,
+        settings: layout,
+        originHost: require('node:os').hostname(),
+        items: made.map((entry) => ({
+          productId: entry.productId ?? null,
+          sku: entry.sku ?? null,
+          filePath: entry.filePath,
+        })),
+      });
+      return { run, files: made.map((entry) => entry.filePath), outputPath: run.outputPath };
+    } finally {
+      events.broadcast('progress:event', { id: opId, complete: true });
+    }
+  });
+
+  handleLocal('labels:print', async ({ companyId, templateId, productIds, layout = {}, printOptions = {} } = {}) => {
+    const built = await rpc('labels:buildDocument', { companyId, templateId, productIds, layout });
+    // Printing has to happen on the Mac with the printer attached to it.
+    const result = await require('../renderWindow').printHtml(built.html, printOptions);
+    await rpc('labels:recordRun', {
+      companyId,
+      templateId,
+      templateName: built.templateName,
+      format: 'print',
+      layoutMode: layout.mode || 'single',
+      settings: { layout, printOptions },
+      originHost: require('node:os').hostname(),
+      items: (Array.isArray(productIds) ? productIds : []).map((productId) => ({ productId })),
+    });
+    return result;
+  });
+
+  handleLocal('catalogStudio:export', async ({ id, outputFolder } = {}) => {
+    // The catalog is built from server data (and every product image in it), so
+    // the server renders the PDF; this Mac writes it where the user asked. The
+    // finished PDF travels rather than the source HTML — for a catalog that is
+    // the smaller of the two by a wide margin, because the HTML embeds every
+    // image as base64.
+    if (!outputFolder || typeof outputFolder !== 'string') throw new Error('Pick an output folder');
+    const res = await rpc('catalogStudio:exportBytes', { id });
+    await fsp.mkdir(outputFolder, { recursive: true });
+    const outputPath = path.join(outputFolder, res.fileName);
+    await fsp.writeFile(outputPath, Buffer.from(res.bytes));
+    // 'Exported' is a property of the catalog, which lives on the server.
+    await rpc('catalogStudio:markExported', { id });
+    return { outputPath };
+  });
+
+  /* v0.1.25 — Social Grid export, on the CLIENT's Mac.
+   *
+   * Same handover as the catalog above and for the same reason: a client has
+   * no database and no product photos, so it cannot lay a grid out — but it
+   * does have the folder the user picked. The server renders every page and
+   * returns the finished images; this Mac writes them.
+   *
+   * A grid is a SERIES (a brand of 24 products at 3x3 is three images), so
+   * unlike the catalog this writes a list of files and reports them all back.
+   */
+  handleLocal('socialGrid:export', async ({ config, outputFolder, presetId } = {}) => {
+    if (!outputFolder || typeof outputFolder !== 'string') throw new Error('Pick an output folder');
+    const res = await rpc('socialGrid:exportBytes', { config });
+    const files = Array.isArray(res?.files) ? res.files : [];
+    if (!files.length) throw new Error('No products match these filters — nothing to export');
+    await fsp.mkdir(outputFolder, { recursive: true });
+    const outputPaths = [];
+    for (const file of files) {
+      const target = path.join(outputFolder, file.fileName);
+      await fsp.writeFile(target, Buffer.from(file.bytes));
+      outputPaths.push(target);
+    }
+    // 'Last exported' belongs to the preset, which lives on the server.
+    if (presetId) await rpc('socialGrid:markExported', { id: presetId });
+    return { outputPaths, pageCount: res.pageCount ?? files.length, productCount: res.productCount ?? 0 };
+  });
+
+  /* ─── v0.1.27: overlay-apply bridges ────────────────────────────────
+   *
+   * These three are proxied for every destination EXCEPT "save to folder",
+   * which the server cannot do on the client's behalf: the folder was chosen
+   * with THIS Mac's picker, and a write performed on the server lands in a
+   * directory tree on the other computer while the user's own folder stays
+   * empty. For that one destination the server is asked to return the
+   * composed bytes and they are written here — the same handover the label,
+   * catalog, Social Grid and watermark paths use.
+   */
+  function makeOverlayApplyHandler(channel) {
+    return async (args = {}) => {
+      const destination = args.destination ?? {};
+      if (destination.kind !== 'saveToFolder') return rpc(channel, args);
+      if (!destination.folder || typeof destination.folder !== 'string') {
+        throw new Error('Pick an output folder');
+      }
+      const res = await rpc(channel, { ...args, destination: { ...destination, collect: true } });
+      const outputs = Array.isArray(res?.outputs) ? res.outputs : [];
+      const folder = path.resolve(destination.folder);
+      /* v0.1.29: say so if the server produced nothing to write. Silently
+       * writing zero files is how the first cut of this bridge behaved — the
+       * export reported success and the folder stayed empty. A missing
+       * `outputs` array means the two sides disagree about the reply shape,
+       * which is worth an error rather than a shrug. */
+      if (outputs.length === 0) {
+        const nothingToDo = Array.isArray(res?.done) && res.done.length === 0;
+        if (!nothingToDo) {
+          throw new Error('The server returned no overlay images to save — nothing was written.');
+        }
+        return { ...res, outputs: [], outputFolder: folder };
+      }
+      await fsp.mkdir(folder, { recursive: true });
+
+      const written = [];
+      for (const out of outputs) {
+        if (!out?.bytes) { written.push(null); continue; }
+        // Name collision is resolved HERE, because only this Mac can see what
+        // is already in the folder. Same -2, -3 … convention as the server.
+        const dest = await writeUniqueFile(folder, out.name || 'overlay.png', Buffer.from(out.bytes));
+        written.push(dest);
+      }
+
+      return {
+        ...res,
+        // Drop the bytes and report where each file actually landed on THIS Mac.
+        outputs: outputs.map((out, i) => {
+          const { bytes: _bytes, ...rest } = out;
+          return written[i] ? { ...rest, outputFilepath: written[i], savedTo: written[i] } : rest;
+        }),
+        outputFolder: folder,
+      };
+    };
+  }
+  /* Registered with LITERAL channel names, not a loop over an array.
+   * test/clientReachability.test.js reads these strings out of the source to
+   * prove every channel the UI calls is served in client mode; a loop would
+   * make it report these as missing. The guard is right to work that way — an
+   * indirect registration is genuinely harder to verify — so the code is
+   * explicit instead of the check being loosened. */
+  handleLocal('templates:applyToProduct', makeOverlayApplyHandler('templates:applyToProduct'));
+  handleLocal('templates:applyBulk', makeOverlayApplyHandler('templates:applyBulk'));
+  handleLocal('templates:applyByFilter', makeOverlayApplyHandler('templates:applyByFilter'));
+
+  handleLocal('labels:importAsset', async ({ sourcePath, name } = {}) => {
+    // The artwork file is on this Mac, so read it here and send the bytes — the
+    // server cannot reach this disk. Same approach as brands:uploadIcon.
+    if (!sourcePath || typeof sourcePath !== 'string') throw new Error('An artwork file path is required');
+    const bytes = await fsp.readFile(sourcePath);
+    return rpc('labels:importAssetFromBytes', {
+      bytes, ext: path.extname(sourcePath), name: name || 'label-art',
+    });
+  });
+
+  /**
+   * v0.1.19: watermark loose image files (Overlay Studio → "Watermark external
+   * photos"), on the CLIENT's Mac.
+   *
+   * Why this used to be unavailable here: the original handler ran on the
+   * server, so the file paths — which point at the client's disk — meant nothing
+   * there, and the UI simply hid the tool in client mode. But the photos ARE on
+   * this Mac, so this is exactly where the work belongs. The one piece the
+   * client cannot read is the template's logo/watermark asset, which lives in
+   * the server's data folder; that is fetched over HTTP and cached in a temp
+   * folder for the duration of the batch.
+   *
+   * The composing itself is main/util/externalOverlay.js, shared with the server
+   * handler, so both modes produce identical output.
+   */
+  handleLocal('templates:applyToExternal', async ({ templateId, inputPaths, outputFolder } = {}) => {
+    if (!templateId) throw new Error('templateId required');
+    const { applyTemplateToFiles, validateExternalRequest } = require('../util/externalOverlay');
+    validateExternalRequest({ inputPaths, outputFolder });
+
+    const template = await rpc('templates:get', templateId);
+    if (!template) throw new Error('Template not found');
+
+    const events = require('../events');
+    const os = require('node:os');
+    const opId = `overlay-external-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const label = template.name || 'Watermark';
+    events.broadcast('progress:event', {
+      id: opId, kind: 'overlay-external', done: 0, total: inputPaths.length,
+      phase: 'applying', label,
+    });
+
+    // Assets live on the server. Download each one once into a temp folder and
+    // hand compose() the local path. Nothing is written next to the user's
+    // photos, and the temp folder is removed in the finally block.
+    const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'msk-ext-assets-'));
+    const cache = new Map();
+    let n = 0;
+    const resolveAsset = async (rel) => {
+      if (!rel) return null;
+      if (cache.has(rel)) return cache.get(rel);
+      const base = baseUrl();
+      const auth = authHeader();
+      if (!base || !auth) {
+        throw new Error(`Could not load overlay artwork "${rel}": server connection is not configured`);
+      }
+      let res;
+      try {
+        res = await fetch(`${base}/assets/${encodeURI(rel)}`, {
+          headers: { Authorization: auth },
+        });
+      } catch (err) {
+        throw new Error(`Could not load overlay artwork "${rel}": ${err.message}`, { cause: err });
+      }
+      if (!res.ok) {
+        throw new Error(`Could not load overlay artwork "${rel}": server returned ${res.status}`);
+      }
+      n += 1;
+      const abs = path.join(tmpDir, `${n}-${path.basename(rel)}`);
+      await fsp.writeFile(abs, Buffer.from(await res.arrayBuffer()));
+      cache.set(rel, abs);
+      return abs;
+    };
+
+    try {
+      return await applyTemplateToFiles({
+        template,
+        inputPaths,
+        outputFolder,
+        resolveAsset,
+        onProgress: ({ done, total, label: progressLabel }) => {
+          events.broadcast('progress:event', {
+            id: opId, kind: 'overlay-external', done, total, phase: 'applying', label: progressLabel,
+          });
+        },
+      });
+    } finally {
+      events.broadcast('progress:event', { id: opId, complete: true });
+      try { await fsp.rm(tmpDir, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    }
   });
 }
 
@@ -1136,7 +1562,7 @@ function registerClientImageImportBridges() {
   const path = require('node:path');
   const imageManager = require('../imageManager');
 
-  ipcMain.handle('images:importForProduct', async (_e, { productId, sourcePath } = {}) => {
+  handleLocal('images:importForProduct', async ({ productId, sourcePath } = {}) => {
     if (!productId) throw new Error('productId required');
     if (!sourcePath) throw new Error('sourcePath required');
     const bytes = await fsp.readFile(sourcePath);
@@ -1144,7 +1570,7 @@ function registerClientImageImportBridges() {
     return rpc('images:importFromBytes', { productId, bytes, ext });
   });
 
-  ipcMain.handle('brands:uploadIcon', async (_e, { sourcePath, name } = {}) => {
+  handleLocal('brands:uploadIcon', async ({ sourcePath, name } = {}) => {
     if (!sourcePath) throw new Error('sourcePath required');
     const bytes = await fsp.readFile(sourcePath);
     const ext = path.extname(sourcePath).toLowerCase() || '.png';
@@ -1154,7 +1580,7 @@ function registerClientImageImportBridges() {
     return rpc('brands:uploadIconFromBytes', { bytes, ext, name });
   });
 
-  ipcMain.handle('watermarks:upload', async (_e, { sourcePath } = {}) => {
+  handleLocal('watermarks:upload', async ({ sourcePath } = {}) => {
     if (!sourcePath) throw new Error('sourcePath required');
     const bytes = await fsp.readFile(sourcePath);
     const ext = path.extname(sourcePath).toLowerCase() || '.png';
@@ -1170,7 +1596,7 @@ function registerClientImageImportBridges() {
    * calls `ai:queueBulkBatch(sourcePaths, ...)`; this handler keeps
    * the same shape and converts paths → bytes silently.
    */
-  ipcMain.handle('ai:queueBulkBatch', async (_e, input = {}) => {
+  handleLocal('ai:queueBulkBatch', async (input = {}) => {
     if (!Array.isArray(input?.sourcePaths) || input.sourcePaths.length === 0) {
       throw new Error('No source images supplied');
     }
@@ -1212,12 +1638,26 @@ function registerClientImageImportBridges() {
     });
     let result;
     try {
+      /* v0.1.27: strip exportDir.
+       *
+       * The folder was chosen through THIS Mac's folder picker, then forwarded
+       * verbatim, and the server's queue runner mkdirs it and copies finished
+       * generations into it — so the images landed on the SERVER's disk inside
+       * a directory tree the client invented, while the folder the user picked
+       * stayed empty. Generation results already come back through the gallery,
+       * which works in client mode; only this side-channel did not.
+       *
+       * Removed rather than rewritten locally because the queue is asynchronous
+       * — the bytes arrive much later, on the server's schedule — so there is
+       * nothing here to write them to. The export-folder control is hidden in
+       * client mode; see BulkSourcePanel. */
+      const { exportDir: _ignoredExportDir, ...safeOptions } = input.options ?? {};
       result = await rpc('ai:queueBulkBatchFromBytes', {
         companyId: input.companyId,
         provider: input.provider,
         model: input.model,
         prompt: input.prompt,
-        options: input.options ?? {},
+        options: safeOptions,
         promptTemplateId: input.promptTemplateId,
         sources,
       });
@@ -1241,7 +1681,7 @@ function registerClientImageImportBridges() {
    * is preserved — same `{ exported, skipped, products, outputPath,
    * skips }` so the Export Center's result modal Just Works.
    */
-  ipcMain.handle('exports:run', async (_e, { profileId, productIds, outputRoot, saveToLibrary } = {}) => {
+  handleLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary } = {}) => {
     if (!profileId) throw new Error('profileId required');
     if (!outputRoot) throw new Error('outputRoot required');
     // v0.31.0: forward saveToLibrary — the server appends the exports to
@@ -1249,22 +1689,65 @@ function registerClientImageImportBridges() {
     // change, which this client picks up like any other remote edit.
     const result = await rpc('exports:runForClient', { profileId, productIds, saveToLibrary });
     const files = Array.isArray(result?.files) ? result.files : [];
-    // Validate + write every file under outputRoot. Reject any
-    // relPath that escapes (defensive — the server would never emit
-    // these, but treat the wire as hostile).
+
+    /* v0.1.27: honour the collision choice the user already made.
+     *
+     * The export happens on the server into a fresh temp folder, so from the
+     * server's point of view nothing ever collides — it reports zero existing
+     * files and hands back the bytes. The collision the user answered the
+     * modal about is with THEIR output folder, and only this Mac can see it.
+     * `onExisting` was previously dropped on the floor here (it was not even
+     * destructured), so "Skip files that already exist" and "Keep both" both
+     * silently overwrote. The policy is now applied where the files actually
+     * land, and the counters are corrected to match what really happened so
+     * the result toast is not a work of fiction. */
+    const nodeFs = require('node:fs');
+    const mode = ['replace', 'skip', 'keepBoth'].includes(onExisting) ? onExisting : 'keepBoth';
     const outRootAbs = path.resolve(outputRoot);
+    let skippedExisting = 0;
+    let replaced = 0;
+    const skippedNow = [];
+    const written = [];
+
     for (const f of files) {
       const rel = String(f?.relPath || '').replace(/^\/+/, '');
       if (!rel || rel.includes('..')) continue;
-      const dest = path.resolve(outRootAbs, rel);
+      let dest = path.resolve(outRootAbs, rel);
       if (!dest.startsWith(outRootAbs + path.sep) && dest !== outRootAbs) continue;
+
       await fsp.mkdir(path.dirname(dest), { recursive: true });
-      await fsp.writeFile(dest, Buffer.from(f.bytes));
+      const bytes = Buffer.from(f.bytes);
+      if (mode === 'skip') {
+        try {
+          await writeExclusiveFile(dest, bytes);
+        } catch (err) {
+          if (err.code !== 'EEXIST') throw err;
+          skippedExisting += 1;
+          skippedNow.push({ sku: path.basename(rel), reason: 'Already exists in the output folder' });
+          continue;
+        }
+      } else if (mode === 'replace') {
+        if (nodeFs.existsSync(dest)) replaced += 1;
+        await fsp.writeFile(dest, bytes);
+      } else {
+        dest = await writeUniqueFile(path.dirname(dest), path.basename(dest), bytes);
+      }
+      written.push(dest);
     }
+
     // Drop the bytes from the return value — renderer doesn't need
     // them and we shouldn't keep them in store memory.
     const { files: _files, ...rest } = result;
-    return { ...rest, outputPath: outRootAbs };
+    return {
+      ...rest,
+      outputPath: outRootAbs,
+      // Correct the server's counters to describe THIS Mac's output folder.
+      exported: written.length,
+      replaced,
+      skippedExisting,
+      skipped: (rest.skipped ?? 0) + skippedExisting,
+      skips: [...(rest.skips ?? []), ...skippedNow],
+    };
   });
 
   /**
@@ -1289,7 +1772,7 @@ function registerClientImageImportBridges() {
    * outputRoot. Same return shape as the server-side previewCollisions
    * so the Export Center's collision modal works identically.
    */
-  ipcMain.handle('exports:checkCollisions', async (_e, { profileId, productIds, outputRoot } = {}) => {
+  handleLocal('exports:checkCollisions', async ({ profileId, productIds, outputRoot } = {}) => {
     if (!profileId || !outputRoot) {
       return { totalExpected: 0, collisionCount: 0, sampleCollisions: [] };
     }
@@ -1320,7 +1803,7 @@ function registerClientImageImportBridges() {
    * locally, writes the file. Same return contract as the
    * standalone version (returns destination path or null on cancel).
    */
-  ipcMain.handle('ai:exportBulkImage', async (_e, { galleryId } = {}) => {
+  handleLocal('ai:exportBulkImage', async ({ galleryId } = {}) => {
     if (!galleryId) throw new Error('galleryId required');
     const result = await rpc('ai:exportBulkImageBytes', { galleryId });
     if (!result?.bytes) throw new Error('No image bytes returned');
@@ -1355,7 +1838,7 @@ function registerClientImageImportBridges() {
    *       renderer's drag operation. The server doesn't have a
    *       webContents instance for the client's window.
    */
-  ipcMain.handle('images:copyImagesToFolder', async (_e, { productId, filepaths, targetFolder, sku: providedSku } = {}) => {
+  handleLocal('images:copyImagesToFolder', async ({ productId, filepaths, targetFolder, sku: providedSku } = {}) => {
     if (!productId) throw new Error('productId is required');
     if (!Array.isArray(filepaths) || filepaths.length === 0) {
       throw new Error('filepaths must be a non-empty array');
@@ -1384,38 +1867,73 @@ function registerClientImageImportBridges() {
     const sku = ((providedSku || 'product').toString().trim() || 'product')
       .replace(/[^A-Za-z0-9._-]+/g, '-');
 
-    let copied = 0;
-    const failures = [];
-    for (let i = 0; i < filepaths.length; i++) {
+    // Resolve every destination before starting I/O so completion order cannot
+    // change filenames. Three transfers gave a useful speedup without turning
+    // a copy action into an unbounded request burst.
+    // ponytail: at most three complete image bodies are buffered; stream this
+    // operation if larger normal images make that memory ceiling a problem.
+    const jobs = [];
+    for (let i = 0; i < filepaths.length; i += 1) {
       const rel = filepaths[i];
       const ext = path.extname(rel) || '.jpg';
       const idx = String(i + 1).padStart(3, '0');
       const baseName = `${sku}-${idx}${ext}`;
 
-      // Collision avoidance — same pattern as the standalone handler.
+      // Reserve each destination atomically before any downloads start. This
+      // keeps names deterministic while preventing another simultaneous copy
+      // action from claiming a path between existsSync() and writeFile().
       let final = path.join(folder, baseName);
       let collisionN = 1;
-      while (fs.existsSync(final)) {
-        final = path.join(folder, `${sku}-${idx} (${collisionN})${ext}`);
-        collisionN += 1;
-        if (collisionN > 999) break;
+      let output = null;
+      let reservationError = null;
+      while (!output) {
+        try {
+          output = await fsp.open(final, 'wx');
+        } catch (err) {
+          if (err.code !== 'EEXIST') {
+            reservationError = err;
+            break;
+          }
+          final = path.join(folder, `${sku}-${idx} (${collisionN})${ext}`);
+          collisionN += 1;
+        }
       }
+      jobs.push({ rel, final, output, reservationError });
+    }
 
-      try {
-        // The app-image:// protocol handler is the client-mode
-        // passthrough that HTTPs to the server with the bearer token
-        // and proxies the bytes back. So net.fetch hides all the
-        // "where do these bytes live" complexity from us.
-        const url = `app-image://local/${encodeURIComponent(rel)}`;
-        const res = await nt.fetch(url);
-        if (!res.ok) throw new Error(`fetch returned ${res.status}`);
-        const buf = Buffer.from(await res.arrayBuffer());
-        await fsp.writeFile(final, buf);
-        copied += 1;
-      } catch (err) {
-        failures.push({ filename: path.basename(rel), error: err.message });
+    const results = new Array(jobs.length);
+    let cursor = 0;
+    async function copyNext() {
+      while (cursor < jobs.length) {
+        const i = cursor;
+        cursor += 1;
+        const { rel, final, output, reservationError } = jobs[i];
+
+        try {
+          if (reservationError) throw reservationError;
+          // The app-image:// protocol handler is the client-mode
+          // passthrough that HTTPs to the server with the bearer token
+          // and proxies the bytes back. So net.fetch hides all the
+          // "where do these bytes live" complexity from us.
+          const url = `app-image://local/${encodeURIComponent(rel)}`;
+          const res = await nt.fetch(url);
+          if (!res.ok) throw new Error(`fetch returned ${res.status}`);
+          const buf = Buffer.from(await res.arrayBuffer());
+          await output.writeFile(buf);
+          await output.close();
+          results[i] = null;
+        } catch (err) {
+          if (output) {
+            try { await output.close(); } catch (_) { /* original error wins */ }
+            try { await fsp.rm(final, { force: true }); } catch (_) { /* best effort */ }
+          }
+          results[i] = { filename: path.basename(rel), error: err.message };
+        }
       }
     }
+    await Promise.all(Array.from({ length: Math.min(3, jobs.length) }, () => copyNext()));
+    const failures = results.filter(Boolean);
+    const copied = results.length - failures.length;
 
     if (copied > 0) {
       try { shl.openPath(folder); } catch (_) { /* non-fatal */ }
@@ -1459,7 +1977,7 @@ function registerClientImageImportBridges() {
    * sweep on next launch is a future improvement if real leaks
    * become visible.
    */
-  ipcMain.handle('images:prepareDrag', async (_e, { productId, filepaths } = {}) => {
+  handleLocal('images:prepareDrag', async ({ productId, filepaths } = {}) => {
     if (!productId) throw new Error('productId is required');
     if (!Array.isArray(filepaths) || filepaths.length === 0) {
       throw new Error('filepaths must be a non-empty array');
@@ -1467,6 +1985,9 @@ function registerClientImageImportBridges() {
     const { net: nt } = require('electron');
     const os = require('node:os');
     const crypto = require('node:crypto');
+    const productImageRows = await rpc('images:listByProduct', productId);
+    if (!Array.isArray(productImageRows)) throw new Error('Could not verify product images with the server');
+    const productFilepaths = new Set(productImageRows.map((image) => image.filepath));
 
     // Unique temp dir per drag. Path collisions inside it are still
     // possible if the user dragged duplicate filenames from different
@@ -1481,20 +2002,10 @@ function registerClientImageImportBridges() {
     // not CPU; Promise.all is fine for typical (≤20) selection sizes.
     await Promise.all(filepaths.map(async (rel) => {
       try {
-        // Filename collision avoidance within this drag's temp dir.
-        // Doesn't need to match a SKU pattern here — the file will
-        // be dropped into the user's target (browser, Mail, …) and
-        // the receiving system renames as needed.
-        const baseName = path.basename(rel) || 'image.jpg';
-        let final = path.join(tmpDir, baseName);
-        let n = 1;
-        while (fs.existsSync(final)) {
-          const ext = path.extname(baseName);
-          const stem = baseName.slice(0, baseName.length - ext.length);
-          final = path.join(tmpDir, `${stem} (${n})${ext}`);
-          n += 1;
-          if (n > 999) break;
+        if (typeof rel !== 'string' || !productFilepaths.has(rel)) {
+          throw new Error('image is not attached to this product');
         }
+        const baseName = path.basename(rel) || 'image.jpg';
 
         // app-image:// in client mode routes to HTTPS server with
         // bearer token (registerClientImageProtocol). Same auth
@@ -1504,7 +2015,8 @@ function registerClientImageImportBridges() {
         const res = await nt.fetch(url);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const buf = Buffer.from(await res.arrayBuffer());
-        await fsp.writeFile(final, buf);
+        const final = await writeUniqueFile(tmpDir, baseName, buf);
+        issuedDragPaths.set(final, Date.now() + DRAG_PREP_TTL_MS);
         downloaded.push(final);
       } catch (err) {
         failed.push({ filepath: rel, error: err.message });
@@ -1525,15 +2037,17 @@ function registerClientImageImportBridges() {
     // completes in seconds, but receiving apps may read the bytes
     // lazily — 5 minutes is paranoia-safe without leaving the temp
     // dir around forever.
-    setTimeout(() => {
+    const cleanupTimer = setTimeout(() => {
+      for (const filePath of downloaded) issuedDragPaths.delete(filePath);
       fsp.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
-    }, 5 * 60 * 1000);
+    }, DRAG_PREP_TTL_MS);
+    cleanupTimer.unref?.();
 
     return { tmpDir, files: downloaded, failed };
   });
 
   ipcMain.on('images:startDragOut', async (event, args = {}) => {
-    const { preparedPaths } = args;
+    const preparedPaths = args && typeof args === 'object' ? args.preparedPaths : null;
     if (!Array.isArray(preparedPaths) || preparedPaths.length === 0) {
       // No prepared paths — the renderer either skipped prepareDrag
       // (which client mode requires) or the drag was triggered with
@@ -1544,7 +2058,7 @@ function registerClientImageImportBridges() {
     // Defensive existence check — temp files may have been cleaned
     // up by the 5 min timer if the user prepared a drag and then
     // sat on the pill for too long.
-    const livePaths = preparedPaths.filter((p) => {
+    const livePaths = takeIssuedDragPaths(preparedPaths).filter((p) => {
       try { return fs.existsSync(p); } catch { return false; }
     });
     if (livePaths.length === 0) return;
@@ -1567,7 +2081,6 @@ function registerClientImageImportBridges() {
     try {
       event.sender.startDrag({ files: livePaths, icon });
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('[client startDragOut] startDrag threw:', err.message);
     }
   });
@@ -1581,7 +2094,7 @@ function registerClientImageImportBridges() {
    *   5. Aggregate the same diagnostic stats the server-side handler
    *      returns so the result modal looks identical.
    */
-  ipcMain.handle('images:autoMatchBySku', async (_e, { companyId, folderPath } = {}) => {
+  handleLocal('images:autoMatchBySku', async ({ companyId, folderPath } = {}) => {
     if (!companyId) throw new Error('companyId is required');
     if (!folderPath) throw new Error('Folder path is required');
 
@@ -1611,6 +2124,7 @@ function registerClientImageImportBridges() {
     let imagesImported = 0;
     let imagesSkippedDup = 0;
     let imagesSkippedCap = 0;
+    const failures = [];
 
     // Pre-tally for a determinate bar.
     let total = 0;
@@ -1636,8 +2150,12 @@ function registerClientImageImportBridges() {
             });
             if (res?.skipped) imagesSkippedDup += 1;
             else { imagesImported += 1; touched = true; }
-          } catch (_err) {
-            imagesSkippedDup += 1;
+          } catch (err) {
+            failures.push({
+              filepath: path.relative(folderPath, c.sourcePath) || path.basename(c.sourcePath),
+              sku: product.sku,
+              error: err.message,
+            });
           }
           done += 1;
           events.broadcast('progress:event', {
@@ -1677,6 +2195,8 @@ function registerClientImageImportBridges() {
       imagesImported,
       imagesSkippedDup,
       imagesSkippedCap,
+      imagesFailed: failures.length,
+      failures,
       unmatchedFiles: unmatched.length,
       unmatchedSamples,
       unmatchedSamplesCapped: unmatched.length > unmatchedSamples.length,

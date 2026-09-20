@@ -1,7 +1,7 @@
 /**
  * v0.34.0: bundle the mobile/iPad web viewer (webclient/index.html) into a
  * JS module the main process can serve, WITHOUT reading a source-tree file
- * at runtime (which would break in the packaged asar — see CLAUDE.md §21).
+ * at runtime (which would break in the packaged asar — see AGENTS.md §21).
  *
  * It emits main/webclientHtml.js = `module.exports = "<html as a JSON
  * string>";`. The electron build then compiles that into

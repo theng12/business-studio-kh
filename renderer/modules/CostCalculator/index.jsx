@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Button, Input, Select, EmptyState } from '../../components/ui.jsx';
+import { Input, Select, EmptyState } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 
 export function CostCalculator() {
@@ -55,7 +55,13 @@ export function CostCalculator() {
           setLandedCostUsd('');
         }
       })
-      .catch(() => setCostData(null));
+      .catch(() => {
+        // v0.1.28: clear the landed cost too. Leaving it meant the panel showed
+        // the PREVIOUS product's cost next to this product's data, and the
+        // suggested retail was derived from it.
+        setCostData(null);
+        setLandedCostUsd('');
+      });
   }, [productId]);
 
   // Two-way binding between margin% and retail$. Whichever field the

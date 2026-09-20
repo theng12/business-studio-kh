@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button, Field, Input, Modal, Select } from '../../components/ui.jsx';
-import { MARKETPLACE_PRESETS, getAllPresets } from '../../lib/presets.js';
+import { getAllPresets } from '../../lib/presets.js';
 
 const FORMATS = [
   { value: 'jpg',  label: 'JPG' },

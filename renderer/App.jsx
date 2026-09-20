@@ -1,7 +1,9 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState, useMemo } from 'react';
 import { useAppStore } from './store/index.js';
-import { Sidebar } from './components/Sidebar.jsx';
+import { Sidebar, NAV } from './components/Sidebar.jsx';
+import { hasAnyCap } from './lib/capabilities.js';
 import { ToastHost } from './components/Toast.jsx';
+import { Button } from './components/ui.jsx';
 import { ProgressOverlay } from './components/ProgressOverlay.jsx';
 // v0.26.44: ClientSyncOverlay (the full-window first-sync splash) was
 // removed. The sidebar NetworkChip now shows boot-sync progress
@@ -78,6 +80,7 @@ const BarcodeStudio = lazy(() => import('./modules/LabelStudio/BarcodeStudio.jsx
 const LabelJobs = lazy(() => import('./modules/LabelStudio/LabelJobs.jsx').then((m) => ({ default: m.LabelJobs })));
 const CatalogTemplates = lazy(() => import('./modules/CatalogStudio/index.jsx').then((m) => ({ default: m.CatalogTemplates })));
 const CatalogProjects = lazy(() => import('./modules/CatalogStudio/index.jsx').then((m) => ({ default: m.CatalogProjects })));
+const SocialGrid = lazy(() => import('./modules/SocialGrid/index.jsx').then((m) => ({ default: m.SocialGrid })));
 
 const PAGES = {
   dashboard: Dashboard,
@@ -98,6 +101,7 @@ const PAGES = {
   catalogtemplates: CatalogTemplates,
   catalogprojects: CatalogProjects,
   catalogstudio: CatalogProjects,
+  socialgrid: SocialGrid,
   history:   History,
   settings:  Settings,
   support:   Support,
@@ -143,20 +147,47 @@ function PageFallback() {
   );
 }
 
-const SHORTCUTS = {
-  '1': 'dashboard',
-  '2': 'library',
-  '3': 'workspace',
-  '4': 'aistudio',
-  '5': 'overlay',
-  '6': 'export',
-  ',': 'settings',
-};
+/* Derived from the sidebar's own NAV list, so a shortcut can never again be
+ * advertised by the sidebar and missing here. Each entry keeps the item's
+ * `caps`, because the keyboard must respect the same permissions the nav does —
+ * previously ⌘3/⌘4/⌘5 opened modules the sidebar had hidden for this role. */
+const SHORTCUTS = (() => {
+  const map = {};
+  for (const section of NAV) {
+    for (const item of section.items || []) {
+      if (item.shortcut) map[item.shortcut] = { module: item.id, caps: item.caps };
+    }
+  }
+  return map;
+})();
 
 export default function App() {
   const activeModule = useAppStore((s) => s.activeModule);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
   const isModuleAvailable = useAppStore((s) => s.isModuleAvailable);
+  /* Same derivation the Sidebar uses, so a keyboard shortcut and the visible nav
+   * can never disagree about what this role may open. */
+  const appMode = useAppStore((s) => s.appMode);
+  const clientConnection = useAppStore((s) => s.clientConnection);
+  // useMemo so the identity is stable: a fresh `['*']` on every render would
+  // make the shortcut effect tear down and re-register its keydown listener
+  // constantly, and ESLint flags exactly that.
+  /* v0.1.31: is this Mac a client that has not been pointed at a server yet?
+   * That is a SETUP step, not a fault — but every request fails until it is
+   * done, and the failure appeared as a red error on each screen in turn. One
+   * banner that says what to do beats a wall of identical errors.
+   *
+   * Driven by the main process's LIVE connection state, not by the mirrored
+   * config value. The mirror is only refreshed on bootstrap, so it stayed ''
+   * after the address was typed — which made the banner sit there forever,
+   * including after a successful connection. Main pushes `unconfigured` on
+   * every poll tick while there is no address and stops the moment there is
+   * one, so this clears itself. */
+  const clientUnconfigured = appMode === 'client' && clientConnection?.status === 'unconfigured';
+  const userCaps = useMemo(
+    () => (appMode === 'client' ? (clientConnection?.user?.caps || ['*']) : ['*']),
+    [appMode, clientConnection],
+  );
   const bootstrap = useAppStore((s) => s.bootstrap);
   const platform = useAppStore((s) => s.platform);
   const [ready, setReady] = useState(false);
@@ -191,15 +222,19 @@ export default function App() {
         return;
       }
       if (e.shiftKey) return;
-      const target = SHORTCUTS[e.key];
-      if (!target) return;
+      const shortcut = SHORTCUTS[e.key];
+      if (!shortcut) return;
+      const { module: target, caps } = shortcut;
       if (!isModuleAvailable(target)) return;
+      // Capability gate, matching the sidebar: a shortcut must not reach a
+      // module this role cannot see.
+      if (!hasAnyCap(userCaps, caps)) return;
       e.preventDefault();
       setActiveModule(target);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [setActiveModule, isModuleAvailable]);
+  }, [setActiveModule, isModuleAvailable, userCaps]);
 
   const Page = PAGES[activeModule] ?? Dashboard;
   const isMac = platform === 'darwin';
@@ -209,6 +244,17 @@ export default function App() {
       <Sidebar />
       <main className="shell__content">
         <div className={`titlebar${isMac ? ' titlebar--mac' : ''}`} />
+        {clientUnconfigured ? (
+          <div className="setup-banner" role="status">
+            <strong>This Mac is set to Client mode but has no server address yet.</strong>
+            <span>
+              Nothing can load until it knows which Mac holds the data. Enter the server
+              address and user token in Settings &rarr; Multi-Mac, or switch back to Standalone
+              if this Mac should use its own data folder.
+            </span>
+            <Button variant="primary" onClick={() => setActiveModule('settings')}>Open Settings</Button>
+          </div>
+        ) : null}
         {ready ? (
           <PageErrorBoundary pageKey={activeModule}>
             {/* v0.49.31: Suspense INSIDE the error boundary so a chunk-

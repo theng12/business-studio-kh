@@ -37,6 +37,17 @@ import { DEFAULT_FILTERS, DEFAULT_SORT, loadProductSort, saveProductSort } from 
 let searchDebounceTimer = null;
 let refreshSeq = 0;
 let refreshAllSeq = 0;
+const refreshRuns = new Map();
+const refreshAllRuns = new Map();
+
+function filtersAreDefault(filters) {
+  return filters.search === '' &&
+    (filters.brandIds == null || filters.brandIds.length === 0) &&
+    (filters.categoryIds == null || filters.categoryIds.length === 0) &&
+    filters.status == null &&
+    filters.processStatus == null &&
+    filters.hasImages == null;
+}
 
 export function createProductsSlice(set, get) {
   return {
@@ -164,59 +175,62 @@ export function createProductsSlice(set, get) {
     async refreshProducts() {
       if (!window.api) return;
       const companyId = get().activeCompanyId;
+      const filters = get().productFilters;
+      const requestedSeq = ++refreshSeq;
+      const defaultView = filtersAreDefault(filters);
+      // A default-view response also owns allProducts. Invalidate any older
+      // filter-agnostic request before awaiting so it cannot overwrite this
+      // newer snapshot when it eventually resolves.
+      const requestedAllSeq = defaultView || !companyId ? ++refreshAllSeq : null;
       if (!companyId) {
-        // v0.17.0: flip productsLoading off in the early-return path so
-        // a session that never picks a company doesn't get stuck on the
-        // "Loading…" indicator. (The Library page renders its own
-        // "No company selected" state in this case.)
         set({ products: [], allProducts: [], productsLoading: false });
         return;
       }
-      set({ productsLoading: true });
-      // v0.49.38: capture a sequence number BEFORE the IPC fires.
-      // The post-IPC code only commits to the store if no newer
-      // refreshProducts() call has started in the meantime. This
-      // prevents the client-mode race where an older (broader) search
-      // response arrives after a newer (narrower) one and overwrites
-      // it. See the module header for the full failure mode.
-      const seq = ++refreshSeq;
-      try {
-        const filters = get().productFilters;
-        const filtersAreDefault =
-          filters.search === '' &&
-          (filters.brandIds == null || filters.brandIds.length === 0) &&
-          (filters.categoryIds == null || filters.categoryIds.length === 0) &&
-          filters.status == null &&
-          filters.processStatus == null &&
-          filters.hasImages == null;
-
-        const list = await window.api.products.list(companyId, filters);
-        // Stale response — a newer refreshProducts() call has been
-        // made since we sent ours. Drop this result silently so it
-        // can't overwrite the newer query's products. The newer call
-        // is responsible for clearing `productsLoading` when it
-        // resolves; we leave the flag alone here.
-        if (seq !== refreshSeq) return;
-        // v0.11.3: keep `allProducts` in sync from the same call when no
-        // filters are active (saves a redundant IPC roundtrip on every
-        // keystroke in the Library search). When filters ARE active, the
-        // two lists differ — fire a parallel query to keep AI Studio's
-        // combobox / Promote dialog showing every product anyway.
-        if (filtersAreDefault) {
-          set({ products: list, allProducts: list, productsLoading: false });
-        } else {
-          set({ products: list, productsLoading: false });
-          get().refreshAllProducts();
-        }
-        const { page, pageSize } = get();
-        const maxPage = Math.max(0, Math.ceil(list.length / pageSize) - 1);
-        if (page > maxPage) set({ page: maxPage });
-      } catch (err) {
-        // Only clear the loading flag if we're still the latest call —
-        // otherwise the newer call will handle that.
-        if (seq === refreshSeq) set({ productsLoading: false });
-        get().addToast(err.message, 'error');
+      const key = JSON.stringify([companyId, filters]);
+      const existing = refreshRuns.get(key);
+      if (existing) {
+        existing.queued = true;
+        existing.seq = requestedSeq;
+        existing.allSeq = requestedAllSeq;
+        return existing.promise;
       }
+      const run = { queued: false, seq: requestedSeq, allSeq: requestedAllSeq, promise: null };
+
+      const runOnce = async (seq, allSeq) => {
+        set({ productsLoading: true });
+        try {
+          const list = await window.api.products.list(companyId, filters);
+          if (seq !== refreshSeq || get().activeCompanyId !== companyId) return;
+          if (defaultView) {
+            set({
+              products: list,
+              productsLoading: false,
+              ...(allSeq === refreshAllSeq ? { allProducts: list } : {}),
+            });
+          } else {
+            set({ products: list, productsLoading: false });
+            await get().refreshAllProducts();
+          }
+          if (seq !== refreshSeq || get().activeCompanyId !== companyId) return;
+          const { page, pageSize } = get();
+          const maxPage = Math.max(0, Math.ceil(list.length / pageSize) - 1);
+          if (page > maxPage) set({ page: maxPage });
+        } catch (err) {
+          if (seq !== refreshSeq || get().activeCompanyId !== companyId) return;
+          set({ productsLoading: false });
+          get().addToast(err.message, 'error');
+        }
+      };
+
+      run.promise = (async () => {
+        do {
+          run.queued = false;
+          await runOnce(run.seq, run.allSeq);
+        } while (run.queued && get().activeCompanyId === companyId &&
+          JSON.stringify(get().productFilters) === JSON.stringify(filters));
+      })().finally(() => { refreshRuns.delete(key); });
+      refreshRuns.set(key, run);
+      return run.promise;
     },
 
     /**
@@ -229,19 +243,45 @@ export function createProductsSlice(set, get) {
      */
     async refreshAllProducts() {
       if (!window.api) return;
-      const companyId = get().activeCompanyId;
-      if (!companyId) { set({ allProducts: [] }); return; }
-      // v0.49.38: same sequence guard pattern as refreshProducts —
-      // discard stale responses so out-of-order arrivals on a slow
-      // client link can't overwrite a newer fetch.
-      const seq = ++refreshAllSeq;
-      try {
-        const list = await window.api.products.list(companyId, {});
-        if (seq !== refreshAllSeq) return;
-        set({ allProducts: list });
-      } catch (err) {
-        get().addToast(err.message, 'error');
+      if (filtersAreDefault(get().productFilters)) {
+        const companyId = get().activeCompanyId;
+        const key = JSON.stringify([companyId, get().productFilters]);
+        return refreshRuns.get(key)?.promise ?? get().refreshProducts();
       }
+      const companyId = get().activeCompanyId;
+      const requestedSeq = ++refreshAllSeq;
+      if (!companyId) {
+        set({ allProducts: [] });
+        return;
+      }
+      const existing = refreshAllRuns.get(companyId);
+      if (existing) {
+        existing.queued = true;
+        existing.seq = requestedSeq;
+        return existing.promise;
+      }
+      const run = { queued: false, seq: requestedSeq, promise: null };
+
+      const runOnce = async (seq) => {
+        try {
+          const list = await window.api.products.list(companyId, {});
+          if (seq !== refreshAllSeq || get().activeCompanyId !== companyId) return;
+          set({ allProducts: list });
+        } catch (err) {
+          if (seq === refreshAllSeq && get().activeCompanyId === companyId) {
+            get().addToast(err.message, 'error');
+          }
+        }
+      };
+
+      run.promise = (async () => {
+        do {
+          run.queued = false;
+          await runOnce(run.seq);
+        } while (run.queued && get().activeCompanyId === companyId);
+      })().finally(() => { refreshAllRuns.delete(companyId); });
+      refreshAllRuns.set(companyId, run);
+      return run.promise;
     },
 
     async createProduct(input) {
@@ -250,21 +290,19 @@ export function createProductsSlice(set, get) {
       const created = await window.api.products.create({ ...input, companyId });
       await Promise.all([
         get().refreshProducts(),
-        get().refreshAllProducts(),
         get().refreshDashboard(),
       ]);
       return created;
     },
     async updateProduct(id, patch) {
       const updated = await window.api.products.update(id, patch);
-      await Promise.all([get().refreshProducts(), get().refreshAllProducts()]);
+      await get().refreshProducts();
       return updated;
     },
     async removeProduct(id) {
       await window.api.products.remove(id);
       await Promise.all([
         get().refreshProducts(),
-        get().refreshAllProducts(),
         get().refreshDashboard(),
       ]);
     },

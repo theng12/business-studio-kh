@@ -20,7 +20,6 @@ import { BulkResizeModal } from './BulkResizeModal.jsx';
 import { AutoCropRunModal } from './AutoCropRunModal.jsx';
 import { BulkBgRemovalModal } from './BulkBgRemovalModal.jsx';
 import { AutoEnhanceRunModal } from './AutoEnhanceRunModal.jsx';
-import { confirm } from '../../components/ConfirmModal.jsx';
 import { confirmWithBackup } from '../../components/BackupReminder.jsx';
 import { TableView } from './LibraryTable.jsx';
 import {
@@ -342,21 +341,24 @@ export function ProductLibrary() {
   // panel which mode to render: empty placeholder, new-product form, or
   // edit-existing-product form.
   const isCreatingProduct = editing === 'new';
+  /* v0.1.27: a counter so "+ New product" always means "start a NEW blank form".
+   *
+   * The handler was `setEditing('new')`, which is a no-op when `editing` is
+   * already `'new'` — React sees no state change, nothing re-renders, and the
+   * panel kept showing the product that had just been created. The next Save
+   * then updated THAT product instead of creating another. Incrementing a
+   * counter alongside gives ProductForm something new to react to. */
+  const [createNonce, setCreateNonce] = useState(0);
   const editingProduct = isCreatingProduct ? null : editing;
   const selectedProductId = editingProduct?.id ?? null;
 
-  if (!activeCompanyId) {
-    return (
-      <div className="page">
-        <PageHeader title="Product Library" />
-        <EmptyState
-          title="No company selected"
-          body="Create or select a company before adding products."
-          action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
-        />
-      </div>
-    );
-  }
+  /* v0.1.11: this used to be an early `return` HERE, which made every hook
+   * declared below it conditional — React requires the same hooks in the same
+   * order on every render, so switching to (or away from) a company with no
+   * active selection changed the hook count and React errored out. The flag is
+   * computed here and the empty state now renders from inside the single main
+   * return, below all hooks. */
+  const noCompanySelected = !activeCompanyId;
 
   const brandsById = useMemo(() => new Map(brands.map((b) => [b.id, b])), [brands]);
   const categoriesById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
@@ -449,6 +451,10 @@ export function ProductLibrary() {
   // state change (filter typing, page change, etc.). Without useCallback the
   // arrow functions get a fresh identity each render, defeating React.memo.
   const handleOpen = useCallback((p) => setEditing(p), []);
+  const startNewProduct = useCallback(() => {
+    setEditing('new');
+    setCreateNonce((n) => n + 1);
+  }, []);
   // "Process →" now opens a small destination picker — Image Workspace or
   // AI Studio. The actual store call happens inside the modal callbacks
   // below. Kept the function name + signature so existing call sites
@@ -508,6 +514,16 @@ export function ProductLibrary() {
 
   return (
     <div className="page page--library">
+      {noCompanySelected ? (
+        <div className="page">
+          <PageHeader title="Product Library" />
+          <EmptyState
+            title="No company selected"
+            body="Create or select a company before adding products."
+            action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
+          />
+        </div>
+      ) : null}
       <PageHeader
         title="Product Library"
         subtitle={loading
@@ -605,7 +621,7 @@ export function ProductLibrary() {
               <option value="shopify">Shopify</option>
               <option value="google">Google</option>
             </Select>
-            <Button variant="primary" onClick={() => setEditing('new')}>+ New product</Button>
+            <Button variant="primary" onClick={startNewProduct}>+ New product</Button>
           </>
         }
       />
@@ -696,7 +712,7 @@ export function ProductLibrary() {
                 hasActiveFilters ? (
                   <Button onClick={resetFilters}>Reset filters</Button>
                 ) : (
-                  <Button variant="primary" onClick={() => setEditing('new')}>+ New product</Button>
+                  <Button variant="primary" onClick={startNewProduct}>+ New product</Button>
                 )
               }
             />
@@ -822,8 +838,9 @@ export function ProductLibrary() {
           <ProductForm
             product={editingProduct}
             isCreating={isCreatingProduct}
+            createKey={createNonce}
             onClose={() => setEditing(null)}
-            onStartCreate={() => setEditing('new')}
+            onStartCreate={startNewProduct}
             onProcess={handleProcess}
             // v0.26.13: side-panel thumbs now open the same Lightbox
             // the row/grid thumbs do. ProductForm only knows the
@@ -1025,7 +1042,7 @@ function RefreshButton() {
       aria-label="Refresh Library"
     >
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        {/* circular arrow — refresh icon, stroke-based per CLAUDE.md §16 */}
+        {/* circular arrow — refresh icon, stroke-based per AGENTS.md §16 */}
         <path
           d="M14 8a6 6 0 1 1-1.76-4.24"
           stroke="currentColor"

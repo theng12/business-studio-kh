@@ -250,7 +250,6 @@ export function Lightbox({ open, onClose, images, startIndex = 0, title, product
       setPendingFlipH(false);
       setPendingFlipV(false);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error('[lightbox] flip failed:', err);
       window.alert(`Flip failed: ${err.message}`);
     } finally {
@@ -272,6 +271,7 @@ export function Lightbox({ open, onClose, images, startIndex = 0, title, product
     if (!spin || !images || images.length < 2) return;
     setPlaying(false); // grabbing it pauses auto-rotate
     dragRef.current = { startX: e.clientX, startIdx: idx };
+      // way — the drag state below is reset regardless.
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
   }
   function onSpinPointerMove(e) {
@@ -558,7 +558,7 @@ function formatBytes(n) {
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-// Inline SVG icons (per CLAUDE.md §16 — no icon library). 16px,
+// Inline SVG icons (per AGENTS.md §16 — no icon library). 16px,
 // stroke-based, currentColor so they pick up the button text colour.
 function FlipHIcon() {
   return (

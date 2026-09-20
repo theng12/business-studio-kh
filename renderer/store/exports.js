@@ -1,5 +1,7 @@
 // Export Center slice — profiles, queue, run + collision check.
 
+let refreshSeq = 0;
+
 export function createExportsSlice(set, get) {
   return {
     // — Export center
@@ -15,16 +17,18 @@ export function createExportsSlice(set, get) {
 
     async refreshExportProfiles() {
       if (!window.api) return;
+      const seq = ++refreshSeq;
       const companyId = get().activeCompanyId;
-      if (!companyId) { set({ exportProfiles: [] }); return; }
+      if (!companyId) { set({ exportProfiles: [], selectedExportProfileId: null }); return; }
       try {
         const profiles = await window.api.exports.listProfiles(companyId);
+        if (seq !== refreshSeq || get().activeCompanyId !== companyId) return;
         set({ exportProfiles: profiles });
         if (!profiles.find((p) => p.id === get().selectedExportProfileId)) {
           set({ selectedExportProfileId: profiles[0]?.id ?? null });
         }
       } catch (err) {
-        get().addToast(err.message, 'error');
+        if (seq === refreshSeq && get().activeCompanyId === companyId) get().addToast(err.message, 'error');
       }
     },
 

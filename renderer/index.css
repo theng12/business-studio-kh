@@ -980,7 +980,7 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 
 /* v0.49.29: bulk-actions dropdown menu (popover). Sits inside the bulk
    toolbar; opens beneath the trigger button. Each section gets a small
-   uppercase heading per CLAUDE.md §1 navigation convention. */
+   uppercase heading per AGENTS.md §1 navigation convention. */
 .lib-bulk-menu { position: relative; }
 .lib-bulk-menu__panel {
   position: absolute;
@@ -2465,6 +2465,14 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 
 .modal--wide { max-width: 720px; }
 
+/* v0.1.3: `md` / `lg` were used by the hand-rolled Purchase Orders and
+   Overlay Studio modals but never defined, so they fell through to the
+   540px default. Defining them keeps the shared Modal's `size` prop
+   honest without changing any current layout — `md` is the default
+   width, `lg` matches `--wide`. */
+.modal--md { max-width: 540px; }
+.modal--lg { max-width: 720px; }
+
 .modal__header {
   display: flex;
   align-items: center;
@@ -3213,6 +3221,14 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 
 .field__row { display: flex; gap: var(--s-1); align-items: stretch; }
 .field__row .input { flex: 1; }
+
+/* v0.1.5: rotation control — number box + reset on one row, slider under
+   it. The number box stays narrow; the reset button sits beside it. */
+.rotation-field { display: flex; flex-direction: column; gap: 6px; }
+.rotation-field .field__row { align-items: flex-end; }
+.rotation-field .field__row .field { flex: 0 0 auto; width: 96px; }
+.rotation-field .field__row .input { max-width: 96px; }
+.rotation-field .slider-field { display: block; }
 /* v0.22.19: SearchableSelect inside .field__row needs to grow the
    same way .input does so the trigger button doesn't shrink to its
    intrinsic width when sitting next to a "+ New" inline button. */
@@ -5162,7 +5178,7 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   font-variant-numeric: tabular-nums;
 }
 
-/* Save-status pill — CLAUDE.md §6 indicator */
+/* Save-status pill — AGENTS.md §6 indicator */
 .ws-save {
   margin-left: auto;
   font-size: 12px;
@@ -6943,7 +6959,17 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 
 /* ─── Overlay Studio ──────────────────────────────────────── */
 
-.page--overlay { display: flex; flex-direction: column; min-height: 0; }
+.page--overlay {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* v0.1.7: the Overlay Studio canvas is height-limited — it is the
+     tallest thing on the page, so every vertical pixel spent on page
+     padding comes straight out of the design canvas. Trim the bottom
+     padding here and give it to the canvas. Scoped to this page; every
+     other page keeps the standard rhythm. */
+  padding-bottom: var(--s-4);
+}
 
 /* List view */
 .ovl-list { display: flex; flex-direction: column; gap: var(--s-3); padding-top: var(--s-3); }
@@ -7316,6 +7342,15 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   align-items: center;
   justify-content: center;
   gap: 6px;
+  /* v0.1.7: FILL the editor's canvas cell instead of shrink-wrapping to
+     its own content (`flex: 0 1 auto`). The cell is 1fr wide, so with
+     shrink-wrap the wrap sat ~24px narrower than the space it was given
+     and the canvas inside it was sized off that smaller box. Taking the
+     full cell means the canvas is limited only by real available space,
+     and the product photo scales down to fit rather than the canvas
+     shrinking to suit the photo. */
+  flex: 1 1 auto;
+  width: 100%;
   min-height: 0;
   /* v0.26.1: checkered transparent workspace background. Makes the
      canvas (white "page") clearly stand out as a floating object
@@ -7367,6 +7402,18 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 /* (Tried an inset ::after halo here but .ovl-canvas has
    overflow:hidden — clips it. The border + shadow combo above is
    the visible delineation; no pseudo-element needed.) */
+
+/* v0.1.5: with no backdrop there is nothing to show, so the workspace
+   fill made the whole canvas look like a solid white block — the
+   "empty space" was invisible and elements appeared to float on a
+   filled page. Show the transparency checkerboard instead, so an empty
+   canvas reads as empty and semi-transparent elements are judgeable. */
+.ovl-canvas--empty {
+  background:
+    linear-gradient(45deg, #e8e8ec 25%, transparent 25%, transparent 75%, #e8e8ec 75%) 0 0/24px 24px,
+    linear-gradient(45deg, #e8e8ec 25%, transparent 25%, transparent 75%, #e8e8ec 75%) 12px 12px/24px 24px,
+    #fff;
+}
 .ovl-canvas__backdrop {
   position: absolute;
   inset: 0;
@@ -7391,16 +7438,29 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   z-index: 1;
 }
 
-/* When the canvas is in "truthful" mode, hide the HTML approximation
-   of each element's content (text / barcode / image) so the user
-   doesn't see the slow-drift HTML version stacked on top of the
-   pixel-accurate PNG below. Selection boxes + drag/resize handles
-   stay visible (they're siblings, not descendants of these content
-   spans, in the element overlay's DOM). */
+/* v0.1.8: the server-rendered PNG is the canvas, always (see the note in
+   EditorCanvas). So the per-element HTML content is hidden permanently —
+   those nodes remain only as invisible click/drag targets and to draw the
+   selection outline, handles and rotation knob.
+
+   Previously this was a "truthful mode" that toggled on `isInteracting`,
+   so the canvas alternated between an HTML approximation and the real
+   render. The two never quite agreed (fonts, barcode bars, image fitting),
+   so the picture visibly jumped when you released an element. One
+   renderer, no switching. */
 .ovl-canvas--truthful .ovl-element__text,
-.ovl-canvas--truthful .ovl-element__barcode,
+.ovl-canvas--truthful .ovl-element__barcode {
+  opacity: 0;
+}
+/* Images are the exception: an element whose source cannot resolve (e.g. a
+   brand-icon element on a product with no brand) still shows its
+   explaining placeholder. The PNG simply has a gap there, so hiding it
+   would leave the user with no hint as to why. */
 .ovl-canvas--truthful .ovl-element__image {
   opacity: 0;
+}
+.ovl-canvas--truthful .ovl-element__image:has(.ovl-element__image-placeholder) {
+  opacity: 1;
 }
 
 /* Status indicator dot in the meta line. Three states — busy (amber
@@ -7646,6 +7706,27 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   display: flex;
   align-items: center;
   justify-content: center;
+  /* v0.1.5: the placeholder now explains WHY the image is missing, so it
+     holds two lines of copy — stack them and pad so the text isn't
+     flush against the striped edge on a small element. */
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  text-align: center;
+  overflow: hidden;
+}
+.ovl-element__image-empty {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--c-text, #18181b);
+}
+.ovl-element__image-src {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--c-text-muted, #71717a);
+  word-break: break-all;
 }
 
 /* ─── AI Studio: header pills + retention note ──────────────── */
@@ -10044,4 +10125,234 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   .catalog-product-columns { grid-template-columns: 1fr; }
   .catalog-editor-tabs { overflow-x: auto; }
   .catalog-editor-tabs > button { min-width: 205px; }
+}
+
+/* v0.1.21: an explanatory note inside Settings, used where a control belongs to
+   the Mac that holds the data rather than the one showing the screen (AI keys,
+   the data folder). Boxed and muted so it reads as information, not as a
+   warning about something being broken. */
+.settings-note {
+  margin: var(--s-3) 0;
+  padding: var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface, rgba(0, 0, 0, 0.03));
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--c-text-muted, #555);
+}
+.settings-note strong { color: var(--c-text, inherit); }
+
+/* v0.1.23: Overlay Studio design view. One labelled box per element instead of
+   its real pixels, so a template can be laid out without a product photo behind
+   it competing for attention. Dashed edge to read as "not the real thing", and
+   a translucent fill so overlapping elements are still distinguishable. */
+.ovl-element__placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-sizing: border-box;
+  border: 1px dashed var(--c-accent, #3b82f6);
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.08);
+  color: var(--c-accent, #3b82f6);
+  text-align: center;
+  overflow: hidden;
+  padding: 2px;
+}
+.ovl-element__placeholder-label {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.ovl-element__placeholder-size {
+  font-size: 11px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
+}
+/* A locked element should still read as locked in design view. */
+.ovl-element.is-locked .ovl-element__placeholder {
+  border-style: solid;
+  opacity: 0.7;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   v0.1.25 — Social Grid
+   Square product-grid images for Facebook / Instagram posts. Layout mirrors
+   Catalog Studio (controls on the left, live preview on the right) so the
+   two product-layout tools feel like the same family.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.social-editor-page .social-editor-back {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 6px; color: var(--c-text-muted); font-size: 12px;
+}
+
+.social-editor {
+  display: grid; grid-template-columns: minmax(340px, 460px) minmax(0, 1fr);
+  gap: 22px; align-items: start;
+}
+.social-editor__left { min-width: 0; }
+
+/* ── controls ─────────────────────────────────────────────────────── */
+.social-controls { display: flex; flex-direction: column; gap: 14px; }
+.social-controls__section {
+  border: 1px solid var(--c-border); border-radius: 14px;
+  background: var(--c-surface); padding: 16px 16px 18px;
+}
+.social-controls__section h3 {
+  margin: 0 0 4px; font-size: 12px; font-weight: 800;
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--c-text-subtle);
+}
+.social-controls__hint,
+.social-controls__note {
+  margin: 0 0 12px; font-size: 12px; line-height: 1.5; color: var(--c-text-muted);
+}
+.social-controls__note {
+  margin: 10px 0 0; padding: 9px 11px; border-radius: 9px;
+  background: var(--c-hover-bg); color: var(--c-text-muted);
+}
+.social-controls__section .field { margin-top: 12px; }
+.social-controls__section .field:first-of-type { margin-top: 8px; }
+
+/* Multi-select of size / grid presets. */
+.social-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.social-choices--compact { grid-template-columns: repeat(3, 1fr); }
+.social-choices button {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  padding: 10px 11px; border: 1px solid var(--c-border); border-radius: 10px;
+  background: var(--c-surface); color: var(--c-text); cursor: pointer;
+  font: inherit; transition: border-color 120ms ease, background 120ms ease;
+}
+.social-choices button:hover { background: var(--c-hover-bg); }
+.social-choices button.is-active {
+  border-color: var(--c-text); background: var(--c-active-bg);
+}
+.social-choices button strong { font-size: 12.5px; font-weight: 700; }
+.social-choices button span { font-size: 11.5px; color: var(--c-text-muted); font-variant-numeric: tabular-nums; }
+.social-choices button small { font-size: 10.5px; color: var(--c-text-subtle); line-height: 1.35; }
+
+.social-toggles { display: flex; flex-direction: column; gap: 7px; }
+
+/* ── hand-picked product list ─────────────────────────────────────── */
+.social-picker { margin-top: 12px; border: 1px solid var(--c-border); border-radius: 11px; overflow: hidden; }
+.social-picker__bar { display: flex; gap: 8px; padding: 9px; border-bottom: 1px solid var(--c-border); }
+.social-picker__bar input { flex: 1; }
+.social-picker__count { margin: 0; padding: 7px 10px; font-size: 11.5px; color: var(--c-text-muted); background: var(--c-hover-bg); }
+.social-picker__list { max-height: 260px; overflow-y: auto; }
+.social-picker__row {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center; gap: 9px; padding: 7px 10px;
+  border-bottom: 1px solid var(--c-border); cursor: pointer; font-size: 12px;
+}
+.social-picker__row:last-child { border-bottom: 0; }
+.social-picker__row:hover { background: var(--c-hover-bg); }
+.social-picker__sku { font-weight: 700; font-variant-numeric: tabular-nums; }
+.social-picker__name { color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.social-picker__img { font-size: 10.5px; color: var(--c-emerald); }
+.social-picker__img.is-missing { color: var(--c-text-subtle); }
+.social-picker__empty { margin: 0; padding: 14px; text-align: center; color: var(--c-text-subtle); font-size: 12px; }
+
+/* ── saved-post cards ─────────────────────────────────────────────── */
+.social-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.social-card {
+  display: flex; flex-direction: column; border: 1px solid var(--c-border);
+  border-radius: 14px; overflow: hidden; background: var(--c-surface);
+}
+.social-card__visual {
+  position: relative; display: grid; place-items: center; padding: 20px;
+  background: var(--c-hover-bg); border: 0; cursor: pointer; font: inherit;
+  border-bottom: 1px solid var(--c-border);
+}
+.social-card__badge {
+  position: absolute; top: 10px; left: 10px; font-size: 10.5px; font-weight: 700;
+  padding: 3px 7px; border-radius: 999px; background: var(--c-surface); color: var(--c-text-muted);
+}
+/* The mini grid mirrors the real aspect ratio, so a portrait or story post
+   does not look square on the card. */
+.social-card__frame { display: grid; gap: 3px; width: 100%; max-width: 132px; aspect-ratio: 1; }
+.social-card__frame[data-square="no"] { aspect-ratio: 3 / 4; max-width: 116px; }
+.social-card__frame i { background: var(--c-border-strong); border-radius: 2px; opacity: .55; }
+.social-card__meta { display: flex; flex-direction: column; gap: 10px; padding: 13px 14px 14px; }
+.social-card__meta strong { display: block; font-size: 13.5px; }
+.social-card__meta span { display: block; margin-top: 2px; font-size: 11.5px; color: var(--c-text-muted); }
+.social-card__status { color: var(--c-text-subtle) !important; }
+.social-card__actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* ── preview ──────────────────────────────────────────────────────── */
+.social-preview {
+  position: sticky; top: 14px; display: flex; flex-direction: column;
+  border: 1px solid var(--c-border); border-radius: 14px;
+  background: var(--c-surface); overflow: hidden;
+}
+.social-preview__bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 11px 13px; border-bottom: 1px solid var(--c-border);
+  font-size: 12px; font-weight: 600; color: var(--c-text-muted);
+}
+.social-preview__nav { display: flex; align-items: center; gap: 6px; }
+.social-preview__stage {
+  position: relative; display: grid; place-items: center; min-height: 300px;
+  padding: 18px; background:
+    repeating-conic-gradient(var(--c-hover-bg) 0% 25%, transparent 0% 50%) 50% / 18px 18px;
+}
+.social-preview__image {
+  max-width: 100%; max-height: 62vh; border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .16); background: #fff;
+}
+.social-preview__busy {
+  position: absolute; bottom: 12px; right: 14px; font-size: 11px; font-weight: 700;
+  padding: 4px 9px; border-radius: 999px; background: var(--c-text); color: var(--c-accent-fg);
+}
+.social-preview__facts {
+  display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 11px 14px;
+  border-top: 1px solid var(--c-border); font-size: 11.5px; color: var(--c-text-muted);
+}
+.social-preview__facts strong { color: var(--c-text); font-variant-numeric: tabular-nums; }
+.social-preview__facts .is-warning strong, .social-preview__facts .is-warning { color: var(--c-amber); }
+.preview-placeholder--error { color: var(--c-rose); }
+
+@media (max-width: 1100px) {
+  .social-editor { grid-template-columns: minmax(0, 1fr); }
+  .social-preview { position: static; }
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   v0.1.31 — client-mode setup banner
+   Shown when this Mac is a client with no server address configured. That is
+   a setup step rather than a fault, so it reads as guidance, not as an error:
+   every request fails in that state, and it used to surface as a red error on
+   each screen in turn.
+   ══════════════════════════════════════════════════════════════════════ */
+.setup-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(180, 83, 9, 0.28);
+  border-left: 3px solid var(--c-amber);
+  border-radius: 12px;
+  background: rgba(180, 83, 9, 0.06);
+  color: var(--c-text);
+}
+.setup-banner strong { font-size: 13.5px; }
+.setup-banner span {
+  flex: 1 1 320px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--c-text-muted);
+}
+
+/* v0.1.31 — explain the address list being empty (server not started). */
+.server-status__hint {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--c-text-muted);
 }

@@ -16,7 +16,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { ipcMain, dialog, shell, net, nativeImage } = require('electron');
+const { ipcMain, dialog, net, nativeImage } = require('electron');
 const sharp = require('sharp');
 
 const products = require('../db/products');
@@ -25,6 +25,7 @@ const { getDataDir } = require('../db');
 const imageManager = require('../imageManager');
 const auditLog = require('../db/auditLog');
 const { broadcast } = require('../events');
+const { writeExclusiveFile } = require('../util/exclusiveFile');
 
 // v0.22.6: image events go under entity_type='image', entity_id=<productId>
 // so a product's History modal naturally interleaves them via the
@@ -41,7 +42,24 @@ function auditImage(productId, action, extra) {
 }
 function lastSegment(p) { return p ? String(p).split('/').pop() : null; }
 
-function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAFE_WATERMARK_EXTS }) {
+const DRAG_PREP_TTL_MS = 5 * 60 * 1000;
+const issuedDragPaths = new Map();
+
+function takeIssuedDragPaths(paths) {
+  const now = Date.now();
+  for (const [filePath, expiresAt] of issuedDragPaths) {
+    if (expiresAt < now) issuedDragPaths.delete(filePath);
+  }
+  const allowed = [];
+  for (const filePath of paths) {
+    const expiresAt = issuedDragPaths.get(filePath);
+    issuedDragPaths.delete(filePath);
+    if (expiresAt >= now) allowed.push(filePath);
+  }
+  return allowed;
+}
+
+function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAFE_WATERMARK_EXTS, exposeLocal }) {
   /* ─── Product images ─── */
 
   expose('images:listByProduct', (productId) => {
@@ -49,7 +67,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     return productImages.listByProduct(productId);
   });
 
-  ipcMain.handle('images:importForProduct', async (_e, { productId, sourcePath }) => {
+  exposeLocal('images:importForProduct', async ({ productId, sourcePath }) => {
     assertProductInActiveCompany(productId);
     const current = productImages.listByProduct(productId);
     if (current.length >= imageManager.MAX_IMAGES_PER_PRODUCT) {
@@ -226,7 +244,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     return productImages.listByProduct(productId);
   });
 
-  ipcMain.handle('images:autoMatchBySku', async (_e, { companyId, folderPath }) => {
+  exposeLocal('images:autoMatchBySku', async ({ companyId, folderPath }) => {
     if (!companyId) throw new Error('companyId is required');
     const companies = require('../db/companies');
     if (companyId !== companies.getActiveId()) {
@@ -257,6 +275,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     let imagesImported = 0;
     let imagesSkippedDup = 0;
     let imagesSkippedCap = 0;
+    const failures = [];
     let done = 0;
 
     try {
@@ -277,8 +296,12 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
             });
             if (skipped) imagesSkippedDup += 1;
             else { imagesImported += 1; touched = true; }
-          } catch (_err) {
-            imagesSkippedDup += 1;
+          } catch (err) {
+            failures.push({
+              filepath: path.relative(folderPath, c.sourcePath) || path.basename(c.sourcePath),
+              sku: product.sku,
+              error: err.message,
+            });
           }
           done += 1;
           broadcast('progress:event', {
@@ -336,6 +359,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       imagesImported,
       imagesSkippedDup,
       imagesSkippedCap,
+      imagesFailed: failures.length,
+      failures,
       unmatchedFiles: unmatched.length,
       unmatchedSamples,
       unmatchedSamplesCapped: unmatched.length > unmatchedSamples.length,
@@ -379,8 +404,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   function applyMergeBookkeeping(decisions /*, result */) {
     for (const dec of (decisions || [])) {
       if (dec && dec.productId) {
-        try { products.recomputeProcessStatus(dec.productId); } catch (_) {}
-        try { products.touchUpdated(dec.productId); } catch (_) {}
+        try { products.recomputeProcessStatus(dec.productId); } catch (err) { process.stderr.write(`[images:merge] recomputeProcessStatus failed for ${dec.productId}: ${err.message}\n`); }
+        try { products.touchUpdated(dec.productId); } catch (err) { process.stderr.write(`[images:merge] touchUpdated failed for ${dec.productId}: ${err.message}\n`); }
         auditImage(dec.productId, 'image:merge-dupes', { removed: (dec.removeIds || []).length });
         emitCatalogChange('images', 'merge', dec.productId);
       }
@@ -445,8 +470,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     if (!opId) throw new Error('opId is required');
     const result = imageDedup.revertMergeOp(opId);
     for (const pid of (result.productIds || [])) {
-      try { products.recomputeProcessStatus(pid); } catch (_) {}
-      try { products.touchUpdated(pid); } catch (_) {}
+      try { products.recomputeProcessStatus(pid); } catch (err) { process.stderr.write(`[images:mergeRevert] recomputeProcessStatus failed for ${pid}: ${err.message}\n`); }
+      try { products.touchUpdated(pid); } catch (err) { process.stderr.write(`[images:mergeRevert] touchUpdated failed for ${pid}: ${err.message}\n`); }
       emitCatalogChange('images', 'mergeRevert', pid);
     }
     return result;
@@ -684,7 +709,23 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // autoCrop:true. Synchronous (blocks the caller) like the bulk-overlay run;
   // sharp trim+compose is ~150-300ms/image. Best on solid/white backgrounds —
   // the UI says so. Returns per-run stats; never throws on a single bad image.
+  /**
+   * v0.1.11: a product that fails the active-company check used to be skipped
+   * with `catch (_) { continue; }` — correct behaviour (an out-of-company
+   * product must not be touched) but completely invisible, so the caller got a
+   * smaller result than they asked for with no explanation. Skipping is still
+   * right; hiding it is not. This logs the reason, and the handlers add it to
+   * the `failures` list they already return, which the UI shows in its
+   * post-run summary.
+   */
+  function skipNotInActiveCompany(productId, opName) {
+    const reason = 'not in the active company — skipped';
+    process.stderr.write(`[${opName}] product ${productId}: ${reason}\n`);
+    return reason;
+  }
+
   expose('images:autoCropProducts', async (opts = {}) => {
+    const OPNAME = 'images:autoCropProducts';
     const { reframeImage } = require('../util/reframe');
     const productIds = Array.isArray(opts.productIds) ? opts.productIds : [];
     // v0.49.8 (mobile-driven): optional per-image filter. When supplied, only
@@ -708,7 +749,14 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const failures = [];   // first few {sku?, filename, error} for the toast
 
     for (const productId of productIds) {
-      try { assertProductInActiveCompany(productId); } catch (_) { continue; }
+      try {
+        assertProductInActiveCompany(productId);
+      } catch (err) {
+        // v0.1.11: count + report instead of vanishing.
+        failed += 1;
+        if (failures.length < 5) failures.push({ productId, error: skipNotInActiveCompany(productId, OPNAME) });
+        continue;
+      }
       const imgs = productImages.listByProduct(productId);
       let any = false;
       for (const img of imgs) {
@@ -780,6 +828,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // fix for hand-taken phone shots. scope 'main' (default) does only the main
   // image; 'all' does every image. No per-image undo (overwrites in place).
   expose('images:autoEnhanceProducts', async (opts = {}) => {
+    const OPNAME = 'images:autoEnhanceProducts';
     const { autoEnhance } = require('../util/autoEnhance');
     const productIds = Array.isArray(opts.productIds) ? opts.productIds : [];
     const scope = opts.scope === 'all' ? 'all' : 'main';
@@ -800,7 +849,14 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const failures = [];
 
     for (const productId of productIds) {
-      try { assertProductInActiveCompany(productId); } catch (_) { continue; }
+      try {
+        assertProductInActiveCompany(productId);
+      } catch (err) {
+        // v0.1.11: count + report instead of vanishing.
+        failed += 1;
+        if (failures.length < 5) failures.push({ productId, error: skipNotInActiveCompany(productId, OPNAME) });
+        continue;
+      }
       const all = productImages.listByProduct(productId);
       // When the per-filepath filter is supplied, use it as the candidate set
       // (ignoring `scope`). Otherwise honour the original scope semantics.
@@ -854,6 +910,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
    * and the DB row\'s filepath is updated.
    */
   expose('images:reencodeProducts', async (opts = {}) => {
+    const OPNAME = 'images:reencodeProducts';
     const productIds = Array.isArray(opts.productIds) ? opts.productIds : [];
     const scope = opts.scope === 'all' ? 'all' : 'main';
     const filepathFilter = Array.isArray(opts.filepaths) && opts.filepaths.length
@@ -907,7 +964,14 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const failures = [];
 
     for (const productId of productIds) {
-      try { assertProductInActiveCompany(productId); } catch (_) { continue; }
+      try {
+        assertProductInActiveCompany(productId);
+      } catch (err) {
+        // v0.1.11: count + report instead of vanishing.
+        failed += 1;
+        if (failures.length < 5) failures.push({ productId, error: skipNotInActiveCompany(productId, OPNAME) });
+        continue;
+      }
       const all = productImages.listByProduct(productId);
       const imgs = filepathFilter
         ? all.filter(img => filepathFilter.has(img.filepath))
@@ -1146,7 +1210,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
    * instead. The folder path already works in client mode.
    */
 
-  expose('images:copyImagesToFolder', async ({ productId, filepaths, targetFolder, sku: providedSku } = {}) => {
+  exposeLocal('images:copyImagesToFolder', async ({ productId, filepaths, targetFolder, sku: providedSku } = {}) => {
     if (!productId) throw new Error('productId is required');
     if (!Array.isArray(filepaths) || filepaths.length === 0) {
       throw new Error('filepaths must be a non-empty array');
@@ -1189,17 +1253,6 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       const idx = String(i + 1).padStart(3, '0');
       const baseName = `${sku}-${idx}${ext}`;
 
-      // Collision avoidance: bump to <name> (1).<ext>, (2), … until a
-      // free name is found. Cheaper than blowing up the user's existing
-      // files in the target folder, even if they re-run the copy.
-      let final = path.join(folder, baseName);
-      let collisionN = 1;
-      while (fs.existsSync(final)) {
-        final = path.join(folder, `${sku}-${idx} (${collisionN})${ext}`);
-        collisionN += 1;
-        if (collisionN > 999) break; // pathological — bail with the last name
-      }
-
       try {
         // One code path for all modes: fetch through the app-image
         // protocol. Standalone/server reads from local disk; client
@@ -1210,7 +1263,20 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         const res = await net.fetch(url);
         if (!res.ok) throw new Error(`fetch returned ${res.status}`);
         const buf = Buffer.from(await res.arrayBuffer());
-        await fs.promises.writeFile(final, buf);
+        // Claim the destination with wx so concurrent copy actions cannot both
+        // choose the same apparently-free name. Retry without a suffix ceiling.
+        let final = path.join(folder, baseName);
+        let collisionN = 1;
+        for (;;) {
+          try {
+            await writeExclusiveFile(final, buf);
+            break;
+          } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
+            final = path.join(folder, `${sku}-${idx} (${collisionN})${ext}`);
+            collisionN += 1;
+          }
+        }
         copied += 1;
       } catch (err) {
         failures.push({ filename: path.basename(rel), error: err.message });
@@ -1222,7 +1288,15 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     // saves the "wait, where did it save?" round-trip. Skipped if
     // everything failed (nothing to show).
     if (copied > 0) {
-      try { shell.openPath(folder); } catch (_) { /* non-fatal */ }
+      // Deliberately fire-and-forget: revealing the folder is a nicety, and the
+      // copy already succeeded, so a failure here must not turn a success into
+      // a visible error. (The old `try { shell.openPath() } catch` could never
+      // have caught anything — openPath does not reject, and the promise was
+      // not awaited.) v0.1.25: routed through the helper so there is exactly
+      // one place in main/ that calls shell.openPath; see
+      // test/openPathHandling.test.js.
+      const { openPathOrThrow } = require('../util/openPath');
+      void openPathOrThrow(folder, 'folder').catch(() => { /* non-fatal */ });
     }
 
     return { copied, folder, canceled: false, failures };
@@ -1242,23 +1316,38 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
    * a slow link. Prep returns paths the renderer can hold onto so
    * the dragstart handler's awaited work is BOUNDED — fast on
    * standalone, predictable on client. */
-  expose('images:prepareDrag', async ({ productId, filepaths } = {}) => {
+  exposeLocal('images:prepareDrag', async ({ productId, filepaths } = {}) => {
     if (!productId) throw new Error('productId is required');
     if (!Array.isArray(filepaths) || filepaths.length === 0) {
       throw new Error('filepaths must be a non-empty array');
     }
     assertProductInActiveCompany(productId);
-    // Standalone / server: every filepath is already on local disk
-    // under <dataDir>/assets/. Resolve and existence-filter.
+    // A renderer may request only image rows attached to this product. Resolve
+    // each one under the real assets root before issuing it for one drag.
+    const productFilepaths = new Set(productImages.listByProduct(productId).map((image) => image.filepath));
+    const assetsRoot = fs.realpathSync(path.join(getDataDir(), 'assets'));
     const failed = [];
     const files = [];
     for (const rel of filepaths) {
-      const abs = path.join(getDataDir(), 'assets', rel);
       try {
-        if (fs.existsSync(abs)) files.push(abs);
-        else failed.push({ filepath: rel, error: 'missing on disk' });
+        if (typeof rel !== 'string' || !productFilepaths.has(rel)) {
+          failed.push({ filepath: rel, error: 'image is not attached to this product' });
+          continue;
+        }
+        const abs = fs.realpathSync(path.resolve(assetsRoot, rel));
+        const inside = path.relative(assetsRoot, abs);
+        if (inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) {
+          failed.push({ filepath: rel, error: 'image is outside the assets folder' });
+          continue;
+        }
+        if (!fs.statSync(abs).isFile()) {
+          failed.push({ filepath: rel, error: 'not a file' });
+          continue;
+        }
+        files.push(abs);
+        issuedDragPaths.set(abs, Date.now() + DRAG_PREP_TTL_MS);
       } catch (err) {
-        failed.push({ filepath: rel, error: err.message });
+        failed.push({ filepath: rel, error: err.code === 'ENOENT' ? 'missing on disk' : err.message });
       }
     }
     return { tmpDir: null, files, failed };
@@ -1269,13 +1358,13 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // routing through expose() would force a promise envelope for
   // nothing.
   ipcMain.on('images:startDragOut', async (event, args = {}) => {
-    const { preparedPaths } = args;
+    const preparedPaths = args && typeof args === 'object' ? args.preparedPaths : null;
     if (!Array.isArray(preparedPaths) || preparedPaths.length === 0) return;
 
     // Defensive existence filter — temp paths from client-mode
     // prepareDrag may have been cleaned up if the user prepped a drag
     // and then sat on the pill past the 5 min cleanup timer.
-    const livePaths = preparedPaths.filter((p) => {
+    const livePaths = takeIssuedDragPaths(preparedPaths).filter((p) => {
       try { return fs.existsSync(p); } catch { return false; }
     });
     if (livePaths.length === 0) return;
@@ -1305,14 +1394,13 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     } catch (err) {
       // Logging only — the drag failed but we can't surface this to
       // the user mid-gesture. They'll just notice nothing was dropped.
-      // eslint-disable-next-line no-console
       console.error('[startDragOut] startDrag threw:', err.message);
     }
   });
 
   /* ─── Watermarks ─── */
 
-  ipcMain.handle('watermarks:upload', async (_e, { sourcePath }) => {
+  exposeLocal('watermarks:upload', async ({ sourcePath }) => {
     if (!sourcePath) throw new Error('Source path required');
     const slug = path.basename(sourcePath, path.extname(sourcePath));
     const { relativePath } = await imageManager.importAsset('watermarks', sourcePath, slug);
