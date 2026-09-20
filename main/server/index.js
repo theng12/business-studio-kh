@@ -23,6 +23,7 @@
 const http = require('node:http');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { logSoftFailure } = require('../util/softFailure');
+const { isMaintenanceActive, runTrackedOperation } = require('../util/maintenanceLifecycle');
 const path = require('node:path');
 const fs = require('node:fs');
 const MAX_RPC_BODY_BYTES = 100 * 1024 * 1024;
@@ -246,14 +247,17 @@ async function serveAsset(req, res, urlPath, dataDir) {
 
   res.writeHead(200, { ...headers, 'Content-Length': stat.size });
   const stream = handle.createReadStream({ autoClose: true });
-  stream.on('error', (err) => {
-    process.stderr.write(`[serveAsset] read error: ${err.message}\n`);
-    if (!res.destroyed) res.destroy(err);
+  await new Promise((resolve) => {
+    stream.on('error', (err) => {
+      process.stderr.write(`[serveAsset] read error: ${err.message}\n`);
+      if (!res.destroyed) res.destroy(err);
+    });
+    stream.on('close', resolve);
+    res.on('close', () => {
+      if (!stream.destroyed) stream.destroy();
+    });
+    stream.pipe(res);
   });
-  res.on('close', () => {
-    if (!stream.destroyed) stream.destroy();
-  });
-  stream.pipe(res);
 }
 
 function isPathWithinRoot(root, candidate) {
@@ -345,6 +349,11 @@ async function handleRequest(req, res, dataDir) {
       'X-App-Version': version,
     });
     res.end(html);
+    return;
+  }
+
+  if (isMaintenanceActive()) {
+    sendJson(res, 503, { error: 'Media Studio KH is performing maintenance and will restart shortly.' });
     return;
   }
 
@@ -456,7 +465,11 @@ function bootServer({ port, dataDir }) {
   if (_server) return Promise.resolve(_bindings);
   return new Promise((resolve, reject) => {
     const srv = http.createServer((req, res) => {
-      handleRequest(req, res, dataDir).catch((err) => {
+      runTrackedOperation(`http:${req.method || 'UNKNOWN'}`, () => handleRequest(req, res, dataDir)).catch((err) => {
+        if (err?.code === 'APP_MAINTENANCE') {
+          try { sendJson(res, 503, { error: err.message }); } catch (_) {}
+          return;
+        }
         process.stderr.write(`[server] unhandled: ${err.stack || err.message}\n`);
           // Last-seen / presence bookkeeping. Failing to stamp a timestamp must not
         try { sendJson(res, 500, { error: 'Internal server error' }); } catch (_) {}
@@ -478,6 +491,11 @@ function bootServer({ port, dataDir }) {
       _wss = wss;
 
       srv.on('upgrade', (req, socket, head) => {
+        if (isMaintenanceActive()) {
+          socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+          socket.destroy();
+          return;
+        }
         const url = req.url || '';
         if (!url.startsWith('/api/events')) {
           socket.write('HTTP/1.1 404 Not Found\r\n\r\n');

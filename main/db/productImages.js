@@ -81,6 +81,13 @@ function getByFilepath(productId, filepath) {
   return rowToImage(row);
 }
 
+function getById(productId, imageId) {
+  const row = getDb()
+    .prepare('SELECT * FROM product_images WHERE product_id = ? AND id = ?')
+    .get(productId, imageId);
+  return rowToImage(row);
+}
+
 function nextOrderIndex(productId) {
   const row = getDb()
     .prepare('SELECT COALESCE(MAX(order_index), -1) AS m FROM product_images WHERE product_id = ?')
@@ -342,6 +349,26 @@ function setProcessed(productId, filepath, { isProcessed, processedFilepath, wor
     .run(params);
 }
 
+function setProcessedById(productId, imageId, { isProcessed, processedFilepath, workspaceSettings }) {
+  const params = {
+    productId,
+    imageId,
+    isProcessed: isProcessed ? 1 : 0,
+    processedFilepath: processedFilepath ?? null,
+    workspaceSettings: JSON.stringify(workspaceSettings ?? {}),
+  };
+  getDb()
+    .prepare(
+      `UPDATE product_images
+       SET is_processed = @isProcessed,
+           processed_filepath = @processedFilepath,
+           workspace_settings = @workspaceSettings
+       WHERE product_id = @productId AND id = @imageId`,
+    )
+    .run(params);
+  return getById(productId, imageId);
+}
+
 function filenameFromRelative(relativePath) {
   return path.basename(relativePath);
 }
@@ -448,6 +475,7 @@ function countByFilepath(filepath) {
 
 module.exports = {
   listByProduct,
+  getById,
   addFromSource,
   addFromBytes,
   addRow,
@@ -455,6 +483,7 @@ module.exports = {
   reorder,
   setMain,
   setProcessed,
+  setProcessedById,
   setContentHash,
   setFilepath,
   setPerceptualHashById,

@@ -120,8 +120,10 @@ export function BackupsPanel({ config }) {
         setRestoringPath(null);
         return;
       }
+      if (!result?.restartScheduled) {
+        throw new Error('Backup restored, but restart was not scheduled. Quit and reopen Media Studio KH.');
+      }
       addToast('Backup restored. Restarting…', 'success');
-      setTimeout(() => window.api.app.relaunch(), 700);
     } catch (err) {
       addToast(`Restore failed: ${err.message}`, 'error');
       setRestoringPath(null);

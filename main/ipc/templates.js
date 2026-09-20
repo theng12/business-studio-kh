@@ -16,6 +16,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const products = require('../db/products');
 const productImages = require('../db/productImages');
@@ -28,6 +29,103 @@ const templateRenderer = require('../templateRenderer');
 const { writeUniqueFile } = require('../util/exclusiveFile');
 const { applyTemplateToFiles, validateExternalRequest } = require('../util/externalOverlay');
 const { getDataDir } = require('../db');
+
+const APPLY_OPERATION_LIMIT = 100;
+const APPLY_FAILURE_TTL_MS = 15 * 60 * 1000;
+const applyOperations = new Map();
+
+function pruneApplyOperations(now = Date.now()) {
+  for (const [id, operation] of applyOperations) {
+    if (operation.status === 'failed' && now - operation.updatedAt >= APPLY_FAILURE_TTL_MS) {
+      applyOperations.delete(id);
+    }
+  }
+}
+
+function normalizeApplyOperationId(value) {
+  if (value == null) return crypto.randomUUID();
+  const id = String(value);
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+    throw new Error('operationId must be a UUID');
+  }
+  return id;
+}
+
+function applyOutcome(operationId, companyId) {
+  pruneApplyOperations();
+  const current = applyOperations.get(operationId);
+  if (current?.companyId === companyId) {
+    return current.status === 'failed'
+      ? { operationId, status: 'failed', error: 'Overlay apply failed', requiresRefresh: true }
+      : { operationId, status: 'pending' };
+  }
+  const run = imageTemplateRuns.getByIdForCompany(operationId, companyId);
+  return run
+    ? { operationId, status: 'succeeded', summary: run }
+    : { operationId, status: 'lost' };
+}
+
+function operationFingerprint(input) {
+  function canonical(value) {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+    }
+    return value;
+  }
+  return crypto.createHash('sha256').update(JSON.stringify(canonical(input))).digest('hex');
+}
+
+function beginApplyOperation(operationId, companyId, fingerprint) {
+  pruneApplyOperations();
+  const current = applyOperations.get(operationId);
+  if (current) {
+    if (current.companyId !== companyId) throw new Error('operationId is unavailable');
+    if (current.fingerprint !== fingerprint) {
+      throw new Error('operationId belongs to a different overlay request');
+    }
+    return applyOutcome(operationId, companyId);
+  }
+  if (imageTemplateRuns.getByIdForCompany(operationId, companyId)) {
+    throw new Error('operationId already completed; query its outcome instead of replaying it');
+  }
+  if (imageTemplateRuns.exists(operationId)) throw new Error('operationId is unavailable');
+  if (applyOperations.size >= APPLY_OPERATION_LIMIT) {
+    throw new Error('Too many overlay operations are still pending. Wait for one to finish.');
+  }
+  applyOperations.set(operationId, {
+    companyId, fingerprint, status: 'pending', updatedAt: Date.now(),
+  });
+  return null;
+}
+
+async function runTrackedApply({ requestedOperationId, templateId, productIds, destination, companyId, emitCatalogChange, scope, source }) {
+  const operationId = normalizeApplyOperationId(requestedOperationId);
+  const fingerprint = operationFingerprint({
+    source,
+    templateId,
+    productIds,
+    destination,
+    scope: scope === 'all' ? 'all' : 'main',
+  });
+  const previous = beginApplyOperation(operationId, companyId, fingerprint);
+  if (previous) return previous;
+  let completed = false;
+  try {
+    const result = await applyBulkInternal({
+      operationId, templateId, productIds, destination, companyId, emitCatalogChange, scope,
+    });
+    completed = true;
+    return result;
+  } catch (err) {
+    applyOperations.set(operationId, {
+      companyId, fingerprint, status: 'failed', updatedAt: Date.now(),
+    });
+    throw err;
+  } finally {
+    if (completed) applyOperations.delete(operationId);
+  }
+}
 
 /* ─── v0.49.52: multi-image overlay apply helpers ───────────────────
  * Overlay apply used to hit only the main image. These let a caller
@@ -387,7 +485,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
     }
   });
 
-  expose('templates:applyBulk', async ({ templateId, productIds, destination, scope } = {}) => {
+  expose('templates:applyBulk', async ({ operationId: requestedOperationId, templateId, productIds, destination, scope } = {}) => {
     if (!templateId) throw new Error('templateId required');
     if (!Array.isArray(productIds) || productIds.length === 0) {
       throw new Error('productIds required');
@@ -400,9 +498,17 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
       throw new Error('saveToFolder requires a folder path');
     }
     const companyId = companies.getActiveId();
-    return await applyBulkInternal({
-      templateId, productIds, destination, companyId, emitCatalogChange, scope,
+    if (!companyId) throw new Error('No active company');
+    return runTrackedApply({
+      requestedOperationId, templateId, productIds, destination, companyId,
+      emitCatalogChange, scope, source: 'selection',
     });
+  });
+
+  expose('templates:getApplyOutcome', ({ operationId } = {}) => {
+    const companyId = companies.getActiveId();
+    if (!companyId) throw new Error('No active company');
+    return applyOutcome(normalizeApplyOperationId(operationId), companyId);
   });
 
   /**
@@ -412,7 +518,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
    * so the confirmation modal can show "this will hit 47 products
    * including BR-001, BR-002, BR-003…" before the user commits.
    */
-  expose('templates:applyByFilter', async ({ templateId, filters, destination, dryRun, scope } = {}) => {
+  expose('templates:applyByFilter', async ({ operationId: requestedOperationId, templateId, filters, destination, dryRun, scope } = {}) => {
     if (!templateId) throw new Error('templateId required');
     const companyId = companies.getActiveId();
     if (!companyId) throw new Error('No active company');
@@ -424,25 +530,13 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
         sampleSkus: all.slice(0, 5).map((p) => p.sku),
       };
     }
-    if (all.length === 0) return { done: [], failed: [], skipped: [], total: 0 };
-
-    // Hand off to applyBulk via the same registered handler — but
-    // we're inside that handler's closure already, so just inline
-    // a recursive call via the dispatcher is overkill. We'll
-    // duplicate the call signature here for clarity.
     const productIds = all.map((p) => p.id);
     if (productIds.length > 1000) {
       throw new Error(`Filter matched ${productIds.length} products — too many for one batch (max 1000). Narrow the filter.`);
     }
-    // Re-enter the apply handler — call through the registered map
-    // would require passing it; simpler to inline via the direct
-    // dispatcher pattern. We just call applyBulk inline:
-    // (The handler this file registers above is captured in scope
-    // by the IPC layer, not as a local fn; so we duplicate the
-    // loop in a helper.)
-    return await applyBulkInternal({
-      templateId, productIds, destination, companyId,
-      emitCatalogChange, scope,
+    return runTrackedApply({
+      requestedOperationId, templateId, productIds, destination, companyId,
+      emitCatalogChange, scope, source: 'filter',
     });
   });
 }
@@ -457,7 +551,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
  * `products`, `productImages`, `templateRenderer`, `imageTemplateRuns`,
  * `getDataDir`, etc.
  */
-async function applyBulkInternal({ templateId, productIds, destination, companyId, emitCatalogChange, scope }) {
+async function applyBulkInternal({ operationId = crypto.randomUUID(), templateId, productIds, destination, companyId, emitCatalogChange, scope }) {
   const events = require('../events');
 
   const done = [];
@@ -479,7 +573,7 @@ async function applyBulkInternal({ templateId, productIds, destination, companyI
   // ProgressOverlay surfaces this run automatically. Previously we
   // broadcast on a custom `templates:apply:progress` channel that
   // nothing in the renderer subscribed to — the apply ran silently.
-  const opId = `overlay-apply-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const opId = operationId;
   const template = imageTemplates.get(templateId); // for the label
   const label = template?.name || 'Overlay';
   events.broadcast('progress:event', {
@@ -535,6 +629,7 @@ async function applyBulkInternal({ templateId, productIds, destination, companyI
 
   try {
     imageTemplateRuns.record({
+      id: operationId,
       templateId,
       companyId,
       outputRoot: destination.kind === 'saveToFolder' ? destination.folder : null,
@@ -547,8 +642,8 @@ async function applyBulkInternal({ templateId, productIds, destination, companyI
   // `outputs` is present only when bytes were collected, so every other caller
   // sees exactly the payload it saw before.
   return collected.length
-    ? { done, failed, skipped, total, outputs: collected }
-    : { done, failed, skipped, total };
+    ? { operationId, done, failed, skipped, total, outputs: collected }
+    : { operationId, done, failed, skipped, total };
 }
 
 /**

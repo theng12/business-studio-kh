@@ -35,6 +35,8 @@ const { dialog, app } = require('electron');
 const serverBundle = require('../serverBundle');
 const events = require('../events');
 const config = require('../config');
+const { canonicalizeExistingPath } = require('../util/backupSafety');
+const { runDataMaintenance } = require('../util/maintenanceLifecycle');
 
 const BUNDLE_EXT = 'iskhbundle';
 
@@ -159,9 +161,19 @@ function register({ exposeLocal }) {
     });
 
     try {
+      const liveDataDir = config.loadConfig().dataDir;
+      const replacesLiveData = !!liveDataDir &&
+        canonicalizeExistingPath(liveDataDir) === canonicalizeExistingPath(targetDataDir);
       const result = await serverBundle.importBundle({
         bundlePath,
         targetDataDir,
+        runReplacement: replacesLiveData
+          ? (replace) => runDataMaintenance({
+              label: 'importing a server bundle',
+              dataDir: liveDataDir,
+              replace,
+            })
+          : undefined,
         onProgress: (stage) => {
           const idx = stages.indexOf(stage);
           events.broadcast('progress:event', {

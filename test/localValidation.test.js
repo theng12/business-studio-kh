@@ -76,20 +76,20 @@ test('expose() — local IPC rejects bad args with a readable message', () => {
   assert.equal(handlerRan, false, 'the handler must NOT run when args are invalid');
 });
 
-test('expose() — local IPC still accepts good args', () => {
+test('expose() — local IPC still accepts good args', async () => {
   const { handlers, expose } = loadHelpersWithStub();
   expose('products:update', () => 'ok');
   const fn = handlers.get('products:update');
-  assert.equal(fn({}, { id: 'p1', patch: { name: 'Fine' } }), 'ok');
+  assert.equal(await fn({}, { id: 'p1', patch: { name: 'Fine' } }), 'ok');
 });
 
-test('expose() — a channel with no validator passes through unchanged', () => {
+test('expose() — a channel with no validator passes through unchanged', async () => {
   const { handlers, expose } = loadHelpersWithStub();
   expose('some:uncoveredChannel', (a) => ({ got: a }));
   const fn = handlers.get('some:uncoveredChannel');
   // Uncovered channels keep the old behaviour so adding validation stays
   // incremental rather than turning every uncovered channel into a hard failure.
-  assert.deepEqual(fn({}, 'anything'), { got: 'anything' });
+  assert.deepEqual(await fn({}, 'anything'), { got: 'anything' });
 });
 
 test('expose() — the message matches the RPC wording for the same bad input', () => {

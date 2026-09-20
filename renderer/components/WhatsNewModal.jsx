@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.35',
+    date: '2026-09-21',
+    items: [
+      'FIX — browser company changes run in order, and late image responses cannot replace the current product or refill cleared session caches.',
+      'FIX — Image Workspace saves follow the image through reordering, verify source image content before processing, and keep processed outputs separate across products and companies.',
+      'FIX — data-folder changes, bundle imports and backup restores stop active work before replacing files and restart safely. Unsupported archive schemas and overlapping folder aliases are rejected.',
+      'FIX — backups and server bundles reject detected image reordering during snapshot creation, including images moved away and back to the same filenames.',
+      'FIX — client permissions stay current after reconnect and role edits. Timed-out overlay runs can check their recorded outcome without automatically repeating the operation.',
+      'Internal — added behavioral response-race tests, real SQLite lifecycle and image-identity checks, and a disposable packaged server/client renderer probe. Builds remain local-only and Apple Silicon only.',
+    ],
+  },
+  {
     version: '0.1.34',
     date: '2026-09-20',
     items: [

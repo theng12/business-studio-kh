@@ -87,6 +87,7 @@ let _connectionState = {
   user: null,
   serverVersion: null,
 };
+let _identityGeneration = 0;
 let _pollTimer = null;
 let _pollBackoffMs = 2000;
 // ponytail: JSON/base64 keeps the 100 MiB encoded ceiling and buffers the
@@ -263,12 +264,15 @@ function broadcastRpcActivity(payload) {
   } catch (_) {}
 }
 
-async function rpc(channel, args) {
+async function rpc(channel, args, timeoutMs) {
   const url = baseUrl();
   const auth = authHeader();
   if (!url) throw new Error('Server URL not set (Settings → Multi-Mac → Client mode)');
   if (!auth) throw new Error('Server token not set (Settings → Multi-Mac → Client mode)');
 
+  // Optional caller budget spans headers, body, and 429 backoff/retries.
+  // Ordinary calls retain their existing per-attempt 120-second timeout.
+  const budgetSignal = timeoutMs == null ? null : AbortSignal.timeout(timeoutMs);
   const startedAt = Date.now();
   const requestBody = JSON.stringify({ channel, args: serializeForServer(args) });
   const requestBytes = Buffer.byteLength(requestBody, 'utf8');
@@ -299,7 +303,9 @@ async function rpc(channel, args) {
     // hinted interval and retry a bounded number of times so transient
     // bursts self-heal. Non-429 responses fall straight through.
     for (let attempt = 0; ; attempt++) {
+      const signal = budgetSignal || AbortSignal.timeout(120_000);
       try {
+        budgetSignal?.throwIfAborted();
         res = await fetch(`${url}/api/rpc`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: auth },
@@ -312,10 +318,24 @@ async function rpc(channel, args) {
           // is generous for a big bulkUpsert / full product list, but finite,
           // so a genuine stall now rejects → the chip turns red + the UI
           // recovers instead of spinning forever.
-          signal: AbortSignal.timeout(120_000),
+          signal,
         });
+
+        // Keep body consumption inside the same transport error boundary as
+        // headers: a timed-out write response is still an unknown outcome.
+        let responseText = '';
+        body = null;
+        try {
+          responseText = await res.text();
+          responseBytes += Buffer.byteLength(responseText, 'utf8');
+          if (responseText) body = JSON.parse(responseText);
+        } catch (err) {
+          if (signal.aborted || isTimeoutError(err)) throw err;
+          // Preserve ordinary response parsing behavior.
+        }
       } catch (err) {
-        if (isLikelyMutationChannel(channel) && isTimeoutError(err)) {
+        if (channel !== 'templates:getApplyOutcome' && isLikelyMutationChannel(channel) &&
+            (isTimeoutError(err) || isTimeoutError(signal.reason))) {
           // The server handler is not cancelled by an HTTP client abort. Do
           // not turn an unknown write outcome into a blind duplicate retry.
           const unknown = mutationOutcomeUnknown(channel, err);
@@ -334,25 +354,17 @@ async function rpc(channel, args) {
         throw new Error(analyzed.message, { cause: err });
       }
 
-      // Read response body as text first so we know its byte count, then
-      // parse JSON. The double-pass costs ~1 ms per call vs. .json()
-      // directly, but it gives us an accurate "bytes downloaded" stat
-      // even when the server omits Content-Length (chunked transfer).
-      let responseText = '';
-      body = null;
-      try {
-        responseText = await res.text();
-        responseBytes += Buffer.byteLength(responseText, 'utf8');
-        if (responseText) body = JSON.parse(responseText);
-      } catch (_) { /* leave body null; downstream handles */ }
-
       // Rate limited → wait the server's Retry-After (or backoff) and try
       // again, up to the helper's cap. After the cap, fall through and let
       // the !res.ok branch surface the rate-limit message as a normal error.
       if (res.status === 429 && shouldRetry(attempt)) {
         const waitMs = retryWaitMs(res.headers.get('retry-after'), attempt);
         process.stdout.write(`[client rpc] 429 on ${channel}; retrying in ${waitMs}ms (attempt ${attempt + 1})\n`);
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        if (budgetSignal) {
+          await require('node:timers/promises').setTimeout(waitMs, undefined, { signal: budgetSignal });
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
         continue;
       }
       break;
@@ -436,6 +448,10 @@ let _wsBackoffMs = 1000;
  */
 function dispatchIncoming({ channel, payload }) {
   if (!channel) return;
+  if (channel === 'server:hello' && payload?.user?.id) {
+    _identityGeneration += 1;
+    setConnectionState({ status: 'connected', lastError: null, user: payload.user });
+  }
   try {
     for (const w of BrowserWindow.getAllWindows()) {
       if (!w.isDestroyed()) w.webContents.send(channel, payload);
@@ -542,6 +558,7 @@ function scheduleReconnect() {
  */
 async function ensureWhoami() {
   if (_connectionState.user?.id) return; // already have it
+  const identityGeneration = _identityGeneration;
   const url = baseUrl();
   const auth = authHeader();
   if (!url || !auth) return; // nothing to query with
@@ -556,7 +573,7 @@ async function ensureWhoami() {
     });
     if (!res.ok) return; // 401 path handled by RPC error flow
     const body = await res.json().catch(() => null);
-    if (body?.user?.id) {
+    if (identityGeneration === _identityGeneration && body?.user?.id) {
       setConnectionState({ user: body.user });
     }
   } catch (_) {
@@ -1404,12 +1421,93 @@ function registerClientFileHandlers() {
    */
   function makeOverlayApplyHandler(channel) {
     return async (args = {}) => {
+      // A dry run does not mutate anything and has no durable outcome to
+      // reconcile. Real bulk runs use one ID for the request, progress event,
+      // and run-history row so a timed-out client can ask what happened
+      // without replaying the mutation.
+      if (args.dryRun) return rpc(channel, args);
+      const tracked = channel === 'templates:applyBulk' || channel === 'templates:applyByFilter';
+      const operationId = tracked ? (args.operationId || require('node:crypto').randomUUID()) : null;
       const destination = args.destination ?? {};
-      if (destination.kind !== 'saveToFolder') return rpc(channel, args);
-      if (!destination.folder || typeof destination.folder !== 'string') {
+      const request = tracked ? { ...args, operationId } : { ...args };
+      const collect = destination.kind === 'saveToFolder';
+      if (collect && (!destination.folder || typeof destination.folder !== 'string')) {
         throw new Error('Pick an output folder');
       }
-      const res = await rpc(channel, { ...args, destination: { ...destination, collect: true } });
+      if (collect) request.destination = { ...destination, collect: true };
+
+      let res;
+      try {
+        res = await rpc(channel, request);
+      } catch (err) {
+        if (!tracked || err?.code !== 'RPC_OUTCOME_UNKNOWN') throw err;
+
+        const deadline = Date.now() + 30_000;
+        let outcome;
+        let lastOutcomeError;
+        while (Date.now() < deadline) {
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) break;
+          try {
+            outcome = await rpc('templates:getApplyOutcome', { operationId }, remainingMs);
+            lastOutcomeError = null;
+          } catch (outcomeError) {
+            // A restart can briefly refuse connections. Retry only transport
+            // uncertainty; authenticated HTTP errors have no nested cause and
+            // still surface immediately.
+            if (outcomeError?.code !== 'RPC_OUTCOME_UNKNOWN' && !outcomeError?.cause) {
+              throw outcomeError;
+            }
+            lastOutcomeError = outcomeError;
+          }
+          if (outcome?.status !== 'pending' && outcome) break;
+          const waitMs = Math.min(250, deadline - Date.now());
+          if (waitMs <= 0) break;
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+
+        if (outcome?.status === 'succeeded') {
+          if (collect) {
+            throw new Error(
+              'The overlay completed on the server, but its response bytes were lost after the connection timed out. ' +
+              'No files were saved on this Mac. Run the export again to create the local files.',
+              { cause: err },
+            );
+          }
+          return {
+            operationId,
+            reconciled: true,
+            status: 'succeeded',
+            summary: outcome.summary,
+          };
+        }
+        if (outcome?.status === 'failed') {
+          throw new Error(
+            'The overlay operation failed on the server. Refresh product data before retrying.',
+            { cause: err },
+          );
+        }
+        if (outcome?.status === 'lost') {
+          throw new Error(
+            'The server cannot confirm whether the overlay operation completed. ' +
+              'Refresh product data before deciding whether to run it again.',
+            { cause: err },
+          );
+        }
+        if (lastOutcomeError) {
+          throw new Error(
+            'Could not reconnect to confirm the overlay result. Refresh product data before deciding whether to run it again.',
+            { cause: err },
+          );
+        }
+        throw new Error(
+          'The overlay operation is still running on the server. ' +
+            'Wait for progress to finish, then refresh product data; do not run it again yet.',
+          { cause: err },
+        );
+      }
+
+      if (!collect) return res;
       const outputs = Array.isArray(res?.outputs) ? res.outputs : [];
       const folder = path.resolve(destination.folder);
       /* v0.1.29: say so if the server produced nothing to write. Silently

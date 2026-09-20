@@ -32,6 +32,9 @@ function isNumber(v)  { return typeof v === 'number' && Number.isFinite(v); }
 function isBool(v)    { return typeof v === 'boolean'; }
 function isNullableString(v) { return v == null || isString(v); }
 function isNullableNumber(v) { return v == null || isNumber(v); }
+function isUuid(v) {
+  return isString(v) && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+}
 
 /** Combinator: every named field must be present (any type). */
 function requireFields(...names) {
@@ -239,13 +242,17 @@ const VALIDATORS = {
   'workspace:processImage': (a) => {
     if (!isObject(a)) return 'expected object';
     if (!isString(a.productId)) return 'productId required';
-    if (!isString(a.filepath)) return 'filepath required';
+    if (!isString(a.imageId)) return 'imageId required';
+    if (!('expectedContentHash' in a)) return 'expectedContentHash required';
+    if (!isNullableString(a.expectedContentHash)) return 'expectedContentHash must be a string or null';
     return true;
   },
   'workspace:saveSettings': (a) => {
     if (!isObject(a)) return 'expected object';
     if (!isString(a.productId)) return 'productId required';
-    if (!isString(a.filepath)) return 'filepath required';
+    if (!isString(a.imageId)) return 'imageId required';
+    if (!('expectedContentHash' in a)) return 'expectedContentHash required';
+    if (!isNullableString(a.expectedContentHash)) return 'expectedContentHash must be a string or null';
     return true;
   },
 
@@ -359,6 +366,7 @@ const VALIDATORS = {
   },
   'templates:applyBulk': (a) => {
     if (!isObject(a)) return 'expected object';
+    if (a.operationId != null && !isUuid(a.operationId)) return 'operationId must be a UUID';
     if (!isString(a.templateId)) return 'templateId required';
     if (!isArray(a.productIds) || a.productIds.length === 0) return 'productIds must be a non-empty array';
     if (a.productIds.length > 1000) return 'productIds too large (max 1000 per batch)';
@@ -367,8 +375,14 @@ const VALIDATORS = {
   },
   'templates:applyByFilter': (a) => {
     if (!isObject(a)) return 'expected object';
+    if (a.operationId != null && !isUuid(a.operationId)) return 'operationId must be a UUID';
     if (!isString(a.templateId)) return 'templateId required';
     if (!isObject(a.destination) || !isString(a.destination.kind)) return 'destination.kind required';
+    return true;
+  },
+  'templates:getApplyOutcome': (a) => {
+    if (!isObject(a)) return 'expected object';
+    if (!isUuid(a.operationId)) return 'operationId must be a UUID';
     return true;
   },
 

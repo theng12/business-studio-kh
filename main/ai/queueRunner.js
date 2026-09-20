@@ -26,6 +26,9 @@ const TICK_MS = 2000;
 let ctx = null;     // { getMainWindow, getConfig }
 let timer = null;
 let running = false;
+let enabled = false;
+const pendingTicks = new Set();
+const idleWaiters = new Set();
 
 /* in-memory per-provider counters of currently in-flight tasks */
 const inflightByProvider = { kie: new Set(), fal: new Set() };
@@ -64,7 +67,7 @@ function apiKeyFor(name) {
 /* ── Tick loop ─────────────────────────────────────────────── */
 
 async function tick() {
-  if (running) return;            // single tick at a time
+  if (!enabled || running) return; // stopped, or a single tick already owns the runner
   running = true;
   let hasWork = false;
   try {
@@ -77,6 +80,7 @@ async function tick() {
 
     // Advance running tasks (poll provider for status).
     for (const t of pending) {
+      if (!enabled) break;
       if (t.status !== 'running') continue;
       if (!inflightByProvider[t.provider]?.has(t.id)) {
         // Resumed after restart — mark as inflight and re-poll.
@@ -87,6 +91,7 @@ async function tick() {
 
     // Start queued tasks subject to per-provider concurrency limits.
     for (const t of pending) {
+      if (!enabled) break;
       if (t.status !== 'queued') continue;
       const live = inflightByProvider[t.provider]?.size ?? 0;
       if (live >= concurrencyLimit(t.provider)) continue;
@@ -96,6 +101,8 @@ async function tick() {
     process.stderr.write(`[ai/queue] tick error: ${err.message}\n`);
   } finally {
     running = false;
+    for (const resolve of idleWaiters) resolve();
+    idleWaiters.clear();
   }
   // Hint: nothing observable changes here — the early-exit is purely a
   // micro-perf win. The interval keeps the runner alive for the next nudge.
@@ -460,25 +467,41 @@ function guessExt(contentType, url) {
 
 /* ── Public API ────────────────────────────────────────────── */
 
+function scheduleTick(delay) {
+  if (!enabled) return;
+  const pending = setTimeout(() => {
+    pendingTicks.delete(pending);
+    void tick();
+  }, delay);
+  pendingTicks.add(pending);
+}
+
 function start(_ctx) {
-  ctx = _ctx;
+  if (_ctx) ctx = _ctx;
+  enabled = true;
   if (timer) clearInterval(timer);
+  for (const pending of pendingTicks) clearTimeout(pending);
+  pendingTicks.clear();
   // Boot sweep: any tasks left in 'running' without a provider task id were
   // interrupted (process killed mid-submit). Mark them failed so Repair has
   // a clear place to start from. Tasks with provider_task_id stay 'running'
   // and the tick loop will re-poll them.
   interruptStaleTasks();
   timer = setInterval(tick, TICK_MS);
-  setTimeout(tick, 100);
+  scheduleTick(100);
 }
 
-function stop() {
+async function stop() {
+  enabled = false;
   if (timer) clearInterval(timer);
   timer = null;
+  for (const pending of pendingTicks) clearTimeout(pending);
+  pendingTicks.clear();
+  if (running) await new Promise((resolve) => idleWaiters.add(resolve));
 }
 
 function nudge() {
-  setTimeout(tick, 50);
+  scheduleTick(50);
 }
 
 function interruptStaleTasks() {

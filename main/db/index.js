@@ -35,6 +35,15 @@ function getDataDir() {
   return currentDataDir;
 }
 
+function closeDb() {
+  if (!db) return;
+  const openDb = db;
+  try { openDb.pragma('wal_checkpoint(TRUNCATE)'); } catch (_) {}
+  openDb.close();
+  db = null;
+  currentDataDir = null;
+}
+
 function addColumnIfMissing(database, table, column, type) {
   const cols = database.prepare(`PRAGMA table_info(${table})`).all();
   if (!cols.some((c) => c.name === column)) {
@@ -942,6 +951,7 @@ function setAppState(key, value) {
 
 module.exports = {
   initDb,
+  closeDb,
   getDb,
   getDataDir,
   addColumnIfMissing,
