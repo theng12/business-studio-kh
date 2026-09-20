@@ -10,7 +10,7 @@
  * keep their PO history but stop showing in the create-PO picker.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Input, Modal, Field, Select, EmptyState, Pagination, paginate, Textarea } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -52,17 +52,31 @@ export function Suppliers() {
   const [editing, setEditing] = useState(null); // null = closed, 'new' = create, object = edit
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const listRequestRef = useRef(0);
+  const spendRequestRef = useRef(0);
   // v0.49.48: per-supplier PO spend rollup, keyed by supplierId →
   // { poCount, receivedCount, totalSpendUsd, lastOrderedAt }. Fetched once
   // per company; refreshed when the supplier list reloads.
   const [spend, setSpend] = useState({});
 
   useEffect(() => {
+    const request = ++spendRequestRef.current;
     if (!activeCompanyId) { setSpend({}); return; }
     window.api.purchaseOrders.supplierSpendRollup(activeCompanyId)
-      .then((m) => setSpend(m && typeof m === 'object' ? m : {}))
-      .catch(() => setSpend({}));
-  }, [activeCompanyId, rows.length]);
+      .then((m) => {
+        if (request !== spendRequestRef.current) return;
+        setSpend(m && typeof m === 'object' ? m : {});
+      })
+      .catch(() => {
+        if (request === spendRequestRef.current) setSpend({});
+      });
+  }, [activeCompanyId, refreshTick]);
+
+  useEffect(() => {
+    setEditing(null);
+    setPage(0);
+  }, [activeCompanyId]);
 
   // Fetch whenever the company / status filter / search changes. The
   // search runs server-side (LIKE on name + country), so debounce by
@@ -74,15 +88,25 @@ export function Suppliers() {
       setLoading(false);
       return undefined;
     }
+    const request = ++listRequestRef.current;
     setLoading(true);
     const t = setTimeout(() => {
       window.api.suppliers.list(activeCompanyId, { search, status: statusFilter })
-        .then((list) => { setRows(Array.isArray(list) ? list : []); })
-        .catch((err) => { addToast(`Failed to load suppliers: ${err.message}`, 'error'); setRows([]); })
-        .finally(() => setLoading(false));
+        .then((list) => {
+          if (request !== listRequestRef.current) return;
+          setRows(Array.isArray(list) ? list : []);
+        })
+        .catch((err) => {
+          if (request !== listRequestRef.current) return;
+          addToast(`Failed to load suppliers: ${err.message}`, 'error');
+          setRows([]);
+        })
+        .finally(() => {
+          if (request === listRequestRef.current) setLoading(false);
+        });
     }, 200);
     return () => clearTimeout(t);
-  }, [activeCompanyId, search, statusFilter, addToast]);
+  }, [activeCompanyId, search, statusFilter, refreshTick, addToast]);
 
   const { currentPage, maxPage, pageStart, pageEnd, total } = useMemo(
     () => paginate(rows.length, page, pageSize),
@@ -92,12 +116,12 @@ export function Suppliers() {
 
   async function refresh() {
     if (!activeCompanyId) return;
-    try {
-      const list = await window.api.suppliers.list(activeCompanyId, { search, status: statusFilter });
-      setRows(Array.isArray(list) ? list : []);
-    } catch (err) {
-      addToast(`Refresh failed: ${err.message}`, 'error');
-    }
+    // Invalidate the current promise immediately, before React schedules the
+    // effect driven by refreshTick. A late response must not win that small
+    // scheduling window.
+    listRequestRef.current += 1;
+    spendRequestRef.current += 1;
+    setRefreshTick((tick) => tick + 1);
   }
 
   async function handleSave(payload) {

@@ -2,6 +2,12 @@
 // images, view-mode + zoom + guides + divider state, plus processing
 // progress.
 
+let workspaceRequestGeneration = 0;
+
+function requestIsCurrent(get, productId, generation) {
+  return generation === workspaceRequestGeneration && get().activeProductId === productId;
+}
+
 export function createWorkspaceSlice(set, get) {
   return {
     // — Workspace
@@ -20,25 +26,34 @@ export function createWorkspaceSlice(set, get) {
     workspaceGuides: false,     // alignment crosshair overlay toggle
 
     async loadWorkspaceForProduct(productId) {
+      const generation = ++workspaceRequestGeneration;
       if (!window.api || !productId) {
         set({ workspaceImages: [], workspaceImageIndex: 0, workspaceProductSku: '', workspaceProductName: '' });
         return;
       }
-      set({ workspaceLoading: true });
+      set({
+        workspaceImages: [],
+        workspaceImageIndex: 0,
+        workspaceProductSku: '',
+        workspaceProductName: '',
+        workspaceLoading: true,
+      });
       try {
         const [product, images] = await Promise.all([
           window.api.products.get(productId),
           window.api.images.listByProduct(productId),
         ]);
+        if (!requestIsCurrent(get, productId, generation)) return;
         set({
-          workspaceImages: images,
+          workspaceImages: images || [],
           workspaceImageIndex: 0,
           workspaceProductSku: product?.sku ?? '',
           workspaceProductName: product?.name ?? '',
           workspaceLoading: false,
         });
       } catch (err) {
-        set({ workspaceLoading: false });
+        if (!requestIsCurrent(get, productId, generation)) return;
+        set({ workspaceLoading: false, workspaceImages: [], workspaceImageIndex: 0 });
         get().addToast(err.message, 'error');
       }
     },
@@ -63,9 +78,16 @@ export function createWorkspaceSlice(set, get) {
       set((s) => ({ workspaceProcessedTick: s.workspaceProcessedTick + 1 }));
     },
     async refreshWorkspaceImages(productId) {
-      const images = await window.api.images.listByProduct(productId);
-      set({ workspaceImages: images });
-      return images;
+      const generation = ++workspaceRequestGeneration;
+      try {
+        const images = await window.api.images.listByProduct(productId);
+        if (!requestIsCurrent(get, productId, generation)) return get().workspaceImages;
+        set({ workspaceImages: images || [], workspaceImageIndex: 0 });
+        return images;
+      } catch (err) {
+        if (requestIsCurrent(get, productId, generation)) throw err;
+        return get().workspaceImages;
+      }
     },
   };
 }

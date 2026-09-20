@@ -217,9 +217,8 @@ function register({ expose, exposeLocal }) {
    * asset trees into the new folder, then update the config. The
    * caller relaunches the app.
    *
-   * We use a copy-then-delete approach (not fs.rename) so a
-   * partial move doesn't leave data orphaned. The original stays
-   * until the copy succeeds.
+ * We stage a complete copy and atomically rename it into place. The
+ * original stays in place so a failed move cannot orphan the data.
    */
   exposeLocal('settings:changeDataFolder', async ({ newPath, move }) => {
     if (!newPath || typeof newPath !== 'string') throw new Error('newPath required');
@@ -229,7 +228,7 @@ function register({ expose, exposeLocal }) {
     const shouldMove = !!move && oldExists && looksLikeOurDataDir(oldPath)
       && path.resolve(oldPath) !== path.resolve(newPath);
     let displacedEmptyTarget = null;
-    let stagedPath = null;
+    let stagedPath;
 
     if (move && oldExists && path.resolve(oldPath) !== path.resolve(newPath)) {
       if (!looksLikeOurDataDir(oldPath) && fs.readdirSync(oldPath).length > 0) {
@@ -250,7 +249,6 @@ function register({ expose, exposeLocal }) {
           await fs.promises.rename(targetAbs, displacedEmptyTarget);
         }
         await fs.promises.rename(stagedPath, targetAbs);
-        stagedPath = null;
       } catch (err) {
         if (stagedPath) await fs.promises.rm(stagedPath, { recursive: true, force: true }).catch(() => {});
         if (displacedEmptyTarget && fs.existsSync(displacedEmptyTarget) && !fs.existsSync(targetAbs)) {
@@ -278,16 +276,8 @@ function register({ expose, exposeLocal }) {
   });
 
   /**
-   * v0.21.4: move a former data folder to the OS Trash. Used after
-   * a successful `settings:changeDataFolder` move so the user
-   * isn't left with two copies on disk. Refuses to trash:
-   *   - the CURRENT data folder (would brick the next launch)
-   *   - any path that doesn't look like one of our data folders
-   *     (guards a tampered config or a buggy renderer call)
-   *   - any path that doesn't actually exist
-   *
-   * Uses `shell.trashItem` rather than `fs.rmSync` so the user
-   * can recover from Finder if anything turns out to be missing.
+   * Retained for compatibility with older clients. New data-folder moves
+   * deliberately leave the source in place; no UI offers cleanup eligibility.
    */
   exposeLocal('settings:trashFolder', async ({ path: targetPath } = {}) => {
     if (!targetPath || typeof targetPath !== 'string') {
