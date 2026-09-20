@@ -1,13 +1,10 @@
 /**
  * v0.49.31: backups:* IPC handlers — local backup / restore.
  *
- * LOCAL-ONLY by design, exactly like main/ipc/serverBundle.js: every
- * channel touches THIS Mac's disk (the backups folder, the live data
- * folder, OS file dialogs, Finder reveal). A client Mac has no local
- * data folder, so these are stubbed out in client mode (see
- * NOT_YET_PORTABLE in main/client/index.js). They go through
- * `ipcMain.handle` directly — never `expose()` — so they don't appear
- * in the RPC registry / server validators.
+ * Data operations (create/list/preview/restore) run on the data-owning Mac
+ * through `expose()` and are available to authorized remote clients. Finder
+ * operations remain local through `exposeLocal()` because they must open on
+ * the Mac the user is looking at.
  *
  * Channels:
  *   - backups:create     → snapshot DB + assets + config into a new
@@ -23,18 +20,19 @@
  *   - backups:pickFolder → choose a custom backups folder (persists
  *                          config.backupsDir).
  *   - backups:restore    → REPLACE the data folder from a backup. The
- *                          renderer confirms first + relaunches after.
+ *                          owning process restarts after remote restores;
+ *                          local renderers relaunch after the response.
  */
 
 const fsp = require('node:fs/promises');
-const { dialog, shell } = require('electron');
+const { app, dialog, shell } = require('electron');
 const { openPathOrThrow } = require('../util/openPath');
 const backupManager = require('../backupManager');
 const events = require('../events');
 const config = require('../config');
 
 /**
- * v0.1.22: creating, listing, previewing and restoring a backup now go through
+ * v0.1.22: creating, listing, previewing and restoring a backup go through
  * expose() so a client Mac can do them — they act on the server's data folder,
  * which is where the data is, and the server's `system.manage` capability gate
  * decides who may. `reveal`, `openFolder` and `pickFolder` deliberately stay
@@ -150,6 +148,16 @@ function register({ expose, exposeLocal }) {
         },
       });
       events.broadcast('progress:event', { id: opId, complete: true });
+      // A remote restore replaces the server's data folder while its current
+      // SQLite connection still points at the safety copy. Restart the server
+      // after the response is queued so the client reconnects to the restored
+      // database. Local renderers keep their existing relaunch path below.
+      let remote = false;
+      try { remote = Boolean(require('../server').getCurrentUserId?.()); } catch (_) {}
+      if (remote) {
+        setTimeout(() => { app.relaunch(); app.exit(0); }, 500);
+        return { ...result, serverRestartScheduled: true };
+      }
       return result;
     } catch (err) {
       events.broadcast('progress:event', { id: opId, complete: true, error: err.message });

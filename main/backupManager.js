@@ -53,6 +53,8 @@ const {
   isBackupFilename,
   validateManifest,
   resolveSafeDest,
+  validateTarListing,
+  validateExtractedTree,
 } = require('./util/backupSafety');
 
 // Config keys that are safe to re-apply on restore. Reuse the exact
@@ -257,13 +259,10 @@ async function previewBackup(backupPath) {
   if (!backupPath || !fs.existsSync(backupPath)) {
     throw new Error('Backup file not found');
   }
-  const { stdout } = await runCommand('tar', ['-tzf', backupPath]);
-  const entries = stdout.split('\n').filter(Boolean);
-  const hasManifest = entries.some((e) => e.endsWith('/manifest.json') || e === 'manifest.json');
-  if (!hasManifest) {
-    throw new Error('Not a valid Business Studio KH backup (no manifest)');
-  }
-  const prefix = entries[0].split('/')[0];
+  const { stdout: names } = await runCommand('tar', ['-tzf', backupPath]);
+  const { stdout: verbose } = await runCommand('tar', ['-tvzf', backupPath]);
+  const listing = validateTarListing(names, verbose);
+  const prefix = listing.rootName;
   const tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-backup-peek-'));
   try {
     await runCommand('tar', ['-xzf', backupPath, '-C', tmpDir, `${prefix}/manifest.json`]);
@@ -321,7 +320,11 @@ async function restoreBackup({ backupPath, onProgress } = {}) {
   // swap it in. This means a corrupt archive fails before we've
   // touched the live data folder at all.
   onProgress?.('extract');
-  const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-restore-'));
+  // Keep staging beside the configured data folder so the final moves stay
+  // on one filesystem (the folder may be on an external drive).
+  const dataParent = path.dirname(path.resolve(dataDir));
+  await fsp.mkdir(dataParent, { recursive: true });
+  const tmpRoot = await fsp.mkdtemp(path.join(dataParent, '.iskh-restore-'));
   let safetyDir = null;
   try {
     await runCommand('tar', ['-xzf', backupPath, '-C', tmpRoot]);
@@ -331,9 +334,14 @@ async function restoreBackup({ backupPath, onProgress } = {}) {
     }
     const backupRoot = path.join(tmpRoot, tmpEntries[0]);
 
+    // Validate the extracted tree before renaming the live data folder. This
+    // catches links/special files that tar listings may represent differently
+    // on another native implementation and proves the staged DB is usable.
+    await validateExtractedTree(backupRoot);
+
     // Path-check every entry we're about to bring in. resolveSafeDest
-    // throws on any traversal/escape — belt-and-braces over the fact
-    // that we control archive creation.
+    // throws on any traversal/escape — belt-and-braces over the archive
+    // listing and extracted-tree checks above.
     const restoredEntries = await fsp.readdir(backupRoot);
     for (const ent of restoredEntries) {
       resolveSafeDest(dataDir, ent); // validates; we move dirs wholesale below
@@ -405,7 +413,7 @@ async function restoreBackup({ backupPath, onProgress } = {}) {
     // If we already renamed the live folder aside but failed before
     // finishing, try to put it back so we don't leave the user with no
     // data folder at all.
-    if (safetyDir && fs.existsSync(safetyDir) && !fs.existsSync(path.join(dataDir, 'database.sqlite'))) {
+    if (safetyDir && fs.existsSync(safetyDir)) {
       try {
         await fsp.rm(dataDir, { recursive: true, force: true });
         await fsp.rename(safetyDir, dataDir);
