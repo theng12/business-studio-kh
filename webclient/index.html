@@ -1252,24 +1252,43 @@
   ];
   var sessionGeneration = 0;
   var companyGeneration = 0;
-  var blobCache = {};      // relpath -> objectURL (so we don't refetch bytes)
+  var imageCacheGeneration = 0;
+  var productImageGenerations = Object.create(null);
+  var companySwitchChain = Promise.resolve();
+  var lastConfirmedCompany = null;
+  var blobCache = {};      // relpath -> { url, productId } (so we don't refetch bytes)
   var imgListCache = {};   // productId -> images[]  (avoid refetching per product)
   var mainImgCache = {};   // productId -> main image relpath | null
   var thumbObserver = null; // IntersectionObserver: load thumbs only when scrolled into view
   var currentDetail = null; // product whose detail sheet is open (for Add photo)
 
-  function clearImageCaches() {
+  function clearImageCaches(productId) {
+    // Mutations fence only their product; refresh/session changes fence everything.
+    if (productId != null) {
+      productImageGenerations[productId] = (productImageGenerations[productId] || 0) + 1;
+    } else {
+      imageCacheGeneration += 1;
+      productImageGenerations = Object.create(null);
+    }
     for (var k in blobCache) {
-      try { URL.revokeObjectURL(blobCache[k]); } catch (e) {}
+      if (productId != null && blobCache[k].productId !== productId) continue;
+      try { URL.revokeObjectURL(blobCache[k].url); } catch (e) {}
       delete blobCache[k];
     }
-    for (var p in imgListCache) delete imgListCache[p];
-    for (var p2 in mainImgCache) delete mainImgCache[p2];
+    if (productId != null) {
+      delete imgListCache[productId];
+      delete mainImgCache[productId];
+    } else {
+      for (var p in imgListCache) delete imgListCache[p];
+      for (var p2 in mainImgCache) delete mainImgCache[p2];
+    }
   }
 
   function resetSessionState() {
     sessionGeneration += 1;
     companyGeneration += 1;
+    companySwitchChain = Promise.resolve();
+    lastConfirmedCompany = null;
     clearImageCaches();
     if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null; }
     stopAiPolling();
@@ -1294,10 +1313,10 @@
   }
 
   /* ── transport ─────────────────────────────────────────────── */
-  function rpc(channel, args) {
-    return fetch(baseUrl + '/api/rpc', {
+  function rpcAt(requestBaseUrl, requestToken, channel, args) {
+    return fetch(requestBaseUrl + '/api/rpc', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + requestToken },
       body: JSON.stringify({ channel: channel, args: args === undefined ? null : args }),
     }).then(function (res) {
       if (!res.ok) {
@@ -1311,27 +1330,22 @@
 
   // Fetch an asset's bytes with the Bearer header → blob URL. Server route
   // is GET /assets/<rel> where <rel> is the image's stored relative path.
-  function assetUrl(relpath) {
+  function assetUrl(relpath, productId) {
     if (!relpath) return Promise.resolve(null);
-    if (blobCache[relpath]) return Promise.resolve(blobCache[relpath]);
-    var requestSession = sessionGeneration;
-    var requestCompany = companyGeneration;
-    var requestBaseUrl = baseUrl;
-    var requestToken = token;
+    if (blobCache[relpath]) return Promise.resolve(blobCache[relpath].url);
+    var request = imageRequestContext(productId);
     var enc = relpath.split('/').map(encodeURIComponent).join('/');
-    return fetch(requestBaseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + requestToken } })
+    return fetch(request.baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + request.token } })
       .then(function (res) { return res.ok ? res.blob() : null; })
       .then(function (blob) {
         if (!blob) return null;
-        if (requestSession !== sessionGeneration || requestCompany !== companyGeneration
-            || requestBaseUrl !== baseUrl || requestToken !== token) return null;
+        if (!imageRequestCurrent(request)) return null;
         var url = URL.createObjectURL(blob);
-        if (requestSession !== sessionGeneration || requestCompany !== companyGeneration
-            || requestBaseUrl !== baseUrl || requestToken !== token) {
+        if (!imageRequestCurrent(request)) {
           try { URL.revokeObjectURL(url); } catch (e) {}
           return null;
         }
-        blobCache[relpath] = url;
+        blobCache[relpath] = { url: url, productId: productId };
         return url;
       })
       .catch(function () { return null; });
@@ -1404,16 +1418,22 @@
   }
 
   function switchCompany(id) {
+    var request = {
+      id: id || null,
+      session: sessionGeneration,
+      generation: ++companyGeneration,
+      baseUrl: baseUrl,
+      token: token,
+    };
     var previous = {
       id: state.companyId,
-      categories: state.categories,
-      categoriesById: state.categoriesById,
+      categories: state.categories.slice(),
+      categoriesById: Object.assign({}, state.categoriesById),
       categoryFilter: state.categoryFilter,
-      products: state.products,
-      filtered: state.filtered,
+      products: state.products.slice(),
       page: state.page,
     };
-    var generation = ++companyGeneration;
+    previous = lastConfirmedCompany || previous;
     clearImageCaches();
     stopAiPolling();
     currentDetail = null;
@@ -1422,7 +1442,7 @@
     document.body.classList.remove('is-selecting');
     var detail = document.getElementById('detail');
     if (detail) detail.classList.remove('open');
-    state.companyId = id || null;
+    state.companyId = request.id;
     state.categories = [];
     state.categoriesById = {};
     state.categoryFilter = '';
@@ -1433,30 +1453,70 @@
     updateCategoryButtons();
     document.getElementById('list').innerHTML = '<div class="loading">Loading…</div>';
 
-    if (!id) return Promise.resolve(false);
-    return rpc('companies:setActive', id)
-      .then(function () {
-        if (generation !== companyGeneration || state.companyId !== id) return false;
-        return Promise.all([loadCategories(id, generation), loadProducts(id, generation)]);
-      })
-      .then(function (result) {
-        if (generation === companyGeneration && state.companyId === id) refreshAiBadge(id, generation);
-        return result;
-      })
-      .catch(function (err) {
-        if (generation !== companyGeneration) return false;
-        state.companyId = previous.id;
-        state.categories = previous.categories;
-        state.categoriesById = previous.categoriesById;
-        state.categoryFilter = previous.categoryFilter;
-        state.products = previous.products;
-        state.filtered = previous.filtered;
-        state.page = previous.page;
+    var activationConfirmed = false;
+    var operation = companySwitchChain.then(function () {
+      if (!sessionRequestCurrent(request)) return null;
+      return rpcAt(request.baseUrl, request.token, 'companies:setActive', request.id)
+        .then(function () {
+          activationConfirmed = true;
+          if (!sessionRequestCurrent(request)) return null;
+          lastConfirmedCompany = companySnapshot(request.id, [], []);
+          return loadCompanyData(request).then(function (data) {
+            if (!sessionRequestCurrent(request)) return null;
+            return companySnapshot(request.id, data.categories, data.products);
+          });
+        });
+    });
+    companySwitchChain = operation.catch(function () {});
+    return operation.then(function (snapshot) {
+      if (!snapshot || !sessionRequestCurrent(request)) return false;
+      lastConfirmedCompany = snapshot;
+      if (request.generation === companyGeneration && state.companyId === request.id) {
+        applyCompanySnapshot(snapshot);
+        refreshAiBadge(request.id, request.generation);
+      }
+      return true;
+    }).catch(function (err) {
+      if (!sessionRequestCurrent(request)) return false;
+      if (!activationConfirmed && request.generation === companyGeneration) {
+        applyCompanySnapshot(lastConfirmedCompany || previous);
+      } else if (request.generation === companyGeneration && state.companyId === request.id) {
         updateCompanyButton();
         updateCategoryButtons();
         render();
-        throw err;
-      });
+      }
+      throw err;
+    });
+  }
+  function rpc(channel, args) { return rpcAt(baseUrl, token, channel, args); }
+
+  function sessionRequestCurrent(request) {
+    return request.session === sessionGeneration
+      && request.baseUrl === baseUrl
+      && request.token === token;
+  }
+
+  function imageRequestContext(productId) {
+    return {
+      session: sessionGeneration,
+      company: companyGeneration,
+      cache: imageCacheGeneration,
+      productId: productId,
+      productGeneration: productImageGenerations[productId] || 0,
+      companyId: state.companyId,
+      baseUrl: baseUrl,
+      token: token,
+    };
+  }
+
+  function imageRequestCurrent(request) {
+    return request.session === sessionGeneration
+      && request.company === companyGeneration
+      && request.cache === imageCacheGeneration
+      && request.productGeneration === (productImageGenerations[request.productId] || 0)
+      && request.companyId === state.companyId
+      && request.baseUrl === baseUrl
+      && request.token === token;
   }
 
   /* ── boot: whoami (role) → companies → products ─────────────── */
@@ -1729,40 +1789,44 @@
   document.getElementById('catSheetClose').addEventListener('click', function () { closeSheet('catSheet'); });
   document.getElementById('catSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('catSheet'); });
 
-  // Categories are per-company. Reloaded on boot and on every company switch
-  // so the picker sheet + the detail-sheet "Category" line stay accurate.
-  function loadCategories(companyId, generation) {
-    if (!companyId) return Promise.resolve([]);
-    return rpc('categories:list', companyId)
-      .then(function (rows) {
-        if (generation !== companyGeneration || state.companyId !== companyId) return null;
-        state.categories = rows || [];
-        state.categoriesById = {};
-        state.categories.forEach(function (c) { state.categoriesById[c.id] = c.name || c.id; });
-        if (state.categoryFilter && !state.categoriesById[state.categoryFilter]) state.categoryFilter = '';
-        updateCategoryButtons();
-      })
-      .catch(function (err) {
-        if (generation === companyGeneration && state.companyId === companyId) throw err;
-        return null;
-      });
+  function companySnapshot(id, categories, products) {
+    var rows = categories || [];
+    var categoriesById = {};
+    rows.forEach(function (c) { categoriesById[c.id] = c.name || c.id; });
+    return {
+      id: id || null,
+      categories: rows,
+      categoriesById: categoriesById,
+      categoryFilter: '',
+      products: products || [],
+      page: 0,
+    };
   }
 
-  function loadProducts(companyId, generation) {
-    document.getElementById('list').innerHTML = '<div class="loading">Loading…</div>';
-    if (!companyId) return Promise.resolve([]);
-    return rpc('products:list', { companyId: companyId, filters: {} })
-      .then(function (rows) {
-        if (generation !== companyGeneration || state.companyId !== companyId) return null;
-        state.products = rows || [];
-        applyFilter();
-        render();
-        return state.products;
-      })
-      .catch(function (err) {
-        if (generation === companyGeneration && state.companyId === companyId) throw err;
-        return null;
-      });
+  function applyCompanySnapshot(snapshot) {
+    state.companyId = snapshot.id;
+    state.categories = snapshot.categories || [];
+    state.categoriesById = snapshot.categoriesById || {};
+    state.categoryFilter = snapshot.categoryFilter || '';
+    state.products = snapshot.products || [];
+    state.page = snapshot.page || 0;
+    applyFilter();
+    updateCompanyButton();
+    updateCategoryButtons();
+    render();
+  }
+
+  // Categories and products are loaded into a detached snapshot so a
+  // confirmed but no-longer-requested company can still be restored if the
+  // newest activation fails.
+  function loadCompanyData(request) {
+    if (!request.id) return Promise.resolve({ categories: [], products: [] });
+    return Promise.all([
+      rpcAt(request.baseUrl, request.token, 'categories:list', request.id),
+      rpcAt(request.baseUrl, request.token, 'products:list', { companyId: request.id, filters: {} }),
+    ]).then(function (rows) {
+      return { categories: rows[0] || [], products: rows[1] || [] };
+    });
   }
 
   function applyFilter() {
@@ -1852,10 +1916,13 @@
     if (p.imageCount === 0) return;
     var slot = document.querySelector('.thumb[data-thumb="' + p.id + '"]');
     if (!slot) return;
+    var request = imageRequestContext(p.id);
     getMainImage(p.id).then(function (rel) {
-      if (!rel) return;
-      return assetUrl(rel).then(function (url) {
-        if (url && slot.isConnected) { slot.style.backgroundImage = 'url("' + url + '")'; slot.textContent = ''; }
+      if (!rel || !imageRequestCurrent(request)) return;
+      return assetUrl(rel, p.id).then(function (url) {
+        if (url && imageRequestCurrent(request) && slot.isConnected) {
+          slot.style.backgroundImage = 'url("' + url + '")'; slot.textContent = '';
+        }
       });
     });
   }
@@ -1864,14 +1931,21 @@
   // sheet, so opening a product you already saw a thumb for is instant.
   function getImageList(productId) {
     if (imgListCache[productId]) return Promise.resolve(imgListCache[productId]);
-    return rpc('images:listByProduct', productId)
-      .then(function (imgs) { imgListCache[productId] = imgs || []; return imgListCache[productId]; })
-      .catch(function () { return []; });
+    var request = imageRequestContext(productId);
+    return rpcAt(request.baseUrl, request.token, 'images:listByProduct', productId)
+      .then(function (imgs) {
+        if (!imageRequestCurrent(request)) return null;
+        imgListCache[productId] = imgs || [];
+        return imgListCache[productId];
+      })
+      .catch(function () { return imageRequestCurrent(request) ? [] : null; });
   }
 
   function getMainImage(productId) {
     if (mainImgCache[productId] !== undefined) return Promise.resolve(mainImgCache[productId]);
+    var request = imageRequestContext(productId);
     return getImageList(productId).then(function (imgs) {
+      if (!imageRequestCurrent(request)) return null;
       var m = imgs && imgs[0];
       var rel = m ? ((m.isProcessed && m.processedFilepath) ? m.processedFilepath : m.filepath) : null;
       mainImgCache[productId] = rel;
@@ -1906,9 +1980,12 @@
   }
 
   function renderGallery(productId) {
+    if (currentDetail && currentDetail.id !== productId) return;
     var gal = document.getElementById('detailGallery');
+    var request = imageRequestContext(productId);
     gal.innerHTML = '<div class="loading">Loading images…</div>';
     getImageList(productId).then(function (imgs) {
+      if (!imageRequestCurrent(request) || (currentDetail && currentDetail.id !== productId)) return;
       if (!imgs || !imgs.length) { gal.innerHTML = '<div class="empty">No images yet — tap “Add photo”.</div>'; return; }
       gal.innerHTML = '';
       var total = imgs.length;
@@ -1988,15 +2065,18 @@
         fig.addEventListener('click', function () {
           if (state.suppressNextClick) { state.suppressNextClick = false; return; }
           if (isSelecting()) toggleSelected(img.filepath);
-          else               openImgPreview(imgs, i);
+          else               openImgPreview(imgs, i, productId);
         });
-        assetUrl(rel).then(function (url) {
-          if (!url) return;
+        assetUrl(rel, productId).then(function (url) {
+          if (!url || !imageRequestCurrent(request) || (currentDetail && currentDetail.id !== productId)) return;
           var im = document.createElement('img'); im.src = url; im.alt = '';
           fig.replaceChild(im, fig.firstChild);
         });
       });
-    }).catch(function (e) { gal.innerHTML = '<div class="empty">' + escapeHtml(e.message) + '</div>'; });
+    }).catch(function (e) {
+      if (!imageRequestCurrent(request) || (currentDetail && currentDetail.id !== productId)) return;
+      gal.innerHTML = '<div class="empty">' + escapeHtml(e.message) + '</div>';
+    });
   }
 
   /* ── v0.49.12: multi-select inside one product\'s gallery ──────
@@ -2055,6 +2135,7 @@
   document.getElementById('selectAllBtn').addEventListener('click', function () {
     if (!currentDetail) return;
     getImageList(currentDetail.id).then(function (imgs) {
+      if (!imgs) return;
       state.selected = new Set(imgs.map(function (x) { return x.filepath; }));
       updateSelectionBar();
       refreshSelectedTileClasses();
@@ -2077,9 +2158,8 @@
       .then(function () {
         // Same blob-cache logic as Set-as-main: position numbers in basenames
         // (sku-001.jpg → sku-002.jpg) shift, so every filepath under this
-        // product is potentially stale. Cheapest correct thing: nuke the lot.
-        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
-        delete imgListCache[productId]; delete mainImgCache[productId];
+        // product is potentially stale. Invalidate only that product.
+        clearImageCaches(productId);
         renderGallery(productId);
         // No toast — the visual swap is the feedback. Reorder happens a lot;
         // a toast per click would be noise.
@@ -2157,8 +2237,7 @@
     if (!window.confirm('Delete image ' + label + ' from this product?\n\nThis can\'t be undone.')) return;
     rpc('images:removeFromProduct', { productId: productId, filepath: filepath })
       .then(function () {
-        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
-        delete imgListCache[productId]; delete mainImgCache[productId];
+        clearImageCaches(productId);
         if (currentDetail && currentDetail.id === productId) {
           currentDetail.imageCount = Math.max(0, (currentDetail.imageCount || 0) - 1);
         }
@@ -2204,9 +2283,8 @@
           closeSheet('tileMenuSheet');
           rpc('images:setMainImage', { productId: ctx.productId, filepath: ctx.filepath })
             .then(function () {
-              // Renumbering means filepaths shifted around — bust everything.
-              for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
-              delete imgListCache[ctx.productId]; delete mainImgCache[ctx.productId];
+              // Renumbering means this product's filepaths shifted around.
+              clearImageCaches(ctx.productId);
               renderGallery(ctx.productId);
               toast('Set as main');
             })
@@ -2302,7 +2380,7 @@
     // Source thumbnail + meta
     var thumb = document.getElementById('aiSourceThumb');
     thumb.style.backgroundImage = '';
-    assetUrl(source.filepath).then(function (url) {
+    assetUrl(source.filepath, source.productId).then(function (url) {
       if (url) thumb.style.backgroundImage = 'url("' + url + '")';
     });
     document.getElementById('aiSourceMeta').innerHTML =
@@ -2603,8 +2681,7 @@
         // Pending → done transition: refresh the regular gallery so the
         // freshly auto-added variants appear immediately.
         if (hadPending && !pending.length) {
-          for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
-          delete imgListCache[productId]; delete mainImgCache[productId];
+          clearImageCaches(productId);
           renderGallery(productId);
           if (!broken.length) toast('AI generation done');
         }
@@ -2784,7 +2861,7 @@
           // Lazy-paint the source thumb. Don't block the list render on N
           // round-trips — each one's async, browser draws as they arrive.
           if (t.sourceImagePath) {
-            assetUrl(t.sourceImagePath).then(function (url) {
+            assetUrl(t.sourceImagePath, t.productId).then(function (url) {
               if (url) { row.querySelector('.thumb').style.backgroundImage = 'url("' + url + '")'; }
             });
           }
@@ -2851,7 +2928,7 @@
     var added = 0, dup = 0, failed = 0;
     function finish() {
       btn.disabled = false; btn.textContent = '＋ Add photo';
-      delete imgListCache[pid]; delete mainImgCache[pid];
+      clearImageCaches(pid);
       currentDetail.imageCount = (currentDetail.imageCount || 0) + added;
       var prod = state.products.find(function (x) { return x.id === pid; });
       if (prod) prod.imageCount = (prod.imageCount || 0) + added;
@@ -2921,8 +2998,7 @@
         // blob-URL cache (keyed by relpath) would serve stale pixels. Revoke +
         // clear it so the gallery + grid thumbs re-fetch. Server sends /assets
         // with Cache-Control: no-store (v0.49.4), so the refetch gets new bytes.
-        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
-        delete imgListCache[pid]; delete mainImgCache[pid];
+        clearImageCaches(pid);
         renderGallery(pid);
         toast(failed
           ? ('Reframed ' + done + ', ' + failed + ' failed')
@@ -3367,8 +3443,7 @@
         var failed = (res && res.failed) || 0;
         // Same in-place overwrite as reframe — bust the blob cache so
         // thumbs re-fetch the new bytes.
-        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
-        delete imgListCache[pid]; delete mainImgCache[pid];
+        clearImageCaches(pid);
         renderGallery(pid);
         toast(failed
           ? ('Enhanced ' + done + ', ' + failed + ' failed')
@@ -3521,8 +3596,7 @@
       .then(function (res) {
         // Append: new image at end of gallery. ReplaceMain: new image at #0,
         // original demoted to #1. Either way bust the caches + re-render.
-        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
-        delete imgListCache[pid]; delete mainImgCache[pid];
+        clearImageCaches(pid);
         // Bump local imageCount so the count in the detail header is right
         // without waiting for a fresh products:list.
         if (currentDetail && currentDetail.id === pid) currentDetail.imageCount = (currentDetail.imageCount || 0) + 1;
@@ -3560,7 +3634,7 @@
     getImageList(productId).then(function (imgs) {
       if (!imgs || imgs.length < 2) { toast('Add 2+ photos to spin'); return; }
       var rels = imgs.map(function (im) { return (im.isProcessed && im.processedFilepath) ? im.processedFilepath : im.filepath; });
-      return Promise.all(rels.map(assetUrl)).then(function (urls) {
+      return Promise.all(rels.map(function (rel) { return assetUrl(rel, productId); })).then(function (urls) {
         urls = urls.filter(Boolean);
         if (urls.length < 2) { toast('Could not load frames'); return; }
         spinState = { urls: urls, idx: 0, n: urls.length, startX: 0, startIdx: 0, dragging: false };
@@ -3607,13 +3681,13 @@
      long-press triggers the system "Save Image" sheet so users can save
      to their camera roll without us shipping a save button. */
 
-  var previewState = null; // { images: [...], index: number }
+  var previewState = null; // { images: [...], index: number, productId }
 
-  function openImgPreview(imgs, startIndex) {
+  function openImgPreview(imgs, startIndex, productId) {
     if (!imgs || !imgs.length) return;
     var n = imgs.length;
     var idx = Math.max(0, Math.min(startIndex || 0, n - 1));
-    previewState = { images: imgs, index: idx };
+    previewState = { images: imgs, index: idx, productId: productId };
     paintImgPreview();
     document.getElementById('imgPreview').classList.add('open');
     document.body.style.overflow = 'hidden';
@@ -3624,7 +3698,7 @@
     var rel = (img.isProcessed && img.processedFilepath) ? img.processedFilepath : img.filepath;
     var el = document.getElementById('imgPreviewImg');
     el.src = ''; // clear while the new one loads (avoids a flash of the old)
-    assetUrl(rel).then(function (url) {
+    assetUrl(rel, s.productId).then(function (url) {
       // Bail if state moved on (rapid prev/next swipes).
       if (url && previewState && previewState.images[previewState.index] === img) {
         el.src = url;

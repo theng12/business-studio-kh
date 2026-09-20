@@ -57,6 +57,7 @@ const {
   validateTarListing,
   validateExtractedTree,
 } = require('./util/backupSafety');
+const { SCHEMA_VERSION } = require('./db');
 const {
   snapshotDataTrees,
   copyDataTrees,
@@ -302,7 +303,7 @@ async function previewBackup(backupPath) {
  * @param {(stage: string) => void} [args.onProgress]
  *   Stages: 'verify' | 'safety-copy' | 'extract' | 'merge-config' | 'done'.
  */
-async function restoreBackup({ backupPath, onProgress } = {}) {
+async function restoreBackup({ backupPath, onProgress, runReplacement } = {}) {
   if (!backupPath || !fs.existsSync(backupPath)) {
     throw new Error('Backup file not found');
   }
@@ -324,6 +325,7 @@ async function restoreBackup({ backupPath, onProgress } = {}) {
   await fsp.mkdir(dataParent, { recursive: true });
   const tmpRoot = await fsp.mkdtemp(path.join(dataParent, '.iskh-restore-'));
   let safetyDir = null;
+  let previousPortableConfig = null;
   try {
     await runCommand('tar', ['-xzf', backupPath, '-C', tmpRoot]);
     const tmpEntries = await fsp.readdir(tmpRoot);
@@ -335,7 +337,7 @@ async function restoreBackup({ backupPath, onProgress } = {}) {
     // Validate the extracted tree before renaming the live data folder. This
     // catches links/special files that tar listings may represent differently
     // on another native implementation and proves the staged DB is usable.
-    await validateExtractedTree(backupRoot);
+    await validateExtractedTree(backupRoot, { expectedSchemaVersion: SCHEMA_VERSION });
 
     // Path-check every entry we're about to bring in. resolveSafeDest
     // throws on any traversal/escape — belt-and-braces over the archive
@@ -345,79 +347,100 @@ async function restoreBackup({ backupPath, onProgress } = {}) {
       resolveSafeDest(dataDir, ent); // validates; we move dirs wholesale below
     }
 
-    // Rename the live data folder aside. Open DB fd follows the inode
-    // into the renamed folder, so the dying connection writes there,
-    // not over the restored DB. We DON'T delete it — recoverable.
-    onProgress?.('safety-copy');
-    const existedBefore = fs.existsSync(dataDir);
-    if (existedBefore) {
-      safetyDir = `${dataDir}.pre-restore.${Date.now()}`;
-      await fsp.rename(dataDir, safetyDir);
-    }
-    await fsp.mkdir(dataDir, { recursive: true });
-
-    // Move each restored entry into the (now empty) data folder.
-    for (const ent of restoredEntries) {
-      const src = path.join(backupRoot, ent);
-      const dst = resolveSafeDest(dataDir, ent);
-      await fsp.rename(src, dst);
-    }
-
-    // Carry the user's backup history back into the restored folder so
-    // a restore doesn't hide their other backups. Best-effort; the
-    // safety copy still holds them if this fails.
-    if (safetyDir) {
-      const oldBackups = path.join(safetyDir, BACKUP_DIR_NAME);
-      const newBackups = path.join(dataDir, BACKUP_DIR_NAME);
-      try {
-        if (fs.existsSync(oldBackups) && !fs.existsSync(newBackups)) {
-          await fsp.cp(oldBackups, newBackups, { recursive: true });
-        }
-      } catch (_) { /* leave history in the safety copy */ }
-    }
-
-    // Re-apply ONLY the portable config keys from the backup's
-    // config.json (AI keys, presets, export prefs). Never touches
-    // dataDir / mode / network — the live machine keeps those.
-    onProgress?.('merge-config');
-    const restoredCfgPath = path.join(dataDir, 'config.json');
-    if (fs.existsSync(restoredCfgPath)) {
-      let restoredCfg = null;
-      try {
-        restoredCfg = JSON.parse(await fsp.readFile(restoredCfgPath, 'utf8'));
-      } catch (err) {
-        process.stderr.write(`[backup restore] backed-up config.json malformed (${err.message}) — skipping config merge\n`);
+    const install = async () => {
+      onProgress?.('safety-copy');
+      const existedBefore = fs.existsSync(dataDir);
+      if (existedBefore) {
+        safetyDir = `${dataDir}.pre-restore.${Date.now()}`;
+        await fsp.rename(dataDir, safetyDir);
       }
-      if (restoredCfg && typeof restoredCfg === 'object') {
-        const merged = {};
-        for (const k of PORTABLE_CONFIG_KEYS) {
-          if (restoredCfg[k] !== undefined) merged[k] = restoredCfg[k];
-        }
-        if (Object.keys(merged).length > 0) config.updateConfig(merged);
-      }
-      // The restored config.json sits inside the data folder, which
-      // is NOT where the app reads config from (that's userData). It's
-      // harmless to leave as a record of what was restored.
-    }
+      await fsp.mkdir(dataDir, { recursive: true });
 
-    onProgress?.('done');
-    return {
-      success: true,
-      restoredManifest: manifest,
-      dataDir,
-      safetyDir,   // where the prior data was moved (null if data dir was empty)
+      // Move each restored entry into the (now empty) data folder.
+      for (const ent of restoredEntries) {
+        const src = path.join(backupRoot, ent);
+        const dst = resolveSafeDest(dataDir, ent);
+        await fsp.rename(src, dst);
+      }
+
+      // Carry the user's backup history back into the restored folder so
+      // a restore doesn't hide their other backups. Best-effort; the
+      // safety copy still holds them if this fails.
+      if (safetyDir) {
+        const oldBackups = path.join(safetyDir, BACKUP_DIR_NAME);
+        const newBackups = path.join(dataDir, BACKUP_DIR_NAME);
+        try {
+          if (fs.existsSync(oldBackups) && !fs.existsSync(newBackups)) {
+            await fsp.cp(oldBackups, newBackups, { recursive: true });
+          }
+        } catch (_) { /* leave history in the safety copy */ }
+      }
+
+      // Re-apply ONLY the portable config keys from the backup's
+      // config.json (AI keys, presets, export prefs). Never touches
+      // dataDir / mode / network — the live machine keeps those.
+      onProgress?.('merge-config');
+      const restoredCfgPath = path.join(dataDir, 'config.json');
+      if (fs.existsSync(restoredCfgPath)) {
+        let restoredCfg = null;
+        try {
+          restoredCfg = JSON.parse(await fsp.readFile(restoredCfgPath, 'utf8'));
+        } catch (err) {
+          process.stderr.write(`[backup restore] backed-up config.json malformed (${err.message}) — skipping config merge\n`);
+        }
+        if (restoredCfg && typeof restoredCfg === 'object') {
+          const merged = {};
+          for (const k of PORTABLE_CONFIG_KEYS) {
+            if (restoredCfg[k] !== undefined) merged[k] = restoredCfg[k];
+          }
+          if (Object.keys(merged).length > 0) {
+            const previous = config.loadConfig();
+            previousPortableConfig = Object.fromEntries(Object.keys(merged).map((key) => [key, previous[key]]));
+            config.updateConfig(merged);
+          }
+        }
+        // The restored config.json sits inside the data folder, which
+        // is NOT where the app reads config from (that's userData). It's
+        // harmless to leave as a record of what was restored.
+      }
+
+      onProgress?.('done');
+      return {
+        success: true,
+        restoredManifest: manifest,
+        dataDir,
+        safetyDir,   // where the prior data was moved (null if data dir was empty)
+      };
     };
-  } catch (err) {
-    // If we already renamed the live folder aside but failed before
-    // finishing, try to put it back so we don't leave the user with no
-    // data folder at all.
-    if (safetyDir && fs.existsSync(safetyDir)) {
+    // Keep rollback inside maintenance, before it reopens the original DB.
+    const replace = async () => {
       try {
-        await fsp.rm(dataDir, { recursive: true, force: true });
-        await fsp.rename(safetyDir, dataDir);
-      } catch (_) { /* best-effort rollback */ }
-    }
-    throw err;
+        return await install();
+      } catch (err) {
+        const failures = [];
+        if (safetyDir && fs.existsSync(safetyDir)) {
+          try {
+            await fsp.rm(dataDir, { recursive: true, force: true });
+            await fsp.rename(safetyDir, dataDir);
+          } catch (rollbackErr) { failures.push(rollbackErr.message); }
+        }
+        if (previousPortableConfig) {
+          try { config.updateConfig(previousPortableConfig); }
+          catch (rollbackErr) { failures.push(rollbackErr.message); }
+        }
+        if (failures.length) {
+          const originalPath = safetyDir && fs.existsSync(safetyDir) ? safetyDir : dataDir;
+          const recoveryError = new Error(
+            `${err.message} Recovery failed: ${failures.join('; ')}. Original data: ${originalPath}. Quit and recover the original data and settings before reopening.`,
+            { cause: err },
+          );
+          recoveryError.code = 'MAINTENANCE_ROLLBACK_FAILED';
+          throw recoveryError;
+        }
+        throw err;
+      }
+    };
+    return await (runReplacement ? runReplacement(replace) : replace());
   } finally {
     try { await fsp.rm(tmpRoot, { recursive: true, force: true }); } catch (_) {}
   }

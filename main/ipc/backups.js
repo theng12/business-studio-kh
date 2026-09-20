@@ -30,6 +30,7 @@ const { openPathOrThrow } = require('../util/openPath');
 const backupManager = require('../backupManager');
 const events = require('../events');
 const config = require('../config');
+const { runDataMaintenance } = require('../util/maintenanceLifecycle');
 
 /**
  * v0.1.22: creating, listing, previewing and restoring a backup go through
@@ -136,6 +137,11 @@ function register({ expose, exposeLocal }) {
     try {
       const result = await backupManager.restoreBackup({
         backupPath,
+        runReplacement: (replace) => runDataMaintenance({
+          label: 'restoring a backup',
+          dataDir: config.loadConfig().dataDir,
+          replace,
+        }),
         onProgress: (stage) => {
           const idx = stages.indexOf(stage);
           events.broadcast('progress:event', {
@@ -148,17 +154,19 @@ function register({ expose, exposeLocal }) {
         },
       });
       events.broadcast('progress:event', { id: opId, complete: true });
-      // A remote restore replaces the server's data folder while its current
-      // SQLite connection still points at the safety copy. Restart the server
-      // after the response is queued so the client reconnects to the restored
-      // database. Local renderers keep their existing relaunch path below.
+      // Restart from main after the response is queued. Correctness must not
+      // depend on either renderer issuing a second IPC after live data changed.
       let remote = false;
       try { remote = Boolean(require('../server').getCurrentUserId?.()); } catch (_) {}
-      if (remote) {
-        setTimeout(() => { app.relaunch(); app.exit(0); }, 500);
-        return { ...result, serverRestartScheduled: true };
+      if (!result.restartScheduled) {
+        app.relaunch();
+        setTimeout(() => app.exit(0), 500);
       }
-      return result;
+      return {
+        ...result,
+        restartScheduled: true,
+        ...(remote ? { serverRestartScheduled: true } : {}),
+      };
     } catch (err) {
       events.broadcast('progress:event', { id: opId, complete: true, error: err.message });
       throw err;

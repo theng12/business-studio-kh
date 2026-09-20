@@ -125,14 +125,26 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
           templateId, filters: filters ?? {}, destination: dest, scope: imageScope,
         });
       }
-      const done = res?.done?.length ?? 0;
-      const failed = res?.failed?.length ?? 0;
-      const skipped = res?.skipped?.length ?? 0;
-      const total = res?.total ?? finalCount;
-      if (failed + skipped === 0) {
-        addToast(`Applied template to ${done} product${done === 1 ? '' : 's'}`, 'success');
+      if (res?.reconciled) {
+        const products = res.summary?.productsCount ?? finalCount;
+        const images = res.summary?.imagesCount ?? 0;
+        const notCompleted = res.summary?.skippedCount ?? 0;
+        const exceptions = notCompleted > 0 ? `, ${notCompleted} skipped or failed` : '';
+        addToast(
+          `Overlay completed on the server for ${products} product${products === 1 ? '' : 's'} ` +
+            `(${images} image result${images === 1 ? '' : 's'}${exceptions}). Product data refreshed.`,
+          notCompleted > 0 ? 'info' : 'success',
+        );
       } else {
-        addToast(`Applied ${done} of ${total} — ${skipped} skipped, ${failed} failed`, failed > 0 ? 'error' : 'info');
+        const done = res?.done?.length ?? 0;
+        const failed = res?.failed?.length ?? 0;
+        const skipped = res?.skipped?.length ?? 0;
+        const total = res?.total ?? finalCount;
+        if (failed + skipped === 0) {
+          addToast(`Applied template to ${done} product${done === 1 ? '' : 's'}`, 'success');
+        } else {
+          addToast(`Applied ${done} of ${total} — ${skipped} skipped, ${failed} failed`, failed > 0 ? 'error' : 'info');
+        }
       }
       // Refresh Library so new images are reflected in thumbs / counts.
       if (destination !== 'saveToFolder') refreshProducts();

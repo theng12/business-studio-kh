@@ -24,9 +24,8 @@ function rowToRun(row) {
   };
 }
 
-function record({ templateId, companyId, outputRoot, productsCount, imagesCount, skippedCount }) {
+function record({ id = crypto.randomUUID(), templateId, companyId, outputRoot, productsCount, imagesCount, skippedCount }) {
   if (!companyId) throw new Error('companyId is required');
-  const id = crypto.randomUUID();
   getDb()
     .prepare(
       `INSERT INTO image_template_runs
@@ -46,6 +45,23 @@ function record({ templateId, companyId, outputRoot, productsCount, imagesCount,
   return id;
 }
 
+function getByIdForCompany(id, companyId) {
+  if (!id || !companyId) return null;
+  return rowToRun(getDb()
+    .prepare(
+      `SELECT r.*, t.name AS template_name
+         FROM image_template_runs r
+         LEFT JOIN image_templates t ON t.id = r.template_id
+        WHERE r.id = ? AND r.company_id = ?`,
+    )
+    .get(id, companyId));
+}
+
+function exists(id) {
+  if (!id) return false;
+  return !!getDb().prepare('SELECT 1 FROM image_template_runs WHERE id = ?').get(id);
+}
+
 function listRecentByCompany(companyId, limit = 20) {
   if (!companyId) return [];
   return getDb()
@@ -61,4 +77,4 @@ function listRecentByCompany(companyId, limit = 20) {
     .map(rowToRun);
 }
 
-module.exports = { record, listRecentByCompany };
+module.exports = { record, getByIdForCompany, exists, listRecentByCompany };

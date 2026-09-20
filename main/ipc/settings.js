@@ -21,6 +21,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { app, dialog, shell } = require('electron');
 const config = require('../config');
+const { canonicalizeExistingPath } = require('../util/backupSafety');
+const { runDataMaintenance } = require('../util/maintenanceLifecycle');
 
 /**
  * v0.21.4: shared guard for "is this folder actually our data dir
@@ -53,8 +55,8 @@ function isPathInside(parent, child) {
 }
 
 function assertMoveTargetSafe(oldPath, newPath) {
-  const oldAbs = path.resolve(oldPath);
-  const newAbs = path.resolve(newPath);
+  const oldAbs = canonicalizeExistingPath(oldPath);
+  const newAbs = canonicalizeExistingPath(newPath);
   if (oldAbs === newAbs || isPathInside(oldAbs, newAbs) || isPathInside(newAbs, oldAbs)) {
     throw new Error('The new data folder must not be the current folder or overlap it.');
   }
@@ -215,7 +217,7 @@ function register({ expose, exposeLocal }) {
    * Pick a new data folder AND optionally move the existing
    * contents. If `move` is true we copy database.sqlite + the
    * asset trees into the new folder, then update the config. The
-   * caller relaunches the app.
+   * main process relaunches the app after the switch succeeds.
    *
  * We stage a complete copy and atomically rename it into place. The
  * original stays in place so a failed move cannot orphan the data.
@@ -225,54 +227,91 @@ function register({ expose, exposeLocal }) {
     const cfg = config.loadConfig();
     const oldPath = cfg.dataDir;
     const oldExists = !!oldPath && fs.existsSync(oldPath);
+    const pathsOverlapExactly = oldPath
+      ? canonicalizeExistingPath(oldPath) === canonicalizeExistingPath(newPath)
+      : false;
     const shouldMove = !!move && oldExists && looksLikeOurDataDir(oldPath)
-      && path.resolve(oldPath) !== path.resolve(newPath);
+      && !pathsOverlapExactly;
     let displacedEmptyTarget = null;
     let stagedPath;
+    let installedTarget = false;
 
-    if (move && oldExists && path.resolve(oldPath) !== path.resolve(newPath)) {
+    if (move && oldExists) {
       if (!looksLikeOurDataDir(oldPath) && fs.readdirSync(oldPath).length > 0) {
         throw new Error('The current data folder contains files but is not recognized as a Media Studio KH data folder.');
       }
       assertMoveTargetSafe(oldPath, newPath);
     }
 
-    if (shouldMove) {
-      const targetAbs = path.resolve(newPath);
-      const parent = path.dirname(targetAbs);
-      await fs.promises.mkdir(parent, { recursive: true });
-      stagedPath = await fs.promises.mkdtemp(path.join(parent, `.${path.basename(targetAbs)}.move-`));
-      try {
-        await stageDataFolder(oldPath, stagedPath);
-        if (fs.existsSync(targetAbs)) {
-          displacedEmptyTarget = `${targetAbs}.empty-${process.pid}-${Date.now()}`;
-          await fs.promises.rename(targetAbs, displacedEmptyTarget);
+    const prepare = shouldMove
+      ? async () => {
+          const targetAbs = path.resolve(newPath);
+          const parent = path.dirname(targetAbs);
+          await fs.promises.mkdir(parent, { recursive: true });
+          stagedPath = await fs.promises.mkdtemp(path.join(parent, `.${path.basename(targetAbs)}.move-`));
+          await stageDataFolder(oldPath, stagedPath);
         }
-        await fs.promises.rename(stagedPath, targetAbs);
+      : undefined;
+
+    const replace = async () => {
+      let configWriteAttempted = false;
+      try {
+        if (shouldMove) {
+          const targetAbs = path.resolve(newPath);
+          if (fs.existsSync(targetAbs)) {
+            displacedEmptyTarget = `${targetAbs}.empty-${process.pid}-${Date.now()}`;
+            await fs.promises.rename(targetAbs, displacedEmptyTarget);
+          }
+          await fs.promises.rename(stagedPath, targetAbs);
+          installedTarget = true;
+        }
+
+        if (!fs.existsSync(newPath)) fs.mkdirSync(newPath, { recursive: true });
+        configWriteAttempted = true;
+        config.updateConfig({ dataDir: newPath, firstLaunchHandled: true });
       } catch (err) {
-        if (stagedPath) await fs.promises.rm(stagedPath, { recursive: true, force: true }).catch(() => {});
-        if (displacedEmptyTarget && fs.existsSync(displacedEmptyTarget) && !fs.existsSync(targetAbs)) {
-          await fs.promises.rename(displacedEmptyTarget, targetAbs).catch(() => {});
+        try {
+          // Restore config before removing the candidate target. If config
+          // recovery fails, retain both folders and leave maintenance blocked.
+          if (configWriteAttempted) {
+            config.updateConfig({ dataDir: oldPath, firstLaunchHandled: cfg.firstLaunchHandled });
+          }
+          if (installedTarget) {
+            await fs.promises.rm(newPath, { recursive: true, force: true });
+          }
+          if (displacedEmptyTarget && fs.existsSync(displacedEmptyTarget)) {
+            await fs.promises.rename(displacedEmptyTarget, newPath);
+          }
+        } catch (rollbackErr) {
+          const recoveryError = new Error(
+            `${err.message} Recovery failed: ${rollbackErr.message}. Original data: ${oldPath}. Quit and recover the original data and settings before reopening.`,
+            { cause: err },
+          );
+          recoveryError.code = 'MAINTENANCE_ROLLBACK_FAILED';
+          throw recoveryError;
         }
         throw err;
       }
-    }
-
-    if (!fs.existsSync(newPath)) fs.mkdirSync(newPath, { recursive: true });
-    try {
-      config.updateConfig({ dataDir: newPath, firstLaunchHandled: true });
-    } catch (err) {
-      if (shouldMove && fs.existsSync(newPath)) {
-        await fs.promises.rm(newPath, { recursive: true, force: true }).catch(() => {});
-        if (displacedEmptyTarget && fs.existsSync(displacedEmptyTarget)) {
-          await fs.promises.rename(displacedEmptyTarget, newPath).catch(() => {});
-        }
+      if (displacedEmptyTarget) {
+        await fs.promises.rm(displacedEmptyTarget, { recursive: true, force: true }).catch(() => {});
       }
-      throw err;
-    }
-    if (displacedEmptyTarget) await fs.promises.rm(displacedEmptyTarget, { recursive: true, force: true }).catch(() => {});
+      return { oldPath, newPath, moved: shouldMove, sourceRetained: shouldMove };
+    };
 
-    return { oldPath, newPath, moved: shouldMove, sourceRetained: shouldMove };
+    try {
+      return await runDataMaintenance({
+        label: 'changing the data folder',
+        dataDir: oldPath,
+        prepare,
+        replace,
+      });
+    } finally {
+      // Only uninstalled staging is disposable here. Once replace() returns,
+      // newPath/config are committed even if scheduling the restart fails.
+      if (stagedPath && fs.existsSync(stagedPath)) {
+        await fs.promises.rm(stagedPath, { recursive: true, force: true }).catch(() => {});
+      }
+    }
   });
 
   /**
