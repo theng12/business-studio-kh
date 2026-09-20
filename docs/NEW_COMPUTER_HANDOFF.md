@@ -1,8 +1,48 @@
 # Media Studio KH — new-computer handoff
 
-Updated: 2026-09-21. Purpose: continue development without losing completed server/client work or repeating historical audits. The current 0.1.35 ledger below supersedes the historical 0.1.34 conclusions and original pre-fix evidence.
+Updated: 2026-09-21. Purpose: continue development without losing completed server/client work or repeating historical audits. The current concurrent-editor pass follows the merged 0.1.35 work; older ledgers remain historical evidence, not a new backlog.
 
-## Current follow-up — 0.1.35
+## Concurrent-editor follow-up — 0.1.36
+
+Base: latest main `e34411bb6ffb1cb66d6dcc5d16eb5699e7a77258`, [merged PR #4](https://github.com/theng12/media-studio-kh/pull/4). Isolated branch `codex/concurrent-editors`; [implementation plan](superpowers/plans/2026-09-21-concurrent-editors.md). The untouched baseline passed 511 tests with lint. Fresh `npm ci`, Node 24.15.0, disposable synthetic profiles; no copied dependencies or historical-data transfer.
+
+### Newly reproduced findings
+
+- **C1 — stale whole-draft writes:** actual SQLite and registered IPC handlers accepted stale overlapping and disjoint Catalog/Social/Label drafts, silently reverting another editor's saved fields. Equal-millisecond writes reused the same timestamp. The fix reuses optional `expectedUpdatedAt` and the existing `CONFLICT|` envelope, with strictly increasing revisions and no schema change. Normal editor saves must carry the last acknowledged revision; an intentional overwrite may omit it.
+- **C2 — export metadata:** a stale Catalog full-row patch could reset `lastExportedAt`. Catalog/Social timestamps are now server-owned and changed only by export markers; markers also advance the revision. Social already preserved the field in its ordinary UI payload, but its stale content write remained unsafe.
+- **C3 — editor lifetime and flush:** actual component harnesses reproduced an old unmounted Catalog/Social/Label request overwriting a newer reopened draft, and company flush resolving while newer typing remained only in the debounce timer. The queue now chains acknowledged revisions and drains the latest dirty draft before Back, export or navigation. Explicit Save reuses Refresh/Overwrite/Cancel; failed or cancelled saves preserve the draft. Normal navigation awaits successful persistence, and unexpected old-instance writes face the server revision check.
+- **C4 — company acknowledgement window:** an actual editor plus the company slice reproduced new typing after the backend changed company but before the client received the acknowledgement. The main content now becomes natively inert for that transition, after pending typing is flushed. Queued transitions retain the lock until the latest context is applied; failure reconciles and unlocks. This prevents new edits during the transition rather than buffering them across tenants.
+
+Initial RED evidence: database contract 2 pass/5 fail; Catalog/Social 2 pass/5 fail; Label 3 pass/2 fail. Independent review also reproduced two introduced helper edge cases before packaging: old static flush values replaying after newer saves, and stale navigation overriding the latest route choice. Both have retained passing regressions. Export-only metadata can advance a dirty draft's revision only when the returned editable payload exactly matches its flushed baseline; unseen editable changes still conflict, and a delayed export response cannot roll back a newer acknowledgement.
+
+### Local verification and installer
+
+Environment: Apple Silicon macOS 27, Xcode Command Line Tools, isolated Node 24.15.0 and fresh dependencies, Electron 44.4.3. Ponytail kept the implementation within the existing queue, conflict dialog, store and IPC patterns. Impeccable informed draft/error ownership and the native transition lock without a redesign. Refreshed ignored Graphify: 3,292 nodes/7,979 edges, code-only extraction with no paid model calls.
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | Lint clean; 564 passed, zero failures/skips |
+| `npm run test:native` | 82 passed, zero failures/skips; overlapping coverage, not 82 additional unique tests |
+| `npm run check:client-server` | Actual RPC stale-write rejection, preserved winners, sequential tokens, explicit overwrites and malformed-token rejection for all three editors; existing reconnect/image/capability checks pass |
+| `npm run check:render` | ASCII/Khmer: 2,253 dark pixels each; 1,975,648 bytes of embedded Khmer font CSS |
+| Packaged server/client probe | 6 checks pass, including actual Catalog UI Cancel/Refresh/Overwrite plus persisted-row checks, image protocol and reconnect after server restart |
+| `npm audit`, `npm audit --omit=dev` | Zero vulnerabilities each |
+| `npm run dist` | Unsigned local arm64 DMG built successfully |
+| DMG verification/read-only mount | Checksum valid; 0.1.36/arm64/macOS 12 minimum; mounted app.asar equals the tested packaged app |
+
+Final installer: `/Users/vengtheng/.codex/worktrees/concurrent-editors/media-studio-kh/dist/Media Studio KH-0.1.36-arm64.dmg`, 245,043,107 bytes, SHA-256 `f86cc73f552b02d86db220e3031cbcee9aba06b57e1e099ba5d030fdc6d41c3c`. Tested/mounted app.asar SHA-256 `b554c78c36ee6bd19c54aef2b0d37b012dbab402ff74c4699fdfce473fda5a49`. The installer was rebuilt and the packaged probe rerun after the final export correction. Artifacts, synthetic profiles, graphs and worker reports stay out of Git. Existing Node module-type and Electron sandbox-extension warnings did not fail their respective checks; macOS 27 warns that the successful hdiutil mount/eject commands are deprecated.
+
+Independent server and renderer reviews passed, including re-review of the final export correction with six targeted checks. Astra reviewed the combined source and verification evidence. GitHub Actions was verified disabled before code-only integration; the repository's PR and main-branch history record the final merge. No installer or other generated artifact is committed.
+
+### Remaining limits
+
+- Run matching current versions on server and clients. Unversioned update calls remain supported for intentional overwrite/backward compatibility; old clients do not gain revision protection merely by upgrading the server.
+- Row-level conflicts do not merge fields automatically. Autosave leaves a conflicting draft unsaved; explicit Save offers recovery. A changed editable export response still conflicts; only a matching editable baseline permits metadata-only revision advancement.
+- Drafts remain in memory. This pass does not add crash/force-quit recovery, persistent draft storage or real-time collaboration. Workspace's distributed same-image editing remains a separate investigation, not proven by these three-editor tests.
+- The packaged probe exercises the actual Catalog conflict dialog on two local processes. Social/Label have actual-component and real RPC/SQLite coverage, not a claimed manual packaged exercise of every editor.
+- Physical two-Mac LAN, Wi-Fi loss/sleep/wake, macOS 12 hardware, iPad Safari and real printer dimensions/cancellation remain hardware checks. No paid AI calls, signing purchase, release publication, deployment or real-data transfer occurred.
+
+## Historical follow-up — 0.1.35
 
 The owner-approved [follow-up plan](superpowers/plans/2026-09-20-handoff-followup.md) starts from main commit `54616464153b4960a4e75e0f77e39f189549f0a3` (0.1.34). The requested handoff commit `c31d7afc9af5d50c48819698f70df21bddd35cc3` is present in history. Implementation uses isolated branch `codex/handoff-followup`, fresh synthetic data and dummy credentials; no historical data or credential transfer is needed.
 
@@ -24,7 +64,7 @@ Image identity note: `content_hash` is an identity/change token, not necessarily
 ### Remaining limitations, not reopened historical fixes
 
 - Physical second-Mac LAN, sleep/wake, printer, iPad Safari and a macOS 12 device still need hardware validation. Local two-process loopback checks are not two-Mac evidence.
-- Workspace lifetime/identity checks do not prove distributed conflict handling in every Catalog, Social or Label editor. Their cross-device same-draft behavior remains an investigation, not a confirmed defect or permission to rewrite those editors.
+- At the end of 0.1.35, Catalog/Social/Label concurrent editing remained an investigation. It was subsequently reproduced as C1–C3 above; do not restart that investigation from this historical limitation.
 - Paid AI providers and the downloaded local background-removal model were not exercised. Source/hash/IPC ownership is tested without paid calls or model downloads.
 - Overlay outcome history cannot recover lost Save-to-Folder response bytes; a process crash or failure before the run record may leave an unknown outcome. Never automatically replay an unknown mutation.
 - Archive checks validate the current APFS target, not an atomic filesystem snapshot or hostile-filesystem guarantee. Coarse/nonstandard ctime may weaken A→B→A detection. Keep writes quiet for deliberate snapshots/cutovers.
@@ -56,7 +96,7 @@ Local installer: `dist/Media Studio KH-0.1.35-arm64.dmg` in `/Users/vengtheng/.c
 
 - Private repository: https://github.com/theng12/media-studio-kh
 - Base branch: `main`. Authenticate with a GitHub account that can access this repository.
-- Original application baseline: **0.1.33**, merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [merged PR #1](https://github.com/theng12/media-studio-kh/pull/1). The follow-up starts from **0.1.34**, [merged PR #3](https://github.com/theng12/media-studio-kh/pull/3), and prepares **0.1.35**. Clone latest `main`; do not reset to a historical SHA.
+- Original application baseline: **0.1.33**, merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [merged PR #1](https://github.com/theng12/media-studio-kh/pull/1). Historical passes produced **0.1.34** ([PR #3](https://github.com/theng12/media-studio-kh/pull/3)) and **0.1.35** ([PR #4](https://github.com/theng12/media-studio-kh/pull/4)). The concurrent-editor pass starts from 0.1.35/main `e34411bb6ffb1cb66d6dcc5d16eb5699e7a77258` and produces **0.1.36**. Clone latest `main`; do not reset to a historical SHA.
 - Before this handoff, a fresh fetch and GitHub API check confirmed that local and remote `main` both pointed to that merge. GitHub Actions was disabled. Keep hosted compute disabled; run checks locally.
 - Scope: personal/internal standalone and Mac server/client use. No Apple Developer subscription, public distribution, deployment, signing, or paid AI calls are required for this work.
 
@@ -91,8 +131,8 @@ For a local installer:
 
 ```bash
 npm run dist
-hdiutil verify "dist/Media Studio KH-0.1.35-arm64.dmg"
-shasum -a 256 "dist/Media Studio KH-0.1.35-arm64.dmg"
+hdiutil verify "dist/Media Studio KH-0.1.36-arm64.dmg"
+shasum -a 256 "dist/Media Studio KH-0.1.36-arm64.dmg"
 ```
 
 Adjust the filename after future patch bumps. Prefer `npm run dist`, which runs the web-viewer generation and native preparation hooks. See the release-script finding below before using alternative release commands. This build is unsigned and needs no paid Apple account. A rebuilt DMG need not have the same hash as an earlier build.
@@ -310,7 +350,7 @@ These are the prior pass's recorded conclusions, not blanket claims about the cu
 These are not additional confirmed bugs. Reproduce before changing behavior. The two resolved investigations are explicitly closed here to prevent repeated work.
 
 - **Live import lifecycle/schema — resolved in 0.1.35:** real WAL, rollback, restart-failure and unsupported-schema cases are retained as tests. Main owns close/install/restart; unsupported schema markers reject before replacement. Historical data migration remains out of scope.
-- **Editor lifetime/concurrent editing:** Catalog/Social/Label/Image Workspace save queues are per mounted editor. Test navigating away and immediately back while an old save is in flight, switching companies while typing during the flush, and two Macs editing the same draft. Preserve Product Library's existing conflict flow; do not infer that every editor has distributed revision checking.
+- **Editor lifetime/concurrent editing:** Catalog/Social/Label findings are tracked as C1–C4 in the 0.1.36 ledger above. Do not repeat those investigations. Image Workspace distributed same-image editing remains unproven; reproduce before changing behavior. Local loopback evidence does not replace physical two-Mac checks.
 - **Image identity after renumbering — resolved in 0.1.35:** actual DB/handler tests cover reorder, removal, wrong product, changed content, pinned byte acquisition and isolated output attachment. Real Chromium checks separately cover stale displayed images. Physical cross-Mac latency remains a hardware check, not an unimplemented identity fix.
 - **Large binary transfers:** JSON/base64 RPC has a 100 MiB encoded ceiling. A 75 MiB raw fixture exceeded it; near-limit retained memory grew roughly 370–376 MiB. Normal 1–5 MiB encoding took roughly 2–14 ms. Keep the clear size error; introduce streaming only after a real workload justifies it.
 - **Hardware/network:** install the same version on two physical Macs; check connect/reconnect after server restart, Wi-Fi loss and sleep/wake, changed DHCP address, company switching, original/processed image refresh and one edit in each direction. Measure actual LAN response times before claiming an app-wide speedup.
@@ -345,7 +385,7 @@ At dispatch, record branch/base SHA, owned files, deliverable and proving comman
 
 For each accepted fix, first reproduce, apply the smallest root-cause correction and retain one meaningful runnable check. Use existing events, validators, DB helpers and UI patterns. Keep security/data-loss protection. Do not rewrite synchronization, add a new state framework, or remove runtime-reachable behavior for cosmetic consistency.
 
-After material fixes run `npm run check`, `npm run test:native`, `npm run check:client-server`, relevant Electron/render checks, both dependency audits, and `npm run dist` when packaging/runtime paths changed or creating a local release. Independently review the final tree. The current follow-up bumped package/lock and the top plain-text changelog entry to **0.1.35**; its completed verification is recorded above.
+After material fixes run `npm run check`, `npm run test:native`, `npm run check:client-server`, relevant Electron/render checks, both dependency audits, and `npm run dist` when packaging/runtime paths changed or creating a local release. Independently review the final tree. The current follow-up bumps package/lock and the top plain-text changelog entry to **0.1.36**; consult its current verification ledger above rather than historical counts.
 
 Before pushing/creating a PR, verify `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` returns `false`. Never dispatch hosted workflows. Under the owner's standing integration rule, commit/push a `codex/` branch, create/review/merge the PR when local checks and mergeability are resolved, then fast-forward local `main`. Do not force-push, publish, deploy, tag, charge, or delete real data. Preserve unrelated work. Never bump `SCHEMA_VERSION` for ordinary additive fixes: existing startup behavior can wipe structural tables after a version bump.
 
@@ -353,4 +393,4 @@ Closed decisions remain closed: do not migrate the three intentionally separate 
 
 ## Paste into the first task on the new computer
 
-> Read AGENTS.md and docs/NEW_COMPUTER_HANDOFF.md on the latest main of theng12/media-studio-kh. Verify Git status and the 0.1.35 follow-up/merged history without discarding newer work. Act as orchestrator: own planning, independent review, verification and integration; delegate bounded work with base commit, owned files, deliverable and proving checks. Prefer Luna for simple work, Terra for cross-file work and Sol at no more than high reasoning for data/security/lifecycle work. Parallelize disjoint tasks, use Ponytail and Graphify, and verify source rather than trusting stale reports. Use disposable data. Continue only the unresolved investigations or explicitly assigned work; do not repeat resolved H1–H15 fixes, reopen closed decisions or make speculative rewrites. Keep GitHub code-only and record evidence and limitations in the handoff.
+> Read AGENTS.md and docs/NEW_COMPUTER_HANDOFF.md on the latest main of theng12/media-studio-kh. Verify Git status and the latest follow-up/merged history without discarding newer work. Act as orchestrator: own planning, independent review, verification and integration; delegate bounded work with base commit, owned files, deliverable and proving checks. Prefer Luna for simple work, Terra for cross-file work and Sol at no more than high reasoning for data/security/lifecycle work. Parallelize disjoint tasks, use Ponytail and Graphify, and verify source rather than trusting stale reports. Use disposable data. Continue only unresolved investigations or explicitly assigned work; do not repeat resolved H1–H15 or C1–C4 fixes, reopen closed decisions or make speculative rewrites. Keep GitHub code-only and record evidence and limitations in the handoff.

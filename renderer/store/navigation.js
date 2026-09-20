@@ -1,6 +1,8 @@
 // Navigation slice — active module + workspace product id, plus the
 // MODULES allowlist + ALWAYS_AVAILABLE gating used by `isModuleAvailable`.
 
+import { flushCompanySwitches } from '../lib/companySwitch.js';
+
 // Whitelist of routable module names. Must stay in sync with PAGES in
 // App.jsx — `setActiveModule` rejects anything not in this set.
 //
@@ -26,6 +28,20 @@ const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'expo
 const ALWAYS_AVAILABLE = new Set(['dashboard', 'company', 'settings', 'support', 'overlay', 'history']);
 
 export function createNavigationSlice(set, get) {
+  let navigationIntent = 0;
+
+  async function navigate(patch, intent = ++navigationIntent) {
+    try {
+      await flushCompanySwitches();
+      if (intent !== navigationIntent) return false;
+      set(patch);
+      return true;
+    } catch (error) {
+      get().addToast(`Couldn't leave this editor: ${error.message}`, 'error');
+      return false;
+    }
+  }
+
   return {
     // — Navigation
     activeModule: 'dashboard',
@@ -43,7 +59,7 @@ export function createNavigationSlice(set, get) {
     pendingPoSupplierId: null,
     pendingCatalogProjectId: null,
 
-    setActiveModule(name) {
+    async setActiveModule(name) {
       if (!MODULES.includes(name)) {
         // Loud-fail in dev/devtools instead of silently dropping the request
         // — the v0.10.0 "Overlay Studio doesn't open" bug was a missing
@@ -54,9 +70,11 @@ export function createNavigationSlice(set, get) {
         // which is the wrong file — the allowlist is at the top of THIS file.
         // A breadcrumb that points at the wrong place costs more than none.
         console.warn(`[store] setActiveModule("${name}") ignored — not in the MODULES allowlist at the top of renderer/store/navigation.js. Add it there, or the click keeps doing nothing silently.`);
-        return;
+        return false;
       }
-      set({ activeModule: name });
+      const intent = ++navigationIntent;
+      if (name === get().activeModule) return true;
+      return navigate({ activeModule: name }, intent);
     },
 
     setActiveProductId(id) {
@@ -64,16 +82,16 @@ export function createNavigationSlice(set, get) {
     },
 
     openProductInWorkspace(productId) {
-      set({ activeProductId: productId, activeModule: 'workspace' });
+      return navigate({ activeProductId: productId, activeModule: 'workspace' });
     },
 
     // v0.49.48: jump to a specific PO detail (from the Library Cost column).
     openPurchaseOrder(poId) {
-      set({ pendingPoId: poId, pendingPoSupplierId: null, activeModule: 'purchaseorders' });
+      return navigate({ pendingPoId: poId, pendingPoSupplierId: null, activeModule: 'purchaseorders' });
     },
     // v0.49.48: jump to the PO list filtered by a supplier (from Suppliers).
     openPurchaseOrdersForSupplier(supplierId) {
-      set({ pendingPoSupplierId: supplierId, pendingPoId: null, activeModule: 'purchaseorders' });
+      return navigate({ pendingPoSupplierId: supplierId, pendingPoId: null, activeModule: 'purchaseorders' });
     },
     // Consumed by the PO module once it's read the pending intent.
     clearPendingPoNav() {
@@ -81,7 +99,7 @@ export function createNavigationSlice(set, get) {
     },
 
     openCatalogProject(projectId) {
-      set({ pendingCatalogProjectId: projectId, activeModule: 'catalogprojects' });
+      return navigate({ pendingCatalogProjectId: projectId, activeModule: 'catalogprojects' });
     },
     clearPendingCatalogNav() {
       set({ pendingCatalogProjectId: null });

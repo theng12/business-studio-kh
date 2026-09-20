@@ -163,6 +163,7 @@ const SHORTCUTS = (() => {
 
 export default function App() {
   const activeModule = useAppStore((s) => s.activeModule);
+  const companySwitching = useAppStore((s) => s.companySwitching);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
   const isModuleAvailable = useAppStore((s) => s.isModuleAvailable);
   /* Same derivation the Sidebar uses, so a keyboard shortcut and the visible nav
@@ -242,7 +243,7 @@ export default function App() {
   return (
     <div className="shell">
       <Sidebar />
-      <main className="shell__content">
+      <main className="shell__content" inert={companySwitching ? '' : undefined} aria-busy={companySwitching || undefined}>
         <div className={`titlebar${isMac ? ' titlebar--mac' : ''}`} />
         {clientUnconfigured ? (
           <div className="setup-banner" role="status">

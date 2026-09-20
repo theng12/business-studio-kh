@@ -64,6 +64,7 @@ export function createCompaniesSlice(set, get) {
     // — Multi-tenant
     companies: [],
     activeCompanyId: null,
+    companySwitching: false,
 
     async refreshCompanies() {
       if (!window.api) return;
@@ -80,6 +81,7 @@ export function createCompaniesSlice(set, get) {
       pendingSwitches += 1;
       const write = switchChain.then(async () => {
         await flushCompanySwitches();
+        set({ companySwitching: true });
         return window.api.companies.setActive(id);
       });
       switchChain = write.catch(() => {});
@@ -100,6 +102,7 @@ export function createCompaniesSlice(set, get) {
             await refreshCompanyData(get);
           }
         } catch (_) { /* keep the last known context */ }
+        if (seq === switchSeq) set({ companySwitching: false });
         return;
       }
       pendingSwitches -= 1;
@@ -110,6 +113,7 @@ export function createCompaniesSlice(set, get) {
       // Filters DO reset (search/brand/category are intrinsically
       // per-company), but sort preference is global UI ergonomics.
       get().applyActiveCompanyContext(id);
+      set({ companySwitching: false });
       await refreshCompanyData(get);
     },
 
