@@ -104,6 +104,18 @@ function requireScalarOrField(name) {
   };
 }
 
+/** Existing editor updates may omit the token for an intentional overwrite. */
+function requireVersionedPatch(args) {
+  const base = requireFields('id', 'patch')(args);
+  if (base !== true) return base;
+  if (!isObject(args.patch)) return 'patch must be an object';
+  if (
+    Object.prototype.hasOwnProperty.call(args.patch, 'expectedUpdatedAt')
+    && !isNumber(args.patch.expectedUpdatedAt)
+  ) return 'expectedUpdatedAt must be a finite number';
+  return true;
+}
+
 /* ─── Per-channel validators ────────────────────────────────────
  *
  * Listed in the same domain order as the IPC handlers in
@@ -490,7 +502,7 @@ const VALIDATORS = {
   'catalogStudio:exportBytes': requireNonEmptyStringFields('id'),
   'catalogStudio:markExported': requireNonEmptyStringFields('id'),
   'catalogStudio:create':    (a) => isObject(a) ? true : 'create payload must be an object',
-  'catalogStudio:update':    requireFields('id', 'patch'),
+  'catalogStudio:update':    requireVersionedPatch,
   'catalogStudio:delete':    requireFields('id'),
   'catalogStudio:duplicate': requireFields('id'),
   'catalogStudio:preview':   requireFields('id'),
@@ -510,12 +522,7 @@ const VALIDATORS = {
     if (!isString(a.name) || !a.name.trim()) return 'name is required';
     return true;
   },
-  'socialGrid:update':       (a) => {
-    const base = requireFields('id', 'patch')(a);
-    if (base !== true) return base;
-    if (!isObject(a.patch)) return 'patch must be an object';
-    return true;
-  },
+  'socialGrid:update':       requireVersionedPatch,
   'socialGrid:delete':       requireNonEmptyStringFields('id'),
   'socialGrid:duplicate':    requireNonEmptyStringFields('id'),
   'socialGrid:markExported': requireNonEmptyStringFields('id'),
@@ -662,7 +669,7 @@ const VALIDATORS = {
   // renderer call. See requireScalarOrField above.
   'labels:getTemplate':       requireScalarOrField('id'),
   'labels:createTemplate':    (a) => isObject(a) ? true : 'create payload must be an object',
-  'labels:updateTemplate':    requireFields('id', 'patch'),
+  'labels:updateTemplate':    requireVersionedPatch,
   'labels:deleteTemplate':    requireScalarOrField('id'),
   'labels:duplicateTemplate': requireScalarOrField('id'),
   'labels:deleteRun':         requireScalarOrField('id'),

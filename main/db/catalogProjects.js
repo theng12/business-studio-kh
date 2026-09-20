@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
-const { parseJson } = require('./_util');
+const { parseJson, prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
 
 function rowToProject(row) {
   if (!row) return null;
@@ -21,12 +21,19 @@ function create(input) {
 }
 function update(id, patch) {
   const current = get(id); if (!current) throw new Error('Catalog project not found');
-  const next = { ...current, ...patch, config: { ...current.config, ...(patch.config || {}) } };
-  getDb().prepare('UPDATE catalog_projects SET name = ?, description = ?, config = ?, updated_at = ?, last_exported_at = ? WHERE id = ?')
-    .run(String(next.name || 'Untitled catalog').trim(), next.description ?? null, JSON.stringify(next.config), Date.now(), next.lastExportedAt ?? null, id);
+  const editable = prepareOptimisticPatch(current, patch, 'catalogProject');
+  const next = { ...current, ...editable, config: { ...current.config, ...(editable.config || {}) } };
+  getDb().prepare('UPDATE catalog_projects SET name = ?, description = ?, config = ?, updated_at = ? WHERE id = ?')
+    .run(String(next.name || 'Untitled catalog').trim(), next.description ?? null,
+      JSON.stringify(next.config), nextUpdatedAt(current.updatedAt), id);
   return get(id);
 }
-function markExported(id) { getDb().prepare('UPDATE catalog_projects SET last_exported_at = ?, updated_at = ? WHERE id = ?').run(Date.now(), Date.now(), id); return get(id); }
+function markExported(id) {
+  const current = get(id); if (!current) return null;
+  getDb().prepare('UPDATE catalog_projects SET last_exported_at = ?, updated_at = ? WHERE id = ?')
+    .run(Date.now(), nextUpdatedAt(current.updatedAt), id);
+  return get(id);
+}
 function remove(id) { return getDb().prepare('DELETE FROM catalog_projects WHERE id = ?').run(id).changes > 0; }
 function duplicate(id) { const p = get(id); if (!p) throw new Error('Catalog project not found'); return create({ ...p, name: `${p.name} copy` }); }
 module.exports = { list, get, create, update, markExported, remove, duplicate };

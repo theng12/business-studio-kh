@@ -57,6 +57,78 @@ const timeout = setTimeout(() => { console.error('FAIL: smoke timed out'); proce
       for (let i = 0; i < 250; i++) { if (predicate()) return; await new Promise(r => setTimeout(r, 20)); }
       throw new Error('Expected client event did not arrive');
     };
+    const postRpc = async (channel, args) => {
+      const response = await fetch(`${base}/api/rpc`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${admin.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel, args }),
+      });
+      return { response, body: await response.json() };
+    };
+    const assertDraftConcurrency = async ({ label, createChannel, getChannel, updateChannel, markExportedChannel, input, kind }) => {
+      const created = await invoke(createChannel, input);
+      const snapshotA = await invoke(getChannel, { id: created.id });
+      const snapshotB = await invoke(getChannel, { id: created.id });
+      assert.notEqual(snapshotA, snapshotB, `${label}: snapshots must be independent responses`);
+      assert.equal(snapshotA.updatedAt, snapshotB.updatedAt, `${label}: snapshots should start at one revision`);
+
+      const winner = await invoke(updateChannel, {
+        id: created.id,
+        patch: { name: `${label} winner`, expectedUpdatedAt: snapshotA.updatedAt },
+      });
+      let staleError;
+      try {
+        await invoke(updateChannel, {
+          id: created.id,
+          patch: { name: `${label} stale`, expectedUpdatedAt: snapshotB.updatedAt },
+        });
+      } catch (error) {
+        staleError = error;
+      }
+      assert.ok(staleError, `${label}: stale write must be rejected`);
+      assert.ok(staleError.message.startsWith('CONFLICT|'), `${label}: stale write should return a conflict payload`);
+      assert.deepEqual(JSON.parse(staleError.message.slice('CONFLICT|'.length)), {
+        kind,
+        id: created.id,
+        name: winner.name,
+        updatedAt: winner.updatedAt,
+      });
+      assert.deepEqual(await invoke(getChannel, { id: created.id }), winner, `${label}: stale write changed the persisted winner`);
+
+      const sequentialName = `${label} sequential`;
+      const sequential = await invoke(updateChannel, {
+        id: created.id,
+        patch: { name: sequentialName, expectedUpdatedAt: winner.updatedAt },
+      });
+      assert.equal(sequential.name, sequentialName, `${label}: sequential token response lost the requested name`);
+      assert.ok(sequential.updatedAt > winner.updatedAt, `${label}: sequential token write must advance updatedAt`);
+
+      const overwriteName = `${label} explicit overwrite`;
+      const overwritten = await invoke(updateChannel, {
+        id: created.id,
+        patch: { name: overwriteName },
+      });
+      assert.equal(overwritten.name, overwriteName, `${label}: omitted-token response lost the requested name`);
+      assert.ok(overwritten.updatedAt > sequential.updatedAt, `${label}: omitted token overwrite must advance updatedAt`);
+
+      const finalRead = await invoke(getChannel, { id: created.id });
+      assert.deepEqual(finalRead, overwritten, `${label}: final read does not match the omitted-token write`);
+      const malformed = await postRpc(updateChannel, {
+        id: created.id,
+        patch: { name: `${label} malformed`, expectedUpdatedAt: 'not-a-number' },
+      });
+      assert.equal(malformed.response.status, 400, `${label}: malformed token must fail validation before the handler`);
+      assert.equal(malformed.body.error, 'Bad request: expectedUpdatedAt must be a finite number');
+      assert.deepEqual(await invoke(getChannel, { id: created.id }), finalRead, `${label}: malformed token changed the row`);
+
+      if (markExportedChannel) {
+        const beforeExport = await invoke(getChannel, { id: created.id });
+        const exported = await postRpc(markExportedChannel, { id: created.id });
+        assert.equal(exported.response.status, 200, `${label}: markExported RPC failed`);
+        const afterExport = await invoke(getChannel, { id: created.id });
+        assert.ok(afterExport.updatedAt > beforeExport.updatedAt, `${label}: markExported must advance updatedAt`);
+      }
+    };
     await waitFor(() => incoming.some(e => e.channel === 'server:hello'));
     assert.equal(client.baseUrl(), base);
     const company = await invoke('companies:create', { name: 'Synthetic Company' });
@@ -77,6 +149,20 @@ const timeout = setTimeout(() => { console.error('FAIL: smoke timed out'); proce
     assert.ok((await response.arrayBuffer()).byteLength > 0);
     const denied = await fetch(`${base}/api/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${viewer.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ channel: 'users:list' }) });
     assert.equal(denied.status, 403);
+    await assertDraftConcurrency({
+      label: 'catalog project', kind: 'catalogProject', createChannel: 'catalogStudio:create', getChannel: 'catalogStudio:get',
+      updateChannel: 'catalogStudio:update', markExportedChannel: 'catalogStudio:markExported',
+      input: { companyId: company.id, name: 'RPC Catalog Draft' },
+    });
+    await assertDraftConcurrency({
+      label: 'social preset', kind: 'socialGridPreset', createChannel: 'socialGrid:create', getChannel: 'socialGrid:get',
+      updateChannel: 'socialGrid:update', markExportedChannel: 'socialGrid:markExported',
+      input: { companyId: company.id, name: 'RPC Social Draft' },
+    });
+    await assertDraftConcurrency({
+      label: 'label template', kind: 'labelTemplate', createChannel: 'labels:createTemplate', getChannel: 'labels:getTemplate',
+      updateChannel: 'labels:updateTemplate', input: { companyId: company.id, name: 'RPC Label Draft' },
+    });
     const greetingCount = incoming.filter(e => e.channel === 'server:hello').length;
     sockets[0].terminate();
     req('./main/db/products').update(product.id, { name: 'Edited while socket disconnected' });
@@ -84,7 +170,7 @@ const timeout = setTimeout(() => { console.error('FAIL: smoke timed out'); proce
     assert.equal((await invoke('products:get', product.id)).name, 'Edited while socket disconnected');
     const attribution = await invoke('users:listForAttribution');
     assert.ok(attribution.every(user => !('token' in user)));
-    console.log(JSON.stringify({ pass: true, version: electron.app.getVersion(), checks: ['real SQLite CRUD over actual client RPC', 'active company and write attribution over RPC', 'real WebSocket greeting, catalog event forwarding and automatic reconnect', 'client /m URL normalization', 'client source-file upload to server and asset download', 'viewer token gate and redacted attribution'] }));
+    console.log(JSON.stringify({ pass: true, version: electron.app.getVersion(), checks: ['real SQLite CRUD over actual client RPC', 'active company and write attribution over RPC', 'real WebSocket greeting, catalog event forwarding and automatic reconnect', 'client /m URL normalization', 'client source-file upload to server and asset download', 'viewer token gate and redacted attribution', 'catalog/social/label two-snapshot conflicts, persisted winners, sequential tokens, omission overwrites and malformed-token pre-write rejection', 'catalog/social markExported revision advancement'] }));
   } finally {
     db?.close();
     await fs.rm(temp, { recursive: true, force: true });

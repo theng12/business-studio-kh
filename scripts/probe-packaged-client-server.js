@@ -5,7 +5,7 @@
  * modules, then boots real server/client BrowserWindows with isolated profiles.
  *
  * Run: node scripts/probe-packaged-client-server.js --app /absolute/Media\ Studio\ KH.app
- * Optional: --expected-version 0.1.35 --artifacts /absolute/probe-artifacts
+ * Optional: --expected-version X.Y.Z --artifacts /absolute/probe-artifacts
  */
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
@@ -259,6 +259,223 @@ function rendererReadyScript() {
   })`;
 }
 
+function catalogNameInputScript() {
+  return `(() => {
+    const editor = document.querySelector('.catalog-editor-page');
+    if (!editor) return null;
+    return [...editor.querySelectorAll('label')]
+      .find((label) => label.textContent.trim().startsWith('Name'))
+      ?.querySelector('input') ?? null;
+  })()`;
+}
+
+async function openCatalogEditor(target, projectName, role) {
+  const openedProjects = await evaluate(target, `(() => {
+    const button = [...document.querySelectorAll('.sidebar__item')]
+      .find((item) => item.textContent.trim() === 'Catalog Projects');
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+  assert.ok(openedProjects, `${role} could not open Catalog Projects from the sidebar`);
+
+  await waitFor(
+    () => evaluate(target, `(() => [...document.querySelectorAll('.catalog-project-card')]
+      .some((card) => card.innerText.includes(${JSON.stringify(projectName)})))()`),
+    `${role} catalog project fixture`,
+  );
+  const openedEditor = await evaluate(target, `(() => {
+    const card = [...document.querySelectorAll('.catalog-project-card')]
+      .find((candidate) => candidate.innerText.includes(${JSON.stringify(projectName)}));
+    const button = [...(card?.querySelectorAll('button') ?? [])]
+      .find((candidate) => candidate.textContent.trim() === 'Open');
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  assert.ok(openedEditor, `${role} could not open the catalog project card`);
+
+  await waitFor(
+    () => evaluate(target, `Boolean(document.querySelector('.catalog-editor-page'))`),
+    `${role} catalog editor`,
+  );
+  const openedDesign = await evaluate(target, `(() => {
+    const button = [...document.querySelectorAll('.catalog-editor-page button')]
+      .find((candidate) => candidate.textContent.includes('Layout & design'));
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  assert.ok(openedDesign, `${role} catalog editor did not expose the Layout & design tab`);
+  await waitFor(
+    () => evaluate(target, `Boolean(${catalogNameInputScript()})`),
+    `${role} catalog name input`,
+  );
+}
+
+async function setCatalogName(target, value, role) {
+  const changed = await evaluate(target, `(() => {
+    const input = ${catalogNameInputScript()};
+    if (!input) return false;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    input.focus();
+    setValue.call(input, ${JSON.stringify(value)});
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(value)} }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return input.value === ${JSON.stringify(value)};
+  })()`);
+  assert.ok(changed, `${role} could not type into the catalog name input`);
+  await waitFor(
+    () => evaluate(target, `${catalogNameInputScript()}?.value === ${JSON.stringify(value)}`),
+    `${role} typed catalog name`,
+  );
+}
+
+async function setCatalogNameAndSave(target, value, role) {
+  const changed = await evaluate(target, `new Promise((resolve) => {
+    const input = ${catalogNameInputScript()};
+    const save = [...document.querySelectorAll('.catalog-editor-page button')]
+      .find((candidate) => candidate.textContent.trim() === 'Save' && !candidate.disabled);
+    if (!input || !save) { resolve(false); return; }
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    input.focus();
+    setValue.call(input, ${JSON.stringify(value)});
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(value)} }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    setTimeout(() => { save.click(); resolve(input.value === ${JSON.stringify(value)}); }, 0);
+  })`);
+  assert.ok(changed, `${role} could not type and save the catalog name`);
+}
+
+async function clickCatalogButton(target, label, role) {
+  const clicked = await evaluate(target, `(() => {
+    const button = [...document.querySelectorAll('.catalog-editor-page button')]
+      .find((candidate) => candidate.textContent.trim() === ${JSON.stringify(label)} && !candidate.disabled);
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  assert.ok(clicked, `${role} could not click catalog ${label}`);
+}
+
+async function waitForCatalogName(target, value, role) {
+  await waitFor(
+    () => evaluate(target, `${catalogNameInputScript()}?.value === ${JSON.stringify(value)}`),
+    `${role} catalog name ${value}`,
+  );
+}
+
+async function waitForCatalogSaved(target, role) {
+  await waitFor(
+    () => evaluate(target, `document.querySelector('.catalog-editor-page .save-status')?.textContent.includes('All changes saved')`),
+    `${role} catalog save`,
+  );
+}
+
+async function waitForPersistedCatalogName(target, projectId, value, role) {
+  await waitFor(
+    () => evaluate(target, `window.api.catalogStudio.get(${JSON.stringify(projectId)})
+      .then((row) => row?.name === ${JSON.stringify(value)})`),
+    `${role} persisted catalog name ${value}`,
+  );
+}
+
+async function waitForCatalogConflict(target, role) {
+  await waitFor(
+    () => evaluate(target, `Boolean([...document.querySelectorAll('.modal')]
+      .find((modal) => modal.textContent.includes('Edit conflict')))`),
+    `${role} edit-conflict dialog`,
+  );
+}
+
+async function chooseCatalogConflict(target, choice, role) {
+  const clicked = await evaluate(target, `(() => {
+    const modal = [...document.querySelectorAll('.modal')]
+      .find((candidate) => candidate.textContent.includes('Edit conflict'));
+    const button = [...(modal?.querySelectorAll('button') ?? [])]
+      .find((candidate) => candidate.textContent.trim() === ${JSON.stringify(choice)});
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  assert.ok(clicked, `${role} could not choose ${choice} in the edit-conflict dialog`);
+  await waitFor(
+    () => evaluate(target, `![...document.querySelectorAll('.modal')]
+      .some((modal) => modal.textContent.includes('Edit conflict'))`),
+    `${role} edit-conflict dialog to close`,
+  );
+}
+
+async function runCatalogEditorConflictScenario({ serverTarget, clientTarget, projectId, projectName }) {
+  const clientDraft = 'Client draft retained after Cancel';
+  const serverName = 'Server version chosen by Refresh';
+  const overwriteDraft = 'Client version deliberately overwritten';
+  const overwriteServerName = 'Server version before Overwrite';
+
+  await Promise.all([
+    openCatalogEditor(serverTarget, projectName, 'server'),
+    openCatalogEditor(clientTarget, projectName, 'client'),
+  ]);
+
+  // This stays below the editor's debounce window: the server's real UI save
+  // establishes the newer revision before the client's autosave may run.
+  await setCatalogName(clientTarget, clientDraft, 'client');
+  await setCatalogNameAndSave(serverTarget, serverName, 'server');
+  await waitForCatalogSaved(serverTarget, 'server');
+  await waitForPersistedCatalogName(serverTarget, projectId, serverName, 'server');
+  await waitForCatalogName(serverTarget, serverName, 'server');
+
+  // Autosave must retain the local draft after its conflict and must not open
+  // the choice dialog on its own. The explicit Save below is the user action
+  // that is allowed to request a resolution.
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  await waitFor(
+    () => evaluate(clientTarget, `(() => {
+      const input = ${catalogNameInputScript()};
+      return input?.value === ${JSON.stringify(clientDraft)}
+        && document.querySelector('.catalog-editor-page .save-status')?.textContent.includes('Unsaved changes')
+        && ![...document.querySelectorAll('.modal')].some((modal) => modal.textContent.includes('Edit conflict'));
+    })()`),
+    'client autosave conflict to retain its draft without a dialog',
+  );
+  await waitForPersistedCatalogName(serverTarget, projectId, serverName, 'server after client autosave');
+
+  await clickCatalogButton(clientTarget, 'Save', 'client');
+  await waitForCatalogConflict(clientTarget, 'client');
+  await chooseCatalogConflict(clientTarget, 'Cancel', 'client');
+  await waitForCatalogName(clientTarget, clientDraft, 'client');
+  await waitForPersistedCatalogName(serverTarget, projectId, serverName, 'server after client Cancel');
+
+  await clickCatalogButton(clientTarget, 'Save', 'client');
+  await waitForCatalogConflict(clientTarget, 'client');
+  await chooseCatalogConflict(clientTarget, 'Refresh', 'client');
+  await waitForCatalogName(clientTarget, serverName, 'client');
+  await waitForCatalogSaved(clientTarget, 'client');
+  await waitForPersistedCatalogName(clientTarget, projectId, serverName, 'client after Refresh');
+
+  await setCatalogName(clientTarget, overwriteDraft, 'client');
+  await setCatalogNameAndSave(serverTarget, overwriteServerName, 'server');
+  await waitForCatalogSaved(serverTarget, 'server');
+  await waitForPersistedCatalogName(serverTarget, projectId, overwriteServerName, 'server');
+  await waitForCatalogName(serverTarget, overwriteServerName, 'server');
+  await new Promise((resolve) => setTimeout(resolve, 700));
+  await waitFor(
+    () => evaluate(clientTarget, `${catalogNameInputScript()}?.value === ${JSON.stringify(overwriteDraft)}`),
+    'client overwrite draft to remain visible after autosave conflict',
+  );
+  await waitForPersistedCatalogName(serverTarget, projectId, overwriteServerName, 'server after client overwrite autosave');
+
+  await clickCatalogButton(clientTarget, 'Save', 'client');
+  await waitForCatalogConflict(clientTarget, 'client');
+  await chooseCatalogConflict(clientTarget, 'Overwrite', 'client');
+  await Promise.all([
+    waitForCatalogName(clientTarget, overwriteDraft, 'client'),
+    waitForCatalogSaved(clientTarget, 'client'),
+    waitForCatalogName(serverTarget, overwriteDraft, 'server'),
+    waitForPersistedCatalogName(clientTarget, projectId, overwriteDraft, 'client after Overwrite'),
+  ]);
+}
+
 async function runSeed([archive, dataDir, mode, replacementName]) {
   if (!archive || !dataDir || !mode) throw new Error('seed requires archive, dataDir, and mode');
   const mainDir = path.join(archive, 'dist-electron', 'main');
@@ -268,6 +485,7 @@ async function runSeed([archive, dataDir, mode, replacementName]) {
     const users = require(path.join(mainDir, 'db', 'users'));
     const companies = require(path.join(mainDir, 'db', 'companies'));
     const products = require(path.join(mainDir, 'db', 'products'));
+    const catalogProjects = require(path.join(mainDir, 'db', 'catalogProjects'));
     const productImages = require(path.join(mainDir, 'db', 'productImages'));
     const { productAssetDir, productImageBasename } = require(path.join(mainDir, 'util', 'assetPath'));
     let admin = users.getByName('Synthetic Admin');
@@ -280,6 +498,12 @@ async function runSeed([archive, dataDir, mode, replacementName]) {
     let product = products.getBySku(company.id, 'PACKAGED-PROBE-001');
     if (!product) product = products.create({ companyId: company.id, sku: 'PACKAGED-PROBE-001', name: 'Synthetic Product' });
     if (replacementName) product = products.update(product.id, { name: replacementName });
+    let catalogProject = catalogProjects.list(company.id).find((row) => row.name === 'Packaged conflict fixture');
+    if (!catalogProject) catalogProject = catalogProjects.create({
+      companyId: company.id,
+      name: 'Packaged conflict fixture',
+      description: 'Disposable packaged UI conflict probe fixture',
+    });
     if (!productImages.listByProduct(product.id).length) {
       const png = Buffer.from(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JH7sAAAAASUVORK5CYII=',
@@ -299,7 +523,7 @@ async function runSeed([archive, dataDir, mode, replacementName]) {
       });
     }
     const image = productImages.listByProduct(product.id)[0];
-    process.stdout.write(JSON.stringify({ companyId: company.id, productId: product.id, imagePath: image.filepath, adminToken: admin.token, viewerId: viewer.id }));
+    process.stdout.write(JSON.stringify({ companyId: company.id, productId: product.id, catalogProjectId: catalogProject.id, imagePath: image.filepath, adminToken: admin.token, viewerId: viewer.id }));
   } finally {
     database.getDb().close();
   }
@@ -360,6 +584,13 @@ async function main() {
     assert.match(serverUi.sidebarText, /Product Library/);
     assert.match(clientUi.sidebarText, /Product Library/);
 
+    await runCatalogEditorConflictScenario({
+      serverTarget,
+      clientTarget,
+      projectId: seed.catalogProjectId,
+      projectName: 'Packaged conflict fixture',
+    });
+
     const clientRead = await evaluate(clientTarget, `window.api.products.get(${JSON.stringify(seed.productId)})`);
     assert.equal(clientRead.name, 'Synthetic Product');
     const editedName = 'Updated by packaged client probe';
@@ -396,6 +627,7 @@ async function main() {
       checks: [
         'real server and client BrowserWindows/preloads rendered matching version and modes',
         'visible Product Library sidebar navigation in both real renderers',
+        'real Catalog editor conflict UI retained a cancelled client draft, refreshed the server version, and intentionally overwrote it only after explicit confirmation',
         'client renderer read and updated synthetic product; server renderer observed it',
         'client app-image protocol fetched synthetic product image',
         'client WebSocket reconnected after server restart and read refreshed state',
