@@ -21,6 +21,7 @@
  */
 
 const http = require('node:http');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { logSoftFailure } = require('../util/softFailure');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -34,21 +35,18 @@ let WebSocketServer = null;
 const handlers = new Map();
 
 /**
- * v0.15.2: per-request caller identity. Set immediately before each
- * RPC handler runs, read by helpers like `companies.getActiveId()` to
- * scope state per-user. Cleared in a `finally` so an async handler's
- * later micro-tasks don't leak the wrong user-id into an unrelated
- * call. (better-sqlite3 is synchronous and our handlers mostly are,
- * so the window for an out-of-order interleave is tiny — but the
- * finally makes it provably safe.)
+ * Per-request caller identity. AsyncLocalStorage keeps concurrent RPC
+ * handlers isolated across awaits, including when they complete out of
+ * order. Helpers like `companies.getActiveId()` read this context to
+ * scope state per user.
  *
  * The local renderer (server-mode admin or standalone) has NO caller
  * user — it goes through ipcMain.handle, not /api/rpc. In that case
  * `getCurrentUserId()` returns null and downstream code falls back
  * to the shared app_state.
  */
-let _currentUserId = null;
-function getCurrentUserId() { return _currentUserId; }
+const callerUserId = new AsyncLocalStorage();
+function getCurrentUserId() { return callerUserId.getStore() ?? null; }
 
 /**
  * v0.15.0: undo the client's base64 envelope so binary payloads
@@ -375,13 +373,10 @@ async function handleRequest(req, res, dataDir) {
     }
 
     try {
-      _currentUserId = user.id;
-      let result;
-      try {
-        result = await handler(deserializeFromClient(body.args));
-      } finally {
-        _currentUserId = null;
-      }
+      const result = await callerUserId.run(
+        user.id,
+        () => handler(deserializeFromClient(body.args)),
+      );
       sendJson(res, 200, { result: serializeResultForWire(result) });
     } catch (err) {
       // Surface the error message but not the stack trace by default.
