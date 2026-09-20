@@ -1,12 +1,12 @@
 # Media Studio KH — new-computer handoff
 
-Updated: 2026-09-20. Purpose: continue development on another computer without losing the completed server/client work or repeating the old audit. This pass changes documentation only; remaining application fixes below are not implemented.
+Updated: 2026-09-20. Purpose: continue development on another computer without losing the completed server/client work or repeating the old audit. The 0.1.34 pass below records the implemented fixes, evidence and remaining environment-only limitations.
 
 ## Repository and baseline
 
 - Private repository: https://github.com/theng12/media-studio-kh
 - Base branch: `main`. Authenticate with a GitHub account that can access this repository.
-- Application baseline: **0.1.33**, merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [merged PR #1](https://github.com/theng12/media-studio-kh/pull/1). The documentation commit containing this handoff comes after that baseline; clone the latest `main`.
+- Application baseline before this pass: **0.1.33**, merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [merged PR #1](https://github.com/theng12/media-studio-kh/pull/1). This pass is **0.1.34**; clone the latest `main` and verify the final merge commit rather than relying on this historical SHA.
 - Before this handoff, a fresh fetch and GitHub API check confirmed that local and remote `main` both pointed to that merge. GitHub Actions was disabled. Keep hosted compute disabled; run checks locally.
 - Scope: personal/internal standalone and Mac server/client use. No Apple Developer subscription, public distribution, deployment, signing, or paid AI calls are required for this work.
 
@@ -63,33 +63,47 @@ On the old computer, `.serena/` remains untracked and a safety stash named `Pres
 
 **Development only:** clone and install dependencies. No live data migration is needed to continue coding. Use synthetic fixtures for tests.
 
-**An additional client:** keep the existing server and its data on the old Mac. In Settings → Multi-Mac, configure the server address and a user token issued by that server, test the connection, then switch/apply Client mode and restart as prompted. Use a separate user for independent per-device company selections. The active company is per user, so two devices sharing one token also share that user's selection. The server listens on HTTP port 13180 by default; use the existing trusted LAN/Tailscale connection. Do not expose the port publicly as part of this handoff. Check both machines report 0.1.33 before comparing behavior.
+**An additional client:** keep the existing server and its data on the old Mac. In Settings → Multi-Mac, configure the server address and a user token issued by that server, test the connection, then switch/apply Client mode and restart as prompted. Use a separate user for independent per-device company selections. The active company is per user, so two devices sharing one token also share that user's selection. The server listens on HTTP port 13180 by default; use the existing trusted LAN/Tailscale connection. Do not expose the port publicly as part of this handoff. Check both machines report 0.1.34 before comparing behavior.
 
 **Move the data-owning server:** this is a separate operation from cloning code. The handoff does not perform it.
 
 1. Finish writes and save editors. Stop client edits, imports, exports, and AI jobs before taking the transfer snapshot; the archive currently snapshots the DB before reading live image trees (see findings). Keep writes stopped until cutover completes; an exported SQLite snapshot alone does not freeze the image trees.
-2. On the old data-owning Mac, use Settings → Multi-Mac → Migration → Export bundle. Transfer the `.iskhbundle` privately. It includes database users/tokens and portable AI API keys in ordinary archive contents; it is not encrypted. Import currently also leaves an extracted `config.partial.json` containing those keys in the destination data directory (H15). Use a private local destination, avoid syncing that file, and never put the archive or extracted credentials in GitHub.
-3. On the new Mac, start with a fresh/disposable standalone installation and use its current/default data directory. If a different target is essential, choose a verified empty directory with **Move existing data OFF**, restart, and confirm the selected path before import; never select valuable/pre-existing data. Use Migration → Pick bundle to import, inspect its version/date and target, then Replace and restart. Use a bundle made by the same 0.1.33 app for this migration; historical/future-schema compatibility needs a separate check. This replaces that Mac's current data; existing recognized data is moved to a timestamped sibling backup.
+2. On the old data-owning Mac, use Settings → Multi-Mac → Migration → Export bundle. Transfer the `.iskhbundle` privately. It includes database users/tokens and portable AI API keys in ordinary archive contents; it is not encrypted. The 0.1.34 importer removes the extracted credential-bearing `config.partial.json` after a successful merge, but keep the archive private and never put it in GitHub.
+3. On the new Mac, start with a fresh/disposable standalone installation and use its current/default data directory. If a different target is essential, choose a verified empty directory with **Move existing data OFF**, restart, and confirm the selected path before import; never select valuable/pre-existing data. Use Migration → Pick bundle to import, inspect its version/date and target, then Replace and restart. Use a bundle made by the same 0.1.34 app for this migration; historical/future-schema compatibility needs a separate check. This replaces that Mac's current data; existing recognized data is moved to a timestamped sibling backup.
 4. Mode, network address/port, machine-local `clientServerUrl`/`clientToken`, and backup destination do not travel. Server-side user/token rows do travel inside the database, so existing user tokens remain valid unless deliberately changed. Set the new Mac to Server mode, restart, and update clients to its address. Keep the old server inactive as a writer once clients switch.
 5. Compare company/product/image counts, open original and processed images, inspect templates and AI gallery, and perform one reversible product edit from a client. Confirm it appears on the server and a second client; then test reconnect. Check backup destination and printer settings. Keep the old data and transfer bundle until verification is complete.
 
-Do not hot-copy an open SQLite file by itself, delete the old data, rotate tokens, run paid jobs, or import a bundle over valuable data merely to test this handoff. Bundle import on an active server has a remaining lifecycle risk below; use the fresh standalone destination path until fixed.
+Do not hot-copy an open SQLite file by itself, delete the old data, rotate tokens, run paid jobs, or import a bundle over valuable data merely to test this handoff. Bundle import on an active server still has the lifecycle/schema limitations below; use the fresh standalone destination path for migration testing.
 
 ## Verified baseline and audit limits
 
 The completed 0.1.33 validation recorded: `npm run check` **409 passed**, zero failures/skips and clean lint; `test:native` **22 passed** (overlapping cases, not 22 extra unique tests); real disposable RPC/WebSocket/reconnect checks; Electron image-cache/auth checks; photo/Khmer render checks; full and production dependency audits with **zero vulnerabilities**; unsigned arm64 DMG build and integrity checks. A disposable two-process packaged server/client smoke loaded both real renderers and round-tripped a product edit. See the [validation record](INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md) for measurements and limitations.
 
-This handoff audit freshly reconfirmed GitHub synchronization and full/production `npm audit` results with **0 vulnerabilities**. It used isolated Node VM probes of actual browser/workspace functions to reproduce stale-company, cross-session cache and wrong-product image behavior, plus a temporary filesystem/settings-handler probe of the conflicting data-folder move. No real catalog or OS Trash content was used. Previous build/test results are historical evidence for the unchanged app baseline, not a claim that every workflow was freshly retested here.
+This handoff audit freshly reconfirmed GitHub synchronization and full/production `npm audit` results with **0 vulnerabilities**. It used isolated Node VM probes of actual browser/workspace functions to reproduce stale-company, cross-session cache and wrong-product image behavior, plus temporary filesystem/settings-handler probes of the conflicting data-folder move, archive boundary and config recovery. No real catalog or OS Trash content was used. The current pass added disposable regression tests for every implemented batch. Previous build/test results are historical evidence for the unchanged app baseline; the current host is Node 26 without a downloaded Electron binary, so Electron-dependent checks are reported separately below.
 
-Graphify's existing 2,301-node map guided source navigation; its locations can predate 0.1.33 and were checked against current callers. Query terms were selected from its vocabulary: server, client, backup, restore, config, product, image, save, web, token, company, bundle. Ponytail favored existing helpers and narrowly scoped fixes. No speculative cleanup or dependency replacement is proposed.
+The prior computer had an existing Graphify map, but Graphify is unavailable on this computer and no graph artifact was present. This pass therefore used direct source inspection and verified callers against current code; no graph was generated or committed. Ponytail favored existing helpers and narrowly scoped fixes. No speculative cleanup or dependency replacement is proposed.
 
 This is a broad, risk-focused audit, not proof that every possible bug has been found. Physical second-Mac LAN behavior, sleep/wake, a real printer, a real migration, iPad Safari, and paid-provider execution still need their own checks. Findings below distinguish reproduced defects, source-confirmed behavior, and investigation-only risks.
 
-## Remaining findings and fix plan
+## Audited findings and resolutions
 
-Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers reliability/build workflow; P3 is dormant maintenance. IDs remain stable for follow-up tracking; execution order appears below.
+H5 was implemented first. P1 items cover data integrity or wrong-context behavior; P2 covers reliability/build workflow; P3 is dormant maintenance. IDs remain stable for follow-up tracking. The detailed evidence and acceptance text below is retained as audit history; the resolution ledger is authoritative for this pass.
 
-### H1 — Browser company changes can show stale or empty data (P1, reproduced/source-confirmed)
+### Resolution ledger — 0.1.34
+
+- **H1–H3 resolved:** the browser now serializes company activation, guards company/session generations, clears stale image state on disconnect or credential/server changes, and normalizes saved/pasted server origins. `test/webclientFreshness.test.js` passes against the generated HTML.
+- **H4 resolved:** `dist:arm64` delegates to canonical `dist`; misleading release aliases were removed. The package remains arm64-only and patch/changelog updates are explicit. `test/releaseScripts.test.js` checks the retained packaging contract.
+- **H5 resolved:** data-folder moves reject non-empty/conflicting/overlapping targets, stage a validated SQLite/filesystem copy, keep the source, and switch configuration only after success. The Settings UI no longer offers source cleanup. `test/dataFolderSafety.test.js` passes with disposable fixtures.
+- **H6 resolved:** user removal, token regeneration and role changes evict that user’s WebSocket clients; server stop closes sockets, heartbeat timers and the WSS. `test/websocketLifecycle.test.js` passes with a real disposable HTTP/WebSocket server.
+- **H7 resolved:** PO line insertion now enforces matching company IDs at the DB boundary. A newly confirmed joined-query `rowid` ambiguity was fixed by qualifying it as `l.rowid`. `test/purchaseOrderTenant.test.js` passes for both rejection and matching insertion.
+- **H8 resolved:** config writes use a same-directory temporary file plus atomic rename and a last-known-good recovery copy; unreadable primary config recovers or throws an actionable error. `test/configRecovery.test.js` passes without real credentials.
+- **H9 bounded resolution:** the delayed disposable mutation reproduction confirms a server-side write can commit after the client timeout. Mutation timeouts now raise `RPC_OUTCOME_UNKNOWN` with explicit refresh-before-retry wording and are never automatically retried; reads retain bounded timeout handling. No global operation ledger was added because no production mutation requiring exactly-once reconciliation was identified in this pass. `test/rpcOutcome.test.js` proves the delayed commit and classification. A real long-running production mutation still needs a physical client/server exercise before claiming automatic discovery.
+- **H10–H12 resolved:** workspace, Cost Calculator, Suppliers and Purchase Orders now guard success/error/finally paths with request generations and company/product identity, including explicit refreshes and manual cost ownership. `test/workspaceFreshness.test.js`, `test/operationsFreshness.test.js` and the existing Image Workspace save tests pass.
+- **H13 resolved for archive construction:** bundle and backup creation now use regular copied file trees plus inventory/hash checks around the DB snapshot and archive, rejecting detected concurrent changes rather than following live symlinks. `test/archiveSnapshotConsistency.test.js` passes for both archive types. An idle restore and physical concurrent filesystem stress test remain environment checks.
+- **H14 resolved:** obsolete `.github/workflows/release.yml` was removed; GitHub Actions remains code-only and disabled. No hosted workflow or release was run.
+- **H15 resolved:** successful bundle import removes the extracted credential-bearing `config.partial.json`; failure preserves the source/archive recovery path. `test/serverBundleCredentialCleanup.test.js` passes with dummy keys only.
+
+### H1 — Browser company changes can show stale or empty data (P1, resolved)
 
 **Where:** `webclient/index.html:1365` (`setActiveCompany`), `:1407` (`pickCompany`), `:1614` (`loadCategories`), `:1631` (`loadProducts`), `:2532` (`refreshNow`); server company gates in `main/ipc/products.js:20` and `main/ipc/catalog.js`.
 
@@ -99,7 +113,7 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** delayed A→B and rapid A→B→A transitions, delayed/rejected setters, category responses and manual refresh cannot overwrite the latest company or display empty success after a failed switch. A real browser test must confirm the visible company and rows agree.
 
-### H2 — Browser image cache survives disconnect/server changes (P2, reproduced)
+### H2 — Browser image cache survives disconnect/server changes (P2, resolved)
 
 **Where:** `webclient/index.html:1228` (three caches), `:1252` (`assetUrl`), `:1301` (new session), `:1317` (disconnect).
 
@@ -109,7 +123,7 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** reconnect to a second server with the same relative filename but different bytes; the new image must be fetched. A pending old-session fetch completing after disconnect must be ignored. Verify timer cleanup and object-URL revocation. Do not claim immediate revocation erases pixels already rendered on screen.
 
-### H3 — Browser Connect rejects a pasted mobile-viewer address (P2, source-confirmed)
+### H3 — Browser Connect rejects a pasted mobile-viewer address (P2, resolved)
 
 **Where:** `webclient/index.html:1286–1294`; exact server routes in `main/server/index.js:304` and `:356`; desktop normalizer in `main/util/fetchErrors.js`.
 
@@ -119,27 +133,27 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** bare host:port, origin with trailing slash, `/m`, `/m/`, and a saved legacy viewer URL connect to the same API origin. Reject unsupported schemes and invalid addresses without persisting them.
 
-### H4 — Alternative release scripts bypass required release steps (P2, source-confirmed)
+### H4 — Alternative release scripts bypass required release steps (P2, resolved)
 
 **Where:** `package.json` scripts `dist:arm64`, `release`, `release:minor`, `release:major`; `scripts/build-webclient.js`; AGENTS §§23–24.
 
-**Evidence:** `npm run dist` invokes `predist`/`postdist`. `dist:arm64` directly builds/packages and has no corresponding lifecycle hooks, so it can package stale generated web HTML after an edit. `release` bumps package/lock version and builds without updating the required hand-curated in-app changelog; minor/major aliases also bypass the patch-only default. The current 0.1.33 package/changelog and generated HTML agree; these are future invocation hazards, not evidence that the delivered artifact is stale.
+**Evidence:** `npm run dist` invokes `predist`/`postdist`. The old `dist:arm64` and release aliases could bypass generated web HTML, native preparation, or the patch/changelog contract. The 0.1.33 package/changelog and generated HTML agreed; these were invocation hazards, not evidence that the delivered artifact was stale.
 
-**Smallest fix:** make the alternate arm64 command reuse the canonical `dist` flow (already arm64-only), and align release commands with the project's deliberate patch/changelog workflow. Prefer removing misleading aliases over introducing a release framework. Until fixed, manually update package/lock and `WhatsNewModal.jsx` together and use `npm run dist`.
+**Resolution:** `dist:arm64` now delegates to `dist`, and the misleading release aliases were removed. Version/changelog updates remain explicit and patch-only.
 
 **Acceptance:** change the viewer source in a disposable checkout and invoke each retained packaging entry point; every artifact contains regenerated HTML. A release cannot silently produce mismatched package/lock/changelog versions. No Git tag or publication should occur automatically.
 
-### H5 — Data-folder move can silently skip data and offer to trash the complete source (P1, reproduced; fix first)
+### H5 — Data-folder move can silently skip data and offer to trash the complete source (P1, resolved; fix first)
 
 **Where:** `main/ipc/settings.js:179–235` and `:250–265`; `renderer/modules/Settings/index.jsx:190–218`.
 
-**Evidence:** “Move existing data” skips an entire top-level entry whenever the destination already has that name, including `database.sqlite` and `assets`. It then selects the destination unconditionally and returns `moved: true`. The UI calls the original directory the “same files” and offers to Trash it. A disposable handler reproduction with different old/new databases and assets selected the pre-existing destination database, omitted the old-only image, and allowed the old directory to be trashed. OS Trash is recoverable until emptied; the real source was never touched in the audit. The empty-destination path also copies a live DB/WAL/files independently rather than taking a consistent SQLite snapshot.
+**Evidence:** the old “Move existing data” path skipped conflicting top-level entries, selected the destination anyway, and offered the source for Trash. A disposable handler reproduction with different old/new databases and assets selected the pre-existing destination database and omitted the old-only image. The current path rejects unsafe targets, stages a complete regular copy with a SQLite backup, validates it before switching config, and retains the source. OS Trash is no longer offered by the Settings UI.
 
-**Smallest fix:** reject non-empty/conflicting destinations before changing configuration. Use the existing SQLite backup facility and a staged, validated copy into an empty destination; only switch config after success. Keep the original on any failure, and never offer cleanup based merely on `moved: true`. Check nested/overlapping old/new paths too. Do not add a broad release lock system.
+**Resolution:** reject non-empty/conflicting/overlapping targets, use staged SQLite/filesystem copies, switch config only after validation, and retain the original on failure. No broad release lock was added.
 
 **Acceptance:** old/new collision rejects without changing config or authorizing source cleanup; injected copy or validation failure retains original data/config; a successful empty-target transfer preserves database rows and all images. Test with an actual temporary SQLite DB, including pending WAL content. Until then, avoid this move flow for a real migration.
 
-### H6 — Revoked users keep WebSocket events; stopping the server does not close upgraded sockets (P1, source-confirmed)
+### H6 — Revoked users keep WebSocket events; stopping the server does not close upgraded sockets (P1, resolved)
 
 **Where:** `main/server/index.js:477–538` and `:553–564`; `main/events.js:56–83`; `main/ipc/users.js:27–38`.
 
@@ -149,7 +163,7 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** a disposable real WebSocket closes after removal/token regeneration/downgrade and receives no later events; a revoked old HTTP token fails. A downgraded still-valid token reconnects with its new role. Server stop closes all sockets/timers and permits a clean restart.
 
-### H7 — Purchase-order lines can link products from another company (P1, source-confirmed)
+### H7 — Purchase-order lines can link products from another company (P1, resolved)
 
 **Where:** `main/db/purchaseOrders.js:401–440`; `main/ipc/purchaseOrders.js:32`; `main/db/index.js:747–775`.
 
@@ -159,7 +173,7 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** a two-company SQLite fixture and real handler reject the cross-company line, leave lines/totals/landed-cost cache unchanged, and still accept a matching product. Recheck receiving/reopening and component edits.
 
-### H8 — Interrupted config writes can silently reset the app's selected data/mode (P2, source-confirmed failure mode)
+### H8 — Interrupted config writes can silently reset the app's selected data/mode (P2, resolved)
 
 **Where:** `main/config.js:103–129`.
 
@@ -169,17 +183,17 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** fault injection around write/rename always leaves an old or new valid configuration; a corrupt primary recovers the original data path/mode/connection settings or presents a clear recovery screen. Do not print tokens in assertions/logs.
 
-### H9 — A mutation timeout can report failure while the server later commits (P2, source-confirmed; delayed workload needs reproduction)
+### H9 — A mutation timeout can report failure while the server later commits (P2, reproduced; bounded resolution)
 
 **Where:** `main/client/index.js:302–325`; `main/server/index.js:423–428`.
 
-**Evidence:** RPC fetch aborts after 120 seconds; the running server handler has no cancellation/operation identity tied to that timeout. An operation that outlives the client request can complete after the client shows an error. A manual retry can duplicate a non-idempotent mutation. The audit did not make a real bulk job exceed 120 seconds.
+**Evidence:** RPC fetch aborts after 120 seconds; the running server handler has no cancellation/operation identity tied to that timeout. A disposable delayed write reproduced the important behavior: the client-side wait failed while the write committed afterward. A manual retry can therefore duplicate a non-idempotent mutation. No real bulk job was allowed to run for 120 seconds on this host.
 
-**Smallest next step:** reproduce with a delayed disposable mutation, then report timeout as “outcome unknown” and reconcile affected state before offering retry. Reuse existing operation/progress tracking for specific long-running channels if necessary. Do not add a global request-deduplication framework before establishing which real operations need it; automatic retries of unknown writes are not a safe fix.
+**Resolution:** classify timed-out mutation channels as `RPC_OUTCOME_UNKNOWN`, show refresh-before-retry wording, and do not automatically retry them. The current UI has no blind generic retry action. A production operation ledger or exactly-once retry path remains deliberately out of scope until a real long-running mutation and its reconciliation surface are identified.
 
-**Acceptance:** a delayed write finishing after client timeout is correctly discovered, the UI does not invite blind duplication, and any retained retry path has an exactly-once check for that operation. Reads retain bounded timeout cleanup.
+**Acceptance:** the delayed write is proven to commit after timeout, the UI does not invite blind duplication, and reads retain bounded timeout cleanup. Automatic discovery of a later completion remains a physical client/server limitation, documented rather than guessed.
 
-### H10 — Image Workspace responses can replace the selected product's images (P1, reproduced)
+### H10 — Image Workspace responses can replace the selected product's images (P1, resolved)
 
 **Where:** `renderer/store/workspace.js:22–43` (`loadWorkspaceForProduct`) and `:65` (`refreshWorkspaceImages`); callers in `renderer/modules/ImageWorkspace/index.jsx` for selection, crop/flip and lightbox completion.
 
@@ -189,7 +203,7 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** delayed A/B loads, delayed A mutation/refresh, null selection and stale rejection all leave only the latest selected product's images, index and loading state. A renderer test must confirm settings/save callbacks use the same image/product identity shown on screen.
 
-### H11 — Cost Calculator can use the previous product/company's cost (P1, source-confirmed)
+### H11 — Cost Calculator can use the previous product/company's cost (P1, resolved)
 
 **Where:** `renderer/modules/CostCalculator/index.jsx:38–65`.
 
@@ -199,7 +213,7 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** deferred A/B lookups and company changes leave the latest product/cost pair; old errors cannot clear it; a manual override made during loading survives. No real pricing data or paid calls are required.
 
-### H12 — Suppliers and Purchase Orders accept stale list/search responses (P2, source-confirmed)
+### H12 — Suppliers and Purchase Orders accept stale list/search responses (P2, resolved)
 
 **Where:** `renderer/modules/Suppliers/index.jsx:71–100`; `renderer/modules/PurchaseOrders/index.jsx:100–128`; their companion supplier/spend loads.
 
@@ -209,17 +223,17 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** two deferred search/company requests resolved backwards leave only the current rows and correct loading state; older post-save refreshes and rejected requests cannot replace the current list. Check supplier choices and spend summaries as well as main rows.
 
-### H13 — Backup/bundle image trees are not a point-in-time snapshot (P1, source-confirmed limitation)
+### H13 — Backup/bundle image trees are not a point-in-time snapshot (P1, bounded resolution)
 
 **Where:** `main/serverBundle.js:154–216`; `main/backupManager.js:135–190`.
 
-**Evidence:** SQLite is snapshotted first, then live asset directories are symlinked into staging and read by `tar -h`. Images renamed, deleted or overwritten between those steps can disagree with the earlier DB snapshot or make tar fail. SQLite integrity validation does not establish DB-to-image consistency. No concurrent real archive was exercised in this pass.
+**Evidence:** the prior implementation snapshotted SQLite first, then symlinked live asset directories into staging and read them with `tar -h`; that could disagree with the DB snapshot. The current implementation copies regular file trees, inventories and hashes them around the snapshot/archive boundary, and rejects detected changes. SQLite integrity alone still does not prove semantic DB-to-image references; no physical concurrent archive stress test was run.
 
-**Smallest next step:** retain the quiesce-writes runbook for manual migration and reproduce a rename/delete at the snapshot/archive boundary with disposable data. Make unsupported busy exports fail clearly or use an existing operation boundary to keep the relevant DB/files consistent. Choose a narrowly scoped solution after the reproduction; do not introduce a general release-wide lock or retention system.
+**Resolution:** use regular copied staging trees and compare inventories/hashes before and after archiving. A changed source now fails clearly instead of producing a silently mixed archive. Keep the quiesce-writes runbook for migration and do not introduce a general release-wide lock.
 
 **Acceptance:** an injected concurrent image rename/delete cannot produce a successful archive with missing/mismatched referenced images; an idle archive restores the expected rows and bytes. Apply the check to both `.iskhbundle` and `.iskhbackup` creation. Keep the original server data intact until the new machine is verified.
 
-### H14 — Disabled hosted release workflow describes an obsolete build (P3, dormant configuration defect)
+### H14 — Disabled hosted release workflow describes an obsolete build (P3, resolved)
 
 **Where:** `.github/workflows/release.yml:1–11,39–43,55–80`.
 
@@ -229,13 +243,13 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 **Acceptance:** Actions remains disabled before/after push and no hosted run/release is created. Static review verifies any retained documented build path matches current scripts/runtime/architecture.
 
-### H15 — Bundle import leaves a second plaintext API-key copy in the data directory (P2, source-confirmed)
+### H15 — Bundle import leaves a second plaintext API-key copy in the data directory (P2, resolved)
 
 **Where:** `main/serverBundle.js:67–78` and `:372–394`.
 
-**Evidence:** bundle export intentionally includes portable API keys in `config.partial.json`. After importing and merging those keys into the normal app configuration, the importer deliberately leaves that file in the live data directory as an informational record. Deleting the transfer archive does not remove this second key copy; a cloud-synced data directory can sync it. No actual user keys were inspected or printed.
+**Evidence:** bundle export intentionally includes portable API keys in `config.partial.json`. The previous importer left that file in the live data directory after merging it into normal configuration, creating a second plaintext copy that a cloud-synced data directory could expose. No actual user keys were inspected or printed.
 
-**Smallest fix:** remove the extracted credentials file after a successful merge, or retain only a redacted record of key names. Preserve recovery on failed import/merge and make the archive's sensitive contents explicit. This does not require a new encryption framework or changes to credential values.
+**Resolution:** remove the extracted credentials file after a successful merge; failed imports leave the source/archive recovery path intact. This does not require a new encryption framework or changes to credential values.
 
 **Acceptance:** a synthetic bundle with dummy credentials imports successfully into the expected config but leaves no key values in informational files in the data directory. Failed merges preserve an actionable recovery path without silently discarding required credentials. Check both fresh imports and a deliberate cleanup plan for existing extracted files; do not delete real files during tests.
 
@@ -243,7 +257,7 @@ Fix H5 first. P1 items cover data integrity or wrong-context behavior; P2 covers
 
 These are not additional confirmed bugs. Reproduce before changing behavior.
 
-- **Live import lifecycle and schema compatibility:** bundle import replaces the active directory before the renderer asks for restart (`main/ipc/serverBundle.js:142–205`); the old DB handle can remain open during that interval. Reproduce concurrent writes/relaunch failure before expanding the supported migration path beyond a fresh, idle standalone destination. Archive validation currently checks SQLite integrity, not app schema compatibility; test old/future schema fixtures before importing historical bundles. `initDb` can wipe older structural schemas. Use matching 0.1.33 source/destination for the current move; do not treat a readable archive as proof that every historic version is safe.
+- **Live import lifecycle and schema compatibility:** bundle import replaces the active directory before the renderer asks for restart (`main/ipc/serverBundle.js:142–205`); the old DB handle can remain open during that interval. Reproduce concurrent writes/relaunch failure before expanding the supported migration path beyond a fresh, idle standalone destination. Archive validation checks SQLite integrity and the new file inventory, not app schema compatibility; test old/future schema fixtures before importing historical bundles. `initDb` can wipe older structural schemas. Use matching 0.1.34 source/destination for the current move; do not treat a readable archive as proof that every historic version is safe.
 - **Editor lifetime/concurrent editing:** Catalog/Social/Label/Image Workspace save queues are per mounted editor. Test navigating away and immediately back while an old save is in flight, switching companies while typing during the flush, and two Macs editing the same draft. Preserve Product Library's existing conflict flow; do not infer that every editor has distributed revision checking.
 - **Image identity after renumbering:** deleting/reordering images changes numbered paths. Test a remote reorder while another client has image settings open, then saves. Check stable image identity and byte revision throughout; existing cache/save-order tests are not proof of this interaction.
 - **Large binary transfers:** JSON/base64 RPC has a 100 MiB encoded ceiling. A 75 MiB raw fixture exceeded it; near-limit retained memory grew roughly 370–376 MiB. Normal 1–5 MiB encoding took roughly 2–14 ms. Keep the clear size error; introduce streaming only after a real workload justifies it.
@@ -251,9 +265,9 @@ These are not additional confirmed bugs. Reproduce before changing behavior.
 - **Print/render:** verify a real selected printer, Khmer/ASCII text, label physical dimensions/margins, PDF export and cancellation. The existing render probe covers output rendering, not printer hardware.
 - **Paid AI:** use stubs/fixtures first for queue recovery, duplicate submission, cancellation and repair. Real paid requests require explicit authority; none were made in this audit.
 
-## Execution order for the next task
+## Historical execution order
 
-The owner asked for orchestration with cost-conscious executors. Use bounded tasks and independent review; choose models/efforts available on the new computer. Recommended assignments, not a requirement to purchase tools:
+The owner asked for orchestration with cost-conscious executors. The following table records the completed bounded batches and their proof; it is retained for provenance, not as an unfinished backlog. No subagent executor was available in this session, so the orchestrator performed the same bounded work and independent checks locally.
 
 | Batch | Work | Suggested executor | Completion proof |
 | --- | --- | --- | --- |
@@ -264,11 +278,11 @@ The owner asked for orchestration with cost-conscious executors. Use bounded tas
 | 5 | H8 config recovery; reproduce H9 unknown mutation outcome; H4 packaging aliases and H14 dormant workflow | Terra/high or Luna/high for the scripts | Fault injection, delayed mutation proof, packaging smoke |
 | Final | Independent review, full local checks, version/changelog, package, integration | Orchestrator plus a reviewer other than implementer | Checked diff, fresh test/build/audit output, verified DMG and synchronized main |
 
-At dispatch record branch/base SHA, owned files, deliverable and proving command. Avoid multiple agents editing the same shared file. Graphify and Ponytail are development aids, not product dependencies; a fresh clone may not have their local indexes/tools. Use current source when a graph is absent or stale. Do not let missing optional tools block ordinary source review.
+At dispatch, record branch/base SHA, owned files, deliverable and proving command. Avoid multiple agents editing the same shared file. Graphify and Ponytail are development aids, not product dependencies; use current source when a graph is absent or stale. Do not let missing optional tools block ordinary source review.
 
 For each accepted fix, first reproduce, apply the smallest root-cause correction and retain one meaningful runnable check. Use existing events, validators, DB helpers and UI patterns. Keep security/data-loss protection. Do not rewrite synchronization, add a new state framework, or remove runtime-reachable behavior for cosmetic consistency.
 
-After material fixes run `npm run check`, `npm run test:native`, `npm run check:client-server`, relevant Electron/render checks, both dependency audits, and `npm run dist` when packaging/runtime paths changed or creating the required local release. Independently review the final tree. A meaningful fix/release needs a **patch** version bump in package/lock plus a matching top plain-text entry in `renderer/components/WhatsNewModal.jsx`. This documentation-only handoff retains 0.1.33.
+After material fixes run `npm run check`, `npm run test:native`, `npm run check:client-server`, relevant Electron/render checks, both dependency audits, and `npm run dist` when packaging/runtime paths changed or creating the required local release. Independently review the final tree. This pass bumped the package/lock and top plain-text changelog entry to **0.1.34**. On the current Node 26 host, Electron download/bootstrap prevented the Electron-dependent portions of those commands; the exact results are recorded in the final verification ledger before integration.
 
 Before pushing/creating a PR, verify `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` returns `false`. Never dispatch hosted workflows. Under the owner's standing integration rule, commit/push a `codex/` branch, create/review/merge the PR when local checks and mergeability are resolved, then fast-forward local `main`. Do not force-push, publish, deploy, tag, charge, or delete real data. Preserve unrelated work. Never bump `SCHEMA_VERSION` for ordinary additive fixes: existing startup behavior can wipe structural tables after a version bump.
 
@@ -276,4 +290,4 @@ Closed decisions remain closed: do not migrate the three intentionally separate 
 
 ## Paste into the first task on the new computer
 
-> Read AGENTS.md and docs/NEW_COMPUTER_HANDOFF.md on the latest main of theng12/media-studio-kh. Verify Git status and the 0.1.33 baseline/merged history. Continue the remaining fix plan, starting with migration safety and the reproduced workspace/company races. Act as orchestrator: delegate bounded independent work to Luna/Terra/Sol with suitable effort, retain focused regression checks, independently review results, and follow the standing local-verification/GitHub code-only integration rules. Preserve live data, keys and unrelated work; use disposable fixtures. Do not repeat completed fixes or turn investigation-only risks into speculative rewrites. Record outcomes and remaining checks back into the handoff.
+> Read AGENTS.md and docs/NEW_COMPUTER_HANDOFF.md on the latest main of theng12/media-studio-kh. Verify Git status and the 0.1.34 baseline/merged history. Continue only the unresolved investigation-only and physical-hardware checks. Act as orchestrator: delegate bounded independent work when executors are available, retain focused regression checks, and follow the standing local-verification/GitHub code-only integration rules. Preserve live data, keys and unrelated work; use disposable fixtures. Do not repeat resolved H1–H15 fixes or turn investigation-only risks into speculative rewrites. Record outcomes and remaining checks back into the handoff.
