@@ -7,6 +7,7 @@ import { GenerationExperience } from '../../components/GenerationExperience.jsx'
 import { useAppStore } from '../../store/index.js';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
+import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 
 const THEMES = [
   { id: 'modern', name: 'Modern', description: 'Soft cards, generous spacing, bold cover.' },
@@ -79,6 +80,15 @@ const CATALOG_TEMPLATES = [
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function editableProject(project, expectedUpdatedAt) {
+  return {
+    name: project.name,
+    description: project.description,
+    config: project.config,
+    ...(expectedUpdatedAt == null ? {} : { expectedUpdatedAt }),
+  };
 }
 
 function projectConfig(template, title) {
@@ -158,6 +168,7 @@ function LivePreview({ preview, onRefresh }) {
 
 export function CatalogEditor({ projectId, onBack }) {
   const products = useAppStore((s) => s.products); const addToast = useAppStore((s) => s.addToast);
+  const companySwitching = useAppStore((s) => s.companySwitching);
   const [project, setProject] = useState(null); const [preview, setPreview] = useState(''); const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null);
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [tab, setTab] = useState('products'); const timer = useRef(null);
   /* v0.1.27: the pending edit is FLUSHED on unmount, not thrown away. The
@@ -167,32 +178,78 @@ export function CatalogEditor({ projectId, onBack }) {
   const latest = useRef(null);
   const dirty = useRef(false);
   const saveQueue = useRef(null);
+  const acknowledgedRevision = useRef(null);
   const editorGeneration = useRef(0);
   const remoteSeq = useRef(0);
-  const save = useCallback((value = latest.current) => {
-    if (!value) return Promise.resolve();
-    clearTimeout(timer.current);
+  const ensureSaveQueue = useCallback(() => {
     if (!saveQueue.current) {
       const generation = editorGeneration.current;
       saveQueue.current = createLatestSaveQueue({
-        persist: (next) => window.api.catalogStudio.update(next.id, next),
+        initialRevision: acknowledgedRevision.current,
+        persist: (next, expectedUpdatedAt) => window.api.catalogStudio.update(next.id, editableProject(next, expectedUpdatedAt)),
         onStart: () => { if (generation === editorGeneration.current) setSaveState('saving'); },
-        onSuccess: (row, value) => { if (generation !== editorGeneration.current || latest.current !== value) return; setProject(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved'); },
-        onError: (e) => { if (generation === editorGeneration.current) { dirty.current = true; setSaveState('dirty'); } addToast(e.message, 'error'); },
+        onSuccess: (row, value) => {
+          if (generation !== editorGeneration.current) return;
+          acknowledgedRevision.current = row.updatedAt;
+          if (latest.current !== value) return;
+          setProject(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
+        },
+        onError: (e) => {
+          if (generation !== editorGeneration.current) return;
+          dirty.current = true; setSaveState('dirty');
+          if (!parseConflictError(e)) addToast(e.message, 'error');
+        },
       });
     }
-    saveQueue.current.enqueue(value);
-    return Promise.resolve();
+    return saveQueue.current;
   }, [addToast]);
+  const save = useCallback((value = latest.current) => {
+    if (!value) return Promise.resolve();
+    clearTimeout(timer.current);
+    ensureSaveQueue().enqueue(value);
+    return Promise.resolve();
+  }, [ensureSaveQueue]);
   saveRef.current = save;
   const flushPending = useCallback(() => {
     if (!dirty.current || !latest.current) return Promise.resolve();
     clearTimeout(timer.current);
-    if (!saveQueue.current) save(latest.current);
-    return saveQueue.current.flush(latest.current);
-  }, [save]);
+    return ensureSaveQueue().flush(() => dirty.current ? latest.current : null);
+  }, [ensureSaveQueue]);
+  const saveNow = useCallback(async () => {
+    const generation = editorGeneration.current;
+    try {
+      await flushPending();
+      return true;
+    } catch (error) {
+      let overwrittenDraft = null;
+      try {
+        const result = await resolveSaveConflict(error, {
+          refresh: () => window.api.catalogStudio.get(projectId),
+          overwrite: () => {
+            if (generation !== editorGeneration.current || latest.current?.id !== projectId) return Promise.reject(new Error('Editor changed before conflict resolution'));
+            overwrittenDraft = latest.current;
+            return window.api.catalogStudio.update(overwrittenDraft.id, editableProject(overwrittenDraft));
+          },
+        });
+        if (result.choice === 'cancel') return false;
+        if (generation !== editorGeneration.current || latest.current?.id !== projectId) return false;
+        const row = result.row;
+        acknowledgedRevision.current = row.updatedAt;
+        ensureSaveQueue().setRevision(row.updatedAt);
+        if (result.choice === 'refresh' || latest.current === overwrittenDraft) {
+          setProject(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
+          return true;
+        }
+        await flushPending();
+        return true;
+      } catch (nextError) {
+        dirty.current = true; setSaveState('dirty'); addToast(nextError.message, 'error');
+        return false;
+      }
+    }
+  }, [addToast, ensureSaveQueue, flushPending, projectId]);
   useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
-  useEffect(() => { let cancelled = false; const generation = ++editorGeneration.current; saveQueue.current = null; latest.current = null; dirty.current = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled && generation === editorGeneration.current) { setProject(p); latest.current = p; setSavedAt(p.updatedAt); } }).catch((e) => { if (!cancelled && generation === editorGeneration.current) addToast(e.message, 'error'); }); return () => { cancelled = true; editorGeneration.current += 1; clearTimeout(timer.current); if (dirty.current && latest.current) void saveRef.current?.(latest.current); }; }, [projectId, addToast]);
+  useEffect(() => { let cancelled = false; const generation = ++editorGeneration.current; saveQueue.current = null; latest.current = null; dirty.current = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled && generation === editorGeneration.current) { setProject(p); latest.current = p; acknowledgedRevision.current = p.updatedAt; setSavedAt(p.updatedAt); } }).catch((e) => { if (!cancelled && generation === editorGeneration.current) addToast(e.message, 'error'); }); return () => { cancelled = true; clearTimeout(timer.current); if (dirty.current && latest.current) void saveRef.current?.(latest.current); editorGeneration.current += 1; }; }, [projectId, addToast]);
   useEffect(() => {
     const offs = [];
     const generation = editorGeneration.current;
@@ -201,7 +258,7 @@ export function CatalogEditor({ projectId, onBack }) {
       if (event.op === 'delete') { onBack(); return; }
       const seq = ++remoteSeq.current;
       window.api.catalogStudio.get(projectId).then((row) => {
-        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { setProject(row); latest.current = row; setSavedAt(row.updatedAt); }
+        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { setProject(row); latest.current = row; acknowledgedRevision.current = row.updatedAt; saveQueue.current?.setRevision(row.updatedAt); setSavedAt(row.updatedAt); }
       }).catch((e) => { if (generation === editorGeneration.current && seq === remoteSeq.current) addToast(e.message, 'error'); });
     };
     if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
@@ -210,8 +267,12 @@ export function CatalogEditor({ projectId, onBack }) {
   }, [projectId, onBack, addToast]);
   const refreshPreview = useCallback(async () => { try { const r = await window.api.catalogStudio.preview(projectId); setPreview(r.html); } catch (e) { addToast(e.message, 'error'); } }, [projectId, addToast]);
   useEffect(() => { if (!project) return undefined; const id = setTimeout(refreshPreview, 260); return () => clearTimeout(id); }, [project, refreshPreview]);
-  function change(patch) { remoteSeq.current += 1; const next = { ...project, ...patch }; setProject(next); latest.current = next; dirty.current = true; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }
+  function change(patch) { if (companySwitching) return; remoteSeq.current += 1; const next = { ...project, ...patch }; setProject(next); latest.current = next; dirty.current = true; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }
   function updateConfig(patch) { change({ config: { ...project.config, ...patch } }); }
+  async function leaveEditor() {
+    try { await flushPending(); onBack(); }
+    catch (error) { if (parseConflictError(error)) addToast('This catalog changed elsewhere. Use Save to review it before leaving.', 'error'); }
+  }
   async function exportPdf() {
     // v0.1.27: inside a try — a failing dialog used to reject out of the
     // click handler with no toast, so the button looked dead.
@@ -219,14 +280,40 @@ export function CatalogEditor({ projectId, onBack }) {
     try { folder = await window.api.files.pickFolder(); } catch (e) { addToast(e.message, 'error'); return; }
     if (!folder) return;
     setWorking(true); setProgress(8); let pulse = null;
-    try { pulse = setInterval(() => setProgress((x) => Math.min(88, x + 7)), 180); if (dirty.current) await flushPending(); const exportDraft = latest.current || project; const res = await window.api.catalogStudio.exportPdf(exportDraft.id, folder); setProgress(100); addToast(`Catalog exported to ${res.outputPath}`, 'success'); const row = await window.api.catalogStudio.get(exportDraft.id); if (latest.current === exportDraft && !dirty.current) { setProject(row); latest.current = row; dirty.current = false; } }
-    catch (e) { addToast(e.message, 'error'); } finally { if (pulse) clearInterval(pulse); setWorking(false); }
+    try {
+      pulse = setInterval(() => setProgress((x) => Math.min(88, x + 7)), 180);
+      if (dirty.current) await flushPending();
+      const generation = editorGeneration.current;
+      const exportDraft = latest.current || project;
+      const baselineRevision = acknowledgedRevision.current;
+      const res = await window.api.catalogStudio.exportPdf(exportDraft.id, folder);
+      setProgress(100);
+      addToast(`Catalog exported to ${res.outputPath}`, 'success');
+      const row = await window.api.catalogStudio.get(exportDraft.id);
+      const ownsBaseline = generation === editorGeneration.current
+        && latest.current?.id === exportDraft.id
+        && row.id === exportDraft.id
+        && acknowledgedRevision.current === baselineRevision
+        && Number(row.updatedAt) >= Number(baselineRevision);
+      if (ownsBaseline && latest.current === exportDraft && !dirty.current) {
+        acknowledgedRevision.current = row.updatedAt;
+        saveQueue.current?.setRevision(row.updatedAt);
+        setProject(row);
+        latest.current = row;
+        dirty.current = false;
+      } else if (ownsBaseline && dirty.current
+        && JSON.stringify(editableProject(row)) === JSON.stringify(editableProject(exportDraft))) {
+        acknowledgedRevision.current = row.updatedAt;
+        saveQueue.current?.setRevision(row.updatedAt);
+      }
+    }
+    catch (e) { addToast(parseConflictError(e) ? 'This catalog changed elsewhere. Use Save to review it before exporting.' : e.message, 'error'); } finally { if (pulse) clearInterval(pulse); setWorking(false); }
   }
   if (!project) return <div className="page-loading">Loading catalog…</div>;
   const c = project.config || {}; const fields = c.fields || DEFAULT_FIELDS;
   return <section className="page catalog-editor-page">
-    <div className="catalog-editor-back"><Button variant="ghost" onClick={onBack}>← Catalog projects</Button><span>Editing project</span></div>
-    <PageHeader title={project.name} subtitle="Catalog Studio" actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={() => save()} /><Button onClick={exportPdf}>Export PDF</Button></>} />
+    <div className="catalog-editor-back"><Button variant="ghost" onClick={leaveEditor}>← Catalog projects</Button><span>Editing project</span></div>
+    <PageHeader title={project.name} subtitle="Catalog Studio" actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} /><Button onClick={exportPdf}>Export PDF</Button></>} />
     <div className="catalog-editor-tabs"><button type="button" className={tab === 'products' ? 'is-active' : ''} onClick={() => setTab('products')}><span>1</span><div><strong>Products</strong><small>Choose and arrange catalog items</small></div></button><button type="button" className={tab === 'design' ? 'is-active' : ''} onClick={() => setTab('design')}><span>2</span><div><strong>Layout & design</strong><small>Style pages and product cards</small></div></button></div>
     {tab === 'products' ? <div className="catalog-product-workspace"><ProductManager products={products} config={c} onChange={updateConfig} /><LivePreview preview={preview} onRefresh={refreshPreview} /></div> :
       <div className="catalog-editor"><aside className="catalog-controls"><section><h3>Project</h3><label>Name<Input value={project.name} onChange={(e) => change({ name: e.target.value })} /></label><label>Description<Input value={project.description || ''} onChange={(e) => change({ description: e.target.value })} /></label></section>

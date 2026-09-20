@@ -66,6 +66,15 @@ export function parseConflictError(err) {
   }
 }
 
+export async function resolveSaveConflict(error, { refresh, overwrite, choose = showConflict }) {
+  const conflict = parseConflictError(error);
+  if (!conflict) throw error;
+  const choice = await choose(conflict);
+  if (choice === 'refresh') return { choice, row: await refresh() };
+  if (choice === 'overwrite') return { choice, row: await overwrite() };
+  return { choice: 'cancel' };
+}
+
 function relativeTime(ts) {
   if (!ts) return '';
   const diff = Date.now() - Number(ts);
@@ -84,7 +93,11 @@ export function ConflictModalHost() {
 
   useEffect(() => {
     _setRequest = setRequest;
-    return () => { _setRequest = null; };
+    return () => {
+      _setRequest = null;
+      requestRef.current?.resolve('cancel');
+      requestRef.current = null;
+    };
   }, []);
 
   useEffect(() => { requestRef.current = request; }, [request]);
@@ -94,7 +107,7 @@ export function ConflictModalHost() {
 
   const editorName = conflict?.updatedByUserId
     ? (attributionUsers?.[conflict.updatedByUserId] ?? 'another user')
-    : 'the server admin';
+    : 'another editor';
   const when = relativeTime(conflict?.updatedAt);
   const label = conflict?.sku || conflict?.name || conflict?.id || 'this item';
 

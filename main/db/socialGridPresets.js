@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
-const { parseJson } = require('./_util');
+const { parseJson, prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
 const { DEFAULTS, normalizeConfig } = require('../util/socialGridModel');
 
 function rowToPreset(row) {
@@ -45,18 +45,22 @@ function create(input) {
 function update(id, patch) {
   const current = get(id);
   if (!current) throw new Error('Post preset not found');
-  const nextName = patch.name ?? current.name;
-  const nextConfig = patch.config ? normalizeConfig({ ...current.config, ...patch.config }) : current.config;
+  const editable = prepareOptimisticPatch(current, patch, 'socialGridPreset');
+  const nextName = editable.name ?? current.name;
+  const nextConfig = editable.config ? normalizeConfig({ ...current.config, ...editable.config }) : current.config;
   getDb()
-    .prepare(`UPDATE social_grid_presets SET name = ?, config = ?, updated_at = ?, last_exported_at = ? WHERE id = ?`)
+    .prepare(`UPDATE social_grid_presets SET name = ?, config = ?, updated_at = ? WHERE id = ?`)
     .run(String(nextName || 'Untitled post').trim(), JSON.stringify(nextConfig),
-      Date.now(), patch.lastExportedAt ?? current.lastExportedAt ?? null, id);
+      nextUpdatedAt(current.updatedAt), id);
   return get(id);
 }
 
 function markExported(id) {
-  const ts = Date.now();
-  getDb().prepare('UPDATE social_grid_presets SET last_exported_at = ?, updated_at = ? WHERE id = ?').run(ts, ts, id);
+  const current = get(id);
+  if (!current) return null;
+  const exportedAt = Date.now();
+  getDb().prepare('UPDATE social_grid_presets SET last_exported_at = ?, updated_at = ? WHERE id = ?')
+    .run(exportedAt, nextUpdatedAt(current.updatedAt), id);
   return get(id);
 }
 
