@@ -59,6 +59,10 @@ const {
   validateExtractedTree,
   resolveSafeDest,
 } = require('./util/backupSafety');
+const {
+  snapshotDataTrees,
+  copyDataTrees,
+} = require('./util/dataSnapshot');
 
 // Keep this list in lockstep with the comment above. Any new config
 // keys added later need an explicit decision here — silently bundling
@@ -154,12 +158,15 @@ async function exportBundle({ outputPath, onProgress } = {}) {
   const stagingRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-bundle-'));
 
   try {
-    // 1. Snapshot SQLite into the staging root. Done first so a
-    //    failure here aborts cheaply before we waste time on the
-    //    (much larger) asset copy.
+    // 1. Record the asset trees before the DB snapshot. The database
+    //    and files must describe the same moment; regular copied trees
+    //    plus the post-copy inventory check reject a moving source.
     onProgress?.('snapshot');
+    const trees = ['assets', 'processed', 'ai-gallery', 'overlays'];
+    const treeSnapshot = await snapshotDataTrees(dataDir, trees);
     const dbDest = path.join(stagingRoot, 'database.sqlite');
     await snapshotDatabase(dbDest);
+    const includedTrees = await copyDataTrees(dataDir, stagingRoot, trees, treeSnapshot);
 
     // 2. Write manifest + portable config.
     onProgress?.('manifest');
@@ -181,21 +188,9 @@ async function exportBundle({ outputPath, onProgress } = {}) {
     );
     manifest.includes.push('database.sqlite', 'config.partial.json');
 
-    // 3. Symlink (NOT copy) the big asset trees into staging so tar
-    //    can pack them by following the links — saves a full disk-to-
-    //    disk copy of potentially many GB of images. tar with -h
-    //    dereferences symlinks at archive time.
-    //
-    //    Each tree is optional: a fresh install might not have
-    //    `processed/` or `ai-gallery/` yet.
-    const trees = ['assets', 'processed', 'ai-gallery', 'overlays'];
-    for (const name of trees) {
-      const src = path.join(dataDir, name);
-      if (fs.existsSync(src)) {
-        await fsp.symlink(src, path.join(stagingRoot, name));
-        manifest.includes.push(name + '/');
-      }
-    }
+    // 3. Asset trees were copied after the DB snapshot and checked
+    //    before/after. Only include trees that existed in that snapshot.
+    for (const name of includedTrees) manifest.includes.push(name + '/');
 
     // Manifest written last so it reflects the actual includes list.
     await fsp.writeFile(
@@ -203,14 +198,14 @@ async function exportBundle({ outputPath, onProgress } = {}) {
       JSON.stringify(manifest, null, 2),
     );
 
-    // 4. tar -czhf <outputPath> -C <stagingParent> <stagingName>
-    //    -h dereferences the asset symlinks; -z gzips. Resulting
-    //    file is a standard .tar.gz that any system tar can extract.
+    // 4. tar -czf <outputPath> -C <stagingParent> <stagingName>
+    //    The staging tree contains regular copied files, not live
+    //    symlinks. Resulting file is a standard .tar.gz.
     onProgress?.('archive');
     const stagingParent = path.dirname(stagingRoot);
     const stagingName = path.basename(stagingRoot);
     await runCommand('tar', [
-      '-czhf', outputPath,
+      '-czf', outputPath,
       '-C', stagingParent,
       stagingName,
     ]);
@@ -223,8 +218,7 @@ async function exportBundle({ outputPath, onProgress } = {}) {
       includes: manifest.includes,
     };
   } finally {
-    // Always clean up staging — even on error. rm -rf because the
-    // staging dir contains symlinks we'd rather not chase.
+    // Always clean up staging — even on error.
     onProgress?.('cleanup');
     try { await fsp.rm(stagingRoot, { recursive: true, force: true }); } catch (_) {}
   }
@@ -389,8 +383,10 @@ async function importBundle({ bundlePath, targetDataDir, onProgress } = {}) {
         }
       }
       if (Object.keys(merged).length > 0) config.updateConfig(merged);
-      // Leave config.partial.json on disk as a record of what was
-      // imported (informational; the app doesn't read it again).
+      // The partial file contains plaintext API keys by design so they can
+      // travel in the bundle. Once the merge succeeds it must not become a
+      // second credential store under the live data directory.
+      await fsp.rm(portableCfgPath, { force: true });
     }
 
     onProgress?.('done');

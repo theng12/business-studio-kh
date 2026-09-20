@@ -16,6 +16,10 @@
 
 
 function register({ expose, exposeLocal }) {
+  const disconnectUser = (id) => {
+    try { require('../events').closeWsClientsForUser(id); } catch (_) { /* server may not be running */ }
+  };
+
   expose('users:list', () => {
     const users = require('../db/users');
     return users.list();
@@ -26,15 +30,21 @@ function register({ expose, exposeLocal }) {
   });
   expose('users:update', ({ id, patch }) => {
     const users = require('../db/users');
-    return users.update(id, patch);
+    const updated = users.update(id, patch);
+    disconnectUser(id);
+    return updated;
   });
   expose('users:remove', (id) => {
     const users = require('../db/users');
-    return users.remove(id);
+    const removed = users.remove(id);
+    if (removed) disconnectUser(id);
+    return removed;
   });
   expose('users:regenerateToken', (id) => {
     const users = require('../db/users');
-    return users.regenerateToken(id);
+    const updated = users.regenerateToken(id);
+    disconnectUser(id);
+    return updated;
   });
   /* Bootstrap helper: called by Settings when the user flips into
      server mode and the users table is still empty. Creates a default

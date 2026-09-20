@@ -11,7 +11,8 @@
  *   - SQLite snapshot via better-sqlite3 .backup() — consistent even
  *     while the live connection is writing (no torn WAL pages).
  *   - tar.gz via the system `tar` (zero dependencies on macOS).
- *   - staging dir + symlinked asset trees so we don't copy GBs twice.
+ *   - staging dir + copied asset trees with inventory checks so an archive
+ *     never follows a live source tree while it is being changed.
  *
  * Where it differs from serverBundle:
  *   - Backups capture the FULL config.json (not just the portable
@@ -56,6 +57,10 @@ const {
   validateTarListing,
   validateExtractedTree,
 } = require('./util/backupSafety');
+const {
+  snapshotDataTrees,
+  copyDataTrees,
+} = require('./util/dataSnapshot');
 
 // Config keys that are safe to re-apply on restore. Reuse the exact
 // list serverBundle defined so the two stay in lockstep — anything
@@ -134,13 +139,18 @@ async function createBackup({ destDir, onProgress } = {}) {
   const stagingRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-backup-'));
 
   try {
-    // 1. Consistent DB snapshot first — cheapest thing to fail on.
+    // 1. Record the asset trees before the DB snapshot. A backup must
+    //    not combine a database snapshot with files from a later write.
     onProgress?.('snapshot');
     const dbSrc = path.join(dataDir, 'database.sqlite');
     const includes = [];
     if (fs.existsSync(dbSrc)) {
+      const trees = BACKUP_DATA_ENTRIES.filter((n) => n !== 'database.sqlite');
+      const treeSnapshot = await snapshotDataTrees(dataDir, trees);
       await snapshotDatabase(path.join(stagingRoot, 'database.sqlite'));
+      const includedTrees = await copyDataTrees(dataDir, stagingRoot, trees, treeSnapshot);
       includes.push('database.sqlite');
+      for (const name of includedTrees) includes.push(name + '/');
     } else {
       // No DB yet — refuse, because a "backup" with no database isn't
       // worth restoring and would fail validation on the way back in.
@@ -153,19 +163,6 @@ async function createBackup({ destDir, onProgress } = {}) {
     if (fs.existsSync(cfgPath)) {
       await fsp.copyFile(cfgPath, path.join(stagingRoot, 'config.json'));
       includes.push('config.json');
-    }
-
-    // 3. Symlink the big asset trees so tar packs them by dereference
-    //    (-h) without a second disk-to-disk copy. The backups/ folder
-    //    is deliberately NOT in this list — a backup never contains
-    //    older backups.
-    const trees = BACKUP_DATA_ENTRIES.filter((n) => n !== 'database.sqlite');
-    for (const name of trees) {
-      const src = path.join(dataDir, name);
-      if (fs.existsSync(src)) {
-        await fsp.symlink(src, path.join(stagingRoot, name));
-        includes.push(name + '/');
-      }
     }
 
     const manifest = {
@@ -181,11 +178,12 @@ async function createBackup({ destDir, onProgress } = {}) {
       JSON.stringify(manifest, null, 2),
     );
 
-    // 4. Pack. -h dereferences the asset symlinks; -z gzips.
+    // 4. Pack the regular-file staging tree; live data is never
+    //    referenced from the archive operation.
     onProgress?.('archive');
     const stagingParent = path.dirname(stagingRoot);
     const stagingName = path.basename(stagingRoot);
-    await runCommand('tar', ['-czhf', outputPath, '-C', stagingParent, stagingName]);
+    await runCommand('tar', ['-czf', outputPath, '-C', stagingParent, stagingName]);
 
     onProgress?.('done');
     const stat = await fsp.stat(outputPath);
