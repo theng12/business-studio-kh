@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.34',
+    date: '2026-09-20',
+    items: [
+      'FIX — switching companies, products, suppliers, purchase orders, cost calculations and workspace images no longer lets a slower earlier response replace the current screen.',
+      'FIX — the browser viewer now waits for company changes, clears old image/session caches on reconnect, and accepts either the desktop server address or its /m address.',
+      'FIX — data-folder moves stage a complete copy safely, retain the source, recover interrupted configuration writes, and keep backup and bundle image trees consistent with their database snapshot.',
+      'FIX — revoked users lose existing live-update sockets, server shutdown closes WebSocket clients cleanly, and purchase orders reject products from another company.',
+      'FIX — a timed-out mutation is reported as outcome unknown so the app does not invite a blind duplicate retry; obsolete hosted release configuration was removed and extracted bundle credentials are cleaned up.',
+      'Internal — added focused disposable regression checks for response freshness, delayed mutation outcomes, data/config/archive safety, WebSocket lifecycle, PO tenancy, packaging scripts and browser sessions. The release remains local-only and arm64-only.',
+    ],
+  },
+  {
     version: '0.1.33',
     date: '2026-09-20',
     items: [

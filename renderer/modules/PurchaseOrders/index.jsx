@@ -23,7 +23,7 @@
  * just calls setStatus + toasts on success.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Pagination, paginate, Badge, Select, Input, Modal } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -80,6 +80,10 @@ export function PurchaseOrders() {
   const [creating, setCreating] = useState(false);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const listRequestRef = useRef(0);
+  const supplierRequestRef = useRef(0);
+  const previousCompanyRef = useRef(activeCompanyId);
 
   // Consume the pending-nav intent exactly once, then clear it so a later
   // manual return to this module doesn't re-trigger the jump.
@@ -89,15 +93,31 @@ export function PurchaseOrders() {
   }, []);
 
   useEffect(() => {
+    const request = ++supplierRequestRef.current;
     if (!activeCompanyId) { setSuppliers([]); return; }
     window.api.suppliers.list(activeCompanyId, { status: 'all' })
-      .then((list) => setSuppliers(Array.isArray(list) ? list : []))
-      .catch(() => setSuppliers([]));
+      .then((list) => {
+        if (request !== supplierRequestRef.current) return;
+        setSuppliers(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (request === supplierRequestRef.current) setSuppliers([]);
+      });
+  }, [activeCompanyId]);
+
+  useEffect(() => {
+    if (previousCompanyRef.current === activeCompanyId) return;
+    previousCompanyRef.current = activeCompanyId;
+    setOpenPoId(null);
+    setCreating(false);
+    setSupplierFilter('');
+    setPage(0);
   }, [activeCompanyId]);
 
   // 200ms debounce same as Suppliers — keeps client mode quiet on fast
   // typists.
   useEffect(() => {
+    const request = ++listRequestRef.current;
     if (!activeCompanyId) { setRows([]); setLoading(false); return undefined; }
     setLoading(true);
     const t = setTimeout(() => {
@@ -106,12 +126,21 @@ export function PurchaseOrders() {
         supplierId: supplierFilter || undefined,
         status: statusFilter,
       })
-        .then((list) => setRows(Array.isArray(list) ? list : []))
-        .catch((err) => { addToast(`Failed to load POs: ${err.message}`, 'error'); setRows([]); })
-        .finally(() => setLoading(false));
+        .then((list) => {
+          if (request !== listRequestRef.current) return;
+          setRows(Array.isArray(list) ? list : []);
+        })
+        .catch((err) => {
+          if (request !== listRequestRef.current) return;
+          addToast(`Failed to load POs: ${err.message}`, 'error');
+          setRows([]);
+        })
+        .finally(() => {
+          if (request === listRequestRef.current) setLoading(false);
+        });
     }, 200);
     return () => clearTimeout(t);
-  }, [activeCompanyId, search, supplierFilter, statusFilter, addToast]);
+  }, [activeCompanyId, search, supplierFilter, statusFilter, refreshTick, addToast]);
 
   const { currentPage, maxPage, pageStart, pageEnd, total } = useMemo(
     () => paginate(rows.length, page, pageSize),
@@ -121,10 +150,10 @@ export function PurchaseOrders() {
 
   function refreshList() {
     if (!activeCompanyId) return;
-    window.api.purchaseOrders.list(activeCompanyId, {
-      search, supplierId: supplierFilter || undefined, status: statusFilter,
-    }).then((list) => setRows(Array.isArray(list) ? list : []))
-      .catch(() => { /* surfaced separately */ });
+    // Invalidate any in-flight list before the state update schedules the
+    // effect, so an older response cannot win the refresh click's gap.
+    listRequestRef.current += 1;
+    setRefreshTick((tick) => tick + 1);
   }
 
   async function handleCreate(payload) {

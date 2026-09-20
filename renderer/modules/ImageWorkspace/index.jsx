@@ -163,6 +163,7 @@ export function ImageWorkspace() {
       setSettings((s) => ({ ...s, cropRect: null, cropStraighten: 0 }));
       setCropMode(false);
       await refreshWorkspaceImages(activeProductId);
+      if (activeProductIdRef.current !== activeProductId) return;
       bumpProcessedTick();
       useAppStore.getState().refreshProducts();
       if (destination === 'overwrite') {
@@ -380,7 +381,7 @@ export function ImageWorkspace() {
     // Only repaint if we are still looking at the product this run was for.
     if (activeProductIdRef.current === runProductId) {
       await refreshWorkspaceImages(runProductId);
-      bumpProcessedTick();
+      if (activeProductIdRef.current === runProductId) bumpProcessedTick();
     }
     return res;
   }
@@ -480,6 +481,7 @@ export function ImageWorkspace() {
     try {
       await window.api.images.flipSource(activeProductId, activeImage.filepath, axis);
       await refreshWorkspaceImages(activeProductId);
+      if (activeProductIdRef.current !== activeProductId) return;
       bumpProcessedTick();
       addToast(`Flipped ${axis === 'h' ? 'horizontally' : 'vertically'}`, 'success');
     } catch (err) {
@@ -637,10 +639,16 @@ export function ImageWorkspace() {
         // pixels too.
         productId={activeProductId}
         onImageMutated={() => {
+          const productId = activeProductId;
           // v0.1.28: this refresh was uncaught, so a failure left the strip stale
           // and said nothing.
-          refreshWorkspaceImages(activeProductId).catch((err) => addToast(err.message, 'error'));
-          bumpProcessedTick();
+          refreshWorkspaceImages(productId)
+            .then(() => {
+              if (activeProductIdRef.current === productId) bumpProcessedTick();
+            })
+            .catch((err) => {
+              if (activeProductIdRef.current === productId) addToast(err.message, 'error');
+            });
         }}
       />
     </div>

@@ -47,6 +47,51 @@ function looksLikeOurDataDir(p) {
   );
 }
 
+function isPathInside(parent, child) {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel === '' || (!rel.startsWith(`..${path.sep}`) && rel !== '..' && !path.isAbsolute(rel));
+}
+
+function assertMoveTargetSafe(oldPath, newPath) {
+  const oldAbs = path.resolve(oldPath);
+  const newAbs = path.resolve(newPath);
+  if (oldAbs === newAbs || isPathInside(oldAbs, newAbs) || isPathInside(newAbs, oldAbs)) {
+    throw new Error('The new data folder must not be the current folder or overlap it.');
+  }
+  if (fs.existsSync(newAbs)) {
+    const entries = fs.readdirSync(newAbs);
+    if (entries.length > 0) {
+      throw new Error('The destination data folder must be empty before moving data into it.');
+    }
+  }
+}
+
+async function stageDataFolder(oldPath, stagePath) {
+  await fs.promises.mkdir(stagePath, { recursive: true });
+  const sourceDb = path.join(oldPath, 'database.sqlite');
+  if (fs.existsSync(sourceDb)) {
+    const destinationDb = path.join(stagePath, 'database.sqlite');
+    try {
+      const { getDb } = require('../db');
+      await getDb().backup(destinationDb);
+    } catch (err) {
+      throw new Error(`Could not create a consistent database snapshot: ${err.message}`, { cause: err });
+    }
+  }
+
+  for (const ent of fs.readdirSync(oldPath, { withFileTypes: true })) {
+    if (ent.name.startsWith('.') || ent.name === 'database.sqlite' || ent.name === 'database.sqlite-wal' || ent.name === 'database.sqlite-shm') continue;
+    if (ent.isSymbolicLink()) throw new Error(`Cannot move data folder: symbolic link found at ${ent.name}`);
+    const src = path.join(oldPath, ent.name);
+    const dst = path.join(stagePath, ent.name);
+    fs.cpSync(src, dst, { recursive: true, errorOnExist: true, force: false });
+  }
+
+  if (fs.existsSync(sourceDb) && !fs.existsSync(path.join(stagePath, 'database.sqlite'))) {
+    throw new Error('Could not verify the staged database snapshot.');
+  }
+}
+
 function register({ expose, exposeLocal }) {
   exposeLocal('settings:getAll', () => {
     // v0.13.0: enrich the config response with a computed
@@ -172,80 +217,67 @@ function register({ expose, exposeLocal }) {
    * asset trees into the new folder, then update the config. The
    * caller relaunches the app.
    *
-   * We use a copy-then-delete approach (not fs.rename) so a
-   * partial move doesn't leave data orphaned. The original stays
-   * until the copy succeeds.
+ * We stage a complete copy and atomically rename it into place. The
+ * original stays in place so a failed move cannot orphan the data.
    */
   exposeLocal('settings:changeDataFolder', async ({ newPath, move }) => {
     if (!newPath || typeof newPath !== 'string') throw new Error('newPath required');
-    if (!fs.existsSync(newPath)) {
-      fs.mkdirSync(newPath, { recursive: true });
-    }
     const cfg = config.loadConfig();
     const oldPath = cfg.dataDir;
     const oldExists = !!oldPath && fs.existsSync(oldPath);
+    const shouldMove = !!move && oldExists && looksLikeOurDataDir(oldPath)
+      && path.resolve(oldPath) !== path.resolve(newPath);
+    let displacedEmptyTarget = null;
+    let stagedPath;
 
-    // Defensive: the only place we should ever copy *from* is a
-    // folder we actually wrote to. The `looksLikeOurDataDir`
-    // check above guards both this copy step AND the v0.21.4
-    // trashFolder channel below — same rules for both.
-
-    if (move && oldExists && looksLikeOurDataDir(oldPath)
-        && path.resolve(oldPath) !== path.resolve(newPath)) {
-      // Copy each known top-level entry: database, assets,
-      // ai-gallery, processed, anything else we don't recognise
-      // (defensive).
-      const entries = fs.readdirSync(oldPath, { withFileTypes: true });
-      for (const ent of entries) {
-        if (ent.name.startsWith('.')) continue;          // skip dotfiles
-        const src = path.join(oldPath, ent.name);
-        const dst = path.join(newPath, ent.name);
-        if (fs.existsSync(dst)) {
-          // Skip files already present in the new folder so we
-          // don't clobber anything the user may have stashed there.
-          continue;
-        }
-        fs.cpSync(src, dst, { recursive: true });
+    if (move && oldExists && path.resolve(oldPath) !== path.resolve(newPath)) {
+      if (!looksLikeOurDataDir(oldPath) && fs.readdirSync(oldPath).length > 0) {
+        throw new Error('The current data folder contains files but is not recognized as a Business Studio KH data folder.');
       }
-      // Best-effort cleanup: remove the old folder if it's now
-      // empty-ish. cpSync doesn't delete from source, so this
-      // branch almost never fires — by design. v0.21.4 adds a
-      // follow-up prompt in the renderer that calls
-      // `settings:trashFolder` after a successful move, which
-      // covers the common case cleanly via the OS Trash (so the
-      // user can recover if anything turns out to be missing).
-      try {
-        const remaining = fs.readdirSync(oldPath).filter((n) => !n.startsWith('.'));
-        if (remaining.length === 0) fs.rmSync(oldPath, { recursive: true, force: true });
-      } catch { /* leave it */ }
+      assertMoveTargetSafe(oldPath, newPath);
     }
 
-    config.updateConfig({ dataDir: newPath, firstLaunchHandled: true });
-
-    // v0.21.4: report whether the old folder still has user data
-    // after the copy, so the renderer can ask "delete it?". This
-    // is purely informational — the renderer makes the call.
-    let oldStillHasData = false;
-    try {
-      if (move && oldExists && path.resolve(oldPath) !== path.resolve(newPath)) {
-        oldStillHasData = looksLikeOurDataDir(oldPath);
+    if (shouldMove) {
+      const targetAbs = path.resolve(newPath);
+      const parent = path.dirname(targetAbs);
+      await fs.promises.mkdir(parent, { recursive: true });
+      stagedPath = await fs.promises.mkdtemp(path.join(parent, `.${path.basename(targetAbs)}.move-`));
+      try {
+        await stageDataFolder(oldPath, stagedPath);
+        if (fs.existsSync(targetAbs)) {
+          displacedEmptyTarget = `${targetAbs}.empty-${process.pid}-${Date.now()}`;
+          await fs.promises.rename(targetAbs, displacedEmptyTarget);
+        }
+        await fs.promises.rename(stagedPath, targetAbs);
+      } catch (err) {
+        if (stagedPath) await fs.promises.rm(stagedPath, { recursive: true, force: true }).catch(() => {});
+        if (displacedEmptyTarget && fs.existsSync(displacedEmptyTarget) && !fs.existsSync(targetAbs)) {
+          await fs.promises.rename(displacedEmptyTarget, targetAbs).catch(() => {});
+        }
+        throw err;
       }
-    } catch (_) { /* leave default */ }
+    }
 
-    return { oldPath, newPath, moved: !!move, oldStillHasData };
+    if (!fs.existsSync(newPath)) fs.mkdirSync(newPath, { recursive: true });
+    try {
+      config.updateConfig({ dataDir: newPath, firstLaunchHandled: true });
+    } catch (err) {
+      if (shouldMove && fs.existsSync(newPath)) {
+        await fs.promises.rm(newPath, { recursive: true, force: true }).catch(() => {});
+        if (displacedEmptyTarget && fs.existsSync(displacedEmptyTarget)) {
+          await fs.promises.rename(displacedEmptyTarget, newPath).catch(() => {});
+        }
+      }
+      throw err;
+    }
+    if (displacedEmptyTarget) await fs.promises.rm(displacedEmptyTarget, { recursive: true, force: true }).catch(() => {});
+
+    return { oldPath, newPath, moved: shouldMove, sourceRetained: shouldMove };
   });
 
   /**
-   * v0.21.4: move a former data folder to the OS Trash. Used after
-   * a successful `settings:changeDataFolder` move so the user
-   * isn't left with two copies on disk. Refuses to trash:
-   *   - the CURRENT data folder (would brick the next launch)
-   *   - any path that doesn't look like one of our data folders
-   *     (guards a tampered config or a buggy renderer call)
-   *   - any path that doesn't actually exist
-   *
-   * Uses `shell.trashItem` rather than `fs.rmSync` so the user
-   * can recover from Finder if anything turns out to be missing.
+   * Retained for compatibility with older clients. New data-folder moves
+   * deliberately leave the source in place; no UI offers cleanup eligibility.
    */
   exposeLocal('settings:trashFolder', async ({ path: targetPath } = {}) => {
     if (!targetPath || typeof targetPath !== 'string') {

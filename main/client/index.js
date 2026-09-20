@@ -39,6 +39,7 @@ const { retryWaitMs, shouldRetry } = require('../util/rateLimitRetry');
 // exactly like the server/standalone ones do.
 const { validateArgs } = require('../util/validateArgs');
 const { writeExclusiveFile, writeUniqueFile } = require('../util/exclusiveFile');
+const { isLikelyMutationChannel, isTimeoutError, mutationOutcomeUnknown } = require('../util/rpcOutcome');
 // v0.15.1: WebSocket client (same `ws` lib as the server). Used in
 // client mode to subscribe to live update events. Loaded lazily so
 // standalone / server mode doesn't pay the import cost.
@@ -314,6 +315,14 @@ async function rpc(channel, args) {
           signal: AbortSignal.timeout(120_000),
         });
       } catch (err) {
+        if (isLikelyMutationChannel(channel) && isTimeoutError(err)) {
+          // The server handler is not cancelled by an HTTP client abort. Do
+          // not turn an unknown write outcome into a blind duplicate retry.
+          const unknown = mutationOutcomeUnknown(channel, err);
+          setConnectionState({ status: 'disconnected', lastError: unknown.message });
+          _syncStats.errorCount += 1;
+          throw unknown;
+        }
         // Network-level failure → flag disconnected so the sidebar chip can
         // turn red. v0.26.34: route through analyzeFetchError so the
         // toast shows the actual reason ("Server refused the connection

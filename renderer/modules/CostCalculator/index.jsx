@@ -16,7 +16,7 @@
  * are kept in component state and reset on module unmount.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Input, Select, EmptyState } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -33,34 +33,61 @@ export function CostCalculator() {
   const [targetMarginPct, setTargetMarginPct] = useState('40');
   const [retailUsd, setRetailUsd] = useState('');
   const [lastEdited, setLastEdited] = useState('margin'); // which field drives the other
+  const productRequestRef = useRef(0);
+  const costRequestRef = useRef(0);
+  const manualCostEditRef = useRef(false);
 
   // Load products for the picker.
   useEffect(() => {
-    if (!activeCompanyId) { setProducts([]); return; }
+    const request = ++productRequestRef.current;
+    manualCostEditRef.current = false;
+    setProducts([]);
+    setProductId('');
+    setCostData(null);
+    setLandedCostUsd('');
+    if (!activeCompanyId) return;
     window.api.products.list(activeCompanyId, {})
-      .then((list) => setProducts(Array.isArray(list) ? list : []))
-      .catch((err) => { addToast(`Failed to load products: ${err.message}`, 'error'); setProducts([]); });
+      .then((list) => {
+        if (request !== productRequestRef.current) return;
+        setProducts(Array.isArray(list) ? list : []);
+      })
+      .catch((err) => {
+        if (request !== productRequestRef.current) return;
+        addToast(`Failed to load products: ${err.message}`, 'error');
+        setProducts([]);
+      });
   }, [activeCompanyId, addToast]);
 
   // When user picks a product, fetch its landed cost cache and use the
   // latest as the default landed cost.
   useEffect(() => {
-    if (!productId) { setCostData(null); return; }
+    const request = ++costRequestRef.current;
+    const companyRequest = productRequestRef.current;
+    manualCostEditRef.current = false;
+    if (!productId) {
+      setCostData(null);
+      setLandedCostUsd('');
+      return;
+    }
+    setCostData(null);
+    setLandedCostUsd('');
     window.api.purchaseOrders.getProductCost(productId)
       .then((c) => {
+        if (request !== costRequestRef.current || companyRequest !== productRequestRef.current) return;
         setCostData(c);
-        if (c?.latestLandedCostUsd != null) {
+        if (!manualCostEditRef.current && c?.latestLandedCostUsd != null) {
           setLandedCostUsd(c.latestLandedCostUsd.toFixed(4));
-        } else {
+        } else if (!manualCostEditRef.current) {
           setLandedCostUsd('');
         }
       })
       .catch(() => {
+        if (request !== costRequestRef.current || companyRequest !== productRequestRef.current) return;
         // v0.1.28: clear the landed cost too. Leaving it meant the panel showed
         // the PREVIOUS product's cost next to this product's data, and the
         // suggested retail was derived from it.
         setCostData(null);
-        setLandedCostUsd('');
+        if (!manualCostEditRef.current) setLandedCostUsd('');
       });
   }, [productId]);
 
@@ -128,9 +155,9 @@ export function CostCalculator() {
             value={productSearch}
             onChange={(e) => setProductSearch(e.target.value)}
           />
-          <Select
-            value={productId}
-            onChange={(e) => setProductId(e.target.value)}
+            <Select
+              value={productId}
+              onChange={(e) => setProductId(e.target.value)}
             style={{ marginTop: 8 }}
           >
             <option value="">— manual entry —</option>
@@ -161,7 +188,10 @@ export function CostCalculator() {
               min="0"
               step="0.0001"
               value={landedCostUsd}
-              onChange={(e) => setLandedCostUsd(e.target.value)}
+              onChange={(e) => {
+                manualCostEditRef.current = true;
+                setLandedCostUsd(e.target.value);
+              }}
             />
             <span className="field__hint">
               Pre-filled from the latest received PO when a product is picked. Edit freely.

@@ -9,6 +9,10 @@ function configPath() {
   return path.join(app.getPath('userData'), CONFIG_FILE);
 }
 
+function recoveryConfigPath() {
+  return `${configPath()}.bak`;
+}
+
 /**
  * Default data folder. Until v0.5.0 we used ~/Library/Application Support/...
  * — fine for the SQLite database but wrong place for user-facing image
@@ -115,18 +119,58 @@ function loadConfig() {
     ensureDir(cfg.dataDir);
     return cfg;
   } catch (err) {
-    process.stderr.write(`[config] parse error: ${err.message}; using defaults\n`);
-    const cfg = defaultConfig();
-    ensureDir(cfg.dataDir);
-    return cfg;
+    const recoveryPath = recoveryConfigPath();
+    try {
+      const recovered = JSON.parse(fs.readFileSync(recoveryPath, 'utf8'));
+      const cfg = { ...defaultConfig(), ...recovered };
+      writeConfigAtomically(cfg);
+      ensureDir(cfg.dataDir);
+      process.stderr.write(`[config] primary config was unreadable; recovered the last valid configuration from ${recoveryPath}\n`);
+      return cfg;
+    } catch (recoveryErr) {
+      throw new Error(
+        `[config] cannot read ${p} and no valid recovery copy is available at ${recoveryPath}. ` +
+        'Restore or remove the damaged config file before starting the app.',
+        { cause: recoveryErr },
+      );
+    }
   }
 }
 
 function saveConfig(cfg) {
   const p = configPath();
   ensureDir(path.dirname(p));
-  fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+  writeConfigAtomically(cfg);
   return cfg;
+}
+
+/**
+ * Persist config without exposing a partially-written JSON file to the next
+ * launch. The previous valid primary remains as a recovery copy until the
+ * next successful save. A failed write or rename leaves the primary intact.
+ */
+function writeConfigAtomically(cfg) {
+  const p = configPath();
+  const recoveryPath = recoveryConfigPath();
+  const tmp = `${p}.${process.pid}.${Date.now()}.tmp`;
+  const serialized = JSON.stringify(cfg, null, 2);
+
+  if (fs.existsSync(p)) {
+    try {
+      JSON.parse(fs.readFileSync(p, 'utf8'));
+      fs.copyFileSync(p, recoveryPath);
+    } catch (_) {
+      // Do not replace a known-good recovery copy with a corrupt primary.
+    }
+  }
+
+  try {
+    fs.writeFileSync(tmp, serialized, { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, p);
+  } catch (err) {
+    try { fs.rmSync(tmp, { force: true }); } catch (_) {}
+    throw err;
+  }
 }
 
 function updateConfig(patch) {
@@ -179,6 +223,7 @@ module.exports = {
   updateConfig,
   assertKnownConfigKeys,
   configPath,
+  recoveryConfigPath,
   defaultDataDir,
   legacyDataDir,
 };

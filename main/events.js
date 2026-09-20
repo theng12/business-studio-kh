@@ -79,12 +79,38 @@ function addWsClient(ws, user) {
 }
 
 function removeWsClient(ws) {
-  _wsClients.delete(ws);
+  if (!_wsClients.delete(ws)) return false;
   broadcast('users:presence', getPresence());
+  return true;
 }
 
 function getWsClientCount() {
   return _wsClients.size;
+}
+
+function closeWsClientsForUser(userId, { code = 4001, reason = 'Session revoked' } = {}) {
+  if (!userId) return 0;
+  let closed = 0;
+  for (const [ws, entry] of Array.from(_wsClients.entries())) {
+    const user = entry?.user ?? entry;
+    if (user?.id !== userId) continue;
+    removeWsClient(ws);
+    closed += 1;
+    try { ws.close(code, reason); } catch (_) {}
+  }
+  return closed;
+}
+
+function closeAllWsClients({ code = 1001, reason = 'Server stopping', terminate = false } = {}) {
+  const clients = Array.from(_wsClients.keys());
+  for (const ws of clients) {
+    removeWsClient(ws);
+    try {
+      ws.close(code, reason);
+      if (terminate) ws.terminate?.();
+    } catch (_) {}
+  }
+  return clients.length;
 }
 
 /**
@@ -126,5 +152,7 @@ module.exports = {
   addWsClient,
   removeWsClient,
   getWsClientCount,
+  closeWsClientsForUser,
+  closeAllWsClients,
   getPresence,
 };
