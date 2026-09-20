@@ -367,6 +367,7 @@ download were removed with it.
 
 - Build time is now a single native rebuild, not two.
 - `predist` installs only the arm64 `sharp` / `@img` binaries (`install:sharp`).
+- Electron 44 requires macOS 12 or newer, reflected in `build.mac.minimumSystemVersion` (verified 2026-09-20).
 - Do NOT use `arch: ["universal"]` — a universal binary bundles both slices into
   one app, roughly doubling the file size. If Intel support is ever needed
   again, prefer adding `"x64"` back to the arch array over going universal.

@@ -29,6 +29,7 @@ const path = require('node:path');
 const sharp = require('sharp');
 const templateRenderer = require('../templateRenderer');
 const { slugify } = require('./slug');
+const { writeUniqueFile } = require('./exclusiveFile');
 
 /**
  * @param {object}   o
@@ -71,7 +72,7 @@ async function applyTemplateToFiles({
         failed.push({ src, error: 'file not found' });
       } else {
         const bytes = await templateRenderer.compose({
-          inputImage: src, template, context: ctx, resolveAsset,
+          inputImage: src, template, context: ctx, resolveAsset, strictImageAssets: true,
         });
         // Re-encode to the source format so a JPG photo stays a JPG
         // (PNG output would balloon photo file sizes).
@@ -84,14 +85,7 @@ async function applyTemplateToFiles({
         const outBytes = await pipe.toBuffer();
 
         const baseName = slugify(path.basename(src, path.extname(src)) || 'photo', 'photo');
-        let name = `${baseName}-${tmplSlug}${ext}`;
-        let n = 2;
-        while (fs.existsSync(path.join(outputFolder, name)) && n < 9999) {
-          name = `${baseName}-${tmplSlug}-${n}${ext}`;
-          n += 1;
-        }
-        const absOut = path.join(outputFolder, name);
-        await fs.promises.writeFile(absOut, outBytes);
+        const absOut = await writeUniqueFile(outputFolder, `${baseName}-${tmplSlug}${ext}`, outBytes);
         done.push({ src, outputFilepath: absOut });
       }
     } catch (err) {

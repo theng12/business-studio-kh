@@ -25,6 +25,7 @@ const { getDataDir } = require('../db');
 const imageManager = require('../imageManager');
 const auditLog = require('../db/auditLog');
 const { broadcast } = require('../events');
+const { writeExclusiveFile } = require('../util/exclusiveFile');
 
 // v0.22.6: image events go under entity_type='image', entity_id=<productId>
 // so a product's History modal naturally interleaves them via the
@@ -40,6 +41,23 @@ function auditImage(productId, action, extra) {
   } catch (_) {/* never break the IPC call on a log failure */}
 }
 function lastSegment(p) { return p ? String(p).split('/').pop() : null; }
+
+const DRAG_PREP_TTL_MS = 5 * 60 * 1000;
+const issuedDragPaths = new Map();
+
+function takeIssuedDragPaths(paths) {
+  const now = Date.now();
+  for (const [filePath, expiresAt] of issuedDragPaths) {
+    if (expiresAt < now) issuedDragPaths.delete(filePath);
+  }
+  const allowed = [];
+  for (const filePath of paths) {
+    const expiresAt = issuedDragPaths.get(filePath);
+    issuedDragPaths.delete(filePath);
+    if (expiresAt >= now) allowed.push(filePath);
+  }
+  return allowed;
+}
 
 function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAFE_WATERMARK_EXTS, exposeLocal }) {
   /* ─── Product images ─── */
@@ -257,6 +275,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     let imagesImported = 0;
     let imagesSkippedDup = 0;
     let imagesSkippedCap = 0;
+    const failures = [];
     let done = 0;
 
     try {
@@ -277,8 +296,12 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
             });
             if (skipped) imagesSkippedDup += 1;
             else { imagesImported += 1; touched = true; }
-          } catch (_err) {
-            imagesSkippedDup += 1;
+          } catch (err) {
+            failures.push({
+              filepath: path.relative(folderPath, c.sourcePath) || path.basename(c.sourcePath),
+              sku: product.sku,
+              error: err.message,
+            });
           }
           done += 1;
           broadcast('progress:event', {
@@ -336,6 +359,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       imagesImported,
       imagesSkippedDup,
       imagesSkippedCap,
+      imagesFailed: failures.length,
+      failures,
       unmatchedFiles: unmatched.length,
       unmatchedSamples,
       unmatchedSamplesCapped: unmatched.length > unmatchedSamples.length,
@@ -1228,17 +1253,6 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       const idx = String(i + 1).padStart(3, '0');
       const baseName = `${sku}-${idx}${ext}`;
 
-      // Collision avoidance: bump to <name> (1).<ext>, (2), … until a
-      // free name is found. Cheaper than blowing up the user's existing
-      // files in the target folder, even if they re-run the copy.
-      let final = path.join(folder, baseName);
-      let collisionN = 1;
-      while (fs.existsSync(final)) {
-        final = path.join(folder, `${sku}-${idx} (${collisionN})${ext}`);
-        collisionN += 1;
-        if (collisionN > 999) break; // pathological — bail with the last name
-      }
-
       try {
         // One code path for all modes: fetch through the app-image
         // protocol. Standalone/server reads from local disk; client
@@ -1249,7 +1263,20 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         const res = await net.fetch(url);
         if (!res.ok) throw new Error(`fetch returned ${res.status}`);
         const buf = Buffer.from(await res.arrayBuffer());
-        await fs.promises.writeFile(final, buf);
+        // Claim the destination with wx so concurrent copy actions cannot both
+        // choose the same apparently-free name. Retry without a suffix ceiling.
+        let final = path.join(folder, baseName);
+        let collisionN = 1;
+        for (;;) {
+          try {
+            await writeExclusiveFile(final, buf);
+            break;
+          } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
+            final = path.join(folder, `${sku}-${idx} (${collisionN})${ext}`);
+            collisionN += 1;
+          }
+        }
         copied += 1;
       } catch (err) {
         failures.push({ filename: path.basename(rel), error: err.message });
@@ -1295,17 +1322,32 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       throw new Error('filepaths must be a non-empty array');
     }
     assertProductInActiveCompany(productId);
-    // Standalone / server: every filepath is already on local disk
-    // under <dataDir>/assets/. Resolve and existence-filter.
+    // A renderer may request only image rows attached to this product. Resolve
+    // each one under the real assets root before issuing it for one drag.
+    const productFilepaths = new Set(productImages.listByProduct(productId).map((image) => image.filepath));
+    const assetsRoot = fs.realpathSync(path.join(getDataDir(), 'assets'));
     const failed = [];
     const files = [];
     for (const rel of filepaths) {
-      const abs = path.join(getDataDir(), 'assets', rel);
       try {
-        if (fs.existsSync(abs)) files.push(abs);
-        else failed.push({ filepath: rel, error: 'missing on disk' });
+        if (typeof rel !== 'string' || !productFilepaths.has(rel)) {
+          failed.push({ filepath: rel, error: 'image is not attached to this product' });
+          continue;
+        }
+        const abs = fs.realpathSync(path.resolve(assetsRoot, rel));
+        const inside = path.relative(assetsRoot, abs);
+        if (inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) {
+          failed.push({ filepath: rel, error: 'image is outside the assets folder' });
+          continue;
+        }
+        if (!fs.statSync(abs).isFile()) {
+          failed.push({ filepath: rel, error: 'not a file' });
+          continue;
+        }
+        files.push(abs);
+        issuedDragPaths.set(abs, Date.now() + DRAG_PREP_TTL_MS);
       } catch (err) {
-        failed.push({ filepath: rel, error: err.message });
+        failed.push({ filepath: rel, error: err.code === 'ENOENT' ? 'missing on disk' : err.message });
       }
     }
     return { tmpDir: null, files, failed };
@@ -1316,13 +1358,13 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // routing through expose() would force a promise envelope for
   // nothing.
   ipcMain.on('images:startDragOut', async (event, args = {}) => {
-    const { preparedPaths } = args;
+    const preparedPaths = args && typeof args === 'object' ? args.preparedPaths : null;
     if (!Array.isArray(preparedPaths) || preparedPaths.length === 0) return;
 
     // Defensive existence filter — temp paths from client-mode
     // prepareDrag may have been cleaned up if the user prepped a drag
     // and then sat on the pill past the 5 min cleanup timer.
-    const livePaths = preparedPaths.filter((p) => {
+    const livePaths = takeIssuedDragPaths(preparedPaths).filter((p) => {
       try { return fs.existsSync(p); } catch { return false; }
     });
     if (livePaths.length === 0) return;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 /**
  * v0.26.0 (Phase 4): canvas-size presets shown in the editor toolbar.
@@ -169,7 +169,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
   // synchronously, kicks off a debounced save. We intentionally bypass
   // React state for the saved-JSON tracking so subsequent renders within
   // the 500ms debounce window don't re-fire saves.
-  const updateTemplate = useCallback((mutator) => {
+  function updateTemplate(mutator) {
     setTemplate((prev) => {
       if (!prev) return prev;
       const next = typeof mutator === 'function' ? mutator(prev) : mutator;
@@ -177,7 +177,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
       scheduleHistoryCommit(prev);
       return next;
     });
-  }, []);
+  }
 
   // v0.25.0: settle-commit history. Whenever `updateTemplate` fires
   // we (re)start a timer; if no further change in 300ms, snapshot the

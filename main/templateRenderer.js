@@ -343,7 +343,7 @@ function defaultResolveAsset(rel) {
   return path.join(getDataDir(), 'assets', rel);
 }
 
-async function renderImageElement(el, ctx, imgW, imgH, resolveAsset) {
+async function renderImageElement(el, ctx, imgW, imgH, resolveAsset, strictImageAssets = false) {
   if (!el.source) return null;
 
   // Work out which data-folder asset this element refers to (if any), then let
@@ -361,7 +361,10 @@ async function renderImageElement(el, ctx, imgW, imgH, resolveAsset) {
   if (!rel) return null;
 
   const abs = await resolveAsset(rel);
-  if (!abs || !fs.existsSync(abs)) return null;
+  if (!abs || !fs.existsSync(abs)) {
+    if (strictImageAssets) throw new Error(`Required overlay artwork not found: ${rel}`);
+    return null;
+  }
 
   const targetW = Math.max(16, Math.round((el.width  ?? 0.15) * imgW));
   const targetH = Math.max(16, Math.round((el.height ?? 0.15) * imgH));
@@ -391,9 +394,18 @@ async function renderImageElement(el, ctx, imgW, imgH, resolveAsset) {
  *   Turns a data-folder-relative asset path into something readable. Defaults
  *   to the local data folder; a client Mac passes a resolver that pulls the
  *   asset from the server instead. See defaultResolveAsset above.
+ * @param {boolean} [args.strictImageAssets=false] — fail when a configured
+ *   image asset cannot be resolved/rendered. External-file batches use this
+ *   so required artwork cannot be silently omitted.
  * @returns {Promise<Buffer>} PNG bytes of the composited image
  */
-async function compose({ inputImage, template, context = {}, resolveAsset = defaultResolveAsset }) {
+async function compose({
+  inputImage,
+  template,
+  context = {},
+  resolveAsset = defaultResolveAsset,
+  strictImageAssets = false,
+}) {
   if (!template || !Array.isArray(template.elements)) {
     throw new Error('Template missing or has no elements');
   }
@@ -438,8 +450,11 @@ async function compose({ inputImage, template, context = {}, resolveAsset = defa
     try {
       if (el.type === 'text')    rendered = await renderTextElement(el, context, imgW, imgH);
       else if (el.type === 'barcode') rendered = await renderBarcodeElement(el, context, imgW, imgH);
-      else if (el.type === 'image')   rendered = await renderImageElement(el, context, imgW, imgH, resolveAsset);
+      else if (el.type === 'image')   rendered = await renderImageElement(
+        el, context, imgW, imgH, resolveAsset, strictImageAssets,
+      );
     } catch (err) {
+      if (strictImageAssets && el.type === 'image') throw err;
       // Per-element failure shouldn't kill the whole composite — surface
       // through stderr so the runner can capture it in batch results.
       process.stderr.write(`[overlay] element ${el.id ?? '?'} (${el.type}) failed: ${err.message}\n`);

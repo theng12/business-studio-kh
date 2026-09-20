@@ -1,0 +1,3604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="Media Studio" />
+<meta name="theme-color" content="#111114" />
+<title>Business Studio KH — Web</title>
+<!--
+  Business Studio KH — Phase-1 web/iPad client.
+
+  A self-contained, build-free viewer that talks to the SAME server your
+  Mac clients use (HTTP+WS RPC over Tailscale). It needs no changes to the
+  app or server: it POSTs to /api/rpc and fetches /assets/<rel> with the
+  Bearer token via fetch() (which, unlike <img src>, can send the auth
+  header — so images load as blob URLs).
+
+  This is read-only on purpose: it proves the iPad → server pipeline and
+  gives a usable Library browser. The full editable app (the real React UI
+  served from the server) is phase 2.
+
+  How to run: serve this folder over http on the server Mac, e.g.
+    cd webclient && python3 -m http.server 8088
+  then on the iPad open  http://<mac-tailscale-name>:8088/  and enter your
+  server URL (e.g. http://<mac-tailscale-name>:41xx) + a user token from
+  Settings → Multi-Mac on the server.
+-->
+<style>
+  :root {
+    --bg: #f6f6f8; --surface: #fff; --text: #1a1a1f; --muted: #6a6a73;
+    --border: rgba(0,0,0,0.12); --border-strong: rgba(0,0,0,0.22);
+    --accent: #2563eb; --accent-bg: #eef2ff; --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e0e11; --surface: #18181c; --text: #ececf0; --muted: #9a9aa3;
+      --border: rgba(255,255,255,0.12); --border-strong: rgba(255,255,255,0.24);
+      --accent: #6b9bff; --accent-bg: #1a2540;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  button { font: inherit; cursor: pointer; }
+  .btn {
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    border-radius: 10px; padding: 10px 16px; font-weight: 500;
+  }
+  .btn--primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn:active { opacity: 0.7; }
+  input, select {
+    font: inherit; width: 100%; padding: 12px 14px; border: 1px solid var(--border-strong);
+    border-radius: 10px; background: var(--surface); color: var(--text); -webkit-appearance: none;
+  }
+  .muted { color: var(--muted); }
+
+  /* ── Connect screen ── */
+  #connect { max-width: 460px; margin: 0 auto; padding: 40px 20px; }
+  #connect h1 { font-size: 22px; margin: 0 0 4px; }
+  #connect .sub { color: var(--muted); margin: 0 0 24px; }
+  #connect label { display: block; font-weight: 600; font-size: 13px; margin: 16px 0 6px; }
+  #connect .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  #connect .err { color: #e5484d; font-size: 13px; margin-top: 14px; min-height: 18px; }
+  #connect .actions { margin-top: 24px; }
+
+  /* ── App shell ── */
+  #app { display: none; max-width: 1100px; margin: 0 auto; }
+  /* v0.46.0: vertical 4-row appbar. Row 1 pairs the company chip with the
+     Disconnect icon (we're disconnecting from THIS company). Row 2 is the
+     category filter chips. Row 3 is a full-width search box. Row 4 is the
+     tiny product count, below the search where it doesn't fight for space. */
+  header.bar {
+    position: sticky; top: 0; z-index: 5; background: var(--bg);
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 12px 16px; padding-top: max(12px, env(safe-area-inset-top));
+    border-bottom: 1px solid var(--border);
+  }
+  header.bar .bar-top { display: flex; align-items: center; gap: 10px; }
+  header.bar .spacer { flex: 1; }
+  header.bar .search { width: 100%; }
+  header.bar .count { font-size: 11px; color: var(--muted); padding-left: 2px; }
+  header.bar .bar-cats { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  /* Compact round icon button — disconnect + sheet-close buttons share this. */
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 38px; height: 38px; padding: 0;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    border-radius: 50%;
+  }
+  .icon-btn:active { opacity: 0.7; }
+  .icon-btn svg { width: 18px; height: 18px; display: block; }
+  /* v0.49.1: refresh button spins while a reload is in flight. */
+  .icon-btn.is-spinning svg { animation: spinSpin 0.7s linear infinite; }
+  @keyframes spinSpin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+  /* v0.49.2: small count badge on the AI activity button. Hidden when 0
+     (the `hidden` HTML attr does the work; this just styles the visible state). */
+  .icon-btn--badged { position: relative; }
+  .icon-btn--badged .badge {
+    position: absolute; top: -4px; right: -4px;
+    min-width: 18px; height: 18px; padding: 0 5px;
+    background: var(--accent); color: #fff;
+    border-radius: 999px; font-size: 11px; font-weight: 700; line-height: 18px;
+    text-align: center; box-shadow: 0 0 0 2px var(--bg);
+  }
+  /* v0.49.2: AI activity rows — small source thumb, SKU + prompt label,
+     status pill on the right. Repair button (failed only) wraps to its own
+     line so the tap target stays at 38px on phone widths. */
+  .ai-activity-row { gap: 12px; }
+  .ai-activity-row .thumb {
+    width: 44px; height: 44px; border-radius: 8px; background-size: cover;
+    background-position: center; background-color: var(--border); flex-shrink: 0;
+  }
+  .ai-activity-row .meta { flex: 1; min-width: 0; }
+  .ai-activity-row .meta strong { display: block; font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ai-activity-row .meta .sub {
+    display: block; color: var(--muted); font-size: 12px; margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ai-activity-row .pill {
+    flex-shrink: 0; padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .ai-activity-row .pill--queued  { background: rgba(100,116,139,0.16); color: #475569; }
+  .ai-activity-row .pill--running { background: rgba(37,99,235,0.16);   color: var(--accent); }
+  .ai-activity-row .pill--failed  { background: rgba(234,88,12,0.16);    color: #c2410c; }
+  .ai-activity-row .repair-line { width: 100%; display: flex; justify-content: flex-end; padding-top: 8px; }
+  .ai-activity-row .repair-line .btn { padding: 6px 12px; font-size: 13px; }
+  .ai-activity-row.is-failed { flex-wrap: wrap; }
+
+  /* Company chip — initials in a pill so the bar isn't dominated by long names. */
+  .co-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    min-width: 38px; height: 38px; padding: 0 12px;
+    border: 1px solid var(--accent); background: var(--accent-bg); color: var(--accent);
+    border-radius: 999px; font-weight: 700; font-size: 13px; letter-spacing: 0.02em;
+  }
+  .co-btn:active { opacity: 0.7; }
+  .co-btn .chev { width: 14px; height: 14px; opacity: 0.75; }
+
+  /* Filter chips (All + Category picker). Active = filled accent. */
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 12px; min-height: 32px;
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    border-radius: 999px; font-weight: 500; font-size: 14px;
+  }
+  .chip:active { opacity: 0.7; }
+  .chip.is-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .chip svg { width: 16px; height: 16px; flex-shrink: 0; }
+  .chip .chev { opacity: 0.75; }
+
+  /* v0.49.8: hint text at the top of the scope sheet — explains the action
+     in one line ("This will overwrite the originals — there\'s no undo.").
+     Muted color, smaller font so it doesn\'t dominate the row list. */
+  .scope-sheet-hint {
+    padding: 4px 16px 8px; font-size: 12px; color: var(--muted); line-height: 1.4;
+  }
+  .scope-sheet-hint.is-danger { color: #c2410c; }
+
+  /* v0.49.9: Reframe & crop sheet — preview at the top, chip rows beneath,
+     primary Apply button at the bottom. Preview area has a fixed height so
+     the chip rows below don\'t jump as the preview re-renders.
+     v0.49.10: the inner content scrolls (overflow-y:auto) so the Apply
+     button is always reachable even when the chip rows + preview overflow.
+     `min-height:0` is the magic flex-child trick that lets a flex column
+     actually shrink its content area instead of getting clipped. */
+  .reframe-sheet {
+    padding: 4px 16px 16px; display: flex; flex-direction: column; gap: 14px;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    flex: 1; min-height: 0;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  /* v0.49.10: on tablet+ the sheet was capped at the global 560 / 70vh box,
+     which felt cramped on iPad and hid the lower chip rows behind the fold.
+     Reframe needs more room because it has a preview image + 4 control rows.
+     Caps so it still feels like a centred sheet, not a fullscreen takeover. */
+  @media (min-width: 640px) {
+    #reframeSheet .sheet-box,
+    #enhanceSheet .sheet-box,
+    #overlaySheet .sheet-box {
+      max-width: min(880px, 92vw);
+      max-height: min(92vh, 920px);
+      width: 100%;
+    }
+  }
+  /* v0.49.14: Overlay template picker — a horizontal strip of thumbnail
+     cards (template name + a tiny rendered icon). Tap to select; selected
+     gets the accent ring. Empty state when no templates exist yet. */
+  .overlay-template-strip {
+    display: flex; gap: 10px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; padding: 4px 2px;
+    scroll-snap-type: x proximity;
+  }
+  .overlay-template-strip::-webkit-scrollbar { display: none; }
+  .overlay-template-card {
+    flex: 0 0 130px; scroll-snap-align: start;
+    border: 1.5px solid var(--border-strong); border-radius: var(--radius);
+    background: var(--surface); padding: 10px;
+    display: flex; flex-direction: column; gap: 4px; cursor: pointer;
+  }
+  .overlay-template-card.is-active { border-color: var(--accent); background: var(--accent-bg); }
+  .overlay-template-card .name { font-weight: 600; font-size: 13px; color: var(--text); }
+  .overlay-template-card .meta { font-size: 11px; color: var(--muted); }
+  .overlay-empty { padding: 20px; text-align: center; font-size: 13px; color: var(--muted); }
+  /* v0.49.11: preview is now BIG. The 42vh cap squashed it to ~140px on a
+     phone and ~310px on iPad, so the user couldn\'t actually evaluate the
+     result before applying. Now it\'s width-driven (square) up to 75vh —
+     fills most of the visible viewport, controls live below the fold and
+     are reached by scrolling. `flex-shrink: 0` is critical because the
+     parent (.reframe-sheet) is a flex column with overflow-y:auto; without
+     it the flex algorithm would squish the preview back down to make room
+     for the chip rows. We WANT the chip rows to live below the fold. */
+  .reframe-preview {
+    position: relative; width: 100%; aspect-ratio: 1;
+    max-height: 75vh;
+    flex-shrink: 0;
+    background: repeating-conic-gradient(#f3f3f3 0% 25%, #ffffff 0% 50%) 0 0 / 20px 20px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; display: flex; align-items: center; justify-content: center;
+  }
+  [data-theme="dark"] .reframe-preview { background: repeating-conic-gradient(#262626 0% 25%, #1e1e1e 0% 50%) 0 0 / 20px 20px; }
+  .reframe-preview img { max-width: 100%; max-height: 100%; display: block; object-fit: contain; }
+  .reframe-preview .reframe-busy {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.55); color: var(--muted); font-size: 13px;
+  }
+  [data-theme="dark"] .reframe-preview .reframe-busy { background: rgba(0,0,0,0.55); }
+  .reframe-preview .reframe-busy[hidden] { display: none; }
+  .reframe-preview-label {
+    text-align: center; font-size: 12px; color: var(--muted); margin-top: -6px;
+  }
+  /* Each control row: small label on top + a chip row beneath. */
+  .reframe-row { display: flex; flex-direction: column; gap: 6px; }
+  .reframe-row-label {
+    font-size: 11px; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.06em; padding-left: 2px;
+  }
+  .reframe-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .reframe-chips .chip { font-size: 13px; padding: 6px 12px; min-height: 30px; }
+  /* Color swatch chip — the dot lives inside the chip beside the label. */
+  .reframe-color-swatch {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 1px solid rgba(0,0,0,0.15); box-shadow: inset 0 0 0 1px rgba(255,255,255,0.4);
+  }
+  /* Bottom action row — Cancel on the left, Apply primary on the right. */
+  .reframe-actions { display: flex; gap: 10px; padding-top: 4px; }
+  .reframe-actions .btn { flex: 1; padding: 12px; font-weight: 600; }
+
+  /* v0.49.7: direction-toggle pill at the top of the sort sheet. Bigger tap
+     target than the standard chip; the up/down icon rotates 180° on .is-desc. */
+  .sort-dir-row { padding: 8px 14px 4px; display: flex; }
+  .sort-dir-row .chip { width: 100%; justify-content: center; padding: 10px 16px; }
+  .sort-dir-row .chip svg { transition: transform 0.15s ease; }
+  .sort-dir-row .chip.is-desc svg { transform: rotate(180deg); }
+
+  /* Bottom-anchored sheet on phones, centered card on tablet+. */
+  .sheet-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,0.5); display: none; }
+  .sheet-overlay.open { display: flex; align-items: flex-end; justify-content: center; }
+  @media (min-width: 640px) { .sheet-overlay.open { align-items: center; } }
+  .sheet-box {
+    background: var(--bg); width: 100%; max-width: 560px; max-height: 85vh;
+    display: flex; flex-direction: column;
+    border-top-left-radius: 16px; border-top-right-radius: 16px;
+    overflow: hidden;
+  }
+  @media (min-width: 640px) { .sheet-box { border-radius: 16px; max-height: 70vh; } }
+  .sheet-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+  }
+  .sheet-head h3 { margin: 0; font-size: 16px; font-weight: 700; flex: 1; }
+  .sheet-search { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .sheet-search input { width: 100%; }
+  .sheet-list { overflow-y: auto; -webkit-overflow-scrolling: touch; flex: 1; padding-bottom: max(0px, env(safe-area-inset-bottom)); }
+  .sheet-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    cursor: pointer; user-select: none;
+  }
+  .sheet-row:active { background: var(--accent-bg); }
+  .sheet-row.is-active { background: var(--accent-bg); color: var(--accent); font-weight: 600; }
+  .sheet-row .check { width: 18px; height: 18px; color: var(--accent); margin-left: auto; flex-shrink: 0; }
+  .sheet-empty { padding: 28px 16px; color: var(--muted); text-align: center; font-size: 14px; }
+
+  /* v0.49.5: keyboard-aware sheets. When iOS pops the keyboard, the visual
+     viewport shrinks but the sheet's max-height (in vh) doesn't — so the
+     sheet's top edge floats off-screen and the search input vanishes behind
+     the keyboard. JS toggles `is-keyboard` on the overlay and sets `--vvh`
+     to window.visualViewport.height; CSS then re-anchors the sheet to the
+     top and caps its height so the search input always stays in view. */
+  .sheet-overlay.is-keyboard.open {
+    align-items: flex-start !important;
+    padding-top: max(0px, env(safe-area-inset-top));
+  }
+  .sheet-overlay.is-keyboard.open .sheet-box {
+    max-height: var(--vvh, 70vh) !important;
+    border-top-left-radius: 0; border-top-right-radius: 0;
+    border-bottom-left-radius: 16px; border-bottom-right-radius: 16px;
+  }
+
+  /* v0.49.5: image preview lightbox. Fullscreen black backdrop, image fills
+     viewport at object-fit:contain. Prev/next buttons plus 1-finger swipe
+     to navigate. iOS long-press on the image still triggers "Save Image" so
+     users can pull it onto their camera roll without us shipping a button. */
+  #imgPreview { position: fixed; inset: 0; z-index: 50; display: none; background: rgba(0,0,0,0.95); }
+  #imgPreview.open { display: flex; align-items: center; justify-content: center; }
+  .img-preview-stage {
+    width: 100%; height: 100%;
+    display: flex; align-items: center; justify-content: center;
+    padding: 50px 14px;
+    touch-action: pinch-zoom; /* let iOS handle pinch natively */
+  }
+  .img-preview-stage img {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain; display: block;
+    user-select: none; -webkit-user-drag: none;
+  }
+  .img-preview-close {
+    position: absolute; top: max(16px, env(safe-area-inset-top)); right: 16px; z-index: 2;
+  }
+  .img-preview-info {
+    position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: 50%;
+    transform: translateX(-50%);
+    padding: 5px 14px; background: rgba(0,0,0,0.45); color: rgba(255,255,255,0.9);
+    border-radius: 999px; font-size: 13px; pointer-events: none;
+  }
+  .img-preview-nav {
+    position: absolute; top: 50%; transform: translateY(-50%); z-index: 2;
+    width: 48px; height: 48px; padding: 0; border-radius: 50%;
+    background: rgba(0,0,0,0.45); color: #fff;
+    border: 1px solid rgba(255,255,255,0.18);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; line-height: 1;
+  }
+  .img-preview-nav:active { background: rgba(0,0,0,0.7); }
+  .img-preview-nav:disabled { opacity: 0.25; }
+  .img-preview-nav-prev { left: 12px; }
+  .img-preview-nav-next { right: 12px; }
+
+  .grid {
+    display: grid; gap: 12px; padding: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; cursor: pointer; display: flex; flex-direction: column;
+  }
+  .card:active { transform: scale(0.98); }
+  .card .thumb {
+    aspect-ratio: 1; background: #e9e9ee center/cover no-repeat;
+    display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px;
+  }
+  @media (prefers-color-scheme: dark) { .card .thumb { background-color: #232329; } }
+  .card .meta { padding: 8px 10px; }
+  .card .sku { font-weight: 600; font-size: 13px; word-break: break-all; }
+  .card .name { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .imgcount { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  .pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 8px 16px 28px; }
+  .loading, .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+
+  /* ── Detail sheet ── */
+  #detail { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,0.45); display: none; }
+  #detail.open { display: block; }
+  #detail .sheet {
+    position: absolute; inset: 0; background: var(--bg); overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  #detail .sheet-head {
+    position: sticky; top: 0; z-index: 1; background: var(--bg);
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 12px 16px; padding-top: max(12px, env(safe-area-inset-top));
+    border-bottom: 1px solid var(--border);
+  }
+  /* SKU takes the leftover space on a wide row and clips with an ellipsis
+     instead of wrapping — keeps the header to a clean single line on iPad. */
+  #detail .sheet-head .sku {
+    font-weight: 700; font-size: 17px;
+    flex: 1 1 auto; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* Action buttons live in a group so they wrap as a unit, not individually,
+     when there isn't enough room. */
+  #detail .sheet-actions {
+    display: flex; gap: 8px; align-items: center; flex-shrink: 0;
+  }
+  /* Prevent button labels from breaking mid-word (was producing the
+     stacked "Auto-/crop" look on a narrow phone). */
+  #detail .sheet-head .btn { white-space: nowrap; }
+  /* Phone-sized viewports: drop the action group onto its own row,
+     and tighten the button chrome a touch.
+     v0.49.11: the action group is now a horizontal-scroll carousel — same
+     pattern as the gallery below. Previously it wrapped to multiple lines
+     once we had three buttons (↻ 360° / ✂︎ Reframe & crop / ＋ Add photo)
+     because "Reframe & crop" pushed the row over the iPhone\'s ~390px
+     width. Carousel keeps it to exactly ONE line; any new edit actions
+     added later (Enhance, Overlay, …) just extend the scroll, no rewrap. */
+  @media (max-width: 640px) {
+    #detail .sheet-actions {
+      width: 100%;
+      flex-wrap: nowrap;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+      scrollbar-width: none; /* Firefox */
+      scroll-snap-type: x proximity;
+      /* a hair of padding so the rightmost button\'s shadow / focus ring
+         isn\'t clipped by the scroller; doesn\'t add visible space. */
+      padding: 2px 2px;
+      margin: -2px -2px;
+    }
+    #detail .sheet-actions::-webkit-scrollbar { display: none; } /* Safari, Chrome */
+    #detail .sheet-actions .btn { flex-shrink: 0; scroll-snap-align: start; }
+    #detail .sheet-head .btn { padding: 8px 12px; font-size: 14px; }
+    #detail .sheet-head { gap: 8px; }
+  }
+  /* v0.49.5: gallery is now a horizontal carousel so adding more images
+     doesn't push the page down. Snap-scrolling so a swipe lands cleanly on
+     the next tile. Each tile is a fixed width — phone shows ~1.5 cards
+     (next-card edge hints there's more to swipe to), iPad shows 3-4.
+     Tap a tile to open the lightbox; ⋯ menu is unchanged. */
+  #detail .gallery {
+    display: flex; gap: 10px; padding: 16px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    scroll-padding: 0 16px;
+    scrollbar-width: none; /* Firefox */
+  }
+  #detail .gallery::-webkit-scrollbar { display: none; } /* Safari, Chrome */
+  #detail .gallery figure {
+    position: relative; margin: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden;
+    flex: 0 0 220px;
+    scroll-snap-align: start;
+    cursor: zoom-in;
+  }
+  /* Floating × delete button — over the top-right corner of each thumb. iOS
+     tap target: 36px circle is a comfortable thumb size; the dark backdrop
+     keeps it legible on both light + dark thumbnails. */
+  #detail .gallery .del {
+    position: absolute; top: 6px; right: 6px; z-index: 1;
+    width: 36px; height: 36px; border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55); color: #fff; border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px; font-weight: 600; line-height: 1; padding: 0;
+  }
+  #detail .gallery .del:active { background: rgba(0, 0, 0, 0.75); }
+
+  /* v0.47.0: ⋯ menu button replaces the old × on each gallery tile. Opens
+     a contextual sheet (Set as main / Use with AI / Delete) — scales as more
+     per-image actions are added without crowding the tile corner with buttons. */
+  #detail .gallery .tile-menu {
+    position: absolute; top: 6px; right: 6px; z-index: 1;
+    width: 36px; height: 36px; border-radius: 50%;
+    background: rgba(0,0,0,0.55); color: #fff; border: 1px solid rgba(255,255,255,0.2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 700; line-height: 1; padding: 0;
+  }
+  #detail .gallery .tile-menu:active { background: rgba(0,0,0,0.75); }
+
+  /* v0.49.8: ← → reorder buttons at the bottom corners of each gallery tile.
+     Same circular-pill style as the ⋯ menu, smaller (32px) so two of them
+     plus the figcaption don\'t crowd the tile. They\'re position:absolute so
+     they overlap the image — the image is still tappable for the preview
+     lightbox via fig.addEventListener(\'click\'), and stopPropagation on each
+     arrow prevents that fallback firing on a reorder tap. */
+  #detail .gallery .tile-arrow {
+    position: absolute; bottom: 38px; z-index: 1;
+    width: 32px; height: 32px; border-radius: 50%;
+    background: rgba(0,0,0,0.55); color: #fff;
+    border: 1px solid rgba(255,255,255,0.2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 700; line-height: 1; padding: 0;
+  }
+  #detail .gallery .tile-arrow.left  { left: 6px; }
+  #detail .gallery .tile-arrow.right { right: 6px; }
+  #detail .gallery .tile-arrow:active { background: rgba(0,0,0,0.75); }
+  #detail .gallery .tile-arrow[disabled] { opacity: 0.35; }
+  /* v0.49.8: writer-only — same gating as the ⋯ menu rows. */
+  body[data-role="viewer"]       #detail .gallery .tile-arrow,
+  body[data-role="photographer"] #detail .gallery .tile-arrow { display: none !important; }
+
+  /* v0.49.12 — multi-select state. Long-press a tile (writer roles) to
+     enter; tiles get a coloured ring + checkmark badge; the per-tile ⋯ /
+     arrow buttons are hidden because their actions are single-image and
+     conflict with multi-select semantics. Tap behaviour swaps from "open
+     lightbox" to "toggle selection." */
+  #detail .gallery figure { -webkit-touch-callout: none; } /* kill iOS long-press image-save sheet */
+  #detail .gallery figure.is-selected {
+    outline: 3px solid var(--accent); outline-offset: -3px;
+  }
+  #detail .gallery figure .select-badge {
+    position: absolute; top: 6px; left: 6px; z-index: 1;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: rgba(0,0,0,0.55); color: #fff; border: 1.5px solid rgba(255,255,255,0.55);
+    display: none; align-items: center; justify-content: center; font-size: 14px; font-weight: 800;
+  }
+  /* Always show the badge in select mode (empty when unselected so users
+     can SEE the affordance to tap-to-select). Filled when selected. */
+  body.is-selecting #detail .gallery figure .select-badge { display: flex; }
+  #detail .gallery figure.is-selected .select-badge {
+    background: var(--accent); color: #fff; border-color: #fff;
+  }
+  /* In select mode the per-tile ⋯ + arrows are hidden — those actions are
+     single-image and would conflict with the bulk semantics. Reorder and
+     the ⋯ menu come back as soon as the user taps Done. */
+  body.is-selecting #detail .gallery .tile-menu,
+  body.is-selecting #detail .gallery .tile-arrow { display: none !important; }
+
+  /* Selection bar — sticky strip above the gallery showing count + actions.
+     Mirrors the iOS Photos pattern (count on the left, Select all / Done on
+     the right). Only visible while body.is-selecting. */
+  #selectionBar {
+    display: none;
+    position: sticky; top: 0; z-index: 2;
+    background: var(--accent-bg); color: var(--text);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 16px;
+    align-items: center; gap: 12px;
+  }
+  body.is-selecting #selectionBar { display: flex; }
+  #selectionBar .count { flex: 1; font-weight: 700; font-size: 14px; color: var(--accent); }
+  #selectionBar .btn { padding: 6px 12px; font-size: 13px; min-height: 32px; }
+
+  /* v0.47.0: "AI generated" section in the product detail. Sits between the
+     fields and the regular gallery — collapsible so non-AI users aren't
+     distracted by it. Variants render as compact cards with Promote / Delete. */
+  #detail .ai-results { padding: 8px 16px 0; }
+  #detail .ai-results.empty { display: none; }
+  #detail .ai-results h4 {
+    margin: 4px 0 8px; font-size: 13px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #detail .ai-results h4 .badge {
+    background: var(--accent); color: #fff;
+    padding: 2px 8px; border-radius: 999px; font-size: 11px; letter-spacing: 0;
+  }
+  #detail .ai-results .ai-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px;
+  }
+  #detail .ai-results figure {
+    margin: 0; position: relative; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  }
+  #detail .ai-results figure img, #detail .ai-results figure .thumb {
+    width: 100%; aspect-ratio: 1; object-fit: cover; display: block;
+  }
+  #detail .ai-results .ai-actions {
+    display: flex; gap: 6px; padding: 6px;
+  }
+  #detail .ai-results .ai-actions .btn {
+    flex: 1; padding: 6px 8px; font-size: 12px; border-radius: 8px;
+  }
+  #detail .ai-results .ai-status {
+    padding: 12px; text-align: center; font-size: 13px; color: var(--muted);
+    border: 1px dashed var(--border); border-radius: var(--radius);
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+  }
+  #detail .ai-results .ai-status .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    animation: aiPulse 1.2s ease-in-out infinite;
+  }
+  @keyframes aiPulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
+  /* v0.49.1: a separate "broken task" row (failed / stuck-done) with a
+     Repair button inline. Same layout as ai-status; warmer colour to signal
+     attention without screaming. Repair button on its own line on phones. */
+  #detail .ai-results .ai-broken {
+    border-color: #ea580c; background: #fff7ed; color: #9a3412; text-align: left;
+    flex-direction: column; align-items: stretch; gap: 8px;
+  }
+  @media (prefers-color-scheme: dark) {
+    #detail .ai-results .ai-broken { background: rgba(234, 88, 12, 0.12); color: #fdba74; border-color: rgba(234, 88, 12, 0.45); }
+  }
+  #detail .ai-results .ai-broken .ai-repair { align-self: flex-end; min-height: 38px; padding: 6px 14px; }
+
+  /* v0.47.0: AI sheet — vertically stacked picker rows + variants + Run. */
+  .ai-sheet { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .ai-source { display: flex; gap: 10px; align-items: center; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+  .ai-source-thumb { width: 56px; height: 56px; background-size: cover; background-position: center; background-color: var(--border); border-radius: 8px; flex-shrink: 0; }
+  .ai-source-meta { font-size: 13px; color: var(--muted); line-height: 1.35; min-width: 0; }
+  .ai-source-meta strong { display: block; color: var(--text); font-weight: 600; font-size: 14px; }
+  .ai-pick {
+    display: flex; align-items: center; gap: 10px; text-align: left;
+    padding: 12px 14px; background: var(--surface); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: var(--radius); font-size: 14px; min-height: 56px;
+  }
+  .ai-pick:active { opacity: 0.7; }
+  .ai-pick-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px; }
+  .ai-pick-value { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ai-pick .chev { width: 18px; height: 18px; opacity: 0.6; }
+  .ai-variants { display: flex; flex-direction: column; gap: 6px; }
+  .ai-variants-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; padding-left: 2px; }
+  .ai-variants-buttons { display: flex; gap: 6px; }
+  .ai-variants-buttons button {
+    flex: 1; min-height: 44px; border-radius: var(--radius);
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    font-weight: 600; font-size: 15px;
+  }
+  .ai-variants-buttons button:active { opacity: 0.7; }
+  .ai-variants-buttons button.is-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .ai-cost { font-size: 13px; color: var(--muted); padding: 2px 4px; }
+  /* v0.49.3: aspect chips. Wraps to multiple lines when there are 5+ options
+     (e.g. Nano Banana Edit has 7), each chip a 44pt-friendly tap target. */
+  .ai-aspect { display: flex; flex-direction: column; gap: 6px; }
+  .ai-aspect-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ai-aspect-chips button {
+    flex: 0 0 auto; min-height: 38px; min-width: 56px; padding: 6px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
+    font-weight: 600; font-size: 14px;
+  }
+  .ai-aspect-chips button:active { opacity: 0.7; }
+  .ai-aspect-chips button.is-active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .ai-cost strong { color: var(--text); }
+  .ai-run { min-height: 50px; font-size: 16px; font-weight: 600; }
+  .ai-run:disabled { opacity: 0.55; }
+  /* Prompt list items use sheet-row but show body excerpt below the label. */
+  .sheet-row .row-sub { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 2px; line-height: 1.3; max-height: 2.6em; overflow: hidden; text-overflow: ellipsis; }
+  .sheet-row.is-group-head { background: var(--surface); font-weight: 600; font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.05em; padding: 8px 16px; cursor: default; }
+  .sheet-row.is-group-head:active { background: var(--surface); }
+  .sheet-row .row-meta { font-size: 12px; color: var(--muted); margin-left: auto; flex-shrink: 0; }
+
+  /* v0.45.0 → v0.47.0: role-based UI gating. Replaces the old × hiding with
+     the new ⋯ menu button (both delete + use-with-AI + set-as-main are writes,
+     so the menu itself is hidden for restricted roles). */
+  body[data-role="viewer"] #addPhotoBtn,
+  body[data-role="viewer"] #autoCropBtn,
+  body[data-role="viewer"] #enhanceBtn,
+  body[data-role="viewer"] #overlayBtn,
+  body[data-role="viewer"] #aiActivityBtn,
+  body[data-role="viewer"] #detail .ai-results .ai-actions,
+  body[data-role="photographer"] #autoCropBtn,
+  body[data-role="photographer"] #enhanceBtn,
+  body[data-role="photographer"] #overlayBtn,
+  body[data-role="photographer"] #aiActivityBtn,
+  body[data-role="photographer"] #detail .ai-results .ai-actions { display: none !important; }
+  /* v0.49.6: the ⋯ menu is now visible for every role because it always
+     contains "Save image to device" — a pure read action everyone gets.
+     The menu's WRITE rows (Set as main, Use with AI, Delete) are gated
+     per-role inside openTileMenu(), in JS, instead of via CSS. */
+  #detail .gallery img { width: 100%; display: block; }
+  #detail .gallery figcaption { padding: 6px 10px; font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+  #detail .fields { padding: 0 16px 32px; }
+  #detail .fields .row { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  #detail .fields .k { color: var(--muted); }
+  #detail .fields .v { font-weight: 500; text-align: right; word-break: break-word; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: #1a1a1f; color: #fff; padding: 10px 16px; border-radius: 10px;
+    font-size: 13px; z-index: 40; opacity: 0; transition: opacity 0.2s; pointer-events: none;
+    max-width: 90%;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- Connect -->
+<section id="connect">
+  <h1>Business Studio KH</h1>
+  <p class="sub">Connect to your server to browse the library.</p>
+  <label for="srv">Server URL</label>
+  <input id="srv" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+         placeholder="http://mac-mini.example-tailnet.ts.net:41xx" />
+  <p class="hint">The same address your Mac clients use (over Tailscale).</p>
+  <label for="tok">Access token</label>
+  <input id="tok" type="password" autocapitalize="off" autocorrect="off" placeholder="paste a user token" />
+  <p class="hint">From the server: Settings → Multi-Mac → a user's token. Make a dedicated "iPad" user if you like.</p>
+  <div class="err" id="connectErr"></div>
+  <div class="actions">
+    <button class="btn btn--primary" id="connectBtn" style="width:100%">Connect</button>
+  </div>
+</section>
+
+<!-- App -->
+<div id="app">
+  <header class="bar">
+    <!-- Row 1: company chip + Disconnect on the same level. They're paired —
+         disconnecting drops your link to this company's catalog. -->
+    <div class="bar-top">
+      <button class="co-btn" id="companyBtn" type="button" aria-label="Switch company" title="Switch company" aria-haspopup="dialog">
+        <span class="co-mark" id="companyMark">·</span>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <span class="spacer"></span>
+      <!-- v0.49.2: global AI activity. Opens a sheet listing every queued /
+           running / failed task across the active company so you can jump
+           back to whichever product is mid-generation, or repair a stuck one.
+           Badge surfaces the count when there's anything outstanding. -->
+      <button class="icon-btn icon-btn--badged" id="aiActivityBtn" type="button" aria-label="AI activity" title="AI activity — queued, running, failed">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2l2.4 5.6L20 10l-5.6 2.4L12 18l-2.4-5.6L4 10l5.6-2.4z"/>
+        </svg>
+        <span class="badge" id="aiActivityBadge" hidden>0</span>
+      </button>
+      <!-- v0.49.1: manual refresh. The web viewer doesn't get WebSocket pushes
+           for catalog changes (unlike the desktop), so what's on screen can
+           drift when a remote edit lands. Tap → bust the blob/list caches and
+           reload the current view (product list, or open detail sheet). -->
+      <button class="icon-btn" id="refreshBtn" type="button" aria-label="Refresh" title="Refresh — pull the latest from the server">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+      </button>
+      <button class="icon-btn" id="disconnect" type="button" aria-label="Disconnect" title="Disconnect">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </button>
+    </div>
+    <!-- Row 2: category filter — "All" chip + Category picker chip (opens a
+         searchable sheet). Active state mirrors state.categoryFilter.
+         v0.49.7 — Sort picker chip lives on the same row. Sort + category are
+         conceptually independent (sort survives category change) but they\'re
+         both list-shaping controls so they read better side-by-side. The row
+         already wraps on narrow phones if needed. -->
+    <div class="bar-cats">
+      <button class="chip is-active" id="catAllBtn" type="button" aria-pressed="true">All</button>
+      <button class="chip" id="catPickerBtn" type="button" aria-haspopup="dialog" aria-label="Filter by category">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 5a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+        </svg>
+        <span id="catPickerLabel">Category</span>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <button class="chip" id="sortPickerBtn" type="button" aria-haspopup="dialog" aria-label="Sort products">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 6h13M3 12h9M3 18h5"/>
+          <path d="M17 14l4 4-4 4M21 18H13"/>
+        </svg>
+        <span id="sortPickerLabel">Newest</span>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </div>
+    <!-- Row 3: search fills the full width edge-to-edge. -->
+    <input class="search" id="search" type="search" placeholder="Search SKU / name…" autocapitalize="off" autocorrect="off" autocomplete="off" />
+    <!-- Row 4: tiny count, tucked under the search. -->
+    <span class="count" id="count"></span>
+  </header>
+  <div id="list"><div class="loading">Loading…</div></div>
+  <div class="pager" id="pager"></div>
+</div>
+
+<!-- Detail -->
+<div id="detail"><div class="sheet">
+  <div class="sheet-head">
+    <button class="btn" id="detailClose">← Back</button>
+    <span class="sku" id="detailSku"></span>
+    <!-- Action buttons grouped so they wrap together to a second row on
+         narrow phones instead of breaking up one-by-one. -->
+    <div class="sheet-actions">
+      <button class="btn" id="spinBtn" title="360° spin — drag to rotate through this product's photos">↻ 360°</button>
+      <button class="btn" id="autoCropBtn" title="Trim background + reframe one or every image in this product">✂︎ Reframe &amp; crop</button>
+      <button class="btn" id="enhanceBtn" title="White balance + auto levels + saturation boost">✨ Enhance</button>
+      <button class="btn" id="overlayBtn" title="Apply an overlay template to the main image">◫ Overlay</button>
+      <button class="btn btn--primary" id="addPhotoBtn">＋ Add photo</button>
+      <!-- accept=image/* with no capture → iOS shows Take Photo + Photo Library + Files -->
+      <input id="photoInput" type="file" accept="image/*" multiple style="display:none" />
+    </div>
+  </div>
+  <!-- v0.47.0: AI-generated variants live above the regular gallery so the
+       freshest output is the first thing you see after a run. Empty by
+       default and hidden via `.empty`. -->
+  <div class="ai-results empty" id="aiResults"></div>
+  <!-- v0.49.12: selection bar — shown via `body.is-selecting`. The
+       container is always in the DOM so the sticky position survives
+       gallery re-renders without flicker. -->
+  <div id="selectionBar">
+    <span class="count" id="selectionCount">0 selected</span>
+    <button class="btn" id="selectAllBtn" type="button">Select all</button>
+    <button class="btn btn--primary" id="selectDoneBtn" type="button">Done</button>
+  </div>
+  <div class="gallery" id="detailGallery"></div>
+  <div class="fields" id="detailFields"></div>
+</div></div>
+
+<!-- 360° spin overlay -->
+<style>
+  #spin { position: fixed; inset: 0; z-index: 50; display: none; background: rgba(0,0,0,0.92); }
+  #spin.open { display: flex; align-items: center; justify-content: center; }
+  .spin-stage { width: 100%; height: 100%; touch-action: none; cursor: ew-resize; display: flex; align-items: center; justify-content: center; }
+  .spin-frame { width: 92vw; height: 80vh; background-position: center; background-repeat: no-repeat; background-size: contain; user-select: none; }
+  .spin-close { position: absolute; top: max(16px, env(safe-area-inset-top)); right: 16px; z-index: 2; }
+  .spin-hint { position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); color: rgba(255,255,255,0.85); background: rgba(0,0,0,0.4); border-radius: 999px; padding: 4px 14px; font-size: 12px; pointer-events: none; }
+</style>
+<div id="spin">
+  <button class="btn spin-close" id="spinClose" aria-label="Close">✕ Close</button>
+  <div class="spin-stage" id="spinStage"><div class="spin-frame" id="spinFrame"></div></div>
+  <div class="spin-hint" id="spinHint">↤ drag to rotate ↦</div>
+</div>
+
+<!-- v0.49.5: image preview lightbox. Opened by tapping a gallery tile. -->
+<div id="imgPreview">
+  <button class="btn img-preview-close" id="imgPreviewClose" type="button" aria-label="Close">✕ Close</button>
+  <button class="img-preview-nav img-preview-nav-prev" id="imgPreviewPrev" type="button" aria-label="Previous image">‹</button>
+  <button class="img-preview-nav img-preview-nav-next" id="imgPreviewNext" type="button" aria-label="Next image">›</button>
+  <div class="img-preview-stage" id="imgPreviewStage"><img id="imgPreviewImg" alt="" /></div>
+  <div class="img-preview-info" id="imgPreviewInfo"></div>
+</div>
+
+<!-- v0.46.0: company switcher sheet (replaces the old <select id="companySel">) -->
+<div class="sheet-overlay" id="companySheet" role="dialog" aria-modal="true" aria-label="Switch company">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Switch company</h3>
+      <button class="icon-btn" id="companySheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-list" id="companySheetList"></div>
+  </div>
+</div>
+
+<!-- v0.46.0: searchable category picker (the old <select id="catFilter"> wasn't
+     searchable, and the catalog has many categories — typing now filters live). -->
+<div class="sheet-overlay" id="catSheet" role="dialog" aria-modal="true" aria-label="Filter by category">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Filter by category</h3>
+      <button class="icon-btn" id="catSheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-search">
+      <input id="catSheetSearch" type="search" placeholder="Search categories…" autocapitalize="off" autocorrect="off" autocomplete="off" />
+    </div>
+    <div class="sheet-list" id="catSheetList"></div>
+  </div>
+</div>
+
+<!-- v0.49.8: scope picker sheet — the reusable "Apply to: this / selected / all"
+     prompt that every destructive image-edit action goes through. Title and
+     option rows are rebuilt on open from the caller\'s context (action name,
+     total image count, current selection). Multi-select arrives in v0.49.9
+     so for now the rows are just "This image" + "All N images". -->
+<div class="sheet-overlay" id="scopeSheet" role="dialog" aria-modal="true" aria-label="Choose images to apply to">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3 id="scopeSheetTitle">Apply to</h3>
+      <button class="icon-btn" id="scopeSheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div id="scopeSheetHint" class="scope-sheet-hint"></div>
+    <div class="sheet-list" id="scopeSheetList"></div>
+  </div>
+</div>
+
+<!-- v0.49.9: Reframe & crop sheet. Replaces the bare scope picker for this
+     action — the user gets a live preview + a small set of controls (scope,
+     tightness, fill mode, fill colour) before committing. Reuses the
+     existing `images:reframePreview` IPC for the preview render, and the
+     `images:autoCropProducts` IPC (now with `filepaths`) for the final commit. -->
+<div class="sheet-overlay" id="reframeSheet" role="dialog" aria-modal="true" aria-label="Reframe and crop">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3 id="reframeSheetTitle">Reframe &amp; crop</h3>
+      <button class="icon-btn" id="reframeSheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="reframe-sheet">
+      <div class="reframe-preview" id="reframePreview">
+        <img id="reframePreviewImg" alt="Reframe preview" hidden />
+        <div class="reframe-busy" id="reframeBusy">Rendering preview…</div>
+      </div>
+      <div class="reframe-preview-label" id="reframePreviewLabel"></div>
+
+      <div class="reframe-row">
+        <div class="reframe-row-label">Apply to</div>
+        <div class="reframe-chips" id="reframeScopeChips"></div>
+      </div>
+
+      <div class="reframe-row">
+        <div class="reframe-row-label">Tightness</div>
+        <div class="reframe-chips" id="reframeTightChips"></div>
+      </div>
+
+      <div class="reframe-row">
+        <div class="reframe-row-label">Background fill</div>
+        <div class="reframe-chips" id="reframeFillChips"></div>
+      </div>
+
+      <div class="reframe-row" id="reframeColorRow">
+        <div class="reframe-row-label">Fill colour</div>
+        <div class="reframe-chips" id="reframeColorChips"></div>
+        <input id="reframeColorPicker" type="color" value="#FFFFFF" style="position:absolute;left:-9999px;width:0;height:0;opacity:0" tabindex="-1" aria-hidden="true" />
+      </div>
+
+      <div class="reframe-actions">
+        <button class="btn" id="reframeCancelBtn" type="button">Cancel</button>
+        <button class="btn btn--primary" id="reframeApplyBtn" type="button">Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- v0.49.13: Enhance sheet. Same shape as Reframe — preview at the top,
+     one control row (Strength: Subtle / Normal / Punchy), Apply / Cancel.
+     Reuses the existing `.reframe-*` CSS classes since the layout is
+     identical and they\'re internal naming. -->
+<div class="sheet-overlay" id="enhanceSheet" role="dialog" aria-modal="true" aria-label="Enhance image">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Enhance</h3>
+      <button class="icon-btn" id="enhanceSheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="reframe-sheet">
+      <div class="reframe-preview" id="enhancePreview">
+        <img id="enhancePreviewImg" alt="Enhance preview" hidden />
+        <div class="reframe-busy" id="enhanceBusy">Rendering preview…</div>
+      </div>
+      <div class="reframe-preview-label" id="enhancePreviewLabel"></div>
+
+      <div class="reframe-row">
+        <div class="reframe-row-label">Apply to</div>
+        <div class="reframe-chips" id="enhanceScopeChips"></div>
+      </div>
+
+      <div class="reframe-row">
+        <div class="reframe-row-label">Strength</div>
+        <div class="reframe-chips" id="enhanceStrengthChips"></div>
+      </div>
+
+      <div class="reframe-actions">
+        <button class="btn" id="enhanceCancelBtn" type="button">Cancel</button>
+        <button class="btn btn--primary" id="enhanceApplyBtn" type="button">Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- v0.49.14: Overlay sheet. Different shape from Reframe / Enhance:
+     Overlay produces a derived image (appended or replacing main), so no
+     scope picker — always operates on the product\'s main image. Picker
+     row at the top to choose a template (horizontal scroll of cards),
+     destination chips below (Append / Replace main), preview in the
+     middle, Apply at the bottom. -->
+<div class="sheet-overlay" id="overlaySheet" role="dialog" aria-modal="true" aria-label="Apply overlay">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Overlay</h3>
+      <button class="icon-btn" id="overlaySheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="reframe-sheet">
+      <div class="reframe-preview" id="overlayPreview">
+        <img id="overlayPreviewImg" alt="Overlay preview" hidden />
+        <div class="reframe-busy" id="overlayBusy">Pick a template to preview…</div>
+      </div>
+      <div class="reframe-preview-label" id="overlayPreviewLabel"></div>
+
+      <div class="reframe-row">
+        <div class="reframe-row-label">Template</div>
+        <div class="overlay-template-strip" id="overlayTemplateStrip"></div>
+      </div>
+
+      <div class="reframe-row">
+        <div class="reframe-row-label">Destination</div>
+        <div class="reframe-chips" id="overlayDestChips"></div>
+      </div>
+
+      <div class="reframe-actions">
+        <button class="btn" id="overlayCancelBtn" type="button">Cancel</button>
+        <button class="btn btn--primary" id="overlayApplyBtn" type="button" disabled>Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- v0.49.7: sort picker sheet. The direction toggle pill lives at the top so
+     the same screen handles "sort by what" + "ascending or descending" without
+     a second sheet. Rows below are the available sort keys (Recently edited /
+     SKU / Name / Category / Image count) — tap one to apply + close. -->
+<div class="sheet-overlay" id="sortSheet" role="dialog" aria-modal="true" aria-label="Sort products">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Sort products by</h3>
+      <button class="icon-btn" id="sortSheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <!-- Direction toggle. The label updates per sort key — "Newest first" /
+         "Oldest first" for dates, "A → Z" / "Z → A" for strings, "High to low"
+         / "Low to high" for the image-count number column. -->
+    <div class="sort-dir-row">
+      <button class="chip is-active" id="sortDirToggle" type="button" aria-label="Toggle sort direction">
+        <span id="sortDirLabel">Newest first</span>
+        <svg id="sortDirIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 15 12 9 18 15"/>
+        </svg>
+      </button>
+    </div>
+    <div class="sheet-list" id="sortSheetList"></div>
+  </div>
+</div>
+
+<!-- v0.47.0: per-gallery-tile action menu. Title + actions are rebuilt every
+     open from the tile's context (set-main hidden if already main, etc.) -->
+<div class="sheet-overlay" id="tileMenuSheet" role="dialog" aria-modal="true" aria-label="Image actions">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3 id="tileMenuTitle">Image</h3>
+      <button class="icon-btn" id="tileMenuClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-list" id="tileMenuList"></div>
+  </div>
+</div>
+
+<!-- v0.47.0: "Process with AI" — the main flow sheet. Tap-to-change rows for
+     prompt + model open their own pickers; Run queues an ai:queueTask. -->
+<div class="sheet-overlay" id="aiSheet" role="dialog" aria-modal="true" aria-label="Process with AI">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Process with AI</h3>
+      <button class="icon-btn" id="aiSheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="ai-sheet">
+      <!-- Source thumb (visual feedback of which image is being processed) -->
+      <div class="ai-source" id="aiSource"><div class="ai-source-thumb" id="aiSourceThumb"></div><div class="ai-source-meta" id="aiSourceMeta"></div></div>
+      <!-- Prompt card -->
+      <button class="ai-pick" id="aiPromptPick" type="button">
+        <span class="ai-pick-label">1. Prompt</span>
+        <span class="ai-pick-value" id="aiPromptValue">Pick a prompt…</span>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <!-- Model card -->
+      <button class="ai-pick" id="aiModelPick" type="button">
+        <span class="ai-pick-label">2. Model</span>
+        <span class="ai-pick-value" id="aiModelValue">Pick a model…</span>
+        <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+      <!-- v0.49.3: aspect ratio chips. Per-model — list rebuilds when the
+           model picker changes. Defaults to the saved aspect when it's in
+           the new model's list, otherwise the model's first option. Hidden
+           until a model is picked since the list depends on it. -->
+      <div class="ai-aspect" id="aiAspectRow" hidden>
+        <span class="ai-pick-label">3. Aspect</span>
+        <div class="ai-aspect-chips" id="aiAspectChips" role="radiogroup" aria-label="Aspect ratio"></div>
+      </div>
+      <!-- v0.49.0: variants selector removed. Mobile always generates a
+           single variant per run — fat-finger protection on a small screen,
+           and predictable per-tap cost. Users can fire another run if they
+           want a second alternative. -->
+      <div class="ai-cost" id="aiCost">Estimated cost: —</div>
+      <button class="btn btn--primary ai-run" id="aiRunBtn" type="button" disabled>✨ Run AI</button>
+    </div>
+  </div>
+</div>
+
+<!-- v0.47.0: searchable prompt picker. Splits results into "My presets" (from
+     ai:listPrompts) and "Library" (the static PROMPT_LIBRARY). Tapping a
+     Library item also calls ai:createPrompt to adopt it. -->
+<div class="sheet-overlay" id="aiPromptSheet" role="dialog" aria-modal="true" aria-label="Pick a prompt">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Pick a prompt</h3>
+      <button class="icon-btn" id="aiPromptSheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-search">
+      <input id="aiPromptSearch" type="search" placeholder="Search prompts…" autocapitalize="off" autocorrect="off" autocomplete="off" />
+    </div>
+    <div class="sheet-list" id="aiPromptList"></div>
+  </div>
+</div>
+
+<!-- v0.47.0: model picker. ~10 image-to-image models with per-output price. -->
+<div class="sheet-overlay" id="aiModelSheet" role="dialog" aria-modal="true" aria-label="Pick a model">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Pick a model</h3>
+      <button class="icon-btn" id="aiModelSheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-list" id="aiModelList"></div>
+  </div>
+</div>
+
+<!-- v0.49.2: global AI activity sheet. Polls while open so it stays current
+     without needing the badge poll loop to do double duty. -->
+<div class="sheet-overlay" id="aiActivitySheet" role="dialog" aria-modal="true" aria-label="AI activity">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>AI activity</h3>
+      <button class="icon-btn" id="aiActivitySheetClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="sheet-list" id="aiActivityList"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  var LS = {
+    url: 'iskh.web.serverUrl', tok: 'iskh.web.token',
+    // v0.49.0: remember the last-used prompt + model so the AI sheet opens
+    // ready-to-run instead of empty. localStorage = per-device defaults.
+    aiPrompt: 'iskh.web.aiPrompt', aiModelKey: 'iskh.web.aiModelKey',
+    // v0.49.3 — remember last picked aspect ratio per device.
+    aiSize: 'iskh.web.aiSize',
+    // v0.49.7 — per-device product list sort preference. Survives
+    // company / category switches; resets only if the user changes it.
+    sortKey: 'iskh.web.sortKey', sortDir: 'iskh.web.sortDir',
+    // v0.49.9 — per-device Reframe & crop defaults so the sheet opens with
+    // the user\'s last picks pre-selected instead of resetting every time.
+    reframeTight: 'iskh.web.reframeTight', // 'snug' | 'normal' | 'loose'
+    reframeFill:  'iskh.web.reframeFill',  // 'color' | 'blur'
+    reframeColor: 'iskh.web.reframeColor', // #FFFFFF | #000000 | #EAEAEA | custom hex
+    // v0.49.13 — per-device Enhance strength preset.
+    enhanceStrength: 'iskh.web.enhanceStrength', // 'subtle' | 'normal' | 'punchy'
+    // v0.49.14 — Overlay: remember last-picked template + destination per
+    // device so the sheet opens ready-to-apply.
+    overlayTemplateId: 'iskh.web.overlayTemplateId',
+    overlayDestKind:   'iskh.web.overlayDestKind', // 'append' | 'replaceMain'
+  };
+  var baseUrl = (localStorage.getItem(LS.url) || '').replace(/\/+$/, '');
+  var token = localStorage.getItem(LS.tok) || '';
+
+  var PAGE_SIZE = 24;
+  var state = {
+    companies: [], companyId: null,
+    categories: [], categoriesById: {}, categoryFilter: '',
+    products: [], filtered: [], page: 0, search: '',
+    // v0.49.7 — product list sort. Default "Recently edited, newest first"
+    // matches the desktop Library default. Persisted in localStorage so the
+    // device remembers it across reloads; survives company / category switch.
+    sortKey: (localStorage.getItem(LS.sortKey) || 'updated'),
+    sortDir: (localStorage.getItem(LS.sortDir) === 'asc' ? 'asc' : 'desc'),
+    role: '', // v0.45.0 — populated from /api/whoami; drives applyRoleGating()
+    // v0.47.0 — AI flow state. Models loaded lazily on first AI sheet open.
+    aiModels: null,                  // null until first fetch; then array
+    aiPickedSource: null,            // { productId, filepath, sku, name } — the image to process
+    aiPickedPromptBody: null,        // the prompt text to send (raw or from picked preset)
+    aiPickedPromptName: null,        // display label of the picked prompt
+    aiPickedPromptTemplateId: null,  // when picked from "My presets", carry through for use_count bump
+    aiPickedModel: null,             // model object from listModels
+    aiPickedSize: null,              // v0.49.3 — aspect ratio string (e.g. '1:1'); per-model list
+    aiVariants: 1,                   // 1..4
+    aiPollTimer: null,               // setInterval id when polling for a running task
+    aiTileMenuFor: null,             // { productId, filepath, index, isMain } — context for the ⋯ menu
+    // v0.49.9 — Reframe & crop sheet state. Persisted defaults are read at
+    // open time; live edits live here until the sheet closes.
+    reframe: null, // { productId, imgs, focusedIndex, lockScope, scope, tight, fill, color, previewSeq, previewUrl }
+    // v0.49.13 — Enhance sheet state. Same shape as reframe but with a
+    // single "strength" control (Subtle / Normal / Punchy) instead of
+    // tightness + fill + colour.
+    enhance: null, // { productId, imgs, focusedIndex, lockScope, scope, strength, previewSeq, previewUrl }
+    // v0.49.14 — Overlay sheet. Different shape: source is always the
+    // product\'s main image (parity with desktop), output is a derived
+    // image. No scope / multi-select integration — Overlay produces new
+    // images instead of editing existing ones.
+    overlay: null, // { productId, templates: [], templateId, destKind, previewSeq, previewUrl }
+    // v0.49.12 — multi-select inside one product\'s gallery. Long-press a
+    // tile to enter; tap any tile in select-mode to toggle. Selection is
+    // a Set of `filepath` strings (not indexes) so it survives reorders.
+    // Scope = THIS product\'s detail view; cleared on detail close + product change.
+    selectMode: false,
+    selected: new Set(),
+    suppressNextClick: false, // set after long-press fires so the click event doesn\'t toggle
+  };
+
+  // v0.47.0: built-in prompt library mirrored from renderer/lib/promptLibrary.js
+  // so first-time mobile users have curated prompts to start from. Tapping one
+  // in the picker "adopts" it via ai:createPrompt so it shows in My presets too.
+  var PROMPT_LIBRARY = [
+    { id:'lib.handheld-to-studio', category:'Studio conversion', label:'Hand-taken → studio',
+      body:'Turn this casual phone photo of the product into a clean professional studio product shot on a seamless pure-white background. Even soft lighting, true-to-life colours, crisp focus, product centered and upright. Keep the product exactly as-is — do not change its shape, pattern, or proportions.' },
+    { id:'lib.catalog-white', category:'Studio conversion', label:'Catalog white background',
+      body:'Place the product on a pure white (#FFFFFF) seamless studio background. Remove all background clutter, soft even lighting, a subtle natural contact shadow beneath the product. Preserve the product’s true colours and surface texture.' },
+    { id:'lib.ecommerce-hero', category:'Studio conversion', label:'E-commerce hero shot',
+      body:'Professional e-commerce hero shot of the product: centered on a clean white background, crisp edges, gentle soft reflection beneath, bright and inviting. Magazine-quality, no props, no text.' },
+    { id:'lib.soft-studio-light', category:'Lighting', label:'Soft studio lighting',
+      body:'Relight the product with soft, diffused studio lighting coming from the upper-left, gentle falloff and no harsh shadows. Preserve the material texture and true colours; keep the background unchanged.' },
+    { id:'lib.warm-showroom', category:'Lighting', label:'Warm showroom glow',
+      body:'Relight with a warm, inviting showroom glow: soft golden key light with subtle ambient fill, premium boutique feel. Keep the product’s real colours accurate and avoid an orange colour cast.' },
+    { id:'lib.bright-even', category:'Lighting', label:'Bright & even (shadowless)',
+      body:'Relight with bright, shadowless, perfectly even lighting as used for top-down flat-lay photography. Neutral white balance, clean highlights, no blown-out areas.' },
+    { id:'lib.marble', category:'Backgrounds', label:'White marble surface',
+      body:'Place the product on a polished white marble surface with a soft neutral out-of-focus background. Natural soft lighting, premium feel, realistic contact shadow.' },
+    { id:'lib.wood-table', category:'Backgrounds', label:'Light wooden table',
+      body:'Stage the product on a light natural wooden table with a blurred neutral interior in the background. Soft daylight from a window, warm but accurate colours, shallow depth of field.' },
+    { id:'lib.gradient-backdrop', category:'Backgrounds', label:'Gradient studio backdrop',
+      body:'Place the product on a smooth studio backdrop that fades from light grey at the top to white at the bottom. Product centered, soft shadow grounding it, clean and modern.' },
+    { id:'lib.lifestyle-scene', category:'Backgrounds', label:'Lifestyle interior scene',
+      body:'Stage this {category} naturally in a tasteful modern interior setting that suits it, with soft natural light and a shallow depth of field. Keep the product the clear focus and unchanged.' },
+    { id:'lib.cutout-white', category:'Cleanup & retouch', label:'Remove background → white',
+      body:'Cleanly cut the product out from its current background and place it on a pure white background. Keep the edges crisp and natural, no haloing, preserve fine detail and true colour.' },
+    { id:'lib.remove-glare', category:'Cleanup & retouch', label:'Remove glare & reflections',
+      body:'Reduce harsh glare, hotspots, and unwanted reflections on the product surface while keeping its real colours, glaze, and texture intact. Do not flatten or repaint the material.' },
+    { id:'lib.remove-dust', category:'Cleanup & retouch', label:'Remove dust, scratches & smudges',
+      body:'Retouch out dust, fingerprints, smudges, and minor scratches from the product and background. Keep the product authentic and unmodified in shape and pattern.' },
+    { id:'lib.remove-tags', category:'Cleanup & retouch', label:'Remove price tags / stickers',
+      body:'Remove any price tags, stickers, barcodes, or stray labels from the product and reconstruct the underlying surface naturally and seamlessly.' },
+    { id:'lib.color-correct', category:'Colour', label:'True-to-life colour correct',
+      body:'Correct the white balance and exposure to neutral and render the product’s real-life colours accurately. The {color} finish should look true to life. No oversaturation, no colour cast.' },
+    { id:'lib.vivid', category:'Colour', label:'Vivid & punchy',
+      body:'Increase contrast and saturation slightly for a vivid, eye-catching catalog look while keeping skin/material tones natural and believable. Do not clip highlights or shadows.' },
+    { id:'lib.spec-sheet', category:'Product spec', label:'Product spec view',
+      body:'Produce a clean straight-on documentation view of the product suitable for a spec sheet: neutral seamless background, no props, accurate proportions and colour, evenly lit, sharp detail across the whole product.' },
+    { id:'lib.outline', category:'Product spec', label:'Outline on white',
+      body:'Render the product as a clean, sharply-defined silhouette-style shot perfectly centered on pure white, with crisp true-to-shape edges and accurate proportions. Useful as a reference / outline image.' },
+    { id:'lib.three-quarter', category:'Angles', label:'Three-quarter angle',
+      body:'Re-render the product at a flattering three-quarter angle showing the front and one side, on a clean white studio background with soft lighting and a subtle shadow. Keep the product identical in design.' },
+    { id:'lib.flat-lay', category:'Angles', label:'Top-down flat lay',
+      body:'Top-down flat-lay of the {name}, perfectly centered on a clean white surface, bright even lighting, a slight soft shadow for grounding. No props, no text.' },
+  ];
+  var blobCache = {};      // relpath -> objectURL (so we don't refetch bytes)
+  var imgListCache = {};   // productId -> images[]  (avoid refetching per product)
+  var mainImgCache = {};   // productId -> main image relpath | null
+  var thumbObserver = null; // IntersectionObserver: load thumbs only when scrolled into view
+  var currentDetail = null; // product whose detail sheet is open (for Add photo)
+
+  /* ── transport ─────────────────────────────────────────────── */
+  function rpc(channel, args) {
+    return fetch(baseUrl + '/api/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ channel: channel, args: args === undefined ? null : args }),
+    }).then(function (res) {
+      if (!res.ok) {
+        return res.json().catch(function () { return {}; }).then(function (j) {
+          throw new Error(j.error || (res.status === 401 ? 'Token rejected' : 'HTTP ' + res.status));
+        });
+      }
+      return res.json().then(function (b) { return b.result; });
+    });
+  }
+
+  // Fetch an asset's bytes with the Bearer header → blob URL. Server route
+  // is GET /assets/<rel> where <rel> is the image's stored relative path.
+  function assetUrl(relpath) {
+    if (!relpath) return Promise.resolve(null);
+    if (blobCache[relpath]) return Promise.resolve(blobCache[relpath]);
+    var enc = relpath.split('/').map(encodeURIComponent).join('/');
+    return fetch(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } })
+      .then(function (res) { return res.ok ? res.blob() : null; })
+      .then(function (blob) {
+        if (!blob) return null;
+        var url = URL.createObjectURL(blob);
+        blobCache[relpath] = url;
+        return url;
+      })
+      .catch(function () { return null; });
+  }
+
+  function toast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(toast._t); toast._t = setTimeout(function () { t.classList.remove('show'); }, 2600);
+  }
+
+  /* ── connect ───────────────────────────────────────────────── */
+  function showConnect(err) {
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('connect').style.display = 'block';
+    // When this page is served BY the app server (…:13180/m), the API is
+    // the same origin — prefill it so the user only needs to paste a token.
+    var prefill = baseUrl || (/^https?:/.test(location.origin || '') ? location.origin : '');
+    document.getElementById('srv').value = prefill;
+    document.getElementById('tok').value = token;
+    document.getElementById('connectErr').textContent = err || '';
+  }
+
+  document.getElementById('connectBtn').addEventListener('click', function () {
+    var u = document.getElementById('srv').value.trim().replace(/\/+$/, '');
+    // Be forgiving: if the user omitted the scheme, assume http://.
+    if (u && !/^https?:\/\//i.test(u)) u = 'http://' + u;
+    var t = document.getElementById('tok').value.trim();
+    if (!u || !t) { document.getElementById('connectErr').textContent = 'Enter both the server URL and a token.'; return; }
+    this.disabled = true; this.textContent = 'Connecting…';
+    var btn = this;
+    // Validate via /api/whoami (token-checked) before saving.
+    fetch(u + '/api/whoami', { headers: { Authorization: 'Bearer ' + t } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error('Token rejected by the server.');
+        if (!res.ok) throw new Error('Server reachable but returned HTTP ' + res.status + '.');
+        return res.json();
+      })
+      .then(function (whoami) {
+        baseUrl = u; token = t;
+        localStorage.setItem(LS.url, u); localStorage.setItem(LS.tok, t);
+        // Capture role so we can hide buttons that the server would 403 on
+        // anyway — server is the authoritative gate (main/util/permissions.js).
+        state.role = (whoami && whoami.user && whoami.user.role) || '';
+        applyRoleGating();
+        document.getElementById('connect').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+        boot();
+      })
+      .catch(function (e) {
+        document.getElementById('connectErr').textContent = e.message || 'Could not connect.';
+      })
+      .finally(function () { btn.disabled = false; btn.textContent = 'Connect'; });
+  });
+
+  document.getElementById('disconnect').addEventListener('click', function () {
+    if (!window.confirm('Disconnect from the server?\n\nYou’ll need to paste your access token again to reconnect.')) return;
+    localStorage.removeItem(LS.tok);
+    token = '';
+    showConnect('');
+  });
+
+  // v0.45.0: hide write-only controls when the connected user is a Viewer
+  // or Photographer. Server is authoritative (sends 403 on disallowed RPCs);
+  // this is purely the UX layer so the buttons don't even appear.
+  function applyRoleGating() {
+    document.body.dataset.role = state.role || '';
+  }
+
+  /* ── boot: whoami (role) → companies → products ─────────────── */
+  function boot() {
+    // On a returning session (page reload while a token's already saved)
+    // we never re-ran the Connect handler, so state.role is empty. Fetch
+    // whoami once before everything else so role-gating is set up by the
+    // time anything renders.
+    var ensureRole = state.role
+      ? Promise.resolve()
+      : fetch(baseUrl + '/api/whoami', { headers: { Authorization: 'Bearer ' + token } })
+          .then(function (res) { return res.ok ? res.json() : null; })
+          .then(function (j) { state.role = (j && j.user && j.user.role) || ''; applyRoleGating(); })
+          .catch(function () { /* non-fatal — UI just shows everything */ });
+
+    ensureRole.then(function () {
+    Promise.all([rpc('companies:list'), rpc('companies:getActiveId').catch(function () { return null; })])
+      .then(function (r) {
+        state.companies = r[0] || [];
+        var active = r[1];
+        state.companyId = (state.companies.find(function (c) { return c.id === active; }) || state.companies[0] || {}).id || null;
+        updateCompanyButton();   // v0.46.0: paints the initials chip
+        renderCompanySheet();    // v0.46.0: builds the company switcher list
+        updateSortChip();        // v0.49.7: paint the sort chip from persisted prefs
+        setActiveCompany(state.companyId);
+        loadCategories();
+        loadProducts();
+        refreshAiBadge(); // v0.49.2 — paint the AI badge on boot
+      })
+      .catch(function (e) { showConnect('Connected, but loading failed: ' + e.message); });
+    });  // ensureRole.then
+  }
+
+  // Writes (importing a photo) target the caller's ACTIVE company on the
+  // server, so keep it synced with whatever company you're viewing.
+  // Per-user (v0.15.2), so this doesn't disturb other clients.
+  function setActiveCompany(id) {
+    if (id) rpc('companies:setActive', id).catch(function () {});
+  }
+
+  document.getElementById('search').addEventListener('input', function () {
+    state.search = this.value.trim().toLowerCase(); state.page = 0; applyFilter(); render();
+  });
+
+  /* ── v0.46.0: company chip + sheet ──────────────────────────── */
+  // Paint the chip: company initial(s). Up to two letters from the first
+  // and second word, falling back to the first letter when there's only one.
+  function companyInitials(name) {
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '·';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  function updateCompanyButton() {
+    var co = state.companies.find(function (c) { return c.id === state.companyId; });
+    var mark = co ? companyInitials(co.name || co.id) : '·';
+    var btn = document.getElementById('companyBtn');
+    document.getElementById('companyMark').textContent = mark;
+    btn.setAttribute('title', co ? ('Company: ' + (co.name || co.id) + ' — tap to switch') : 'Switch company');
+  }
+  function renderCompanySheet() {
+    var list = document.getElementById('companySheetList');
+    list.innerHTML = '';
+    if (!state.companies.length) {
+      list.innerHTML = '<div class="sheet-empty">No companies on this server.</div>';
+      return;
+    }
+    state.companies.forEach(function (c) {
+      var row = document.createElement('div');
+      row.className = 'sheet-row' + (c.id === state.companyId ? ' is-active' : '');
+      row.innerHTML = '<span>' + escapeHtml(c.name || c.id) + '</span>'
+        + (c.id === state.companyId
+          ? '<svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>'
+          : '');
+      row.addEventListener('click', function () { pickCompany(c.id); });
+      list.appendChild(row);
+    });
+  }
+  function pickCompany(id) {
+    if (!id || id === state.companyId) { closeSheet('companySheet'); return; }
+    state.companyId = id; state.page = 0;
+    state.categoryFilter = ''; // categories belong to the OLD company; reset.
+    updateCompanyButton();
+    setActiveCompany(id);
+    closeSheet('companySheet');
+    loadCategories();
+    loadProducts();
+  }
+  document.getElementById('companyBtn').addEventListener('click', function () {
+    renderCompanySheet();
+    openSheet('companySheet');
+  });
+
+  /* ── v0.46.0: category chips + searchable picker sheet ─────── */
+  // "All" chip is active when there's no category filter; the picker chip is
+  // active when there IS one, and shows the active category's name.
+  function updateCategoryButtons() {
+    var has = !!state.categoryFilter;
+    var allBtn = document.getElementById('catAllBtn');
+    var pickBtn = document.getElementById('catPickerBtn');
+    var label = document.getElementById('catPickerLabel');
+    allBtn.classList.toggle('is-active', !has);
+    allBtn.setAttribute('aria-pressed', String(!has));
+    pickBtn.classList.toggle('is-active', has);
+    label.textContent = has ? (state.categoriesById[state.categoryFilter] || 'Category') : 'Category';
+  }
+  // Build the (optionally search-filtered) list of category rows. Empty
+  // query renders the whole list; otherwise case-insensitive substring match.
+  function renderCategorySheet(query) {
+    var list = document.getElementById('catSheetList');
+    list.innerHTML = '';
+    var q = (query || '').trim().toLowerCase();
+    if (!state.categories.length) {
+      list.innerHTML = '<div class="sheet-empty">No categories for this company.</div>';
+      return;
+    }
+    var matches = q
+      ? state.categories.filter(function (c) { return (c.name || '').toLowerCase().indexOf(q) !== -1; })
+      : state.categories.slice();
+    if (matches.length === 0) {
+      list.innerHTML = '<div class="sheet-empty">No categories match “' + escapeHtml(query) + '”.</div>';
+      return;
+    }
+    matches.forEach(function (c) {
+      var row = document.createElement('div');
+      var active = c.id === state.categoryFilter;
+      row.className = 'sheet-row' + (active ? ' is-active' : '');
+      row.innerHTML = '<span>' + escapeHtml(c.name || c.id) + '</span>'
+        + (active
+          ? '<svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>'
+          : '');
+      row.addEventListener('click', function () { pickCategory(c.id); });
+      list.appendChild(row);
+    });
+  }
+  function pickCategory(id) {
+    state.categoryFilter = id || '';
+    state.page = 0;
+    updateCategoryButtons();
+    applyFilter();
+    render();
+    closeSheet('catSheet');
+  }
+  document.getElementById('catAllBtn').addEventListener('click', function () { pickCategory(''); });
+  document.getElementById('catPickerBtn').addEventListener('click', function () {
+    document.getElementById('catSheetSearch').value = '';
+    renderCategorySheet('');
+    openSheet('catSheet');
+    // Defer the focus a tick so iOS Safari doesn't fight the sheet animation.
+    setTimeout(function () { document.getElementById('catSheetSearch').focus(); }, 80);
+  });
+  document.getElementById('catSheetSearch').addEventListener('input', function () {
+    renderCategorySheet(this.value);
+  });
+
+  /* ── v0.49.7: sort picker ─────────────────────────────────────
+     Mirrors the desktop Library\'s sort vocabulary (sku / name / category /
+     images / updated). Skips brand because the mobile viewer doesn\'t load
+     brands and would sort by raw brand IDs. Skips color/finish because it\'s
+     rarely useful on a small screen.
+     Direction labels adapt per key — "Newest first" vs "A → Z" vs "High to
+     low" — because "Ascending" / "Descending" reads as jargon to staff. */
+  var SORT_OPTIONS = [
+    { key: 'updated',  label: 'Recently edited', type: 'date' },
+    { key: 'sku',      label: 'SKU',             type: 'string' },
+    { key: 'name',     label: 'Name',            type: 'string' },
+    { key: 'category', label: 'Category',        type: 'string' },
+    { key: 'images',   label: 'Image count',     type: 'number' },
+  ];
+  function sortOption(key) {
+    for (var i = 0; i < SORT_OPTIONS.length; i++) if (SORT_OPTIONS[i].key === key) return SORT_OPTIONS[i];
+    return SORT_OPTIONS[0];
+  }
+  // Direction-label vocabulary: dates read as "Newest/Oldest", numbers as
+  // "High to low", strings as "A → Z". Falls back if anything is off.
+  function dirLabel(opt, dir) {
+    if (opt.type === 'date')   return dir === 'desc' ? 'Newest first'    : 'Oldest first';
+    if (opt.type === 'number') return dir === 'desc' ? 'High to low'     : 'Low to high';
+    return dir === 'desc' ? 'Z → A' : 'A → Z';
+  }
+  // Pull the comparable value for one product on the active sort key.
+  // Category resolves through state.categoriesById so the user sees rows
+  // grouped under the human-readable category name, not its UUID.
+  function sortValue(p, key) {
+    if (key === 'sku')      return (p.sku || '').toLowerCase();
+    if (key === 'name')     return (p.name || '').toLowerCase();
+    if (key === 'category') return (state.categoriesById[p.categoryId] || '').toLowerCase();
+    if (key === 'images')   return Number(p.imageCount || 0);
+    /* updated */           return Number(p.updatedAt || 0);
+  }
+  // Stable sort: ties break on SKU so the order doesn\'t jitter between
+  // renders. Numeric comparison for numbers; localeCompare with numeric:true
+  // for strings so "AV-M81" / "AV-M8101" / "AV-M8200" read in human order.
+  function sortProducts(items) {
+    var key = state.sortKey;
+    var dir = state.sortDir === 'asc' ? 1 : -1;
+    var type = sortOption(key).type;
+    return items.slice().sort(function (a, b) {
+      var av = sortValue(a, key), bv = sortValue(b, key);
+      var cmp;
+      if (type === 'number' || type === 'date') {
+        cmp = (av - bv);
+      } else {
+        cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+      }
+      if (cmp !== 0) return cmp * dir;
+      // Tiebreaker: SKU ascending, so equal rows have a stable order.
+      return String(a.sku || '').localeCompare(String(b.sku || ''), undefined, { numeric: true, sensitivity: 'base' });
+    });
+  }
+  // The chip label is just the option name ("SKU", "Category", …). The
+  // direction arrow lives in the chip via a tiny ▴/▾ glyph appended to the
+  // text so users see at a glance which way it\'s sorted without opening the sheet.
+  function updateSortChip() {
+    var opt = sortOption(state.sortKey);
+    var arrow = state.sortDir === 'desc' ? ' ↓' : ' ↑';
+    document.getElementById('sortPickerLabel').textContent = opt.label + arrow;
+  }
+  function renderSortSheet() {
+    var list = document.getElementById('sortSheetList');
+    list.innerHTML = '';
+    SORT_OPTIONS.forEach(function (opt) {
+      var row = document.createElement('div');
+      var active = opt.key === state.sortKey;
+      row.className = 'sheet-row' + (active ? ' is-active' : '');
+      row.innerHTML = '<span>' + escapeHtml(opt.label) + '</span>'
+        + (active
+          ? '<svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>'
+          : '');
+      row.addEventListener('click', function () { pickSort(opt.key); });
+      list.appendChild(row);
+    });
+    // Sync the direction toggle to the current key (label vocabulary depends
+    // on the key\'s type — date vs string vs number).
+    var opt = sortOption(state.sortKey);
+    var btn = document.getElementById('sortDirToggle');
+    btn.classList.toggle('is-desc', state.sortDir === 'desc');
+    document.getElementById('sortDirLabel').textContent = dirLabel(opt, state.sortDir);
+  }
+  function pickSort(key) {
+    if (state.sortKey !== key) {
+      state.sortKey = key;
+      try { localStorage.setItem(LS.sortKey, key); } catch (_) {}
+    }
+    state.page = 0;
+    updateSortChip();
+    applyFilter();
+    render();
+    closeSheet('sortSheet');
+  }
+  function toggleSortDir() {
+    state.sortDir = state.sortDir === 'desc' ? 'asc' : 'desc';
+    try { localStorage.setItem(LS.sortDir, state.sortDir); } catch (_) {}
+    state.page = 0;
+    updateSortChip();
+    // Refresh the toggle\'s label + arrow without closing the sheet — the
+    // user might want to flip the direction and then pick a different key.
+    var opt = sortOption(state.sortKey);
+    document.getElementById('sortDirToggle').classList.toggle('is-desc', state.sortDir === 'desc');
+    document.getElementById('sortDirLabel').textContent = dirLabel(opt, state.sortDir);
+    applyFilter();
+    render();
+  }
+  document.getElementById('sortPickerBtn').addEventListener('click', function () {
+    renderSortSheet();
+    openSheet('sortSheet');
+  });
+  document.getElementById('sortDirToggle').addEventListener('click', toggleSortDir);
+  document.getElementById('sortSheetClose').addEventListener('click', function () { closeSheet('sortSheet'); });
+  document.getElementById('sortSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('sortSheet'); });
+
+  /* ── shared sheet open/close ───────────────────────────────── */
+  function openSheet(id) { document.getElementById(id).classList.add('open'); document.body.style.overflow = 'hidden'; }
+  function closeSheet(id) {
+    document.getElementById(id).classList.remove('open');
+    // Don't unlock body scroll if the product detail sheet is still open.
+    document.body.style.overflow = document.getElementById('detail').classList.contains('open') ? 'hidden' : '';
+  }
+  document.getElementById('companySheetClose').addEventListener('click', function () { closeSheet('companySheet'); });
+  document.getElementById('companySheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('companySheet'); });
+  document.getElementById('catSheetClose').addEventListener('click', function () { closeSheet('catSheet'); });
+  document.getElementById('catSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('catSheet'); });
+
+  // Categories are per-company. Reloaded on boot and on every company switch
+  // so the picker sheet + the detail-sheet "Category" line stay accurate.
+  function loadCategories() {
+    if (!state.companyId) {
+      state.categories = []; state.categoriesById = {};
+      updateCategoryButtons();
+      return Promise.resolve();
+    }
+    return rpc('categories:list', state.companyId)
+      .then(function (rows) {
+        state.categories = rows || [];
+        state.categoriesById = {};
+        state.categories.forEach(function (c) { state.categoriesById[c.id] = c.name || c.id; });
+        if (state.categoryFilter && !state.categoriesById[state.categoryFilter]) state.categoryFilter = '';
+        updateCategoryButtons();
+      })
+      .catch(function () { /* non-fatal — filter just stays at "All" */ });
+  }
+
+  function loadProducts() {
+    document.getElementById('list').innerHTML = '<div class="loading">Loading…</div>';
+    if (!state.companyId) { state.products = []; applyFilter(); render(); return; }
+    rpc('products:list', { companyId: state.companyId, filters: {} })
+      .then(function (rows) { state.products = rows || []; applyFilter(); render(); })
+      .catch(function (e) { document.getElementById('list').innerHTML = '<div class="empty">' + escapeHtml(e.message) + '</div>'; });
+  }
+
+  function applyFilter() {
+    var q = state.search;
+    var cat = state.categoryFilter;
+    var filtered = state.products.filter(function (p) {
+      if (cat && p.categoryId !== cat) return false;
+      if (q && (p.sku || '').toLowerCase().indexOf(q) === -1
+            && (p.name || '').toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+    // v0.49.7 — sort after filter so the active sort applies INSIDE the
+    // chosen category too (user\'s explicit ask).
+    state.filtered = sortProducts(filtered);
+  }
+
+  /* ── render grid ───────────────────────────────────────────── */
+  function render() {
+    var total = state.filtered.length;
+    var pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (state.page >= pages) state.page = pages - 1;
+    var start = state.page * PAGE_SIZE;
+    var pageItems = state.filtered.slice(start, start + PAGE_SIZE);
+
+    document.getElementById('count').textContent = total + (total === 1 ? ' product' : ' products');
+
+    var list = document.getElementById('list');
+    if (total === 0) { list.innerHTML = '<div class="empty">No products' + (state.search ? ' match “' + escapeHtml(state.search) + '”.' : '.') + '</div>'; }
+    else {
+      var grid = document.createElement('div'); grid.className = 'grid';
+      pageItems.forEach(function (p) { grid.appendChild(card(p)); });
+      list.innerHTML = ''; list.appendChild(grid);
+      observeThumbs(pageItems);
+    }
+
+    var pager = document.getElementById('pager');
+    pager.innerHTML = '';
+    if (pages > 1) {
+      pager.appendChild(pagerBtn('‹ Prev', state.page > 0, function () { state.page--; render(); window.scrollTo(0, 0); }));
+      var lbl = document.createElement('span'); lbl.className = 'count'; lbl.textContent = 'Page ' + (state.page + 1) + ' / ' + pages;
+      pager.appendChild(lbl);
+      pager.appendChild(pagerBtn('Next ›', state.page < pages - 1, function () { state.page++; render(); window.scrollTo(0, 0); }));
+    }
+  }
+
+  function pagerBtn(text, enabled, fn) {
+    var b = document.createElement('button'); b.className = 'btn'; b.textContent = text;
+    b.disabled = !enabled; if (enabled) b.addEventListener('click', fn);
+    return b;
+  }
+
+  function card(p) {
+    var el = document.createElement('div'); el.className = 'card'; el.dataset.id = p.id;
+    var cnt = (p.imageCount != null ? p.imageCount : '');
+    el.innerHTML =
+      '<div class="thumb" data-thumb="' + p.id + '">' + (cnt ? '' : 'no image') + '</div>' +
+      '<div class="meta">' +
+        '<div class="sku">' + escapeHtml(p.sku || '(no SKU)') + '</div>' +
+        (p.name ? '<div class="name">' + escapeHtml(p.name) + '</div>' : '') +
+        (cnt !== '' ? '<div class="imgcount">' + cnt + ' image' + (cnt === 1 ? '' : 's') + '</div>' : '') +
+      '</div>';
+    el.addEventListener('click', function () { openDetail(p); });
+    return el;
+  }
+
+  // Only fetch a card's thumbnail once it scrolls into view — so a page of
+  // 24 cards doesn't fire 24 full-image downloads at once (the big drag on
+  // a high-latency/remote link). Falls back to eager load if the browser
+  // lacks IntersectionObserver.
+  function observeThumbs(items) {
+    if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null; }
+    var byId = {};
+    items.forEach(function (p) { byId[p.id] = p; });
+    if (!('IntersectionObserver' in window)) { items.forEach(lazyThumb); return; }
+    thumbObserver = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (!en.isIntersecting) return;
+        thumbObserver.unobserve(en.target);
+        var p = byId[en.target.getAttribute('data-thumb')];
+        if (p) lazyThumb(p);
+      });
+    }, { rootMargin: '300px' }); // start loading a bit before they appear
+    document.querySelectorAll('.thumb[data-thumb]').forEach(function (el) { thumbObserver.observe(el); });
+  }
+
+  function lazyThumb(p) {
+    if (p.imageCount === 0) return;
+    var slot = document.querySelector('.thumb[data-thumb="' + p.id + '"]');
+    if (!slot) return;
+    getMainImage(p.id).then(function (rel) {
+      if (!rel) return;
+      return assetUrl(rel).then(function (url) {
+        if (url && slot.isConnected) { slot.style.backgroundImage = 'url("' + url + '")'; slot.textContent = ''; }
+      });
+    });
+  }
+
+  // Cached image-list fetch — reused by the grid thumbnail AND the detail
+  // sheet, so opening a product you already saw a thumb for is instant.
+  function getImageList(productId) {
+    if (imgListCache[productId]) return Promise.resolve(imgListCache[productId]);
+    return rpc('images:listByProduct', productId)
+      .then(function (imgs) { imgListCache[productId] = imgs || []; return imgListCache[productId]; })
+      .catch(function () { return []; });
+  }
+
+  function getMainImage(productId) {
+    if (mainImgCache[productId] !== undefined) return Promise.resolve(mainImgCache[productId]);
+    return getImageList(productId).then(function (imgs) {
+      var m = imgs && imgs[0];
+      var rel = m ? ((m.isProcessed && m.processedFilepath) ? m.processedFilepath : m.filepath) : null;
+      mainImgCache[productId] = rel;
+      return rel;
+    });
+  }
+
+  /* ── detail sheet ──────────────────────────────────────────── */
+  function openDetail(p) {
+    currentDetail = p;
+    document.getElementById('detailSku').textContent = p.sku || '(no SKU)';
+    var fields = document.getElementById('detailFields');
+    fields.innerHTML = '';
+    document.getElementById('detail').classList.add('open');
+    document.body.style.overflow = 'hidden';
+
+    // Resolve category id → human name via the per-company map we loaded at
+    // boot. Price is the retail figure; formatted with two decimals when set.
+    var catName = p.categoryId && state.categoriesById ? state.categoriesById[p.categoryId] : null;
+    var priceR = (p.priceRetail != null && p.priceRetail !== '') ? ('$' + Number(p.priceRetail).toFixed(2)) : null;
+    var rows = [
+      ['Name', p.name], ['Category', catName], ['Color / finish', p.colorFinish],
+      ['Price', priceR], ['Barcode', p.barcode],
+      ['Status', p.status], ['Images', p.imageCount],
+    ].filter(function (r) { return r[1] != null && r[1] !== ''; });
+    fields.innerHTML = rows.map(function (r) {
+      return '<div class="row"><span class="k">' + escapeHtml(r[0]) + '</span><span class="v">' + escapeHtml(String(r[1])) + '</span></div>';
+    }).join('');
+
+    renderGallery(p.id);
+    renderAiResults(p.id); // v0.47.0
+  }
+
+  function renderGallery(productId) {
+    var gal = document.getElementById('detailGallery');
+    gal.innerHTML = '<div class="loading">Loading images…</div>';
+    getImageList(productId).then(function (imgs) {
+      if (!imgs || !imgs.length) { gal.innerHTML = '<div class="empty">No images yet — tap “Add photo”.</div>'; return; }
+      gal.innerHTML = '';
+      var total = imgs.length;
+      imgs.forEach(function (img, i) {
+        var rel = (img.isProcessed && img.processedFilepath) ? img.processedFilepath : img.filepath;
+        var fig = document.createElement('figure');
+        // v0.49.12: stamp the filepath so refreshSelectedTileClasses() can
+        // toggle .is-selected without a full re-render.
+        fig.setAttribute('data-filepath', img.filepath);
+        var size = img.fileSize ? fmtBytes(img.fileSize) : '';
+        // v0.47.0: replaced the × delete with a ⋯ menu — set-main / use-with-AI /
+        // delete all hang off the same opener so the tile corner stays clean.
+        // v0.49.8: ← → reorder buttons at bottom corners. Disabled at boundaries
+        // (first tile can\'t go earlier, last tile can\'t go later). CSS hides
+        // them entirely for Viewer / Photographer roles.
+        // v0.49.12: select-badge — empty circle when select-mode is on but
+        // this tile isn\'t selected; filled ✓ when selected. CSS handles the
+        // show/hide based on body.is-selecting.
+        var leftDis  = i === 0         ? ' disabled' : '';
+        var rightDis = i === total - 1 ? ' disabled' : '';
+        fig.innerHTML = '<div class="thumb" style="aspect-ratio:1"></div>' +
+          '<span class="select-badge" aria-hidden="true">✓</span>' +
+          '<button class="tile-menu" type="button" aria-label="Image actions">⋯</button>' +
+          '<button class="tile-arrow left"  type="button" aria-label="Move earlier"' + leftDis  + '>‹</button>' +
+          '<button class="tile-arrow right" type="button" aria-label="Move later"'   + rightDis + '>›</button>' +
+          '<figcaption><span>#' + (i + 1) + (i === 0 ? ' · main' : '') + '</span><span>' + size + '</span></figcaption>';
+        gal.appendChild(fig);
+        // Apply the selection style if this tile was already in the Set
+        // (e.g. user rotated to another image and came back).
+        if (state.selected.has(img.filepath)) fig.classList.add('is-selected');
+        var menuBtn = fig.querySelector('.tile-menu');
+        menuBtn.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          openTileMenu({ productId: productId, filepath: img.filepath, index: i, isMain: i === 0, sku: (currentDetail && currentDetail.sku) || '' });
+        });
+        // v0.49.8: reorder by swapping with the neighbor. Server enforces the
+        // permutation check on `images:reorderImages`, so an invalid order
+        // throws and we don\'t mutate state until the response comes back.
+        fig.querySelector('.tile-arrow.left').addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          if (i > 0) reorderImageNeighbor(productId, imgs, i, i - 1);
+        });
+        fig.querySelector('.tile-arrow.right').addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          if (i < total - 1) reorderImageNeighbor(productId, imgs, i, i + 1);
+        });
+        // v0.49.12: long-press to enter multi-select. 500ms hold without
+        // movement > 10px triggers it. Cancelled on pointerup (it\'s a tap)
+        // or significant pointermove (it\'s a scroll). suppressNextClick
+        // keeps the click handler from immediately deselecting the tile we
+        // just selected via the long-press itself.
+        var lpTimer = null, lpStartX = 0, lpStartY = 0;
+        fig.addEventListener('pointerdown', function (ev) {
+          if (isSelecting() || !isWriter()) return; // no LP needed in select mode
+          lpStartX = ev.clientX; lpStartY = ev.clientY;
+          if (lpTimer) clearTimeout(lpTimer);
+          lpTimer = setTimeout(function () {
+            lpTimer = null;
+            state.suppressNextClick = true;
+            enterSelectMode(img.filepath);
+          }, 500);
+        });
+        function cancelLP(ev) {
+          if (!lpTimer) return;
+          if (ev && ev.type === 'pointermove') {
+            if (Math.abs(ev.clientX - lpStartX) <= 10 && Math.abs(ev.clientY - lpStartY) <= 10) return;
+          }
+          clearTimeout(lpTimer); lpTimer = null;
+        }
+        fig.addEventListener('pointermove',   cancelLP);
+        fig.addEventListener('pointerup',     cancelLP);
+        fig.addEventListener('pointercancel', cancelLP);
+        fig.addEventListener('pointerleave',  cancelLP);
+        // v0.49.5 + v0.49.12: tap the tile → open lightbox OR toggle the
+        // selection if we\'re in select-mode. ⋯ + arrows stopPropagation so
+        // they don\'t double-fire here.
+        fig.addEventListener('click', function () {
+          if (state.suppressNextClick) { state.suppressNextClick = false; return; }
+          if (isSelecting()) toggleSelected(img.filepath);
+          else               openImgPreview(imgs, i);
+        });
+        assetUrl(rel).then(function (url) {
+          if (!url) return;
+          var im = document.createElement('img'); im.src = url; im.alt = '';
+          fig.replaceChild(im, fig.firstChild);
+        });
+      });
+    }).catch(function (e) { gal.innerHTML = '<div class="empty">' + escapeHtml(e.message) + '</div>'; });
+  }
+
+  /* ── v0.49.12: multi-select inside one product\'s gallery ──────
+     Enters via long-press (writer roles only). In select mode, tap any
+     tile toggles its selection; the per-tile ⋯ + arrows hide; the
+     Reframe sheet (and future Enhance / Overlay) shows "Selected (N)"
+     as a third scope option. Tap Done to exit; selection clears.
+     Selection is a Set of filepaths so it survives reorders. */
+  function isSelecting() { return !!state.selectMode; }
+  function selectionCount() { return state.selected.size; }
+  function selectionFilepaths() {
+    var out = [];
+    state.selected.forEach(function (fp) { out.push(fp); });
+    return out;
+  }
+
+  function enterSelectMode(firstFilepath) {
+    if (!isWriter()) return;
+    state.selectMode = true;
+    state.selected.clear();
+    if (firstFilepath) state.selected.add(firstFilepath);
+    document.body.classList.add('is-selecting');
+    updateSelectionBar();
+    refreshSelectedTileClasses();
+  }
+  function exitSelectMode() {
+    state.selectMode = false;
+    state.selected.clear();
+    document.body.classList.remove('is-selecting');
+    updateSelectionBar();
+    refreshSelectedTileClasses();
+  }
+  function toggleSelected(filepath) {
+    if (!isSelecting()) return;
+    if (state.selected.has(filepath)) state.selected.delete(filepath);
+    else                              state.selected.add(filepath);
+    updateSelectionBar();
+    refreshSelectedTileClasses();
+  }
+  function updateSelectionBar() {
+    var n = selectionCount();
+    document.getElementById('selectionCount').textContent =
+      n === 0 ? 'Tap tiles to select' : (n + ' selected');
+  }
+  // Cheap re-paint of just the `.is-selected` class on each visible tile
+  // — avoids a full renderGallery() round-trip (which would re-fetch
+  // assetUrls and flicker the thumbs). The data-filepath attribute on each
+  // figure is the link back.
+  function refreshSelectedTileClasses() {
+    var figs = document.querySelectorAll('#detailGallery figure');
+    figs.forEach(function (fig) {
+      var fp = fig.getAttribute('data-filepath');
+      fig.classList.toggle('is-selected', !!fp && state.selected.has(fp));
+    });
+  }
+  document.getElementById('selectAllBtn').addEventListener('click', function () {
+    if (!currentDetail) return;
+    getImageList(currentDetail.id).then(function (imgs) {
+      state.selected = new Set(imgs.map(function (x) { return x.filepath; }));
+      updateSelectionBar();
+      refreshSelectedTileClasses();
+    });
+  });
+  document.getElementById('selectDoneBtn').addEventListener('click', exitSelectMode);
+
+  /* ── v0.49.8: reorder by neighbor swap ─────────────────────────
+     Build the desired permutation as a filepath array, fire
+     `images:reorderImages`, then bust caches and re-render. Server is
+     authoritative — if the permutation is invalid the RPC throws and we
+     don\'t mutate UI state. Position 0 ↔ "main", so swapping with index 0
+     changes the main image just like Set as main does. */
+  function reorderImageNeighbor(productId, imgs, from, to) {
+    if (!imgs || from < 0 || to < 0 || from >= imgs.length || to >= imgs.length) return;
+    var next = imgs.slice();
+    var tmp = next[from]; next[from] = next[to]; next[to] = tmp;
+    var newOrder = next.map(function (x) { return x.filepath; });
+    rpc('images:reorderImages', { productId: productId, newOrder: newOrder })
+      .then(function () {
+        // Same blob-cache logic as Set-as-main: position numbers in basenames
+        // (sku-001.jpg → sku-002.jpg) shift, so every filepath under this
+        // product is potentially stale. Cheapest correct thing: nuke the lot.
+        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
+        delete imgListCache[productId]; delete mainImgCache[productId];
+        renderGallery(productId);
+        // No toast — the visual swap is the feedback. Reorder happens a lot;
+        // a toast per click would be noise.
+      })
+      .catch(function (e) { toast('Reorder failed: ' + e.message); });
+  }
+
+  /* ── v0.49.8: scope picker ────────────────────────────────────
+     The single entry point every destructive edit goes through. Pass:
+       {action, productId, imgs, focusedIndex, danger, hint, onPick}
+     `imgs` is the current list from getImageList. `focusedIndex` is the
+     image the user tapped (for "This image"). `danger:true` colors the
+     hint orange and adds the "no undo" warning by default.
+     `onPick(filepaths)` is invoked with the chosen image set after the
+     user picks — empty == "All N images". v0.49.9 will add the "Selected"
+     row sourced from the multi-select state. */
+  function openScopePicker(opts) {
+    if (!opts || !opts.imgs || !opts.imgs.length) return;
+    var imgs = opts.imgs;
+    var focusedIndex = (opts.focusedIndex != null) ? opts.focusedIndex : 0;
+    var focusedImg = imgs[focusedIndex] || imgs[0];
+    document.getElementById('scopeSheetTitle').textContent = opts.action + ' — apply to';
+    var hint = document.getElementById('scopeSheetHint');
+    var hintTxt = opts.hint || '';
+    if (opts.danger) hintTxt = (hintTxt ? hintTxt + ' ' : '') + 'Overwrites the original — no undo.';
+    hint.textContent = hintTxt;
+    hint.classList.toggle('is-danger', !!opts.danger);
+
+    var list = document.getElementById('scopeSheetList');
+    list.innerHTML = '';
+    function row(label, sub, onClick) {
+      var r = document.createElement('div');
+      r.className = 'sheet-row';
+      r.innerHTML = '<span><strong>' + escapeHtml(label) + '</strong>'
+                  + (sub ? '<br><span style="color:var(--muted);font-size:12px">' + escapeHtml(sub) + '</span>' : '')
+                  + '</span>';
+      r.addEventListener('click', onClick);
+      return r;
+    }
+    list.appendChild(row(
+      'This image (#' + (focusedIndex + 1) + (focusedIndex === 0 ? ' · main' : '') + ')',
+      '1 image',
+      function () { closeSheet('scopeSheet'); opts.onPick([focusedImg.filepath]); }
+    ));
+    // v0.49.12: third option when there\'s a multi-selection. Inserted
+    // between "This image" and "All images" so the list reads
+    // narrowest → widest.
+    if (isSelecting() && selectionCount() > 0) {
+      var selPaths = imgs.map(function (x) { return x.filepath; })
+                         .filter(function (fp) { return state.selected.has(fp); });
+      if (selPaths.length) {
+        list.appendChild(row(
+          'Selected (' + selPaths.length + ')',
+          selPaths.length + ' image' + (selPaths.length === 1 ? '' : 's'),
+          function () { closeSheet('scopeSheet'); opts.onPick(selPaths); }
+        ));
+      }
+    }
+    list.appendChild(row(
+      'All images',
+      imgs.length + ' image' + (imgs.length === 1 ? '' : 's'),
+      function () { closeSheet('scopeSheet'); opts.onPick(imgs.map(function (x) { return x.filepath; })); }
+    ));
+    openSheet('scopeSheet');
+  }
+  document.getElementById('scopeSheetClose').addEventListener('click', function () { closeSheet('scopeSheet'); });
+  document.getElementById('scopeSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('scopeSheet'); });
+
+  // Tap the × on a gallery tile → confirm → server-side delete → refresh.
+  // Server is authoritative; we just bust the in-page caches and re-render.
+  // The image cap on the product means deletion can only DECREMENT imageCount,
+  // never push it negative; the Math.max guard is a belt-and-braces clamp.
+  function confirmAndDeleteImage(productId, filepath, index) {
+    var label = '#' + (index + 1) + (index === 0 ? ' (main)' : '');
+    if (!window.confirm('Delete image ' + label + ' from this product?\n\nThis can\'t be undone.')) return;
+    rpc('images:removeFromProduct', { productId: productId, filepath: filepath })
+      .then(function () {
+        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
+        delete imgListCache[productId]; delete mainImgCache[productId];
+        if (currentDetail && currentDetail.id === productId) {
+          currentDetail.imageCount = Math.max(0, (currentDetail.imageCount || 0) - 1);
+        }
+        var prod = state.products.find(function (x) { return x.id === productId; });
+        if (prod) prod.imageCount = Math.max(0, (prod.imageCount || 0) - 1);
+        renderGallery(productId);
+        toast('Image deleted');
+      })
+      .catch(function (e) { toast('Delete failed: ' + e.message); });
+  }
+
+  /* ──────────────────────────────────────────────────────────────
+     v0.47.0: AI flow on mobile
+     ──────────────────────────────────────────────────────────────
+     The full flow: ⋯ menu → "Use with AI" → AI sheet (source, prompt,
+     model, variants) → Run → polls ai:listTasks until done → AI gallery
+     section repopulates with the variants for Promote / Delete.
+     Server's role ACL (v0.45.0) enforces write permission; UI hides the
+     menu entirely for Viewer / Photographer.
+     ────────────────────────────────────────────────────────────── */
+
+  // v0.49.6 — quick role check used by tile-menu + AI flow.
+  function isWriter() { return state.role === 'admin' || state.role === 'editor'; }
+
+  /* ── Per-tile ⋯ menu (save / set-main / use-with-AI / delete) ── */
+  function openTileMenu(ctx) {
+    state.aiTileMenuFor = ctx;
+    document.getElementById('tileMenuTitle').textContent = 'Image #' + (ctx.index + 1) + (ctx.isMain ? ' · main' : '');
+    var list = document.getElementById('tileMenuList');
+    list.innerHTML = '';
+    // Save to device — visible to EVERY role. Long-press still works as the
+    // discoverable iOS gesture, but a menu item is more obvious for staff
+    // who don\'t know about it.
+    list.appendChild(menuRow('⬇  Save image to device', function () {
+      closeSheet('tileMenuSheet');
+      saveImageToDevice(ctx);
+    }));
+    // Writer-only rows. Server enforces with the v0.45.0 ACL; this is just
+    // UI hiding so Viewer / Photographer don\'t see buttons that would 403.
+    if (isWriter()) {
+      if (!ctx.isMain) {
+        list.appendChild(menuRow('★  Set as main image', function () {
+          closeSheet('tileMenuSheet');
+          rpc('images:setMainImage', { productId: ctx.productId, filepath: ctx.filepath })
+            .then(function () {
+              // Renumbering means filepaths shifted around — bust everything.
+              for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
+              delete imgListCache[ctx.productId]; delete mainImgCache[ctx.productId];
+              renderGallery(ctx.productId);
+              toast('Set as main');
+            })
+            .catch(function (e) { toast('Set-main failed: ' + e.message); });
+        }));
+      }
+      list.appendChild(menuRow('✨  Use with AI', function () {
+        closeSheet('tileMenuSheet');
+        openAiSheet({ productId: ctx.productId, filepath: ctx.filepath, index: ctx.index, sku: ctx.sku || '' });
+      }));
+      // v0.49.9: per-image Reframe & crop now opens the Reframe sheet with
+      // scope locked to this specific image — gives the user a live preview
+      // + the tightness/fill/colour controls before committing. The
+      // sheet\'s "Apply" button is the explicit confirm; the destructive
+      // window.confirm we used in v0.49.8 is now redundant.
+      list.appendChild(menuRow('✂︎  Reframe & crop this image', function () {
+        closeSheet('tileMenuSheet');
+        getImageList(ctx.productId).then(function (imgs) {
+          if (!imgs || !imgs.length) { toast('No images to reframe'); return; }
+          openReframeSheet({ productId: ctx.productId, imgs: imgs, focusedIndex: ctx.index, lockScope: true });
+        });
+      }));
+      list.appendChild(menuRow('🗑  Delete', function () {
+        closeSheet('tileMenuSheet');
+        confirmAndDeleteImage(ctx.productId, ctx.filepath, ctx.index);
+      }, true));
+    }
+    openSheet('tileMenuSheet');
+  }
+
+  /* v0.49.6 — save an image to the device. Prefers the iOS share sheet
+     (`navigator.share` with a File) since that surfaces "Save Image" right
+     into Photos with one tap. Falls back to a triggered <a download>, which
+     on iOS routes through Files (user can then move to Photos). Either way,
+     no long-press required. */
+  function saveImageToDevice(ctx) {
+    var rel = ctx.filepath || '';
+    if (!rel) { toast('No image to save'); return; }
+    toast('Preparing image…');
+    var enc = rel.split('/').map(encodeURIComponent).join('/');
+    fetch(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } })
+      .then(function (res) {
+        if (!res.ok) throw new Error('Server returned ' + res.status);
+        return res.blob();
+      })
+      .then(function (blob) {
+        var ext = (blob.type && blob.type.split('/')[1]) || (rel.split('.').pop() || 'jpg');
+        var sku = (ctx.sku || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'image';
+        var filename = sku + '-' + ((ctx.index || 0) + 1) + '.' + ext;
+        // Try the native share sheet first — iOS shows "Save Image" which
+        // saves to Photos directly. canShare() is the gate per spec.
+        var file = null;
+        try { file = new File([blob], filename, { type: blob.type || 'image/jpeg' }); } catch (_) {}
+        if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+          return navigator.share({ files: [file] }).catch(function (e) {
+            // User cancellation isn\'t an error — only surface real failures.
+            if (e && e.name !== 'AbortError') toast('Share failed: ' + e.message);
+          });
+        }
+        // Fallback: trigger an <a download>. iOS routes this through the
+        // Files app; user can long-press the file → Share → Save Image.
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+        toast('Downloading…');
+      })
+      .catch(function (e) { toast('Save failed: ' + e.message); });
+  }
+  function menuRow(label, onClick, destructive) {
+    var r = document.createElement('div');
+    r.className = 'sheet-row';
+    if (destructive) r.style.color = '#dc2626';
+    r.textContent = label;
+    r.addEventListener('click', onClick);
+    return r;
+  }
+  document.getElementById('tileMenuClose').addEventListener('click', function () { closeSheet('tileMenuSheet'); });
+  document.getElementById('tileMenuSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('tileMenuSheet'); });
+
+  /* ── AI sheet (Process with AI) ────────────────────────────── */
+  function openAiSheet(source) {
+    // Source is { productId, filepath, index, sku }. The picked PROMPT + MODEL
+    // are restored from localStorage so the sheet opens ready-to-run for
+    // returning users; the source itself always reflects the tapped image.
+    state.aiPickedSource = source;
+    state.aiPickedPromptBody = null;
+    state.aiPickedPromptName = null;
+    state.aiPickedPromptTemplateId = null;
+    state.aiPickedModel = null;
+
+    // Source thumbnail + meta
+    var thumb = document.getElementById('aiSourceThumb');
+    thumb.style.backgroundImage = '';
+    assetUrl(source.filepath).then(function (url) {
+      if (url) thumb.style.backgroundImage = 'url("' + url + '")';
+    });
+    document.getElementById('aiSourceMeta').innerHTML =
+      '<strong>' + escapeHtml(source.sku || '(no SKU)') + '</strong>' +
+      'Image #' + (source.index + 1) + (source.index === 0 ? ' · main' : '');
+
+    // v0.49.0: restore last-used prompt from localStorage. We trust the
+    // saved BODY even if the templateId is now stale (the user may have
+    // deleted that preset on desktop) — sending raw text always works.
+    document.getElementById('aiPromptValue').textContent = 'Pick a prompt…';
+    try {
+      var savedPrompt = JSON.parse(localStorage.getItem(LS.aiPrompt) || 'null');
+      if (savedPrompt && savedPrompt.body) {
+        state.aiPickedPromptBody = savedPrompt.body;
+        state.aiPickedPromptName = savedPrompt.name || 'Last prompt';
+        state.aiPickedPromptTemplateId = savedPrompt.templateId || null;
+        document.getElementById('aiPromptValue').textContent = state.aiPickedPromptName;
+      }
+    } catch (e) { /* corrupt JSON → fall through to "Pick a prompt…" */ }
+
+    // Restore last-used model. We need the model catalog so the in-flight
+    // model object (with displayName + pricing) can be re-attached — not
+    // just the key. Fetch lazily on first open + cache.
+    document.getElementById('aiModelValue').textContent = 'Pick a model…';
+    document.getElementById('aiAspectRow').hidden = true; // shown after a model is picked / restored
+    state.aiPickedSize = null;
+    refreshAiCost(); // shows "—" until model is restored / picked
+    var savedKey = localStorage.getItem(LS.aiModelKey) || '';
+    function applySavedModel(models) {
+      if (!savedKey) return;
+      var m = (models || []).find(function (x) { return x.key === savedKey; });
+      if (!m) return; // model was retired in the catalog — leave empty
+      state.aiPickedModel = m;
+      document.getElementById('aiModelValue').textContent =
+        (m.displayName || m.key) + ' · ' + (m.provider || '');
+      renderAspectChips(m); // v0.49.3 — paints the aspect row with the saved choice
+      refreshAiCost();
+      refreshAiRunEnabled();
+    }
+    if (state.aiModels === null) {
+      rpc('ai:listModels').then(function (rows) {
+        state.aiModels = rows || [];
+        applySavedModel(state.aiModels);
+      }).catch(function () { state.aiModels = []; });
+    } else {
+      applySavedModel(state.aiModels);
+    }
+    refreshAiRunEnabled();
+    openSheet('aiSheet');
+  }
+  function refreshAiRunEnabled() {
+    var ok = state.aiPickedPromptBody && state.aiPickedModel && state.aiPickedSource;
+    document.getElementById('aiRunBtn').disabled = !ok;
+  }
+  function refreshAiCost() {
+    var m = state.aiPickedModel;
+    var per = m && m.pricing && m.pricing.perOutputUsd;
+    var el = document.getElementById('aiCost');
+    if (per == null) { el.innerHTML = 'Estimated cost: —'; return; }
+    el.innerHTML = 'Estimated cost: <strong>$' + per.toFixed(3) + '</strong> per run';
+  }
+  document.getElementById('aiSheetClose').addEventListener('click', function () { closeSheet('aiSheet'); });
+  document.getElementById('aiSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('aiSheet'); });
+
+  /* ── Prompt picker — "My presets" + "Library" with one-tap adopt ── */
+  document.getElementById('aiPromptPick').addEventListener('click', function () {
+    document.getElementById('aiPromptSearch').value = '';
+    // Load fresh user presets each open so a Save-on-desktop is reflected.
+    rpc('ai:listPrompts', state.companyId).catch(function () { return []; }).then(function (rows) {
+      renderAiPromptSheet('', rows || []);
+    });
+    openSheet('aiPromptSheet');
+    setTimeout(function () { document.getElementById('aiPromptSearch').focus(); }, 80);
+  });
+  function renderAiPromptSheet(query, myPresets) {
+    state.aiMyPresets = myPresets;  // remember for search re-renders
+    var list = document.getElementById('aiPromptList');
+    list.innerHTML = '';
+    var q = (query || '').trim().toLowerCase();
+    function filt(items, getLabel, getBody) {
+      if (!q) return items.slice();
+      return items.filter(function (it) {
+        return (getLabel(it) || '').toLowerCase().indexOf(q) !== -1
+            || (getBody(it) || '').toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    var presets = filt(myPresets, function (p) { return p.name; }, function (p) { return p.body; });
+    var lib = filt(PROMPT_LIBRARY, function (p) { return p.label; }, function (p) { return p.body; });
+
+    if (presets.length) {
+      list.appendChild(groupHead('My presets'));
+      presets.forEach(function (p) {
+        list.appendChild(promptRow(p.name, p.body, function () {
+          pickPrompt({ body: p.body, name: p.name, templateId: p.id });
+        }));
+      });
+    }
+    if (lib.length) {
+      list.appendChild(groupHead('Library'));
+      lib.forEach(function (p) {
+        list.appendChild(promptRow(p.label, p.body, function () {
+          // Adopt into "My presets" so it shows up in the user's list next
+          // time — same UX as the desktop's "Save to my presets". Non-fatal:
+          // if create fails (rare — e.g. duplicate name) we still use the body.
+          rpc('ai:createPrompt', { companyId: state.companyId, name: p.label, body: p.body })
+            .then(function (saved) {
+              pickPrompt({ body: p.body, name: p.label, templateId: saved && saved.id });
+              toast('Saved "' + p.label + '" to your presets');
+            })
+            .catch(function () {
+              pickPrompt({ body: p.body, name: p.label, templateId: null });
+            });
+        }, p.category));
+      });
+    }
+    if (!presets.length && !lib.length) {
+      list.innerHTML = '<div class="sheet-empty">No prompts match “' + escapeHtml(query) + '”.</div>';
+    }
+  }
+  function groupHead(label) {
+    var r = document.createElement('div');
+    r.className = 'sheet-row is-group-head';
+    r.textContent = label;
+    return r;
+  }
+  function promptRow(label, body, onClick, metaText) {
+    var r = document.createElement('div');
+    r.className = 'sheet-row';
+    var html = '<div><strong>' + escapeHtml(label) + '</strong>' +
+      '<span class="row-sub">' + escapeHtml(body) + '</span></div>';
+    if (metaText) html += '<span class="row-meta">' + escapeHtml(metaText) + '</span>';
+    r.innerHTML = html;
+    r.addEventListener('click', onClick);
+    return r;
+  }
+  function pickPrompt(p) {
+    state.aiPickedPromptBody = p.body;
+    state.aiPickedPromptName = p.name;
+    state.aiPickedPromptTemplateId = p.templateId || null;
+    document.getElementById('aiPromptValue').textContent = p.name || 'Prompt picked';
+    // v0.49.0: remember as the per-device default for the next run.
+    try { localStorage.setItem(LS.aiPrompt, JSON.stringify({ body: p.body, name: p.name, templateId: p.templateId || null })); } catch (e) {}
+    closeSheet('aiPromptSheet');
+    refreshAiRunEnabled();
+  }
+  document.getElementById('aiPromptSearch').addEventListener('input', function () {
+    renderAiPromptSheet(this.value, state.aiMyPresets || []);
+  });
+  document.getElementById('aiPromptSheetClose').addEventListener('click', function () { closeSheet('aiPromptSheet'); });
+  document.getElementById('aiPromptSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('aiPromptSheet'); });
+
+  /* ── Model picker — image-to-image only, with per-output price ── */
+  document.getElementById('aiModelPick').addEventListener('click', function () {
+    var list = document.getElementById('aiModelList');
+    list.innerHTML = '<div class="sheet-empty">Loading models…</div>';
+    var p = state.aiModels === null
+      ? rpc('ai:listModels').then(function (r) { state.aiModels = r || []; return state.aiModels; })
+      : Promise.resolve(state.aiModels);
+    p.then(function (models) { renderAiModelSheet(models); }).catch(function (e) {
+      list.innerHTML = '<div class="sheet-empty">' + escapeHtml(e.message) + '</div>';
+    });
+    openSheet('aiModelSheet');
+  });
+  function renderAiModelSheet(models) {
+    var list = document.getElementById('aiModelList');
+    list.innerHTML = '';
+    // Filter to image-to-image only: a model is i2i if its display name or
+    // key contains "image-to-image" / "edit" / "i2i". Simple + matches the
+    // model catalog conventions in main/ai/models.js.
+    var i2i = (models || []).filter(function (m) {
+      var s = ((m.displayName || '') + ' ' + (m.key || '')).toLowerCase();
+      return s.indexOf('image-to-image') !== -1 || s.indexOf('i2i') !== -1 || s.indexOf('edit') !== -1;
+    });
+    if (!i2i.length) {
+      list.innerHTML = '<div class="sheet-empty">No image-to-image models available.</div>';
+      return;
+    }
+    i2i.forEach(function (m) {
+      var per = m.pricing && m.pricing.perOutputUsd;
+      var price = per != null ? ('$' + per.toFixed(3) + '/img') : '';
+      var r = document.createElement('div');
+      r.className = 'sheet-row';
+      r.innerHTML = '<div><strong>' + escapeHtml(m.displayName || m.key || '') + '</strong>' +
+        '<span class="row-sub">' + escapeHtml(m.provider || '') + '</span></div>' +
+        '<span class="row-meta">' + price + '</span>';
+      r.addEventListener('click', function () { pickModel(m); });
+      list.appendChild(r);
+    });
+  }
+  function pickModel(m) {
+    state.aiPickedModel = m;
+    document.getElementById('aiModelValue').textContent = (m.displayName || m.key || '') + ' · ' + (m.provider || '');
+    // v0.49.0: remember as per-device default for the next run.
+    try { localStorage.setItem(LS.aiModelKey, m.key || ''); } catch (e) {}
+    // v0.49.3: aspect-ratio list depends on the model. Carry over the saved
+    // size when it's in the new model's list; otherwise fall back to the
+    // model's first option.
+    renderAspectChips(m);
+    closeSheet('aiModelSheet');
+    refreshAiCost();
+    refreshAiRunEnabled();
+  }
+
+  // v0.49.3 — build the aspect chip row for the given model. The "saved"
+  // preference wins if it's a valid option for THIS model (e.g. switching
+  // from a GPT-Image-2 to Nano Banana doesn't strand the user on an aspect
+  // the model doesn't accept); otherwise use the model's first listed size.
+  function renderAspectChips(m) {
+    var row = document.getElementById('aiAspectRow');
+    var box = document.getElementById('aiAspectChips');
+    box.innerHTML = '';
+    var sizes = (m && Array.isArray(m.sizes)) ? m.sizes : [];
+    if (!sizes.length) { row.hidden = true; state.aiPickedSize = null; return; }
+    row.hidden = false;
+    var saved = '';
+    try { saved = localStorage.getItem(LS.aiSize) || ''; } catch (e) {}
+    var initial = sizes.indexOf(saved) !== -1 ? saved : sizes[0];
+    state.aiPickedSize = initial;
+    sizes.forEach(function (s) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = s;
+      btn.setAttribute('role', 'radio');
+      btn.setAttribute('aria-checked', String(s === initial));
+      if (s === initial) btn.classList.add('is-active');
+      btn.addEventListener('click', function () {
+        state.aiPickedSize = s;
+        try { localStorage.setItem(LS.aiSize, s); } catch (e) {}
+        box.querySelectorAll('button').forEach(function (x) {
+          x.classList.toggle('is-active', x === btn);
+          x.setAttribute('aria-checked', String(x === btn));
+        });
+      });
+      box.appendChild(btn);
+    });
+  }
+  document.getElementById('aiModelSheetClose').addEventListener('click', function () { closeSheet('aiModelSheet'); });
+  document.getElementById('aiModelSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('aiModelSheet'); });
+
+  /* ── Run → queue the task → start polling ──────────────────── */
+  document.getElementById('aiRunBtn').addEventListener('click', function () {
+    if (!state.aiPickedPromptBody || !state.aiPickedModel || !state.aiPickedSource) return;
+    var btn = this; btn.disabled = true; btn.textContent = 'Queueing…';
+    var src = state.aiPickedSource;
+    var m = state.aiPickedModel;
+    var args = {
+      companyId: state.companyId,
+      productId: src.productId,
+      sourceImagePath: src.filepath,
+      provider: m.provider,
+      model: m.key,
+      prompt: state.aiPickedPromptBody,
+      promptTemplateId: state.aiPickedPromptTemplateId || null,
+      // v0.48.0: every variant auto-adds to the product as a new image. Mobile
+      // users don't get a separate "review & promote" step — they just see the
+      // results land in the regular gallery and can ⋯ → Set as main / Delete
+      // from there. autoAddToProduct (not autoPromoteAsMain) means we don't
+      // disrupt the existing main image; new variants append at the end.
+      // v0.49.0: always 1 variant per tap on mobile — predictable per-run cost,
+      // fat-finger protection. Want another? Tap Run again.
+      // v0.49.3: include the picked aspect ratio (`size`) so we don't fall
+      // through to the model's provider default (which defaulted to 1:1 on
+      // some models but not all — output dimensions were silently wrong).
+      options: { nVariants: 1, numImages: 1, autoAddToProduct: true, size: state.aiPickedSize || undefined },
+    };
+    rpc('ai:queueTask', args)
+      .then(function () {
+        toast('Queued — check back in 30–60s');
+        closeSheet('aiSheet');
+        startAiPolling(src.productId);
+        refreshAiBadge(); // v0.49.2 — bump the appbar badge immediately
+      })
+      .catch(function (e) { toast('Queue failed: ' + e.message); })
+      .finally(function () { btn.disabled = false; btn.textContent = '✨ Run AI'; refreshAiRunEnabled(); });
+  });
+
+  /* ── AI section: status-only banner + polling + Repair ───────
+     v0.48.0: variants auto-add to the product (autoAddToProduct), so the
+     section doesn't list completed items or offer Promote / Remove. It
+     shows: (a) a pulse while a task is in flight, (b) a Repair button per
+     failed task (provider didn't return an image — the desktop's Repair
+     flow re-fetches without spending fresh credit). On the pending → done
+     transition the regular gallery refreshes so new variants are visible. */
+  function renderAiResults(productId) {
+    var box = document.getElementById('aiResults');
+    rpc('ai:listTasks', { companyId: state.companyId, limit: 20, statuses: ['queued','running','done','failed'] })
+      .catch(function () { return []; })
+      .then(function (tasks) {
+        var mine = (tasks || []).filter(function (t) { return t.productId === productId; });
+        var pending = mine.filter(function (t) { return t.status === 'queued' || t.status === 'running'; });
+        var broken = mine.filter(function (t) { return t.status === 'failed'; });
+        var hadPending = state.aiHadPendingFor === productId;
+
+        // Pending → done transition: refresh the regular gallery so the
+        // freshly auto-added variants appear immediately.
+        if (hadPending && !pending.length) {
+          for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
+          delete imgListCache[productId]; delete mainImgCache[productId];
+          renderGallery(productId);
+          if (!broken.length) toast('AI generation done');
+        }
+
+        if (!pending.length && !broken.length) {
+          state.aiHadPendingFor = null;
+          box.classList.add('empty');
+          box.innerHTML = '';
+          stopAiPolling();
+          return;
+        }
+
+        state.aiHadPendingFor = pending.length ? productId : null;
+        box.classList.remove('empty');
+        var html = '<h4>AI activity</h4>';
+        if (pending.length) {
+          html += '<div class="ai-status"><span class="dot"></span>' +
+            ' Generating ' + pending.length + ' variant' + (pending.length === 1 ? '' : 's') +
+            '… results land in the gallery below in 30–60s.</div>';
+        }
+        broken.forEach(function (t) {
+          var reason = t.errorMessage ? escapeHtml(t.errorMessage) : 'Provider didn\'t return an image';
+          html += '<div class="ai-status ai-broken">' +
+            '<div>⚠ ' + reason + '</div>' +
+            '<button class="btn btn--primary ai-repair" data-id="' + escapeHtml(t.id) + '">Repair (no extra credit)</button>' +
+          '</div>';
+        });
+        box.innerHTML = html;
+        box.querySelectorAll('.ai-repair').forEach(function (b) {
+          b.addEventListener('click', function () { repairAiTask(b.getAttribute('data-id'), b); });
+        });
+        // Keep polling whenever ANYTHING is in flight; broken tasks alone
+        // don't need a polling loop (state is stable until user repairs).
+        if (pending.length) startAiPolling(productId);
+        else stopAiPolling();
+      });
+  }
+  function repairAiTask(taskId, btn) {
+    if (!taskId) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Repairing…'; }
+    rpc('ai:repairTask', taskId)
+      .then(function () {
+        toast('Repair queued — checking again');
+        if (currentDetail) renderAiResults(currentDetail.id);
+        refreshAiBadge(); // v0.49.2 — failed dropped to running, may flip back
+      })
+      .catch(function (e) { toast('Repair failed: ' + e.message); })
+      .finally(function () {
+        if (btn) { btn.disabled = false; btn.textContent = 'Repair (no extra credit)'; }
+      });
+  }
+
+  /* ── v0.49.1: manual refresh ────────────────────────────────
+     The web viewer doesn't subscribe to the WebSocket event bus the desktop
+     uses, so a remote edit doesn't push down. This bust-everything reload
+     covers it: clear blob/list caches, then re-fetch products, the open
+     detail's gallery, and the AI status. Spins the icon while it works. */
+  function refreshNow() {
+    var btn = document.getElementById('refreshBtn');
+    btn.classList.add('is-spinning');
+    // Drop all in-memory caches.
+    for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
+    for (var p in imgListCache) delete imgListCache[p];
+    for (var p2 in mainImgCache) delete mainImgCache[p2];
+    var jobs = [];
+    // Reload products (always — the grid behind any open sheet still needs it).
+    if (state.companyId) {
+      jobs.push(
+        rpc('products:list', { companyId: state.companyId, filters: {} })
+          .then(function (rows) { state.products = rows || []; applyFilter(); render(); })
+          .catch(function () {})
+      );
+    }
+    // Reload the open detail if any (gallery + AI section + product fields).
+    if (currentDetail && document.getElementById('detail').classList.contains('open')) {
+      renderGallery(currentDetail.id);
+      renderAiResults(currentDetail.id);
+    }
+    refreshAiBadge(); // v0.49.2 — keep the badge fresh after a manual refresh
+    Promise.all(jobs).finally(function () {
+      // Brief minimum spin so the user sees feedback even when the round-trip
+      // is instant on a fast network.
+      setTimeout(function () { btn.classList.remove('is-spinning'); }, 500);
+    });
+  }
+  document.getElementById('refreshBtn').addEventListener('click', refreshNow);
+
+  /* ── v0.49.2: global AI activity (badge + sheet) ────────────
+     The badge counts queued + running + failed across the whole company so
+     the user knows there's outstanding work even when browsing elsewhere.
+     The sheet lists every task with source-image thumb, SKU, prompt + model
+     label, and a status pill. Tap a row → close the sheet + open that
+     product's detail. Failed rows include an inline Repair button (same
+     no-extra-credit flow as the per-product Repair). */
+
+  state.aiActivityPollTimer = null;
+
+  function refreshAiBadge() {
+    if (!state.companyId) return;
+    rpc('ai:listTasks', { companyId: state.companyId, limit: 50, statuses: ['queued','running','failed'] })
+      .catch(function () { return []; })
+      .then(function (tasks) {
+        var n = (tasks || []).length;
+        var b = document.getElementById('aiActivityBadge');
+        if (n > 0) { b.textContent = n > 99 ? '99+' : String(n); b.hidden = false; }
+        else { b.hidden = true; }
+      });
+  }
+
+  function openAiActivity() {
+    renderAiActivity(); // immediate paint
+    openSheet('aiActivitySheet');
+    // Live-poll while the sheet is open so status pills flip queued→running→done
+    // (done items drop out of the list) without the user pulling-to-refresh.
+    if (state.aiActivityPollTimer) clearInterval(state.aiActivityPollTimer);
+    state.aiActivityPollTimer = setInterval(renderAiActivity, 6000);
+  }
+  function closeAiActivity() {
+    closeSheet('aiActivitySheet');
+    if (state.aiActivityPollTimer) { clearInterval(state.aiActivityPollTimer); state.aiActivityPollTimer = null; }
+    refreshAiBadge(); // catch any state changes the poll missed
+  }
+  document.getElementById('aiActivityBtn').addEventListener('click', openAiActivity);
+  document.getElementById('aiActivitySheetClose').addEventListener('click', closeAiActivity);
+  document.getElementById('aiActivitySheet').addEventListener('click', function (e) { if (e.target === this) closeAiActivity(); });
+
+  function renderAiActivity() {
+    var list = document.getElementById('aiActivityList');
+    if (!state.companyId) { list.innerHTML = '<div class="sheet-empty">No company selected.</div>'; return; }
+    rpc('ai:listTasks', { companyId: state.companyId, limit: 50, statuses: ['queued','running','failed'] })
+      .catch(function () { return []; })
+      .then(function (tasks) {
+        tasks = tasks || [];
+        // Update the badge from this same fetch so we don't burn an extra call.
+        var b = document.getElementById('aiActivityBadge');
+        if (tasks.length > 0) { b.textContent = tasks.length > 99 ? '99+' : String(tasks.length); b.hidden = false; }
+        else { b.hidden = true; }
+        if (!tasks.length) {
+          list.innerHTML = '<div class="sheet-empty">No AI tasks in flight. ✨</div>';
+          return;
+        }
+        list.innerHTML = '';
+        tasks.forEach(function (t) {
+          var p = state.products.find(function (x) { return x.id === t.productId; });
+          var sku = (p && p.sku) || t.productId || '(no product)';
+          var prompt = (t.prompt || '').replace(/\s+/g, ' ').slice(0, 80);
+          var statusClass = 'pill--' + (t.status || 'queued');
+          var failed = t.status === 'failed';
+          var row = document.createElement('div');
+          row.className = 'sheet-row ai-activity-row' + (failed ? ' is-failed' : '');
+          row.innerHTML =
+            '<div class="thumb" data-rel="' + escapeHtml(t.sourceImagePath || '') + '"></div>' +
+            '<div class="meta">' +
+              '<strong>' + escapeHtml(sku) + '</strong>' +
+              '<span class="sub">' + escapeHtml(prompt) + (prompt.length === 80 ? '…' : '') + '</span>' +
+            '</div>' +
+            '<span class="pill ' + statusClass + '">' + escapeHtml(t.status || '') + '</span>' +
+            (failed ? '<div class="repair-line"><button class="btn btn--primary ai-repair" data-id="' + escapeHtml(t.id) + '">Repair (no extra credit)</button></div>' : '');
+          // Row tap → close the sheet + open that product's detail. Skip
+          // when the tap lands on the Repair button (separate handler below).
+          row.addEventListener('click', function (ev) {
+            if (ev.target.closest('.ai-repair')) return;
+            jumpToProductDetail(t.productId);
+          });
+          list.appendChild(row);
+          // Lazy-paint the source thumb. Don't block the list render on N
+          // round-trips — each one's async, browser draws as they arrive.
+          if (t.sourceImagePath) {
+            assetUrl(t.sourceImagePath).then(function (url) {
+              if (url) { row.querySelector('.thumb').style.backgroundImage = 'url("' + url + '")'; }
+            });
+          }
+        });
+        list.querySelectorAll('.ai-repair').forEach(function (b) {
+          b.addEventListener('click', function (ev) {
+            ev.stopPropagation();
+            repairAiTask(b.getAttribute('data-id'), b);
+            // After repair, repaint the sheet so the row's status updates.
+            setTimeout(renderAiActivity, 400);
+          });
+        });
+      });
+  }
+
+  // Tap a row → open that product's detail. We have the productId only;
+  // look up the local copy if it's on the current page, otherwise fetch
+  // it. Either way we close the activity sheet first so the navigation
+  // feels snappy and there's no overlay pile-up.
+  function jumpToProductDetail(productId) {
+    closeAiActivity();
+    var p = state.products.find(function (x) { return x.id === productId; });
+    if (p) { openDetail(p); return; }
+    rpc('products:get', productId)
+      .then(function (fetched) {
+        if (fetched) openDetail(fetched);
+        else toast('Product no longer exists');
+      })
+      .catch(function (e) { toast('Could not open product: ' + e.message); });
+  }
+  function startAiPolling(productId) {
+    stopAiPolling();
+    state.aiPollTimer = setInterval(function () {
+      if (!currentDetail || currentDetail.id !== productId) { stopAiPolling(); return; }
+      renderAiResults(productId);
+    }, 6000);
+  }
+  function stopAiPolling() {
+    if (state.aiPollTimer) { clearInterval(state.aiPollTimer); state.aiPollTimer = null; }
+  }
+
+  /* ── add photos (camera / library) ─────────────────────────── */
+  function extFromType(file) {
+    var t = (file.type || '').toLowerCase();
+    if (t.indexOf('png') !== -1) return '.png';
+    if (t.indexOf('webp') !== -1) return '.webp';
+    if (t.indexOf('heic') !== -1 || t.indexOf('heif') !== -1) return '.heic';
+    return '.jpg'; // iOS usually hands us JPEG from the library/camera anyway
+  }
+  function fileToB64(file) {
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () { var s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
+      r.onerror = function () { reject(new Error('Could not read the photo')); };
+      r.readAsDataURL(file);
+    });
+  }
+  function handleAddPhotos(files) {
+    if (!currentDetail || !files || !files.length) return;
+    var pid = currentDetail.id;
+    var arr = Array.prototype.slice.call(files);
+    var btn = document.getElementById('addPhotoBtn');
+    btn.disabled = true;
+    var added = 0, dup = 0, failed = 0;
+    function finish() {
+      btn.disabled = false; btn.textContent = '＋ Add photo';
+      delete imgListCache[pid]; delete mainImgCache[pid];
+      currentDetail.imageCount = (currentDetail.imageCount || 0) + added;
+      var prod = state.products.find(function (x) { return x.id === pid; });
+      if (prod) prod.imageCount = (prod.imageCount || 0) + added;
+      renderGallery(pid);
+      var msg = added + ' photo' + (added === 1 ? '' : 's') + ' added';
+      if (dup) msg += ', ' + dup + ' already there';
+      if (failed) msg += ', ' + failed + ' failed';
+      toast(msg);
+    }
+    function next(i) {
+      if (i >= arr.length) return finish();
+      btn.textContent = 'Uploading ' + (i + 1) + '/' + arr.length + '…';
+      fileToB64(arr[i])
+        .then(function (b64) {
+          return rpc('images:importFromBytes', { productId: pid, bytes: { __bin: true, b64: b64 }, ext: extFromType(arr[i]) });
+        })
+        .then(function (res) { if (res && res.skipped) dup++; else added++; })
+        .catch(function (e) { failed++; toast('Upload failed: ' + e.message); })
+        .then(function () { next(i + 1); });
+    }
+    next(0);
+  }
+  document.getElementById('addPhotoBtn').addEventListener('click', function () {
+    document.getElementById('photoInput').click();
+  });
+
+  /* ── v0.49.8: Reframe & crop ─────────────────────────────────
+     Was "Auto-crop." Now goes through the scope picker first instead of
+     silently running on every image. Trims the background border around the
+     product and reframes to a uniform white-background look — best on solid
+     / white backgrounds. Destructive (overwrites in place).
+     "This image" sends the focused image (defaults to the main / first) via
+     the new `filepaths` filter on `images:autoCropProducts`. "All images"
+     omits the filter so the IPC keeps its original loop behavior. */
+  document.getElementById('autoCropBtn').addEventListener('click', function () {
+    if (!currentDetail) return;
+    var pid = currentDetail.id;
+    getImageList(pid).then(function (imgs) {
+      if (!imgs || !imgs.length) { toast('No images to reframe'); return; }
+      // v0.49.9: opens the new Reframe sheet (live preview + controls) instead
+      // of the bare scope picker. Header entry defaults to lockScope=false so
+      // the user can toggle between Main and All inside the sheet.
+      openReframeSheet({ productId: pid, imgs: imgs, focusedIndex: 0, lockScope: false });
+    });
+  });
+
+  function runReframeCrop(pid, filepaths, opts) {
+    opts = opts || {};
+    var btn = document.getElementById('autoCropBtn');
+    var n = filepaths.length;
+    btn.disabled = true; btn.textContent = 'Cropping ' + n + '…';
+    rpc('images:autoCropProducts', {
+      productIds: [pid],
+      // Empty array would mean "no images" — only pass the key when we want to filter.
+      filepaths: filepaths,
+      // v0.49.9: tightness/fill/colour now come from the Reframe sheet
+      // instead of being hard-coded defaults. Server still clamps these.
+      scale:         opts.scale         != null ? opts.scale         : 0.88,
+      fillMode:      opts.fillMode      || 'color',
+      fillColor:     opts.fillColor     || '#FFFFFF',
+      trimThreshold: opts.trimThreshold != null ? opts.trimThreshold : 12,
+    })
+      .then(function (res) {
+        var done = (res && res.images) || 0;
+        var failed = (res && res.failed) || 0;
+        // Auto-crop overwrites files in place (same relpath, new bytes), so the
+        // blob-URL cache (keyed by relpath) would serve stale pixels. Revoke +
+        // clear it so the gallery + grid thumbs re-fetch. Server sends /assets
+        // with Cache-Control: no-store (v0.49.4), so the refetch gets new bytes.
+        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
+        delete imgListCache[pid]; delete mainImgCache[pid];
+        renderGallery(pid);
+        toast(failed
+          ? ('Reframed ' + done + ', ' + failed + ' failed')
+          : ('Reframed ' + done + ' image' + (done === 1 ? '' : 's')));
+      })
+      .catch(function (e) { toast('Reframe failed: ' + e.message); })
+      .finally(function () { btn.disabled = false; btn.textContent = '✂︎ Reframe & crop'; });
+  }
+
+  /* ── v0.49.9: Reframe & crop sheet ────────────────────────────
+     Replaces the bare scope picker for this action so users can SEE the
+     result and TUNE the knobs (tightness, fill mode, fill colour) before
+     committing. Live preview via `images:reframePreview`. */
+
+  // Tightness → scale mapping. Snug = product fills more of the canvas;
+  // Loose = more breathing room. "Normal" matches the v0.49.8 default (0.88).
+  var REFRAME_TIGHTNESS = [
+    { key: 'snug',   label: 'Snug',   scale: 0.95 },
+    { key: 'normal', label: 'Normal', scale: 0.88 },
+    { key: 'loose', label: 'Loose',  scale: 0.78 },
+  ];
+  var REFRAME_FILLS = [
+    { key: 'color', label: 'Solid colour' },
+    { key: 'blur',  label: 'Blur edges' },
+  ];
+  var REFRAME_COLORS = [
+    { key: '#FFFFFF', label: 'White' },
+    { key: '#000000', label: 'Black' },
+    { key: '#EAEAEA', label: 'Light grey' },
+  ];
+
+  function reframeOpt(arr, key) {
+    for (var i = 0; i < arr.length; i++) if (arr[i].key === key) return arr[i];
+    return arr[0];
+  }
+  // Decode the `{__bin:true, b64}` envelope into a Blob URL we can drop on
+  // an <img>. Mirrors how the AI variants render. Caller is responsible for
+  // revoking the URL when it\'s replaced or the sheet closes.
+  function envelopeToBlobUrl(env, mime) {
+    if (!env || env.__bin !== true || typeof env.b64 !== 'string') return null;
+    try {
+      var bin = atob(env.b64);
+      var len = bin.length;
+      var u8 = new Uint8Array(len);
+      for (var i = 0; i < len; i++) u8[i] = bin.charCodeAt(i);
+      return URL.createObjectURL(new Blob([u8], { type: mime || 'image/png' }));
+    } catch (_) { return null; }
+  }
+
+  function openReframeSheet(o) {
+    if (!o || !o.imgs || !o.imgs.length) return;
+    var focusedIndex = (o.focusedIndex != null) ? o.focusedIndex : 0;
+    // Lock scope when entered from the ⋯ menu — the user already picked the
+    // specific image, so we don\'t make them pick a scope on top of that.
+    var lockScope = !!o.lockScope;
+    // v0.49.12: if there\'s an active multi-selection AND the user didn\'t
+    // enter via the ⋯ menu (which locks to one image), default the scope to
+    // "Selected (N)." Their selection IS the intent.
+    var hasSelection = !lockScope && isSelecting() && selectionCount() > 0;
+    state.reframe = {
+      productId: o.productId,
+      imgs: o.imgs,
+      focusedIndex: focusedIndex,
+      lockScope: lockScope,
+      scope: lockScope ? 'one' : (hasSelection ? 'selected' : 'main'),  // 'one' | 'main' | 'all' | 'selected'
+      tight: localStorage.getItem(LS.reframeTight) || 'normal',
+      fill:  localStorage.getItem(LS.reframeFill)  || 'color',
+      color: localStorage.getItem(LS.reframeColor) || '#FFFFFF',
+      previewSeq: 0,   // bumps on every change so stale RPC responses don\'t paint
+      previewUrl: null,
+    };
+    document.getElementById('reframeSheetTitle').textContent = 'Reframe & crop';
+    paintReframeSheet();
+    openSheet('reframeSheet');
+    schedulePreview(0); // first preview right away
+  }
+
+  function paintReframeSheet() {
+    var r = state.reframe; if (!r) return;
+    // Scope chips. Locked entry from ⋯ menu shows a single read-only chip
+    // for the image; otherwise the toggle between Main and All.
+    var scopeEl = document.getElementById('reframeScopeChips');
+    scopeEl.innerHTML = '';
+    if (r.lockScope) {
+      var only = document.createElement('span');
+      only.className = 'chip is-active';
+      only.textContent = 'This image (#' + (r.focusedIndex + 1) + (r.focusedIndex === 0 ? ' · main' : '') + ')';
+      scopeEl.appendChild(only);
+    } else {
+      scopeEl.appendChild(reframeChip('Main image (#1)', r.scope === 'main', function () { setScope('main'); }));
+      // v0.49.12: third option when a multi-selection exists. Shows the
+      // exact count so the user can sanity-check before tapping Apply.
+      if (isSelecting() && selectionCount() > 0) {
+        scopeEl.appendChild(reframeChip(
+          'Selected (' + selectionCount() + ')',
+          r.scope === 'selected',
+          function () { setScope('selected'); }
+        ));
+      }
+      scopeEl.appendChild(reframeChip('All ' + r.imgs.length + ' images', r.scope === 'all', function () { setScope('all'); }));
+    }
+    // Tightness
+    var tightEl = document.getElementById('reframeTightChips');
+    tightEl.innerHTML = '';
+    REFRAME_TIGHTNESS.forEach(function (opt) {
+      tightEl.appendChild(reframeChip(opt.label, r.tight === opt.key, function () { setTight(opt.key); }));
+    });
+    // Fill
+    var fillEl = document.getElementById('reframeFillChips');
+    fillEl.innerHTML = '';
+    REFRAME_FILLS.forEach(function (opt) {
+      fillEl.appendChild(reframeChip(opt.label, r.fill === opt.key, function () { setFill(opt.key); }));
+    });
+    // Colour row (only when Fill = solid colour). For Blur we hide it.
+    var colorRow = document.getElementById('reframeColorRow');
+    if (r.fill === 'color') {
+      colorRow.style.display = '';
+      var colorEl = document.getElementById('reframeColorChips');
+      colorEl.innerHTML = '';
+      var matched = false;
+      REFRAME_COLORS.forEach(function (opt) {
+        var active = r.color.toUpperCase() === opt.key.toUpperCase();
+        if (active) matched = true;
+        var chip = reframeChip('', active, function () { setColor(opt.key); });
+        // Build chip contents: swatch dot + label.
+        var dot = document.createElement('span'); dot.className = 'reframe-color-swatch'; dot.style.background = opt.key;
+        chip.prepend(dot);
+        chip.appendChild(document.createTextNode(opt.label));
+        colorEl.appendChild(chip);
+      });
+      // "Custom…" chip — opens the hidden native colour picker. Active when
+      // the current colour isn\'t one of the presets.
+      var customChip = reframeChip('Custom…', !matched, function () {
+        var pk = document.getElementById('reframeColorPicker');
+        pk.value = r.color;
+        // Trigger native picker via .click(); iOS Safari supports this.
+        pk.click();
+      });
+      if (!matched) {
+        var dot2 = document.createElement('span'); dot2.className = 'reframe-color-swatch'; dot2.style.background = r.color;
+        customChip.prepend(dot2);
+      }
+      colorEl.appendChild(customChip);
+    } else {
+      colorRow.style.display = 'none';
+    }
+    // Preview label — which image we\'re showing.
+    var srcIdx = previewSourceIndex();
+    var srcImg = r.imgs[srcIdx];
+    var labelTxt = 'Previewing #' + (srcIdx + 1) + (srcIdx === 0 ? ' · main' : '');
+    if (!r.lockScope && r.scope === 'all') labelTxt += ' — same settings apply to all ' + r.imgs.length + ' images';
+    document.getElementById('reframePreviewLabel').textContent = labelTxt;
+    // Apply button label.
+    var n = applyFilepaths().length;
+    document.getElementById('reframeApplyBtn').textContent =
+      'Apply to ' + n + ' image' + (n === 1 ? '' : 's');
+  }
+
+  function reframeChip(label, isActive, onClick) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'chip' + (isActive ? ' is-active' : '');
+    if (label) b.textContent = label;
+    b.addEventListener('click', function (ev) { ev.preventDefault(); onClick(); });
+    return b;
+  }
+
+  function setScope(s) { state.reframe.scope = s; paintReframeSheet(); schedulePreview(200); }
+  function setTight(k) {
+    state.reframe.tight = k;
+    try { localStorage.setItem(LS.reframeTight, k); } catch (_) {}
+    paintReframeSheet(); schedulePreview(200);
+  }
+  function setFill(k) {
+    state.reframe.fill = k;
+    try { localStorage.setItem(LS.reframeFill, k); } catch (_) {}
+    paintReframeSheet(); schedulePreview(200);
+  }
+  function setColor(hex) {
+    state.reframe.color = hex.toUpperCase();
+    try { localStorage.setItem(LS.reframeColor, state.reframe.color); } catch (_) {}
+    paintReframeSheet(); schedulePreview(200);
+  }
+  document.getElementById('reframeColorPicker').addEventListener('input', function () {
+    setColor(this.value || '#FFFFFF');
+  });
+
+  // Which image to preview — when scope is "one" or "main" we preview that
+  // image; when "all" we preview the main (#0) as the representative one.
+  function previewSourceIndex() {
+    var r = state.reframe; if (!r) return 0;
+    if (r.scope === 'one') return r.focusedIndex;
+    if (r.scope === 'main') return 0;
+    // v0.49.12: "selected" → preview the FIRST selected image in gallery
+    // order. Looks better than picking an arbitrary one from the Set.
+    if (r.scope === 'selected') {
+      for (var i = 0; i < r.imgs.length; i++) {
+        if (state.selected.has(r.imgs[i].filepath)) return i;
+      }
+    }
+    return 0; // all → still preview the main image
+  }
+  function applyFilepaths() {
+    var r = state.reframe; if (!r) return [];
+    if (r.scope === 'one')  return [r.imgs[r.focusedIndex].filepath];
+    if (r.scope === 'main') return [r.imgs[0].filepath];
+    if (r.scope === 'selected') {
+      // Filter to selection ∩ this product\'s current images so a stale
+      // entry (selection from before a delete, say) doesn\'t throw a 4xx.
+      return r.imgs.map(function (x) { return x.filepath; })
+                   .filter(function (fp) { return state.selected.has(fp); });
+    }
+    return r.imgs.map(function (x) { return x.filepath; });
+  }
+
+  // Debounced preview. Every control change bumps state.reframe.previewSeq;
+  // the response is only painted if its seq matches the latest one, so the
+  // user dragging through chip taps doesn\'t end up with the second-to-last
+  // preview painting on top of the last.
+  var previewTimer = null;
+  function schedulePreview(delayMs) {
+    var r = state.reframe; if (!r) return;
+    r.previewSeq = (r.previewSeq || 0) + 1;
+    var seq = r.previewSeq;
+    if (previewTimer) clearTimeout(previewTimer);
+    document.getElementById('reframeBusy').hidden = false;
+    previewTimer = setTimeout(function () { runPreview(seq); }, Math.max(0, delayMs || 350));
+  }
+  function runPreview(seq) {
+    var r = state.reframe; if (!r) return;
+    var srcIdx = previewSourceIndex();
+    var src = r.imgs[srcIdx];
+    var opt = reframeOpt(REFRAME_TIGHTNESS, r.tight);
+    rpc('images:reframePreview', {
+      productId: r.productId, filepath: src.filepath,
+      scale: opt.scale,
+      offsetX: 0, offsetY: 0,
+      fillMode: r.fill,
+      fillColor: r.color,
+      autoCrop: true, trimThreshold: 12,
+    })
+      .then(function (res) {
+        if (!state.reframe || state.reframe.previewSeq !== seq) return; // stale
+        var url = envelopeToBlobUrl(res && res.bytes, 'image/png');
+        if (!url) return;
+        var imgEl = document.getElementById('reframePreviewImg');
+        // Revoke the previous URL so we don\'t leak blobs across redraws.
+        if (state.reframe.previewUrl) { try { URL.revokeObjectURL(state.reframe.previewUrl); } catch (_) {} }
+        state.reframe.previewUrl = url;
+        imgEl.src = url; imgEl.hidden = false;
+        document.getElementById('reframeBusy').hidden = true;
+      })
+      .catch(function (e) {
+        if (!state.reframe || state.reframe.previewSeq !== seq) return;
+        document.getElementById('reframeBusy').hidden = false;
+        document.getElementById('reframeBusy').textContent = 'Preview failed: ' + (e.message || 'unknown');
+      });
+  }
+  function closeReframeSheet() {
+    closeSheet('reframeSheet');
+    if (state.reframe && state.reframe.previewUrl) {
+      try { URL.revokeObjectURL(state.reframe.previewUrl); } catch (_) {}
+    }
+    state.reframe = null;
+  }
+  function applyReframeSheet() {
+    var r = state.reframe; if (!r) return;
+    var opt = reframeOpt(REFRAME_TIGHTNESS, r.tight);
+    var paths = applyFilepaths();
+    closeReframeSheet();
+    runReframeCrop(r.productId, paths, {
+      scale: opt.scale, fillMode: r.fill, fillColor: r.color, trimThreshold: 12,
+    });
+  }
+  document.getElementById('reframeCancelBtn').addEventListener('click', closeReframeSheet);
+  document.getElementById('reframeApplyBtn').addEventListener('click', applyReframeSheet);
+  document.getElementById('reframeSheetClose').addEventListener('click', closeReframeSheet);
+  document.getElementById('reframeSheet').addEventListener('click', function (e) { if (e.target === this) closeReframeSheet(); });
+
+  /* ── v0.49.13: Enhance sheet ──────────────────────────────────
+     Auto white-balance + auto-levels + saturation/brightness boost. Same
+     UX skeleton as Reframe (preview + scope + Apply) with a single control
+     row: Strength. Maps to three presets so users don\'t need to pick
+     numbers. Live preview via `images:autoEnhancePreview`. */
+  var ENHANCE_PRESETS = [
+    { key: 'subtle', label: 'Subtle', saturation: 1.03, brightness: 1.00 },
+    { key: 'normal', label: 'Normal', saturation: 1.08, brightness: 1.00 }, // matches desktop default
+    { key: 'punchy', label: 'Punchy', saturation: 1.18, brightness: 1.05 },
+  ];
+  function enhancePreset(key) {
+    for (var i = 0; i < ENHANCE_PRESETS.length; i++) if (ENHANCE_PRESETS[i].key === key) return ENHANCE_PRESETS[i];
+    return ENHANCE_PRESETS[1]; // Normal
+  }
+  function openEnhanceSheet(o) {
+    if (!o || !o.imgs || !o.imgs.length) return;
+    var focusedIndex = (o.focusedIndex != null) ? o.focusedIndex : 0;
+    var lockScope = !!o.lockScope;
+    var hasSelection = !lockScope && isSelecting() && selectionCount() > 0;
+    state.enhance = {
+      productId: o.productId,
+      imgs: o.imgs,
+      focusedIndex: focusedIndex,
+      lockScope: lockScope,
+      scope: lockScope ? 'one' : (hasSelection ? 'selected' : 'main'),
+      strength: localStorage.getItem(LS.enhanceStrength) || 'normal',
+      previewSeq: 0,
+      previewUrl: null,
+    };
+    paintEnhanceSheet();
+    openSheet('enhanceSheet');
+    scheduleEnhancePreview(0);
+  }
+  function paintEnhanceSheet() {
+    var e = state.enhance; if (!e) return;
+    // Scope chips — same shape as reframe.
+    var scopeEl = document.getElementById('enhanceScopeChips');
+    scopeEl.innerHTML = '';
+    if (e.lockScope) {
+      var only = document.createElement('span');
+      only.className = 'chip is-active';
+      only.textContent = 'This image (#' + (e.focusedIndex + 1) + (e.focusedIndex === 0 ? ' · main' : '') + ')';
+      scopeEl.appendChild(only);
+    } else {
+      scopeEl.appendChild(reframeChip('Main image (#1)', e.scope === 'main', function () { setEnhanceScope('main'); }));
+      if (isSelecting() && selectionCount() > 0) {
+        scopeEl.appendChild(reframeChip(
+          'Selected (' + selectionCount() + ')',
+          e.scope === 'selected',
+          function () { setEnhanceScope('selected'); }
+        ));
+      }
+      scopeEl.appendChild(reframeChip('All ' + e.imgs.length + ' images', e.scope === 'all', function () { setEnhanceScope('all'); }));
+    }
+    // Strength chips.
+    var strEl = document.getElementById('enhanceStrengthChips');
+    strEl.innerHTML = '';
+    ENHANCE_PRESETS.forEach(function (p) {
+      strEl.appendChild(reframeChip(p.label, e.strength === p.key, function () { setEnhanceStrength(p.key); }));
+    });
+    // Preview label.
+    var srcIdx = enhancePreviewSourceIndex();
+    var labelTxt = 'Previewing #' + (srcIdx + 1) + (srcIdx === 0 ? ' · main' : '');
+    if (!e.lockScope && e.scope === 'all')      labelTxt += ' — same settings apply to all ' + e.imgs.length + ' images';
+    else if (!e.lockScope && e.scope === 'selected') labelTxt += ' — same settings apply to all ' + selectionCount() + ' selected';
+    document.getElementById('enhancePreviewLabel').textContent = labelTxt;
+    // Apply button label.
+    var n = enhanceApplyFilepaths().length;
+    document.getElementById('enhanceApplyBtn').textContent =
+      'Apply to ' + n + ' image' + (n === 1 ? '' : 's');
+  }
+  function setEnhanceScope(s) { state.enhance.scope = s; paintEnhanceSheet(); scheduleEnhancePreview(200); }
+  function setEnhanceStrength(k) {
+    state.enhance.strength = k;
+    try { localStorage.setItem(LS.enhanceStrength, k); } catch (_) {}
+    paintEnhanceSheet(); scheduleEnhancePreview(200);
+  }
+  function enhancePreviewSourceIndex() {
+    var e = state.enhance; if (!e) return 0;
+    if (e.scope === 'one') return e.focusedIndex;
+    if (e.scope === 'main') return 0;
+    if (e.scope === 'selected') {
+      for (var i = 0; i < e.imgs.length; i++) {
+        if (state.selected.has(e.imgs[i].filepath)) return i;
+      }
+    }
+    return 0;
+  }
+  function enhanceApplyFilepaths() {
+    var e = state.enhance; if (!e) return [];
+    if (e.scope === 'one')  return [e.imgs[e.focusedIndex].filepath];
+    if (e.scope === 'main') return [e.imgs[0].filepath];
+    if (e.scope === 'selected') {
+      return e.imgs.map(function (x) { return x.filepath; })
+                   .filter(function (fp) { return state.selected.has(fp); });
+    }
+    return e.imgs.map(function (x) { return x.filepath; });
+  }
+  var enhancePreviewTimer = null;
+  function scheduleEnhancePreview(delayMs) {
+    var e = state.enhance; if (!e) return;
+    e.previewSeq = (e.previewSeq || 0) + 1;
+    var seq = e.previewSeq;
+    if (enhancePreviewTimer) clearTimeout(enhancePreviewTimer);
+    document.getElementById('enhanceBusy').hidden = false;
+    enhancePreviewTimer = setTimeout(function () { runEnhancePreview(seq); }, Math.max(0, delayMs || 350));
+  }
+  function runEnhancePreview(seq) {
+    var e = state.enhance; if (!e) return;
+    var srcIdx = enhancePreviewSourceIndex();
+    var src = e.imgs[srcIdx];
+    var p = enhancePreset(e.strength);
+    rpc('images:autoEnhancePreview', {
+      productId: e.productId, filepath: src.filepath,
+      whiteBalance: true, autoLevels: true,
+      saturation: p.saturation, brightness: p.brightness,
+    })
+      .then(function (res) {
+        if (!state.enhance || state.enhance.previewSeq !== seq) return; // stale
+        var url = envelopeToBlobUrl(res && res.bytes, 'image/png');
+        if (!url) return;
+        var imgEl = document.getElementById('enhancePreviewImg');
+        if (state.enhance.previewUrl) { try { URL.revokeObjectURL(state.enhance.previewUrl); } catch (_) {} }
+        state.enhance.previewUrl = url;
+        imgEl.src = url; imgEl.hidden = false;
+        document.getElementById('enhanceBusy').hidden = true;
+      })
+      .catch(function (err) {
+        if (!state.enhance || state.enhance.previewSeq !== seq) return;
+        document.getElementById('enhanceBusy').hidden = false;
+        document.getElementById('enhanceBusy').textContent = 'Preview failed: ' + (err.message || 'unknown');
+      });
+  }
+  function closeEnhanceSheet() {
+    closeSheet('enhanceSheet');
+    if (state.enhance && state.enhance.previewUrl) {
+      try { URL.revokeObjectURL(state.enhance.previewUrl); } catch (_) {}
+    }
+    state.enhance = null;
+  }
+  function applyEnhanceSheet() {
+    var e = state.enhance; if (!e) return;
+    var preset = enhancePreset(e.strength);
+    var paths = enhanceApplyFilepaths();
+    var pid = e.productId;
+    closeEnhanceSheet();
+    runEnhance(pid, paths, { saturation: preset.saturation, brightness: preset.brightness });
+  }
+  function runEnhance(pid, filepaths, opts) {
+    opts = opts || {};
+    var btn = document.getElementById('enhanceBtn');
+    var n = filepaths.length;
+    btn.disabled = true; btn.textContent = 'Enhancing ' + n + '…';
+    rpc('images:autoEnhanceProducts', {
+      productIds: [pid],
+      filepaths: filepaths,
+      whiteBalance: true, autoLevels: true,
+      saturation: opts.saturation != null ? opts.saturation : 1.08,
+      brightness: opts.brightness != null ? opts.brightness : 1.00,
+    })
+      .then(function (res) {
+        var done = (res && res.images) || 0;
+        var failed = (res && res.failed) || 0;
+        // Same in-place overwrite as reframe — bust the blob cache so
+        // thumbs re-fetch the new bytes.
+        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
+        delete imgListCache[pid]; delete mainImgCache[pid];
+        renderGallery(pid);
+        toast(failed
+          ? ('Enhanced ' + done + ', ' + failed + ' failed')
+          : ('Enhanced ' + done + ' image' + (done === 1 ? '' : 's')));
+      })
+      .catch(function (e) { toast('Enhance failed: ' + e.message); })
+      .finally(function () { btn.disabled = false; btn.textContent = '✨ Enhance'; });
+  }
+  document.getElementById('enhanceBtn').addEventListener('click', function () {
+    if (!currentDetail) return;
+    var pid = currentDetail.id;
+    getImageList(pid).then(function (imgs) {
+      if (!imgs || !imgs.length) { toast('No images to enhance'); return; }
+      openEnhanceSheet({ productId: pid, imgs: imgs, focusedIndex: 0, lockScope: false });
+    });
+  });
+  document.getElementById('enhanceCancelBtn').addEventListener('click', closeEnhanceSheet);
+  document.getElementById('enhanceApplyBtn').addEventListener('click', applyEnhanceSheet);
+  document.getElementById('enhanceSheetClose').addEventListener('click', closeEnhanceSheet);
+  document.getElementById('enhanceSheet').addEventListener('click', function (e) { if (e.target === this) closeEnhanceSheet(); });
+
+  /* ── v0.49.14: Overlay sheet ──────────────────────────────────
+     Applies a saved overlay template to the product\'s main image and
+     either appends the result as a new image, or replaces the main with
+     it (demoting the original to #2). Source is always main — matches
+     the desktop\'s `templates:applyToProduct` semantics; no scope picker
+     because the operation always produces a derived image, not an edit. */
+  function openOverlaySheet(o) {
+    if (!o || !o.productId) return;
+    state.overlay = {
+      productId: o.productId,
+      templates: [],
+      templateId: localStorage.getItem(LS.overlayTemplateId) || null,
+      destKind:   localStorage.getItem(LS.overlayDestKind)   || 'append',
+      previewSeq: 0,
+      previewUrl: null,
+    };
+    paintOverlaySheet();           // paint with whatever\'s in state
+    openSheet('overlaySheet');
+    // Fetch the catalog and re-paint. Each company\'s templates are
+    // fetched fresh — they\'re short lists and the user might have added
+    // new ones since the last open.
+    rpc('templates:list').then(function (rows) {
+      var arr = Array.isArray(rows) ? rows : [];
+      if (!state.overlay) return; // sheet was closed while fetching
+      state.overlay.templates = arr;
+      // If the saved templateId no longer exists in the catalog, drop it
+      // so we don\'t leave the chip stuck on a phantom selection.
+      if (state.overlay.templateId && !arr.some(function (t) { return t.id === state.overlay.templateId; })) {
+        state.overlay.templateId = null;
+      }
+      paintOverlaySheet();
+      if (state.overlay.templateId) scheduleOverlayPreview(0);
+    }).catch(function (e) {
+      if (!state.overlay) return;
+      document.getElementById('overlayBusy').hidden = false;
+      document.getElementById('overlayBusy').textContent = 'Failed to load templates: ' + (e.message || 'unknown');
+    });
+  }
+  function paintOverlaySheet() {
+    var o = state.overlay; if (!o) return;
+    // Template strip
+    var strip = document.getElementById('overlayTemplateStrip');
+    strip.innerHTML = '';
+    if (!o.templates || !o.templates.length) {
+      strip.innerHTML = '<div class="overlay-empty">No templates yet. Create one in Overlay Studio on the desktop.</div>';
+    } else {
+      o.templates.forEach(function (t) {
+        var card = document.createElement('div');
+        card.className = 'overlay-template-card' + (t.id === o.templateId ? ' is-active' : '');
+        card.innerHTML = '<div class="name">' + escapeHtml(t.name || '(no name)') + '</div>'
+                       + '<div class="meta">' + (t.canvasWidth || '?') + ' × ' + (t.canvasHeight || '?') + '</div>';
+        card.addEventListener('click', function () { pickOverlayTemplate(t.id); });
+        strip.appendChild(card);
+      });
+    }
+    // Destination chips
+    var destEl = document.getElementById('overlayDestChips');
+    destEl.innerHTML = '';
+    destEl.appendChild(reframeChip('Append (new image)',  o.destKind === 'append',      function () { setOverlayDest('append'); }));
+    destEl.appendChild(reframeChip('Replace main',        o.destKind === 'replaceMain', function () { setOverlayDest('replaceMain'); }));
+    // Preview label
+    var t = o.templates && o.templates.length && o.templateId
+      ? o.templates.find(function (x) { return x.id === o.templateId; })
+      : null;
+    document.getElementById('overlayPreviewLabel').textContent =
+      t ? ('Applying “' + (t.name || '') + '” to the main image') : 'Pick a template above';
+    // Apply button
+    var btn = document.getElementById('overlayApplyBtn');
+    btn.disabled = !o.templateId;
+    btn.textContent = o.destKind === 'replaceMain' ? 'Apply (replace main)' : 'Apply (append)';
+  }
+  function pickOverlayTemplate(id) {
+    if (!state.overlay) return;
+    state.overlay.templateId = id;
+    try { localStorage.setItem(LS.overlayTemplateId, id); } catch (_) {}
+    paintOverlaySheet();
+    scheduleOverlayPreview(150);
+  }
+  function setOverlayDest(kind) {
+    if (!state.overlay) return;
+    state.overlay.destKind = kind;
+    try { localStorage.setItem(LS.overlayDestKind, kind); } catch (_) {}
+    paintOverlaySheet();
+    // Destination doesn\'t affect the preview pixels, so no preview rerun.
+  }
+  var overlayPreviewTimer = null;
+  function scheduleOverlayPreview(delayMs) {
+    var o = state.overlay; if (!o || !o.templateId) return;
+    o.previewSeq = (o.previewSeq || 0) + 1;
+    var seq = o.previewSeq;
+    if (overlayPreviewTimer) clearTimeout(overlayPreviewTimer);
+    document.getElementById('overlayBusy').hidden = false;
+    document.getElementById('overlayBusy').textContent = 'Rendering preview…';
+    overlayPreviewTimer = setTimeout(function () { runOverlayPreview(seq); }, Math.max(0, delayMs || 250));
+  }
+  function runOverlayPreview(seq) {
+    var o = state.overlay; if (!o || !o.templateId) return;
+    rpc('templates:renderPreview', { templateId: o.templateId, productId: o.productId })
+      .then(function (res) {
+        if (!state.overlay || state.overlay.previewSeq !== seq) return;
+        var url = envelopeToBlobUrl(res && res.bytes, 'image/png');
+        if (!url) return;
+        var imgEl = document.getElementById('overlayPreviewImg');
+        if (state.overlay.previewUrl) { try { URL.revokeObjectURL(state.overlay.previewUrl); } catch (_) {} }
+        state.overlay.previewUrl = url;
+        imgEl.src = url; imgEl.hidden = false;
+        document.getElementById('overlayBusy').hidden = true;
+      })
+      .catch(function (e) {
+        if (!state.overlay || state.overlay.previewSeq !== seq) return;
+        document.getElementById('overlayBusy').hidden = false;
+        document.getElementById('overlayBusy').textContent = 'Preview failed: ' + (e.message || 'unknown');
+      });
+  }
+  function closeOverlaySheet() {
+    closeSheet('overlaySheet');
+    if (state.overlay && state.overlay.previewUrl) {
+      try { URL.revokeObjectURL(state.overlay.previewUrl); } catch (_) {}
+    }
+    state.overlay = null;
+  }
+  function applyOverlaySheet() {
+    var o = state.overlay; if (!o || !o.templateId) return;
+    var pid = o.productId, tid = o.templateId, dest = { kind: o.destKind };
+    closeOverlaySheet();
+    var btn = document.getElementById('overlayBtn');
+    btn.disabled = true; btn.textContent = 'Applying…';
+    rpc('templates:applyToProduct', { templateId: tid, productId: pid, destination: dest })
+      .then(function (res) {
+        // Append: new image at end of gallery. ReplaceMain: new image at #0,
+        // original demoted to #1. Either way bust the caches + re-render.
+        for (var k in blobCache) { try { URL.revokeObjectURL(blobCache[k]); } catch (e) {} delete blobCache[k]; }
+        delete imgListCache[pid]; delete mainImgCache[pid];
+        // Bump local imageCount so the count in the detail header is right
+        // without waiting for a fresh products:list.
+        if (currentDetail && currentDetail.id === pid) currentDetail.imageCount = (currentDetail.imageCount || 0) + 1;
+        var prod = state.products.find(function (x) { return x.id === pid; });
+        if (prod) prod.imageCount = (prod.imageCount || 0) + 1;
+        renderGallery(pid);
+        toast((res && res.skipped) ? 'Overlay matched an existing image (no duplicate added)' : 'Overlay applied');
+      })
+      .catch(function (e) { toast('Overlay failed: ' + e.message); })
+      .finally(function () { btn.disabled = false; btn.textContent = '◫ Overlay'; });
+  }
+  document.getElementById('overlayBtn').addEventListener('click', function () {
+    if (!currentDetail) return;
+    var pid = currentDetail.id;
+    getImageList(pid).then(function (imgs) {
+      if (!imgs || !imgs.length) { toast('Add a photo first — overlay needs a base image'); return; }
+      openOverlaySheet({ productId: pid });
+    });
+  });
+  document.getElementById('overlayCancelBtn').addEventListener('click', closeOverlaySheet);
+  document.getElementById('overlayApplyBtn').addEventListener('click', applyOverlaySheet);
+  document.getElementById('overlaySheetClose').addEventListener('click', closeOverlaySheet);
+  document.getElementById('overlaySheet').addEventListener('click', function (e) { if (e.target === this) closeOverlaySheet(); });
+
+  /* ── 360° spin (drag through a product's photos as frames) ──── */
+  var spinState = null; // { urls, idx, n, startX, startIdx, dragging }
+  function setSpinFrame(i) {
+    var s = spinState; if (!s) return;
+    s.idx = ((i % s.n) + s.n) % s.n;
+    document.getElementById('spinFrame').style.backgroundImage = 'url("' + s.urls[s.idx] + '")';
+  }
+  function openSpin(productId) {
+    var btn = document.getElementById('spinBtn');
+    btn.disabled = true;
+    getImageList(productId).then(function (imgs) {
+      if (!imgs || imgs.length < 2) { toast('Add 2+ photos to spin'); return; }
+      var rels = imgs.map(function (im) { return (im.isProcessed && im.processedFilepath) ? im.processedFilepath : im.filepath; });
+      return Promise.all(rels.map(assetUrl)).then(function (urls) {
+        urls = urls.filter(Boolean);
+        if (urls.length < 2) { toast('Could not load frames'); return; }
+        spinState = { urls: urls, idx: 0, n: urls.length, startX: 0, startIdx: 0, dragging: false };
+        setSpinFrame(0);
+        document.getElementById('spin').classList.add('open');
+        document.body.style.overflow = 'hidden';
+      });
+    }).catch(function (e) { toast(e.message); }).finally(function () { btn.disabled = false; });
+  }
+  function closeSpin() {
+    document.getElementById('spin').classList.remove('open');
+    // Spin is opened from within the detail sheet, which also locks body
+    // scroll. Only release the lock if the detail sheet is now closed too —
+    // otherwise the page would scroll behind the still-open sheet.
+    document.body.style.overflow = document.getElementById('detail').classList.contains('open') ? 'hidden' : '';
+    spinState = null;
+  }
+  (function () {
+    var stage = document.getElementById('spinStage');
+    var PX = 26;
+    stage.addEventListener('pointerdown', function (e) {
+      if (!spinState) return;
+      spinState.dragging = true; spinState.startX = e.clientX; spinState.startIdx = spinState.idx;
+      try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    stage.addEventListener('pointermove', function (e) {
+      var s = spinState; if (!s || !s.dragging) return;
+      setSpinFrame(s.startIdx + Math.round(-(e.clientX - s.startX) / PX));
+    });
+    function end() { if (spinState) spinState.dragging = false; }
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', end);
+    document.getElementById('spinClose').addEventListener('click', closeSpin);
+    document.getElementById('spin').addEventListener('click', function (e) { if (e.target === this) closeSpin(); });
+    document.getElementById('spinBtn').addEventListener('click', function () { if (currentDetail) openSpin(currentDetail.id); });
+  })();
+
+  /* ──────────────────────────────────────────────────────────────
+     v0.49.5: image preview lightbox
+     ──────────────────────────────────────────────────────────────
+     Fullscreen viewer for a single product image. Opened by tapping a
+     gallery tile; prev/next via buttons or 1-finger swipe. iOS pinch-zoom
+     still works on the image (touch-action: pinch-zoom on the stage), and
+     long-press triggers the system "Save Image" sheet so users can save
+     to their camera roll without us shipping a save button. */
+
+  var previewState = null; // { images: [...], index: number }
+
+  function openImgPreview(imgs, startIndex) {
+    if (!imgs || !imgs.length) return;
+    var n = imgs.length;
+    var idx = Math.max(0, Math.min(startIndex || 0, n - 1));
+    previewState = { images: imgs, index: idx };
+    paintImgPreview();
+    document.getElementById('imgPreview').classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+  function paintImgPreview() {
+    var s = previewState; if (!s) return;
+    var img = s.images[s.index];
+    var rel = (img.isProcessed && img.processedFilepath) ? img.processedFilepath : img.filepath;
+    var el = document.getElementById('imgPreviewImg');
+    el.src = ''; // clear while the new one loads (avoids a flash of the old)
+    assetUrl(rel).then(function (url) {
+      // Bail if state moved on (rapid prev/next swipes).
+      if (url && previewState && previewState.images[previewState.index] === img) {
+        el.src = url;
+        el.alt = img.filename || '';
+      }
+    });
+    document.getElementById('imgPreviewInfo').textContent =
+      '#' + (s.index + 1) + ' of ' + s.images.length + (s.index === 0 ? ' · main' : '');
+    document.getElementById('imgPreviewPrev').disabled = s.index <= 0;
+    document.getElementById('imgPreviewNext').disabled = s.index >= s.images.length - 1;
+  }
+  function previewPrev() {
+    if (!previewState || previewState.index <= 0) return;
+    previewState.index -= 1; paintImgPreview();
+  }
+  function previewNext() {
+    if (!previewState || previewState.index >= previewState.images.length - 1) return;
+    previewState.index += 1; paintImgPreview();
+  }
+  function closeImgPreview() {
+    document.getElementById('imgPreview').classList.remove('open');
+    // Restore scroll lock state — detail sheet (if open) needs it back.
+    document.body.style.overflow = document.getElementById('detail').classList.contains('open') ? 'hidden' : '';
+    previewState = null;
+    document.getElementById('imgPreviewImg').src = '';
+  }
+  document.getElementById('imgPreviewClose').addEventListener('click', closeImgPreview);
+  document.getElementById('imgPreviewPrev').addEventListener('click', previewPrev);
+  document.getElementById('imgPreviewNext').addEventListener('click', previewNext);
+  document.getElementById('imgPreview').addEventListener('click', function (e) {
+    // Backdrop tap (anything outside the image / nav buttons) closes.
+    if (e.target.id === 'imgPreview' || e.target.id === 'imgPreviewStage') closeImgPreview();
+  });
+
+  // 1-finger swipe on the stage → prev/next. Multi-touch (pinch) is left
+  // alone so iOS handles native zoom.
+  (function () {
+    var stage = document.getElementById('imgPreviewStage');
+    var sx = 0; var sy = 0; var dragging = false;
+    stage.addEventListener('touchstart', function (e) {
+      if (e.touches.length > 1) { dragging = false; return; }
+      dragging = true; sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    }, { passive: true });
+    stage.addEventListener('touchend', function (e) {
+      if (!dragging || !e.changedTouches.length) { dragging = false; return; }
+      dragging = false;
+      var dx = e.changedTouches[0].clientX - sx;
+      var dy = e.changedTouches[0].clientY - sy;
+      // Only treat as horizontal swipe if it's more horizontal than vertical.
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) {
+        if (dx < 0) previewNext(); else previewPrev();
+      }
+    }, { passive: true });
+  })();
+
+  /* ──────────────────────────────────────────────────────────────
+     v0.49.5: keyboard-aware sheet sizing
+     ──────────────────────────────────────────────────────────────
+     iOS pops the on-screen keyboard ABOVE the layout viewport — the sheet's
+     vh-based max-height doesn't shrink, so the sheet's top edge floats
+     off-screen and the search input vanishes behind the keyboard. Watch
+     visualViewport and toggle the `is-keyboard` class on any open sheet so
+     CSS re-anchors it to the top with a visualViewport-sized max-height. */
+  function syncSheetsToViewport() {
+    var open = document.querySelectorAll('.sheet-overlay.open');
+    if (!open.length) return;
+    var visH = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    // Heuristic: if the visual viewport is more than 120px short of the
+    // layout viewport, the keyboard is up. 120px is roughly the smallest
+    // possible iOS keyboard (a numeric keypad); the regular keyboard takes
+    // ~300px. Either way we want the sheet pinned to the top.
+    var keyboardUp = (window.innerHeight - visH) > 120;
+    open.forEach(function (s) {
+      s.classList.toggle('is-keyboard', keyboardUp);
+      if (keyboardUp) s.style.setProperty('--vvh', visH + 'px');
+      else s.style.removeProperty('--vvh');
+    });
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', syncSheetsToViewport);
+    window.visualViewport.addEventListener('scroll', syncSheetsToViewport);
+  }
+  window.addEventListener('resize', syncSheetsToViewport);
+  document.getElementById('photoInput').addEventListener('change', function () {
+    handleAddPhotos(this.files);
+    this.value = ''; // reset so the same photo can be picked again
+  });
+
+  function closeDetail() {
+    document.getElementById('detail').classList.remove('open');
+    document.body.style.overflow = '';
+    stopAiPolling(); // v0.47.0 — no point polling once the sheet is closed.
+    if (isSelecting()) exitSelectMode(); // v0.49.12 — selection belongs to this product\'s view.
+  }
+  document.getElementById('detailClose').addEventListener('click', closeDetail);
+  document.getElementById('detail').addEventListener('click', function (e) { if (e.target === this) closeDetail(); });
+
+  /* ── helpers ───────────────────────────────────────────────── */
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fmtBytes(n) {
+    if (!n) return '';
+    if (n < 1024 * 1024) return Math.max(1, Math.round(n / 1024)) + ' KB';
+    var mb = n / (1024 * 1024); return (mb >= 10 ? Math.round(mb) : mb.toFixed(1)) + ' MB';
+  }
+
+  /* ── start ─────────────────────────────────────────────────── */
+  if (baseUrl && token) {
+    document.getElementById('connect').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    boot();
+  } else {
+    showConnect('');
+  }
+})();
+</script>
+</body>
+</html>

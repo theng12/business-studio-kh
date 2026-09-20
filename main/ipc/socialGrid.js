@@ -101,9 +101,14 @@ async function renderPageBytes(products, brands, config, pageIndex, pageCount, f
 function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActiveCompany }) {
   /* ── saved post presets ─────────────────────────────────────────── */
 
-  expose('socialGrid:list', ({ companyId } = {}) => presets.list(companyId || companies.getActiveId()));
+  expose('socialGrid:list', ({ companyId } = {}) => {
+    const activeId = companies.getActiveId();
+    if (companyId && companyId !== activeId) return [];
+    return presets.list(companyId || activeId);
+  });
   expose('socialGrid:get', ({ id } = {}) => assertEntityInActiveCompany(presets.get(id), 'Post preset'));
   expose('socialGrid:create', (input = {}) => {
+    if (input.companyId !== companies.getActiveId()) throw new Error('Cross-company create blocked');
     const row = presets.create(input);
     emitCatalogChange('socialGrid', 'create', row.id);
     return row;
@@ -216,6 +221,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
   expose('socialGrid:markExported', ({ id } = {}) => {
     assertEntityInActiveCompany(presets.get(id), 'Post preset');
     presets.markExported(id);
+    emitCatalogChange('socialGrid', 'update', id);
     return { ok: true };
   });
 }

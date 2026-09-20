@@ -27,8 +27,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     assertEntityInActiveCompany(templates.get(id), 'Label template');
     const row = templates.update(id, patch); emitCatalogChange('labels', 'update', id); return row;
   });
-  expose('labels:deleteTemplate', ({ id } = {}) => { assertEntityInActiveCompany(templates.get(id), 'Label template'); return templates.remove(id); });
-  expose('labels:duplicateTemplate', ({ id } = {}) => { assertEntityInActiveCompany(templates.get(id), 'Label template'); return templates.duplicate(id); });
+  expose('labels:deleteTemplate', ({ id } = {}) => { assertEntityInActiveCompany(templates.get(id), 'Label template'); const ok = templates.remove(id); emitCatalogChange('labels', 'delete', id); return ok; });
+  expose('labels:duplicateTemplate', ({ id } = {}) => { assertEntityInActiveCompany(templates.get(id), 'Label template'); const row = templates.duplicate(id); emitCatalogChange('labels', 'create', row.id); return row; });
   expose('labels:preview', async ({ templateId, productId, layout } = {}) => {
     const template = templates.get(templateId); if (!template) throw new Error('Label template not found');
     assertEntityInActiveCompany(template, 'Label template');
@@ -49,7 +49,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
   exposeLocal('labels:importAsset', async ({ sourcePath, name } = {}) => imageManager.importAsset('labels', sourcePath, name || 'label-art'));
   exposeLocal('labels:listPrinters', () => renderer.listPrinters());
   expose('labels:listRuns', ({ companyId, limit } = {}) => runs.list(companyId, limit));
-  expose('labels:deleteRun', ({ id } = {}) => runs.remove(id));
+  expose('labels:deleteRun', ({ id } = {}) => { const removed = runs.remove(id); emitCatalogChange('labels', 'run-delete', id); return removed; });
   exposeLocal('labels:openOutput', async ({ outputPath } = {}) => {
     if (!outputPath || typeof outputPath !== 'string') throw new Error('Output path required');
     return openPathOrThrow(outputPath, 'label file');
@@ -133,6 +133,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     for (const item of (Array.isArray(items) ? items : [])) {
       runs.addItem(run.id, item);
     }
+    emitCatalogChange('labels', 'run', templateId);
     return { run };
   });
 
@@ -196,6 +197,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
         settings: { ...layout, originHost: os.hostname() } });
       products.forEach((product, i) => runs.addItem(run.id, { productId: product.id, sku: product.sku,
         filePath: format === 'pdf' ? made[0] : made[i], productSnapshot: product, templateSnapshot: template }));
+      emitCatalogChange('labels', 'run', templateId);
       return { run, files: made, outputPath: run.outputPath };
     } finally {
       events.broadcast('progress:event', { id: opId, complete: true });
@@ -209,6 +211,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     const html = await labelsDocument({ template, products, brands: brandsDb.list(companyId), layout });
     const result = await renderer.printHtml(html, printOptions);
     runs.create({ companyId, templateId, templateName: template.name, format: 'print', layoutMode: layout.mode || 'single', productCount: products.length, settings: { layout, printOptions, originHost: os.hostname() } });
+    emitCatalogChange('labels', 'run', templateId);
     return result;
   });
 }

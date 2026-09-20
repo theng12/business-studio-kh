@@ -86,6 +86,20 @@ function bareHandleChannels() {
   return found;
 }
 
+/** Fire-and-forget registrations do not pass through validateArgs. Keep their
+ * small, manually-audited surface visible instead of letting ipcMain.on calls
+ * bypass the registration ledger. */
+function bareOnChannels() {
+  const found = [];
+  for (const file of walkJs(path.join(ROOT, 'main'))) {
+    const src = stripComments(fs.readFileSync(file, 'utf8'));
+    for (const m of src.matchAll(/ipcMain\.on\(\s*'([^']+)'/g)) {
+      found.push(`${m[1]}  (${path.relative(ROOT, file)})`);
+    }
+  }
+  return found.sort();
+}
+
 const ALL_CHANNELS = declaredChannels();
 
 /**
@@ -175,6 +189,13 @@ test('validator coverage — no bare ipcMain.handle with a channel name anywhere
     + 'main/client/index.js — instead of a bare ipcMain.handle. A bare handle\n'
     + 'skips validation entirely:\n  ' + offenders.join('\n  '),
   );
+});
+
+test('validator coverage — fire-and-forget channels stay on the audited drag path', () => {
+  assert.deepEqual(bareOnChannels(), [
+    'images:startDragOut  (main/client/index.js)',
+    'images:startDragOut  (main/ipc/images.js)',
+  ]);
 });
 
 test('validator coverage — client-mode local handlers mirror known channels', () => {
