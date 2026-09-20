@@ -35,6 +35,7 @@
 const { ipcMain } = require('electron');
 const { broadcast } = require('../events');
 const { validateArgs } = require('../util/validateArgs');
+const { runTrackedOperation } = require('../util/maintenanceLifecycle');
 
 /* ─── Constants ───────────────────────────────────────────────── */
 
@@ -77,15 +78,16 @@ const SAFE_BRAND_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg']);
  * modules).
  */
 function expose(channel, handler) {
+  const trackedHandler = (args) => runTrackedOperation(channel, () => handler(args));
   try {
     const { registerHandler } = require('../server');
-    registerHandler(channel, handler);
+    registerHandler(channel, trackedHandler);
   } catch (err) {
     process.stderr.write(`[ipc.expose] server registry not available: ${err.message}\n`);
   }
   ipcMain.handle(channel, (_e, ...args) => {
     validateArgs(channel, args[0]);
-    return handler(args[0]);
+    return trackedHandler(args[0]);
   });
 }
 
@@ -116,7 +118,7 @@ function expose(channel, handler) {
 function exposeLocal(channel, handler) {
   ipcMain.handle(channel, (_e, ...args) => {
     validateArgs(channel, args[0]);
-    return handler(args[0]);
+    return runTrackedOperation(channel, () => handler(args[0]));
   });
 }
 

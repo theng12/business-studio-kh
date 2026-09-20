@@ -809,12 +809,6 @@ export function MigrationPanel({ config, addToast }) {
     try {
       await window.api.servers.importBundle(preview.bundlePath, config.dataDir);
       addToast?.('Bundle imported. Restarting…', 'success');
-      // Small grace period so the toast renders before the relaunch
-      // pulls the rug out. applyImportedDataDir is a no-op when the
-      // path didn't change, but we call it to atomically persist the
-      // path (in case the import wrote to a different folder than the
-      // live config — defensive) and trigger the relaunch.
-      await window.api.servers.applyImportedDataDir(config.dataDir, true);
     } catch (err) {
       addToast?.(`Import failed: ${err.message}`, 'error');
       setImporting(false);

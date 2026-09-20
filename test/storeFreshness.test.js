@@ -422,6 +422,10 @@ test('server hello coalesces reconnect reconciliation and repeated bootstraps ke
   const beforeReconnect = productCalls;
 
   generation = 2;
+  listeners.emit('connection', {
+    status: 'connected',
+    user: { id: 'current-user', caps: ['products.edit'] },
+  });
   listeners.emit('hello', { user: { id: 'current-user', caps: ['products.edit'] } });
   listeners.emit('hello', { user: { id: 'current-user', caps: ['products.edit'] } });
   await waitFor(() => useAppStore.getState().products[0]?.id === 'product-v2', 'reconnect did not reconcile products');

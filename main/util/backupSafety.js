@@ -14,6 +14,7 @@
  * most worth a regression test.
  */
 
+const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 
@@ -39,6 +40,23 @@ const BACKUP_DIR_NAME = 'backups';
 // database.sqlite's -wal / -shm sidecars are handled separately by the
 // snapshot step (db.backup() produces a single consistent file).
 const BACKUP_DATA_ENTRIES = ['database.sqlite', 'assets', 'processed', 'ai-gallery', 'overlays'];
+
+/** Resolve existing symlinks while preserving any not-yet-created suffix. */
+function canonicalizeExistingPath(inputPath) {
+  let cursor = path.resolve(inputPath);
+  const suffix = [];
+  while (true) {
+    try {
+      return path.resolve(fs.realpathSync.native(cursor), ...suffix);
+    } catch (err) {
+      if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) throw err;
+      suffix.unshift(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
 
 /**
  * Is `child` strictly inside `parent`? Used to reject any archive
@@ -145,7 +163,7 @@ function validateTarListing(namesText, verboseText) {
   return { rootName, entries };
 }
 
-async function validateExtractedTree(rootDir, { openDatabase } = {}) {
+async function validateExtractedTree(rootDir, { openDatabase, expectedSchemaVersion } = {}) {
   const rootAbs = path.resolve(rootDir);
   const rootStat = await fsp.lstat(rootAbs).catch(() => null);
   if (!rootStat || !rootStat.isDirectory() || rootStat.isSymbolicLink()) {
@@ -180,12 +198,12 @@ async function validateExtractedTree(rootDir, { openDatabase } = {}) {
   };
   await walk(rootAbs);
   const dbPath = path.join(rootAbs, 'database.sqlite');
-  await validateSQLiteDatabase(dbPath, { openDatabase });
+  await validateSQLiteDatabase(dbPath, { openDatabase, expectedSchemaVersion });
   return true;
 }
 
 /** Verify regular-file identity and SQLite's own consistency check. */
-async function validateSQLiteDatabase(filePath, { openDatabase } = {}) {
+async function validateSQLiteDatabase(filePath, { openDatabase, expectedSchemaVersion } = {}) {
   const stat = await fsp.lstat(filePath).catch(() => null);
   if (!stat || !stat.isFile() || stat.nlink > 1) {
     throw new Error('Archive database.sqlite is not a regular file');
@@ -208,6 +226,19 @@ async function validateSQLiteDatabase(filePath, { openDatabase } = {}) {
     const result = db.prepare('PRAGMA quick_check').get();
     if (!result || result.quick_check !== 'ok') {
       throw new Error('Archive database.sqlite failed SQLite quick_check');
+    }
+    if (Number.isInteger(expectedSchemaVersion)) {
+      let schemaVersion = null;
+      try {
+        const row = db.prepare("SELECT value FROM app_state WHERE key = 'schema_version'").get();
+        schemaVersion = row?.value;
+      } catch (_) { /* reported by the exact-version check below */ }
+      if (schemaVersion !== String(expectedSchemaVersion)) {
+        const found = schemaVersion == null ? 'missing' : JSON.stringify(schemaVersion);
+        throw new Error(
+          `Archive database schema version ${found} is not supported; expected v${expectedSchemaVersion}.`,
+        );
+      }
     }
   } catch (err) {
     if (/Archive database/.test(err.message)) throw err;
@@ -313,6 +344,7 @@ module.exports = {
   BACKUP_EXT,
   BACKUP_DIR_NAME,
   BACKUP_DATA_ENTRIES,
+  canonicalizeExistingPath,
   isPathInside,
   safeArchiveEntry,
   resolveSafeDest,

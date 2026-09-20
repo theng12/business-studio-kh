@@ -192,11 +192,13 @@ export function Settings() {
     setPendingDataFolder(null);
     try {
       const result = await window.api.settings.changeDataFolder(next, move);
+      if (!result?.restartScheduled) {
+        throw new Error('Data folder changed, but restart was not scheduled. Quit and reopen Business Studio KH.');
+      }
       if (move && result?.sourceRetained) {
         addToast('Original data folder retained until you verify the new location.', 'info');
       }
       addToast(move ? 'Data moved. Restarting…' : 'Pointed at new folder. Restarting…', 'success');
-      setTimeout(() => window.api.app.relaunch(), 600);
     } catch (err) {
       addToast(err.message, 'error');
     }

@@ -38,7 +38,10 @@ test('bundle import removes extracted portable credentials after a successful me
           resolveSafeDest: (rootPath, rel) => path.join(rootPath, rel),
         };
       }
-      if (request === './config') return { updateConfig: (patch) => updates.push(patch) };
+      if (request === './config') return {
+        loadConfig: () => ({}),
+        updateConfig: (patch) => updates.push(patch),
+      };
       return originalLoad.call(this, request, parent, isMain);
     };
     delete require.cache[require.resolve('../main/serverBundle')];

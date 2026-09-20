@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const url = require('node:url');
 const { createHash } = require('node:crypto');
+const { runTrackedOperation } = require('./util/maintenanceLifecycle');
 
 /**
  * v0.26.42: async existence probe. Used in place of `fs.existsSync`
@@ -140,49 +141,54 @@ function registerImageProtocol(dataDir) {
 
   protocol.handle('app-image', async (request) => {
     try {
-      const stripped = request.url.replace(/^app-image:\/\/local\//, '');
-      // Drop cache-bust querystring (e.g. ?v=3) before resolving on disk.
-      const noQuery = stripped.split('?')[0];
-      const decoded = decodeURIComponent(noQuery);
+      return await runTrackedOperation('protocol:app-image', async () => {
+        const stripped = request.url.replace(/^app-image:\/\/local\//, '');
+        // Drop cache-bust querystring (e.g. ?v=3) before resolving on disk.
+        const noQuery = stripped.split('?')[0];
+        const decoded = decodeURIComponent(noQuery);
 
-      // Renderer always supplies a relative path. We deliberately do NOT
-      // accept absolute paths — a malicious renderer payload could otherwise
-      // walk outside the asset trees and read config.json, crash.log, or the
-      // SQLite database. The renderer has the assetsRoot mapped via the
-      // protocol; absolute file access goes through dedicated IPC handlers
-      // that perform their own validation.
-      if (path.isAbsolute(decoded)) {
-        return new Response(null, { status: 403 });
-      }
+        // Renderer always supplies a relative path. We deliberately do NOT
+        // accept absolute paths — a malicious renderer payload could otherwise
+        // walk outside the asset trees and read config.json, crash.log, or the
+        // SQLite database. The renderer has the assetsRoot mapped via the
+        // protocol; absolute file access goes through dedicated IPC handlers
+        // that perform their own validation.
+        if (path.isAbsolute(decoded)) {
+          return new Response(null, { status: 403 });
+        }
 
-      let abs;
-      if (decoded.startsWith('processed/') || decoded.startsWith('ai-gallery/')) {
-        abs = path.join(dataDir, decoded);
-      } else {
-        abs = path.join(assetsRoot, decoded);
-      }
+        let abs;
+        if (decoded.startsWith('processed/') || decoded.startsWith('ai-gallery/')) {
+          abs = path.join(dataDir, decoded);
+        } else {
+          abs = path.join(assetsRoot, decoded);
+        }
 
-      const normalized = path.normalize(abs);
-      // Belt-and-braces: even relative input could traverse via `..`. Confirm
-      // the resolved path falls inside one of the three allowed roots.
-      if (
-        !isPathWithinRoot(assetsRoot, normalized) &&
-        !isPathWithinRoot(processedRoot, normalized) &&
-        !isPathWithinRoot(aiGalleryRoot, normalized)
-      ) {
-        return new Response(null, { status: 403 });
-      }
-      // v0.26.42: async existence check. This handler serves EVERY
-      // image preview the renderer requests — Library grid thumbs,
-      // side-panel previews, AI gallery, etc. With the user's
-      // dataDir on iCloud Drive, existsSync on a not-yet-materialised
-      // file used to block the entire event loop while macOS
-      // downloaded it; now only this handler's promise waits.
-      if (!(await fileExists(normalized))) {
-        return new Response(null, { status: 404 });
-      }
-      return net.fetch(url.pathToFileURL(normalized).toString());
+        const normalized = path.normalize(abs);
+        // Belt-and-braces: even relative input could traverse via `..`. Confirm
+        // the resolved path falls inside one of the three allowed roots.
+        if (
+          !isPathWithinRoot(assetsRoot, normalized) &&
+          !isPathWithinRoot(processedRoot, normalized) &&
+          !isPathWithinRoot(aiGalleryRoot, normalized)
+        ) {
+          return new Response(null, { status: 403 });
+        }
+        // v0.26.42: async existence check. This handler serves EVERY
+        // image preview the renderer requests — Library grid thumbs,
+        // side-panel previews, AI gallery, etc. With the user's
+        // dataDir on iCloud Drive, existsSync on a not-yet-materialised
+        // file used to block the entire event loop while macOS
+        // downloaded it; now only this handler's promise waits.
+        if (!(await fileExists(normalized))) {
+          return new Response(null, { status: 404 });
+        }
+        return net.fetch(url.pathToFileURL(normalized).toString());
+      }, { trackResponseBody: true });
     } catch (err) {
+      if (err?.code === 'APP_MAINTENANCE') {
+        return new Response(null, { status: 503 });
+      }
       process.stderr.write(`[app-image] handler error: ${err.message}\n`);
       return new Response(null, { status: 500 });
     }

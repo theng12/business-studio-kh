@@ -86,17 +86,7 @@ function installSubscriptions(set, get) {
     if (typeof off === 'function') _catalogUnsubs.push(off);
   }
   if (window.api?.events?.onServerHello) {
-    const off = window.api.events.onServerHello((payload) => {
-      if (payload?.user) {
-        set((state) => ({
-          clientConnection: {
-            ...state.clientConnection,
-            status: 'connected',
-            lastError: null,
-            user: payload.user,
-          },
-        }));
-      }
+    const off = window.api.events.onServerHello(() => {
       requestReconciliation(set, get);
     });
     if (typeof off === 'function') _catalogUnsubs.push(off);
