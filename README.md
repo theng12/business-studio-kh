@@ -4,6 +4,10 @@ A multi-purpose product media workspace for macOS, built with Electron.
 
 Business Studio KH keeps one shared Product Library at the center of three focused workspaces: image production, label design and printing, and catalog creation. Product details are entered once and can then drive edited images, AI variations, barcodes, multilingual labels, shelf cards, and print-ready catalogs. The app works standalone and retains the existing multi-Mac server/client foundation for collaborative image workflows.
 
+## Continue development on another Mac
+
+Start with [the new-computer handoff](docs/NEW_COMPUTER_HANDOFF.md) for the current baseline, setup commands, data-transfer options, and prioritized remaining bugs. The source is in the private [GitHub repository](https://github.com/theng12/media-studio-kh); DMGs, live data, and credentials are not included in a clone.
+
 ## Install (beta)
 
 The app isn't code-signed yet, so macOS Gatekeeper will refuse to open it out of the box.
@@ -44,7 +48,7 @@ If you don't run step 3 you'll see "Business Studio KH is damaged and can't be o
 **Catalog management**
 - Multi-tenant: one app, many companies. Each company has its own brands, categories, products, and asset tree.
 - Brand-grouped products with optional icons that follow through to exports and Overlay Studio templates.
-- Per-product image lists (up to 20) with reorder, set-as-main, content-addressed dedup.
+- Per-product image lists (up to 50) with reorder, set-as-main, content-based dedup.
 - Excel / CSV import with column mapping, sample workbook download, dry-run preview, merge-or-overwrite policy on conflict.
 
 **Product Library**
@@ -87,7 +91,7 @@ If you don't run step 3 you'll see "Business Studio KH is damaged and can't be o
 **Storage**
 - Default data folder is `~/Pictures/Business Studio KH/` (configurable in Settings).
 - Asset tree: `<dataDir>/assets/<company>/<brand-or-_unassigned>/<sku>/<SKU>-NNN.<ext>`.
-- Content-addressed dedup (SHA-1 first 10 chars in filename).
+- Content-based dedup; product images use numbered filenames, while imported artwork uses clean names with numeric collision suffixes.
 - iCloud Drive support: detected automatically, switches SQLite to DELETE journal mode for safe sync.
 
 ## Keyboard shortcuts
@@ -102,10 +106,10 @@ Press `Cmd+?` (or `Ctrl+?`) inside the app for the full list. Highlights:
 
 ## Development
 
-Requires Node 20+ and Xcode Command Line Tools (for `better-sqlite3`'s native build).
+Use an Apple Silicon Mac running macOS 12 or newer, Node 24 (verified with 24.15.0), and Xcode Command Line Tools for native dependencies. Do not copy `node_modules` from another computer.
 
 ```bash
-npm install
+npm ci
 npm run dev    # Vite + Electron with HMR
 npm run dist   # build the macOS arm64 DMG into dist/
 ```
