@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.39',
+    date: '2026-09-21',
+    items: [
+      'FIX — a save that keeps failing on one image no longer locks the whole image strip, and a conflicting save now explains why the switch is blocked.',
+      'FIX — Process and Apply report a concurrent-edit conflict in plain language instead of a raw conflict payload, and a failed list refresh after a successful process no longer reads as a failure.',
+      'FIX — applying a crop that overwrites the source image saves pending adjustments first, so they are not lost.',
+      'Internal — the import parser keeps generated column names unique, and added rendered import-preview and Image Workspace conflict regressions.',
+    ],
+  },
+  {
     version: '0.1.38',
     date: '2026-09-21',
     items: [

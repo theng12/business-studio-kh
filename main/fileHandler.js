@@ -11,16 +11,18 @@ function readWorkbook(filePath) {
     /* Duplicate headers must not collapse into one column. Row objects were
      * keyed by header name, so a second "SKU" column overwrote the first and a
      * file with a stray duplicate SKU lost every SKU value — the preview then
-     * read "out of 0 rows" with no explanation. Repeats get a numeric suffix
-     * (SKU, SKU (2), …) so both columns survive and the map screen shows them;
-     * the suffix does not auto-guess, so only the first occurrence maps. */
+     * read "out of 0 rows" with no explanation. Every final key is forced
+     * unique (SKU, SKU (2), …) including the generated `Column N` name for a
+     * blank header, which can itself collide with a real header of that name. */
     const rawHeaders = (rows[0] ?? []).map((h) => String(h ?? '').trim());
-    const occurrences = new Map();
+    const used = new Set();
     const headers = rawHeaders.map((h, index) => {
-      const count = (occurrences.get(h) ?? 0) + 1;
-      occurrences.set(h, count);
-      if (count === 1) return h;
-      return h ? `${h} (${count})` : `Column ${index + 1}`;
+      const base = h || `Column ${index + 1}`;
+      let name = base;
+      let n = 1;
+      while (used.has(name)) { n += 1; name = `${base} (${n})`; }
+      used.add(name);
+      return name;
     });
     const body = rows.slice(1).map((r) => {
       const obj = {};

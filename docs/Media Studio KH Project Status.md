@@ -4,13 +4,15 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 **Scope:** personal/internal macOS (Apple Silicon) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, local release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
 
-## Current software pass — 0.1.38 (merged); no active pass
+## Current software pass — 0.1.39 (self-review fixes, pre-merge)
 
 **Repository state (verified 2026-09-21):**
 
-- Worktree: `/Users/vengtheng/.codex/worktrees/workspace-concurrency/media-studio-kh`; current branch `codex/status-0138` off `origin/main` (`866ac5b`), for this status update only.
-- **0.1.37 is merged:** PR #6, merge commit `172d3eb80079d8333c336a44e942cdb2aab5146d`; local `main` fast-forwarded. The 0.1.37 DMG below was built before integration and matches the merged app source; it was handed to the owner for the customer. The customer's import problem is resolved.
-- **0.1.38 is merged:** PR #7, merge commit `866ac5b021c52ca3e8a3cc9498f3974060a19bb0`. Import hardening (duplicate headers, title rows), the documentation truth pass, and the patch bump.
+- Worktree: `/Users/vengtheng/.codex/worktrees/workspace-concurrency/media-studio-kh`; branch `codex/review-fixes` off `origin/main` (`b8f1bb7`).
+- **0.1.37 merged:** PR #6, merge commit `172d3eb80079d8333c336a44e942cdb2aab5146d`; its DMG was handed to the owner for the customer.
+- **0.1.38 merged:** PR #7, merge commit `866ac5b021c52ca3e8a3cc9498f3974060a19bb0` (import hardening + documentation truth pass).
+- **Docs merged:** PR #8, merge commit `b8f1bb7` (status record + plan checkboxes).
+- This pass (0.1.39): a separate-agent adversarial review of `0d0f93b..b8f1bb7`, its fixes, the R3.1 rendered test, and the R5 runbook — [hardware validation runbook](HARDWARE_VALIDATION_RUNBOOK.md).
 - Plans: [2026-09-21 workspace concurrency](superpowers/plans/2026-09-21-workspace-concurrency.md) (delivered in 0.1.37); [2026-09-21 remaining work](superpowers/plans/2026-09-21-remaining-work.md).
 
 **Priority checklist** — statuses: investigation · reproduced · implemented/unverified · self-reviewed · verified · blocked · deferred/out-of-scope · closed decision.
@@ -25,14 +27,19 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 - [x] **I3 — customer "Excel import doesn't work". Closed: resolved by the owner.** The supplied workbook imports correctly end-to-end. The 0.1.37 import improvements plus this pass's hardening cover the reproduced shapes.
 - [x] **R4.1 — duplicate header columns blanked every row. Verified (self-reviewed).** `readWorkbook` keyed row objects by header name, so a second "SKU" column overwrote the first and a file with a stray duplicate lost every SKU ("out of 0 rows"). Repeats now get a numeric suffix so both columns survive. Tests: `test/productImportWorkbook.test.js`.
 - [x] **R4.2 — a title row above the headers dead-ended. Verified (self-reviewed).** `readWorkbook` now sets `looksLikeTitleRow`; the map step explains it instead of showing one useless column. Same test file.
-- [x] **R2 — documentation truth pass. Verified (self-reviewed).** Corrected `AGENTS.md` §8 (default data folder is `~/Pictures/Media Studio KH`; `userData/data` is legacy) and §17 counts (`test/` 81, `main/util/` 25), and corrected the briefing's Electron 44 / Vite 7 and data-folder claims.
+- [x] **R2 — documentation truth pass. Verified (self-reviewed).** Corrected `AGENTS.md` §8 (default data folder is `~/Pictures/Media Studio KH`; `userData/data` is legacy) and §17 counts (`test/` 81, `main/util/` 25), and corrected the briefing's Electron 44 / Vite 7 and data-folder claims. 0.1.39 additionally corrects the briefing's client-mode stub count (41 → 27, the `NOT_YET_PORTABLE` list).
+- [x] **R3.1 — rendered import-preview regression. Verified (self-reviewed).** `ImportPreview` is exported and rendered with `react-dom/server`; `test/productImportPreview.test.js` asserts the "N of M rows had no SKU" message appears only when rows were dropped.
+- [x] **R3.2 — separate-agent adversarial review + fixes. Self-reviewed (a separate agent, same model family — not an independent third party).** Review of `0d0f93b..b8f1bb7`: **no P1**. Fixed from it: (P2) a retained failing context on another image no longer locks the strip, and a conflicting save explains the block; (P3) process conflicts are explained instead of showing the raw `CONFLICT|` payload; (P3) overwrite-crop flushes the pending draft before rewriting the source; (P3) a failed post-process refresh is no longer reported as a failed process; (P3) generated `Column N` import headers stay unique. Regressions in `test/workspaceConcurrentEditor.test.js`, `test/productImportWorkbook.test.js`, `test/productImportPreview.test.js`.
+- [ ] **R5 — hardware/provider validation. Runbook prepared; NOT performed.** No physical two-Mac, printer, macOS 12, iPad Safari, paid-provider or model-download check was run from this machine. See [the runbook](HARDWARE_VALIDATION_RUNBOOK.md); its results table is unfilled.
+- [x] **R6 — next bounded task chosen from fresh evidence.** See "Next action" at the end of this record.
 - [x] **W1–W5 statuses above are "verified" only in the sense of fresh self-run checks on that tree; there has been no independent review since the F1–F5 corrections. 0.1.37 is nevertheless merged at the owner's direction.**
 - Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer).
 
 **Artifacts:**
 
 - **0.1.37 (merged, delivered):** `dist/Media Studio KH-0.1.37-arm64.dmg` — 245,044,926 bytes, SHA-256 `576ee0a91dac0211560db89d69c4db426bafed8a1ad0346a0473b95046ecfafb`. Unsigned; arm64; min macOS 12.0.0. Tested packaged asar SHA-256 `d61d293c414bbc9d98ea229b67cb237196605a70dcd507811323cd6cd7d8ddb6`; the mounted DMG's asar matches it.
-- **0.1.38 (merged):** DMG not built — this pass changed a packaged renderer file but no customer needs the artifact; build with `npm run dist` on request.
+- **0.1.38 (merged):** DMG not built — no customer needed the artifact.
+- **0.1.39:** DMG not built yet — build with `npm run dist` after this pass's checks if an artifact is wanted.
 - **Superseded, do not deliver:** the earlier `1a6d60eba5bf2c1240d4c2426d2db0ea2414335477eb90802a002203cd065a34` DMG, built before the final 0.1.37 corrections.
 
 **Verification ledger (fresh self-run, 2026-09-21):**
@@ -62,7 +69,7 @@ Environment note: this shell exports `ELECTRON_RUN_AS_NODE=1` globally. `check:r
 
 **Hardware/provider checks not performed:** physical two-Mac LAN, Wi-Fi loss/sleep-wake, changed server address, bidirectional edits, macOS 12 hardware, iPad Safari, real printer dimensions/cancellation, paid AI provider calls, and downloading the local background-removal model. Loopback process checks are not two-Mac evidence.
 
-**One next action:** obtain the customer's actual failing spreadsheet and exact version (the supplied file imports cleanly), then — once integration is authorized — commit the reviewed source on `codex/workspace-concurrency`, push, and open the code-only PR.
+**One next action (R6):** run the [hardware/provider validation runbook](HARDWARE_VALIDATION_RUNBOOK.md) on real hardware — it is the only class of check this machine cannot close, and no code change substitutes for it. The next bounded engineering task after that is a real-Electron probe for the Image Workspace strip/selection paths (the adversarial review noted the component tests use a hand-rolled hook harness rather than the real React renderer), then a documentation truth pass v2 for the briefing's remaining app-structure counts.
 
 
 ## Historical record — 0.1.36

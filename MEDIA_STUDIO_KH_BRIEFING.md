@@ -80,13 +80,13 @@ In client mode the renderer is unchanged — the same screens, the same calls �
 and the main process forwards each request to the server over HTTP, with the
 data folder and its assets served over the same connection.
 
-**Client mode is not fully at parity.** 41 channels are stubbed with a clear
-"not yet available in client mode" message rather than implemented: local
-backup/restore, user and role administration, server controls, the data-folder
-mover, label printing and generation, catalog PDF export, and AI provider key
-checks. Label printing is the one most likely to matter in practice, because
-printing is inherently local to the Mac you are sitting at. This is a known,
-tracked list, not a surprise — see `test/clientReachability.test.js`.
+**Client mode is not fully at parity.** 27 channels — the `NOT_YET_PORTABLE`
+list in `main/client/index.js` (verified 2026-09-21) — are stubbed with a clear
+"not yet available in client mode" message rather than implemented: user and
+role administration, server controls and migration bundles, the data-folder
+mover, backup browse/reveal, and AI provider key/credit checks. This is a
+known, tracked list, not a surprise — `test/clientReachability.test.js` guards
+that no renderer-called channel is missing.
 
 ---
 
