@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.38',
+    date: '2026-09-21',
+    items: [
+      'FIX — importing a spreadsheet now says row 1 looks like a title instead of the column names, rather than leaving a mapping screen with nothing to map.',
+      'FIX — a spreadsheet that repeats a column name (for example two SKU columns) keeps the first column’s values instead of losing them and showing no rows in the preview.',
+      'Internal — corrected the documented default data folder and stale file counts in AGENTS.md, and updated the product briefing to the current Electron 44 / Vite 7 stack.',
+    ],
+  },
+  {
     version: '0.1.37',
     date: '2026-09-21',
     items: [
