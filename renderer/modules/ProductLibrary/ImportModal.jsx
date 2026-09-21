@@ -379,6 +379,14 @@ export function ImportModal({ open, onClose }) {
             </div>
           ) : null}
 
+          {sheet.looksLikeTitleRow ? (
+            <p className="field__error" role="status">
+              Row 1 looks like a title, not column names — this import reads the
+              {' '}<strong>first row</strong> as the headers. Delete that title row in Excel
+              (or move the column names to row 1), save, and choose the file again.
+            </p>
+          ) : null}
+
           <p className="ws-hint">
             <strong>How updates work.</strong> New SKUs are inserted; existing SKUs are updated.
             Only the fields you supply a value for are overwritten. Blank cells leave existing data alone.

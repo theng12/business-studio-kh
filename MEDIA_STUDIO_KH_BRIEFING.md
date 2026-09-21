@@ -44,8 +44,8 @@ studio, an overlay/watermark studio, and a purchasing area.
 
 | Layer | Choice |
 |---|---|
-| Shell | Electron 33.4.11 + `vite-plugin-electron` |
-| UI | React 18 + Vite 5 |
+| Shell | Electron ^44.4.3 + `vite-plugin-electron/simple` (verified 2026-09-21) |
+| UI | React 18 + Vite 7 (verified 2026-09-21) |
 | Styling | One hand-written `renderer/index.css` — no Tailwind, no CSS build step |
 | State | Zustand (one store, composed of ~16 slice files) |
 | Database | SQLite via `better-sqlite3` |
@@ -185,7 +185,9 @@ document for the authoritative column list.
 ## File and folder conventions
 
 **Data folder** — user-configurable in Settings, defaulting to
-`app.getPath('userData')/data`. Its layout:
+`~/Pictures/Business Studio KH` (`defaultDataDir()` in `main/config.js`;
+verified 2026-09-21). `app.getPath('userData')/data` is the legacy path. Its
+layout:
 
 ```
 <dataDir>/
