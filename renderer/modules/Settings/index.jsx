@@ -473,8 +473,8 @@ export function Settings() {
         {isClient && (
           <div className="settings-note" role="note">
             <strong>AI keys live on the server Mac.</strong> In this setup the Mac
-            holding your data runs the generations, so it uses its own kie.ai /
-            fal.ai keys and its own concurrency limits. Change them there
+            holding your data runs the generations, so it uses its own OpenAI key
+            and its own concurrency limit. Change them there
             (Settings → AI Generation on that Mac). The defaults below are yours —
             they decide which model this Mac asks for.
           </div>

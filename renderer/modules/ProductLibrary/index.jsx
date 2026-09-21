@@ -736,7 +736,7 @@ export function ProductLibrary() {
                       sees which actions overwrite originals before clicking.
                       Edit fields is metadata-only — stays its own button.
                       Delete + Clear stay inline (destructive affordance / escape). */}
-                  <Button onClick={() => setBulkAiOpen(true)} disabled={bulkDeleting} title="Queues a paid AI generation for each — kie.ai / fal.ai. Confirms cost before running.">
+                  <Button onClick={() => setBulkAiOpen(true)} disabled={bulkDeleting} title="Queues a paid OpenAI image generation for each — confirms cost before running.">
                     AI Studio ({selectedIds.size}) →
                   </Button>
                   <BulkActionsMenu
