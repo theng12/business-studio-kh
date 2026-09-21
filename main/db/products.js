@@ -850,6 +850,10 @@ function bulkUpsert(companyId, rows, opts = {}) {
     if (policy === 'overwrite') {
       // Apply whatever the row says, even when empty. Missing key = leave alone.
       if (!isSupplied(row, key)) return { changed: false };
+      // status is NOT NULL (default 'active'). A blank/null status must leave
+      // the existing value alone rather than write null, which would fail the
+      // whole row's update and silently skip every other field on that row.
+      if (key === 'status' && (row[key] === '' || row[key] == null)) return { changed: false };
       const next = row[key] === '' ? null : row[key];
       return { changed: next !== existing[key], value: next };
     }

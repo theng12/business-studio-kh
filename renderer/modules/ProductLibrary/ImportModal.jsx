@@ -77,6 +77,20 @@ function autoGuess(header) {
   return '__skip__';
 }
 
+/**
+ * Whether to tell the user that row 1 looks like a title rather than headers.
+ *
+ * The parser flags the shape (one non-empty cell in row 1, more in row 2), but
+ * that shape also occurs on a perfectly valid sheet with a single named column
+ * and blank trailing headers — where the advice to delete row 1 would destroy a
+ * real header row. Only suggest it when NO column name is recognized, which is
+ * the actual dead-end the hint exists for.
+ */
+export function shouldSuggestTitleRow(sheet) {
+  if (!sheet?.looksLikeTitleRow) return false;
+  return !(sheet.headers ?? []).some((h) => autoGuess(h) !== '__skip__');
+}
+
 export function ImportModal({ open, onClose }) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const brands = useAppStore((s) => s.brands);
@@ -217,11 +231,13 @@ export function ImportModal({ open, onClose }) {
           || field === 'stockQty') {
           out[field] = blank ? null : toNumber(raw);
         } else if (field === 'status') {
-          if (blank) out.status = null;
-          else {
-            const v = String(raw).trim().toLowerCase();
-            out.status = ['active', 'inactive', 'draft'].includes(v) ? v : null;
-          }
+          /* status is NOT NULL (default 'active'). A blank or unrecognized
+           * value must leave the existing value alone — emitting null would
+           * fail the whole row's update ("NOT NULL constraint failed"),
+           * silently skipping every other field in that row under Overwrite.
+           * New rows default to 'active' in create(). */
+          const v = blank ? '' : String(raw).trim().toLowerCase();
+          if (['active', 'inactive', 'draft'].includes(v)) out.status = v;
         } else {
           out[field] = blank ? null : String(raw).trim();
         }
@@ -388,7 +404,7 @@ export function ImportModal({ open, onClose }) {
             </div>
           ) : null}
 
-          {sheet.looksLikeTitleRow ? (
+          {shouldSuggestTitleRow(sheet) ? (
             <p className="field__error" role="status">
               Row 1 looks like a title, not column names — this import reads the
               {' '}<strong>first row</strong> as the headers. Delete that title row in Excel
@@ -398,8 +414,8 @@ export function ImportModal({ open, onClose }) {
 
           <p className="ws-hint">
             <strong>How updates work.</strong> New SKUs are inserted; existing SKUs are updated.
-            Only the fields you supply a value for are overwritten. Blank cells leave existing data alone.
-            Images and variants are never touched by import.
+            Only the fields you supply a value for are overwritten. Under Merge, blank cells leave
+            existing data alone; Overwrite clears them. Images and variants are never touched by import.
           </p>
 
           <div className="import-table-wrap">
