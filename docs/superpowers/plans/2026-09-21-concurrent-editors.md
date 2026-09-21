@@ -6,7 +6,7 @@
 
 **Base:** `e34411bb6ffb1cb66d6dcc5d16eb5699e7a77258` (0.1.35), latest main verified before isolated `codex/concurrent-editors` worktree.
 
-**Spec:** Owner's approved next software pass and the unresolved editor investigation in `docs/NEW_COMPUTER_HANDOFF.md`. Existing save/status/explicit-Save and tenant contracts in AGENTS.md remain binding.
+**Spec:** Owner's approved next software pass and the unresolved editor investigation in `docs/PROJECT_STATUS.md`. Existing save/status/explicit-Save and tenant contracts in AGENTS.md remain binding.
 
 **Architecture:** Trace renderer draft → latest-save queue → preload/IPC/RPC → database and event refresh. Reuse existing Product Library conflict semantics if a lost update is reproduced. Preserve current single-user autosave, context flush and explicit Save; no live collaborative merge, leases, external service or new dependency.
 

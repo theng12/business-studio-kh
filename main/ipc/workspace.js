@@ -64,12 +64,24 @@ function register({ expose, emitCatalogChange }) {
   // SHA-1 of the source fetched by the renderer. Recursive RPC serialization
   // restores its nested bytes to Buffer in client mode; structured clone keeps
   // the ArrayBuffer in local mode.
-  expose('workspace:processImage', async ({ productId, imageId, expectedContentHash, settings, foregroundBytes } = {}) => {
+  expose('workspace:processImage', async ({
+    productId,
+    imageId,
+    expectedContentHash,
+    expectedWorkspaceRevision,
+    settings,
+    foregroundBytes,
+  } = {}) => {
     const product = products.get(productId);
     if (!product) throw new Error('Product not found');
     if (!expectedContentHash) {
       throw new Error('Image identity unavailable; re-import the image and try again');
     }
+    const entry = resolveImage(productId, imageId, expectedContentHash);
+    if (expectedWorkspaceRevision !== undefined) {
+      productImages.assertWorkspaceRevision(entry, expectedWorkspaceRevision);
+    }
+    const entryWorkspaceRevision = entry.workspaceRevision;
     const source = await readSource(productId, imageId, expectedContentHash);
     let target = source.image;
     let fgBuffer = source.bytes;
@@ -101,6 +113,7 @@ function register({ expose, emitCatalogChange }) {
         isProcessed: true,
         processedFilepath: output.relativePath,
         workspaceSettings: settings,
+        expectedWorkspaceRevision: entryWorkspaceRevision,
       });
       attached = true;
       products.recomputeProcessStatus(productId);
@@ -118,13 +131,26 @@ function register({ expose, emitCatalogChange }) {
     };
   });
 
-  expose('workspace:saveSettings', ({ productId, imageId, expectedContentHash, settings } = {}) => {
+  expose('workspace:saveSettings', ({
+    productId,
+    imageId,
+    expectedContentHash,
+    expectedWorkspaceRevision,
+    settings,
+  } = {}) => {
     const target = resolveImage(productId, imageId, expectedContentHash);
-    productImages.setProcessedById(productId, target.id, {
+    if (expectedWorkspaceRevision !== undefined) {
+      productImages.assertWorkspaceRevision(target, expectedWorkspaceRevision);
+    }
+    const update = {
       isProcessed: target.isProcessed,
       processedFilepath: target.processedFilepath,
       workspaceSettings: settings,
-    });
+    };
+    if (expectedWorkspaceRevision !== undefined) {
+      update.expectedWorkspaceRevision = expectedWorkspaceRevision;
+    }
+    productImages.setProcessedById(productId, target.id, update);
     return productImages.listByProduct(productId);
   });
 }

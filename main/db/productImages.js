@@ -27,6 +27,7 @@ function rowToImage(row) {
     isProcessed: !!row.is_processed,
     processedFilepath: row.processed_filepath,
     workspaceSettings: parseJson(row.workspace_settings, {}),
+    workspaceRevision: Number(row.workspace_revision ?? 0),
     contentHash: row.content_hash ?? null,
     perceptualHash: row.perceptual_hash ?? null,
     fileSize: row.file_size ?? null,
@@ -343,29 +344,52 @@ function setProcessed(productId, filepath, { isProcessed, processedFilepath, wor
       `UPDATE product_images
        SET is_processed = @isProcessed,
            processed_filepath = @processedFilepath,
-           workspace_settings = @workspaceSettings
+           workspace_settings = @workspaceSettings,
+           workspace_revision = workspace_revision + 1
        WHERE product_id = @productId AND filepath = @filepath`,
     )
     .run(params);
 }
 
-function setProcessedById(productId, imageId, { isProcessed, processedFilepath, workspaceSettings }) {
+function workspaceConflict(image) {
+  return new Error(`CONFLICT|${JSON.stringify({
+    kind: 'workspaceImage',
+    id: image?.id ?? null,
+    name: image?.filename ?? null,
+    workspaceRevision: image?.workspaceRevision ?? null,
+  })}`);
+}
+
+function assertWorkspaceRevision(image, expectedWorkspaceRevision) {
+  if (image.workspaceRevision !== expectedWorkspaceRevision) throw workspaceConflict(image);
+}
+
+function setProcessedById(productId, imageId, input) {
+  const { isProcessed, processedFilepath, workspaceSettings } = input;
+  const guarded = Object.prototype.hasOwnProperty.call(input, 'expectedWorkspaceRevision');
   const params = {
     productId,
     imageId,
     isProcessed: isProcessed ? 1 : 0,
     processedFilepath: processedFilepath ?? null,
     workspaceSettings: JSON.stringify(workspaceSettings ?? {}),
+    expectedWorkspaceRevision: guarded ? input.expectedWorkspaceRevision : null,
+    guarded: guarded ? 1 : 0,
   };
-  getDb()
+  const result = getDb()
     .prepare(
       `UPDATE product_images
        SET is_processed = @isProcessed,
            processed_filepath = @processedFilepath,
-           workspace_settings = @workspaceSettings
-       WHERE product_id = @productId AND id = @imageId`,
+           workspace_settings = @workspaceSettings,
+           workspace_revision = workspace_revision + 1
+       WHERE product_id = @productId AND id = @imageId
+         AND (@guarded = 0 OR workspace_revision = @expectedWorkspaceRevision)`,
     )
     .run(params);
+  if (guarded && result.changes === 0) {
+    throw workspaceConflict(getById(productId, imageId) || { id: imageId });
+  }
   return getById(productId, imageId);
 }
 
@@ -484,6 +508,7 @@ module.exports = {
   setMain,
   setProcessed,
   setProcessedById,
+  assertWorkspaceRevision,
   setContentHash,
   setFilepath,
   setPerceptualHashById,

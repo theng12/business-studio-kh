@@ -1,10 +1,69 @@
-# Business Studio KH — new-computer handoff
+# Business Studio KH — Development Status
 
-Updated: 2026-09-21. Purpose: continue development without losing completed server/client work or repeating historical audits. The current concurrent-editor pass follows the merged 0.1.35 work; older ledgers remain historical evidence, not a new backlog.
+Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of current development status, verified evidence, stable findings and remaining limits. This is a project status document, not a handoff to another person or computer.
 
-## Concurrent-editor follow-up — 0.1.36
+**Scope:** personal/internal macOS (Apple Silicon) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, local release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
+
+## Current software pass — 0.1.37 (release candidate prepared, not integrated)
+
+**Repository state (verified 2026-09-21):**
+
+- Worktree: `$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh`
+- Branch: `codex/workspace-concurrency`
+- Base/HEAD: `0d0f93b2bf6d870ef50133f4b78b2ca08c816886` (0.1.36, PR #5); `origin/main` is the same SHA; no commits for this pass.
+- Work is **uncommitted and untracked**. Tracked edits include `main/db/{index,productImages}.js`, `main/imageDedup.js`, `main/ipc/workspace.js`, `main/preload.js`, `main/server/validators.js`, `renderer/modules/ImageWorkspace/index.jsx`, `renderer/store/workspace.js`, `scripts/probe-*.js`, `test/imageWorkspaceAutosave.test.js`, `renderer/modules/ProductLibrary/ImportModal.jsx`, `renderer/components/WhatsNewModal.jsx`, `package.json`, `package-lock.json`, README and three plan docs. Untracked: `docs/Business Studio KH Project Status.md`, `docs/superpowers/plans/2026-09-21-workspace-concurrency.md`, `test/workspaceConcurrency.test.js`, `test/workspaceConcurrentEditor.test.js`, `test/productImportNameResolver.test.js`, `renderer/lib/nameIdResolver.js`. `docs/NEW_COMPUTER_HANDOFF.md` is deleted as part of the rename to this file. `CLAUDE.md` remains a symlink to `AGENTS.md`.
+- Plan: [2026-09-21 workspace concurrency](superpowers/plans/2026-09-21-workspace-concurrency.md).
+
+**Priority checklist** — statuses: investigation · reproduced · implemented/unverified · self-reviewed · verified · blocked · deferred/out-of-scope · closed decision.
+
+- [x] **W1 — same-image settings lost update. Verified (self-reviewed).** Two real SQLite/registered-handler snapshots saved brightness 15 then stale 90; stale silently won. Additive `workspace_revision`, exposed as `workspaceRevision`; optional safe-integer `expectedWorkspaceRevision` on save (5th arg). Files: `main/db/index.js`, `main/db/productImages.js`, `main/ipc/workspace.js`, `main/preload.js`, `renderer/lib/latestSaveQueue.js`. Tests: `test/workspaceConcurrency.test.js`. No schema-version bump.
+- [x] **W2 — stale processing attaches over a newer edit. Verified (self-reviewed).** `processImage` pins its entry revision across async work and re-checks atomically before attaching output (6th arg). Losing output is cleaned up without deleting the winner. Tests: `test/workspaceConcurrency.test.js`, `test/workspaceImageIdentity.test.js`.
+- [x] **W3 — renderer coordination. Verified (self-reviewed).** Idle refresh now adopts newer settings; Process waits for the latest draft; refresh preserves selection by ID; a failed pending save blocks navigation flush and keeps the draft. Files: `renderer/modules/ImageWorkspace/index.jsx`, `renderer/store/workspace.js`. Tests: `test/imageWorkspaceAutosave.test.js`, `test/workspaceConcurrentEditor.test.js`.
+- [x] **W4 — merge-undo revision reset. Verified (self-reviewed).** Dedup undo preserves the counter and restores at a newer revision. Tests: `test/workspaceConcurrency.test.js`, `test/imageDedup` coverage via archive round trips.
+- [x] **W5 — retained-editor lifecycle (F1–F5). Self-reviewed; corrections verified by focused and full checks; not independently reviewed.** Corrections present: source flip locks + flushes before mutating; navigation flushes only reachable identities (product + image id/hash); removed/replaced drafts are retained for exact-identity return and never rebound to different bytes; dirty re-entry restores the context's own draft and revision; delayed selection follows target ID; processing locks before its first await and releases in `finally`; stale conflict completions check editor generation. Retained regressions: five in `test/workspaceConcurrentEditor.test.js`. Self-review (2026-09-21) traced context map, seed effect, `flushPendingSave`, `handleFlipActive`, `handleProcess*`, selection and conflict paths; additionally pinned that a restored dirty draft is retried and a failed retry surfaces as `error` (not a stuck `saving`). The prior independent whole-branch review FAIL describes the pre-correction tree and is **not** approval of these corrections.
+- [x] **I1 — product import created each brand/category once per row. Verified (self-reviewed).** Reproduced with an actual-component harness: 3 rows sharing one brand produced 3 `brands.create` IPC calls. Fixed via `renderer/lib/nameIdResolver.js`, a per-run case-insensitive resolver seeded from the store lookups. Harness now reports 1; `test/productImportNameResolver.test.js` (3 cases) passes. Limitation: fixes redundant work, not the customer's un-reproduced failure below.
+- [x] **I2 — import silently dropped rows with no SKU. Implemented/unverified (UI).** `buildRows` dropped rows whose mapped SKU cell was blank and the preview reported only the smaller count. The preview now states "N of M rows had no SKU and were skipped". Data path verified by the component harness (`sourceRowCount`/`rowsConsidered` differ correctly); no DOM-level repo test exists for the rendered message.
+- [ ] **I3 — customer "Excel import doesn't work". Blocked on artifact.** The customer's supplied workbook (`media-studio-kh-products-sample.xlsx`, 3 rows, barcode SKUs) imports correctly here end-to-end (3 inserted, re-import 3 unchanged). The import UI + `main/fileHandler.js` are byte-identical from 0.1.32 → 0.1.37, and `xlsx` is present in the packaged asar. Customer is on a pre-0.1.36 build and reported a preview of roughly "0 new, 0 updated, 1 of 1 rows", which points at their actual file (header/mapping/sheet/SKU cells), not the supplied file. Next action: obtain the exact failing file + version, or confirm the supplied file's outcome on the new build.
+- [x] **W1–W5 statuses above are "verified" only in the sense of fresh self-run checks on this exact tree; there has been no independent review since the F1–F5 corrections.**
+- Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer).
+
+**Final artifact (current):**
+
+- `dist/Business Studio KH-0.1.37-arm64.dmg` — 245,044,926 bytes, SHA-256 `576ee0a91dac0211560db89d69c4db426bafed8a1ad0346a0473b95046ecfafb`. Built 2026-09-21 after all source changes; unsigned; arm64; min macOS 12.0.0.
+- Tested packaged app.asar SHA-256 `d61d293c414bbc9d98ea229b67cb237196605a70dcd507811323cd6cd7d8ddb6`; the mounted DMG's asar matches it. `xlsx` present (25 entries).
+- **Stale, do not deliver:** the previous `dist/Business Studio KH-0.1.37-arm64.dmg` (245,043,028 bytes, SHA-256 `1a6d60eba5bf2c1240d4c2426d2db0ea2414335477eb90802a002203cd065a34`) was built before the last corrections and has been replaced by the file above.
+
+**Verification ledger (fresh self-run, 2026-09-21, this tree):**
+
+| Check | Result | Log |
+| --- | --- | --- |
+| `npm run check` | exit 0; lint clean; **595 passed**, 0 failed/skipped | `/tmp/mskh-verify/check.log` |
+| `npm run test:native` | exit 0; **91 passed**, 0 failed/skipped (overlapping coverage, not 91 extra unique) | `/tmp/mskh-verify/native.log` |
+| `npm run check:client-server` | exit 0; real SQLite/RPC incl. workspace two-snapshot conflict, sequential revision ACKs, explicit overwrite, malformed-token rejection | `/tmp/mskh-verify/client-server.log` |
+| `npm run check:render` | exit 0; ASCII and Khmer 2,253 dark pixels each; 1,975,648 bytes embedded font CSS | `/tmp/mskh-verify/render.log` |
+| `npm audit` / `npm audit --omit=dev` | exit 0; 0 vulnerabilities each | `/tmp/mskh-verify/audit*.log` |
+| `git diff --check` | exit 0 | — |
+| `npm run dist` | exit 0; unsigned arm64 DMG built; `hdiutil verify` VALID; read-only mount confirmed version/minOS/arch and asar equality | `/tmp/mskh-verify/dist.log` |
+| Packaged server/client probe | exit 0; 7 checks incl. real Catalog and Image Workspace conflict UI with persisted-row assertions | `/tmp/mskh-verify/packaged-probe.log` |
+| Focused renderer | exit 0; 27 passed (`workspaceConcurrentEditor` + `imageWorkspaceAutosave`) | `/tmp/mskh-verify/focused.log` |
+| Focused native | exit 0; 40 passed (workspace concurrency, image identity, archive round trip, validator agreement/coverage) | — |
+
+Environment note: this shell exports `ELECTRON_RUN_AS_NODE=1` globally. `check:render` and the packaged probe fail under it; re-run them with `env -u ELECTRON_RUN_AS_NODE`. Host Node is v26.8.2; checks use isolated Node 24.15.0 and the bundled Electron 44 runtime (Node 24.21.0).
+
+**Review type and scope:** all conclusions in this pass are **self-review** by DeepSeek. The last independent review (Astra/reviewer) examined the frozen pre-correction source and returned FAIL on F1–F4 (plus F5); that report is historical evidence about that revision only. No independent review exists for the corrected tree.
+
+**External-authorization ledger:** local commits, tests, documentation and unsigned build preparation are authorized. Pushing, PR creation/merge, tags, releases, deployment, signing purchases and installer publication are **not** authorized in this session; before any push, `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` must return `false`. No push or PR occurred. The DMG is a local file handed to the owner; nothing was uploaded.
+
+**Hardware/provider checks not performed:** physical two-Mac LAN, Wi-Fi loss/sleep-wake, changed server address, bidirectional edits, macOS 12 hardware, iPad Safari, real printer dimensions/cancellation, paid AI provider calls, and downloading the local background-removal model. Loopback process checks are not two-Mac evidence.
+
+**One next action:** obtain the customer's actual failing spreadsheet and exact version (the supplied file imports cleanly), then — once integration is authorized — commit the reviewed source on `codex/workspace-concurrency`, push, and open the code-only PR.
+
+
+## Historical record — 0.1.36
 
 Base: latest main `e34411bb6ffb1cb66d6dcc5d16eb5699e7a77258`, [merged PR #4](https://github.com/theng12/media-studio-kh/pull/4). Isolated branch `codex/concurrent-editors`; [implementation plan](superpowers/plans/2026-09-21-concurrent-editors.md). The untouched baseline passed 511 tests with lint. Fresh `npm ci`, Node 24.15.0, disposable synthetic profiles; no copied dependencies or historical-data transfer.
+
+Status: the 0.1.36 concurrent-editor work is recorded as locally verified and integrated. The limits below are known boundaries and follow-up checks, not an implied migration or assignment.
 
 ### Newly reproduced findings
 
@@ -38,13 +97,13 @@ Independent server and renderer reviews passed, including re-review of the final
 
 - Run matching current versions on server and clients. Unversioned update calls remain supported for intentional overwrite/backward compatibility; old clients do not gain revision protection merely by upgrading the server.
 - Row-level conflicts do not merge fields automatically. Autosave leaves a conflicting draft unsaved; explicit Save offers recovery. A changed editable export response still conflicts; only a matching editable baseline permits metadata-only revision advancement.
-- Drafts remain in memory. This pass does not add crash/force-quit recovery, persistent draft storage or real-time collaboration. Workspace's distributed same-image editing remains a separate investigation, not proven by these three-editor tests.
+- Drafts remain in memory. This pass does not add crash/force-quit recovery, persistent draft storage or real-time collaboration. Workspace's distributed same-image editing was subsequently reproduced as W1/W2 above; it was not proven by these three-editor tests.
 - The packaged probe exercises the actual Catalog conflict dialog on two local processes. Social/Label have actual-component and real RPC/SQLite coverage, not a claimed manual packaged exercise of every editor.
 - Physical two-Mac LAN, Wi-Fi loss/sleep/wake, macOS 12 hardware, iPad Safari and real printer dimensions/cancellation remain hardware checks. No paid AI calls, signing purchase, release publication, deployment or real-data transfer occurred.
 
-## Historical follow-up — 0.1.35
+## Historical record — 0.1.35
 
-The owner-approved [follow-up plan](superpowers/plans/2026-09-20-handoff-followup.md) starts from main commit `54616464153b4960a4e75e0f77e39f189549f0a3` (0.1.34). The requested handoff commit `c31d7afc9af5d50c48819698f70df21bddd35cc3` is present in history. Implementation uses isolated branch `codex/handoff-followup`, fresh synthetic data and dummy credentials; no historical data or credential transfer is needed.
+This section is historical evidence from the 0.1.35 pass, not current status or assigned work. The owner-approved [follow-up plan](superpowers/plans/2026-09-20-handoff-followup.md) starts from main commit `54616464153b4960a4e75e0f77e39f189549f0a3` (0.1.34). The requested handoff commit `c31d7afc9af5d50c48819698f70df21bddd35cc3` is present in history. Implementation used isolated branch `codex/handoff-followup`, fresh synthetic data and dummy credentials; no historical data or credential transfer was needed.
 
 - **H1/H2 — browser context:** company setters are serialized and session-bound; delayed image lists, blob fetches and gallery paints cannot publish into another session/product. Per-product revisions avoid cancelling an unrelated product's valid request. Final review additionally reproduced an earlier failed switch undoing a newer queued selection; the retained regression and latest-generation rollback guard now pass independent re-review.
 - **H3/H4 — URL and packaging commands:** the existing 0.1.34 origin normalization and canonical `dist` aliases remain in place; no redundant rewrite.
@@ -92,19 +151,19 @@ Final HTML source SHA-256: `29b2776467ebdbc974f09b147130e89e23b2baffe308a9bef240
 
 Local installer: `dist/Business Studio KH-0.1.35-arm64.dmg` in `$HOME/.codex/worktrees/handoff-followup/media-studio-kh`, 245,034,685 bytes, SHA-256 `07b756c5821c58850ba852ed38f2187ca828b764a935b373a46b5c9ddbc455d2`. Tested/mounted app.asar SHA-256: `e5c132d8feaa240746fb325305c162e4795d77fa966f227900b61c2a7255000e`. Build artifacts, profiles, graph and agent reports remain outside Git. GitHub Actions was verified disabled before integration.
 
-## Repository and baseline
+## Repository and development baseline
 
 - Private repository: https://github.com/theng12/media-studio-kh
 - Base branch: `main`. Authenticate with a GitHub account that can access this repository.
-- Original application baseline: **0.1.33**, merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [merged PR #1](https://github.com/theng12/media-studio-kh/pull/1). Historical passes produced **0.1.34** ([PR #3](https://github.com/theng12/media-studio-kh/pull/3)) and **0.1.35** ([PR #4](https://github.com/theng12/media-studio-kh/pull/4)). The concurrent-editor pass starts from 0.1.35/main `e34411bb6ffb1cb66d6dcc5d16eb5699e7a77258` and produces **0.1.36**. Clone latest `main`; do not reset to a historical SHA.
-- Before this handoff, a fresh fetch and GitHub API check confirmed that local and remote `main` both pointed to that merge. GitHub Actions was disabled. Keep hosted compute disabled; run checks locally.
+- Current merged application release: **0.1.36** ([PR #5](https://github.com/theng12/media-studio-kh/pull/5)); the current candidate is 0.1.37. Historical passes produced **0.1.33** (merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [PR #1](https://github.com/theng12/media-studio-kh/pull/1)), **0.1.34** ([PR #3](https://github.com/theng12/media-studio-kh/pull/3)) and **0.1.35** ([PR #4](https://github.com/theng12/media-studio-kh/pull/4)). Use latest main; do not reset to a historical SHA.
+- At the start of the current pass, fresh fetch confirmed local and remote `main` at `0d0f93b2bf6d870ef50133f4b78b2ca08c816886` (0.1.36); GitHub Actions was disabled. Keep hosted compute disabled; run checks locally.
 - Scope: personal/internal standalone and Mac server/client use. No Apple Developer subscription, public distribution, deployment, signing, or paid AI calls are required for this work.
 
-Read [AGENTS.md](../AGENTS.md), then this file and [the completed validation record](INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md). The [previous implementation plan](superpowers/plans/2026-09-20-internal-server-client.md) and [original improvement note](superpowers/plans/server-client-improvement-note.md) explain history; their completed items are not a new backlog. Older distribution audits contain superseded public-release framing.
+Read [AGENTS.md](../AGENTS.md), then this status record and [the completed validation record](INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md). The [previous implementation plan](superpowers/plans/2026-09-20-internal-server-client.md) and [original improvement note](superpowers/plans/server-client-improvement-note.md) explain history; their completed items are not a new backlog. Older distribution audits contain superseded public-release framing.
 
-## Start on the new Mac
+## Historical environment and migration notes — not assigned
 
-Supported packaging target: Apple Silicon (`arm64`), macOS 12 or newer. Intel/Windows are not validated targets for this handoff. Use Node 24; the current checkout was verified with Node **24.15.0**, npm **11.12.1**. Node 20 is insufficient for the current Electron/better-sqlite3 dependencies. Install Git and Xcode Command Line Tools first (`xcode-select -p` verifies the tools; `xcode-select --install` installs them if missing).
+The setup and data-transfer material in this section is retained from earlier migration planning for provenance. It is not a current assignment or a handoff procedure. The supported packaging target is Apple Silicon (`arm64`), macOS 12 or newer. Intel/Windows are not validated targets. Use Node 24; the current checkout was verified with Node **24.15.0**, npm **11.12.1**. Node 20 is insufficient for the current Electron/better-sqlite3 dependencies. Install Git and Xcode Command Line Tools first (`xcode-select -p` verifies the tools; `xcode-select --install` installs them if missing).
 
 ```bash
 git clone https://github.com/theng12/media-studio-kh.git
@@ -123,7 +182,7 @@ npm audit
 npm audit --omit=dev
 ```
 
-`npm ci` rebuilds native dependencies for Electron. Do not copy `node_modules`, build outputs, or an old native binary from the other computer. `test:native` is mandatory for DB changes: a host-Node run can skip native cases when its ABI differs. The client/server and render probes use temporary data/profiles; do not replace them with tests against the real catalog.
+`npm ci` rebuilds native dependencies for Electron. Do not copy `node_modules`, build outputs, or an old native binary from another environment. `test:native` is mandatory for DB changes: a host-Node run can skip native cases when its ABI differs. The client/server and render probes use temporary data/profiles; do not replace them with tests against the real catalog.
 
 For actual development, use `npm run dev`. It launches the app and can access the normal app profile: use a disposable macOS account/profile or deliberately configured test data when reproducing destructive or paid workflows. Do not assume development mode isolates the real catalog automatically.
 
@@ -137,9 +196,9 @@ shasum -a 256 "dist/Business Studio KH-0.1.36-arm64.dmg"
 
 Adjust the filename after future patch bumps. Prefer `npm run dist`, which runs the web-viewer generation and native preparation hooks. See the release-script finding below before using alternative release commands. This build is unsigned and needs no paid Apple account. A rebuilt DMG need not have the same hash as an earlier build.
 
-The current local installer is built in the isolated follow-up worktree under `dist/Business Studio KH-0.1.35-arm64.dmg`; it is not uploaded as a GitHub Release. Rebuild from source on another Mac. Only remove quarantine from an installer/app you built or have verified as your own trusted copy.
+The historical 0.1.35 installer was built in the isolated follow-up worktree under `dist/Business Studio KH-0.1.35-arm64.dmg`; it was not uploaded as a GitHub Release. Rebuild from source when packaging is explicitly assigned. Only remove quarantine from an installer/app you built or have verified as your own trusted copy.
 
-## What a clone does and does not transfer
+## Historical transfer notes — not assigned
 
 GitHub includes source, `package-lock.json`, bundled fonts, tests, docs, and the previously missing `webclient/index.html`. Edit that HTML source, then run `npm run webclient:bundle`; `main/webclientHtml.js` is generated and must match it.
 
@@ -149,27 +208,27 @@ The actual default data directory is `~/Pictures/Business Studio KH` (`main/conf
 
 On the old computer, `.serena/` remains untracked and a safety stash named `Preserved Media Studio 0.1.32 before reviewed 0.1.33 integration (baseline 70449d3)` remains local. Its completed source is already in the merged history. Do not reapply that stash to the new `main`. No app source needs to be recovered from it.
 
-### Choose the intended computer role
+### Historical computer-role notes — not assigned
 
 **Development only:** clone and install dependencies. No live data migration is needed to continue coding. Use synthetic fixtures for tests.
 
-**An additional client:** keep the existing server and its data on the old Mac. In Settings → Multi-Mac, configure the server address and a user token issued by that server, test the connection, then switch/apply Client mode and restart as prompted. Use a separate user for independent per-device company selections. The active company is per user, so two devices sharing one token also share that user's selection. The server listens on HTTP port 13180 by default; use the existing trusted LAN/Tailscale connection. Do not expose the port publicly as part of this handoff. Check both machines report 0.1.35 before comparing behavior.
+**An additional client:** keep the existing server and its data on the old Mac. In Settings → Multi-Mac, configure the server address and a user token issued by that server, test the connection, then switch/apply Client mode and restart as prompted. Use a separate user for independent per-device company selections. The active company is per user, so two devices sharing one token also share that user's selection. The server listens on HTTP port 13180 by default; use the existing trusted LAN/Tailscale connection. Do not expose the port publicly. If this historical procedure is ever assigned, compare matching current application versions before comparing behavior.
 
 **Move the data-owning server:** this is a separate operation from cloning code. The handoff does not perform it.
 
 1. Finish writes and save editors. Stop client edits, imports, exports, and AI jobs before taking the transfer snapshot; the archive now rejects detected changes, but quiescing writes still makes the migration boundary easiest to reason about. Keep writes stopped until cutover completes; an exported SQLite snapshot alone does not freeze independently changing image trees.
 2. On the old data-owning Mac, use Settings → Multi-Mac → Migration → Export bundle. Transfer the `.iskhbundle` privately. It includes database users/tokens and portable AI API keys in ordinary archive contents; it is not encrypted. The importer removes the extracted credential-bearing `config.partial.json` after a successful merge, but keep the archive private and never put it in GitHub.
-3. On the new Mac, start with a fresh/disposable standalone installation and use its current/default data directory. If a different target is essential, choose a verified empty directory with **Move existing data OFF**, restart, and confirm the selected path before import; never select valuable/pre-existing data. Use Migration → Pick bundle to import, inspect its version/date and target, then Replace and restart. Use a bundle made by the same 0.1.35 app; unsupported schema markers are rejected, not migrated. This replaces that Mac's current data; existing recognized data is moved to a timestamped sibling backup.
+3. On the destination Mac, start with a fresh/disposable standalone installation and use its current/default data directory. If a different target is essential, choose a verified empty directory with **Move existing data OFF**, restart, and confirm the selected path before import; never select valuable/pre-existing data. Use Migration → Pick bundle to import, inspect its version/date and target, then Replace and restart. Use a bundle made by the same app version; unsupported schema markers are rejected, not migrated. This replaces the destination's current data; existing recognized data is moved to a timestamped sibling backup.
 4. Mode, network address/port, machine-local `clientServerUrl`/`clientToken`, and backup destination do not travel. Server-side user/token rows do travel inside the database, so existing user tokens remain valid unless deliberately changed. Set the new Mac to Server mode, restart, and update clients to its address. Keep the old server inactive as a writer once clients switch.
 5. Compare company/product/image counts, open original and processed images, inspect templates and AI gallery, and perform one reversible product edit from a client. Confirm it appears on the server and a second client; then test reconnect. Check backup destination and printer settings. Keep the old data and transfer bundle until verification is complete.
 
-Do not hot-copy an open SQLite file by itself, delete the old data, rotate tokens, run paid jobs, or import a bundle over valuable data merely to test this handoff. The 0.1.35 maintenance lifecycle and schema checks supersede the original import limitations below. The optional real-data transfer procedure is historical operational guidance, not an assigned task; this development pass uses only disposable destinations.
+Do not hot-copy an open SQLite file by itself, delete the old data, rotate tokens, run paid jobs, or import a bundle over valuable data merely to test this historical procedure. The current maintenance lifecycle and schema checks supersede the original import limitations below. The optional real-data transfer procedure is historical operational guidance, not an assigned task; the current development work uses only disposable destinations.
 
 ## Verified baseline and audit limits
 
 The completed 0.1.33 validation recorded: `npm run check` **409 passed**, zero failures/skips and clean lint; `test:native` **22 passed** (overlapping cases, not 22 extra unique tests); real disposable RPC/WebSocket/reconnect checks; Electron image-cache/auth checks; photo/Khmer render checks; full and production dependency audits with **zero vulnerabilities**; unsigned arm64 DMG build and integrity checks. A disposable two-process packaged server/client smoke loaded both real renderers and round-tripped a product edit. See the [validation record](INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md) for measurements and limitations.
 
-The original handoff audit used isolated Node VM probes of browser/workspace functions and temporary filesystem/settings-handler probes. No real catalog or OS Trash content was used. The current 0.1.35 follow-up adds real SQLite, deferred-component, HTTP and Electron evidence as recorded above; old host-Node/Electron availability limitations no longer describe this computer.
+The original handoff audit used isolated Node VM probes of browser/workspace functions and temporary filesystem/settings-handler probes. No real catalog or OS Trash content was used. The current 0.1.36 status adds real SQLite, deferred-component, HTTP and Electron evidence as recorded above; old host-Node/Electron availability limitations no longer describe this computer.
 
 Graphify is available on this computer. Its local code-only map is ignored and was refreshed after structural changes. Ponytail favored existing helpers and narrowly scoped fixes; no dependency replacement or speculative cleanup was added.
 
@@ -350,7 +409,7 @@ These are the prior pass's recorded conclusions, not blanket claims about the cu
 These are not additional confirmed bugs. Reproduce before changing behavior. The two resolved investigations are explicitly closed here to prevent repeated work.
 
 - **Live import lifecycle/schema — resolved in 0.1.35:** real WAL, rollback, restart-failure and unsupported-schema cases are retained as tests. Main owns close/install/restart; unsupported schema markers reject before replacement. Historical data migration remains out of scope.
-- **Editor lifetime/concurrent editing:** Catalog/Social/Label findings are tracked as C1–C4 in the 0.1.36 ledger above. Do not repeat those investigations. Image Workspace distributed same-image editing remains unproven; reproduce before changing behavior. Local loopback evidence does not replace physical two-Mac checks.
+- **Editor lifetime/concurrent editing:** Catalog/Social/Label findings are resolved as C1–C4 in the 0.1.36 ledger above. Image Workspace same-image editing is now tracked as W1/W2 in the current pass; do not restart its investigation from historical notes. Local loopback evidence does not replace physical two-Mac checks.
 - **Image identity after renumbering — resolved in 0.1.35:** actual DB/handler tests cover reorder, removal, wrong product, changed content, pinned byte acquisition and isolated output attachment. Real Chromium checks separately cover stale displayed images. Physical cross-Mac latency remains a hardware check, not an unimplemented identity fix.
 - **Large binary transfers:** JSON/base64 RPC has a 100 MiB encoded ceiling. A 75 MiB raw fixture exceeded it; near-limit retained memory grew roughly 370–376 MiB. Normal 1–5 MiB encoding took roughly 2–14 ms. Keep the clear size error; introduce streaming only after a real workload justifies it.
 - **Hardware/network:** install the same version on two physical Macs; check connect/reconnect after server restart, Wi-Fi loss and sleep/wake, changed DHCP address, company switching, original/processed image refresh and one edit in each direction. Measure actual LAN response times before claiming an app-wide speedup.
@@ -370,7 +429,7 @@ These are not additional confirmed bugs. Reproduce before changing behavior. The
 
 ## Historical execution order
 
-The following table records the prior 0.1.34 pass, retained for provenance rather than as an unfinished backlog. No subagent executor was available in that historical session. The current 0.1.35 follow-up did use bounded Luna/Terra/Sol workers, independent reviewers and Astra integration; its plan and current ledger are above.
+The following table records the prior 0.1.34 pass, retained for provenance rather than as an unfinished backlog. No subagent executor was available in that historical session. The historical 0.1.35 follow-up did use bounded Luna/Terra/Sol workers, independent reviewers and Astra integration; its plan and ledger are above.
 
 | Batch | Work | Suggested executor | Completion proof |
 | --- | --- | --- | --- |
@@ -391,6 +450,6 @@ Before pushing/creating a PR, verify `gh api repos/theng12/media-studio-kh/actio
 
 Closed decisions remain closed: do not migrate the three intentionally separate bulk modals, rename the `watermarks` asset folder, buy signing, add Intel packaging, or reimplement completed B1–B8 fixes merely because an older audit mentions them. Preserve the `CLAUDE.md` symlink to `AGENTS.md`.
 
-## Paste into the first task on the new computer
+## Historical task prompt — not assigned
 
-> Read AGENTS.md and docs/NEW_COMPUTER_HANDOFF.md on the latest main of theng12/media-studio-kh. Verify Git status and the latest follow-up/merged history without discarding newer work. Act as orchestrator: own planning, independent review, verification and integration; delegate bounded work with base commit, owned files, deliverable and proving checks. Prefer Luna for simple work, Terra for cross-file work and Sol at no more than high reasoning for data/security/lifecycle work. Parallelize disjoint tasks, use Ponytail and Graphify, and verify source rather than trusting stale reports. Use disposable data. Continue only unresolved investigations or explicitly assigned work; do not repeat resolved H1–H15 or C1–C4 fixes, reopen closed decisions or make speculative rewrites. Keep GitHub code-only and record evidence and limitations in the handoff.
+> Historical prompt retained for provenance only; it is not a current instruction or handoff. Read AGENTS.md and docs/PROJECT_STATUS.md on the latest main of theng12/media-studio-kh. Verify Git status and the latest follow-up/merged history without discarding newer work. Act as orchestrator: own planning, independent review, verification and integration; delegate bounded work with base commit, owned files, deliverable and proving checks. Prefer Luna for simple work, Terra for cross-file work and Sol at no more than high reasoning for data/security/lifecycle work. Parallelize disjoint tasks, use Ponytail and Graphify, and verify source rather than trusting stale reports. Use disposable data. Continue only unresolved investigations or explicitly assigned work; do not repeat resolved H1–H15 or C1–C4 fixes, reopen closed decisions or make speculative rewrites. Keep GitHub code-only and record evidence and limitations in the status record.

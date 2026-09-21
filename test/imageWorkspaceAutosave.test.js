@@ -184,7 +184,13 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
       saveSettings: (productId, imageId, expectedContentHash, settings) => {
         const gate = deferred();
         calls.push({ productId, imageId, expectedContentHash, settings, gate });
-        return gate.promise;
+        return gate.promise.then(() => [{
+          id: imageId,
+          filepath: `${imageId}.jpg`,
+          contentHash: expectedContentHash,
+          workspaceSettings: settings,
+          workspaceRevision: 1,
+        }]);
       },
       processImage: async () => ({}),
     },
@@ -274,9 +280,18 @@ test('ImageWorkspace serializes a newer manual save behind an in-flight autosave
     workspace: {
       saveSettings: (productId, imageId, expectedContentHash, settings) => {
         const gate = deferred();
+        const workspaceRevision = calls.length + 1;
         calls.push({ productId, imageId, expectedContentHash, settings, gate });
-        gate.promise.then(() => { persistedBrightness = settings.brightness; });
-        return gate.promise;
+        return gate.promise.then(() => {
+          persistedBrightness = settings.brightness;
+          return [{
+            id: imageId,
+            filepath: `${imageId}.jpg`,
+            contentHash: expectedContentHash,
+            workspaceSettings: settings,
+            workspaceRevision,
+          }];
+        });
       },
       processImage: async () => ({}),
     },
