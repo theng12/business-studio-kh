@@ -74,6 +74,9 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 | `npm test` (final, 0.1.44) | exit 0; **616 passed**; 8/8 consecutive full-suite runs green after the rpcOutcome stabilization | `/tmp/mskh-verify/full-*.log` |
 | `npm run test:native` (final, 0.1.44) | exit 0; **94 passed** | `/tmp/mskh-verify/native-0144.log` |
 | Packaged probe (0.1.44) | exit 0; **8 checks**, incl. real-renderer strip switch + Workspace conflict UI | `/tmp/mskh-verify/packaged-probe-0144.log` |
+| `npm run check:client-server` (0.1.44) | exit 0; pass | `/tmp/mskh-verify/rpc-0144.log` |
+| `npm run check:render` (0.1.44) | exit 0; pass | `/tmp/mskh-verify/render-0144.log` |
+| `npm audit` / `npm audit --omit=dev` (0.1.44) | exit 0; 0 vulnerabilities each | `/tmp/mskh-verify/audit-0144.log` |
 | `npm run dist` (0.1.44) + DMG verify | exit 0; checksum VALID; read-only mount; mounted asar equals the tested build | `/tmp/mskh-verify/dist-0144.log` |
 | `npm run test:native` (0.1.39) | exit 0; **91 passed** | `/tmp/mskh-verify/native-0139.log` |
 | `vite build` (0.1.39) | exit 0; renderer compiled | `/tmp/mskh-verify/build-0139.log` |
