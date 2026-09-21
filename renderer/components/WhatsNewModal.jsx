@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.43',
+    date: '2026-09-21',
+    items: [
+      'FIX — the import option “Skip existing” no longer replaces a product’s Tags; it now leaves existing products completely untouched, as its label says.',
+      'FIX — a product created from an import row with a blank Status is stored as active instead of an empty status.',
+      'POLISH — the “row 1 may be a title” note is now a neutral, conditional hint, so it appears whenever the shape is ambiguous without telling you to delete a real header row.',
+      'Internal — regressions for skip-tags, blank-status inserts, the title-row hint, and the crop-conflict message.',
+    ],
+  },
+  {
     version: '0.1.42',
     date: '2026-09-21',
     items: [

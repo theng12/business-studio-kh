@@ -647,6 +647,35 @@ test('review follow-up: overwrite-crop flushes the pending draft before rewritin
   }
 });
 
+test('review follow-up: a crop blocked by a conflict explains the conflict', async () => {
+  const original = { id: 'image-1', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1 }, workspaceRevision: 4 };
+  let cropCalls = 0;
+  const api = apiWith(async () => { throw new Error('CONFLICT|{"kind":"workspaceImage","id":"image-1","workspaceRevision":5}'); });
+  api.images.cropImage = async () => { cropCalls += 1; return { outW: 1, outH: 1 }; };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, original);
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({
+      ...settingsPanel(hook).props.settings,
+      brightness: 9,
+      cropRect: { x: 0, y: 0, width: 0.5, height: 0.5 },
+    });
+    await hook.settle(Component);
+    global.window.confirm = () => true;
+    const canvas = findNode(hook.getOutput(), (node) => typeof node.props?.onApplyCrop === 'function');
+    await canvas.props.onApplyCrop('overwrite');
+    await hook.settle(Component);
+    assert.equal(cropCalls, 0, 'the crop must not run while the pending draft conflicts');
+    const messages = store.getState().toasts.map((t) => t.message);
+    assert.ok(messages.some((m) => /changed elsewhere/i.test(m)), 'the conflict must be explained');
+    assert.ok(!messages.some((m) => /CONFLICT\|/.test(m)), 'the raw sentinel must not reach the user');
+  } finally {
+    hook.cleanup();
+  }
+});
+
 test('review follow-up: a failed post-process refresh is not reported as a failed process', async () => {
   const original = { id: 'image-1', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1, removeBackground: false }, workspaceRevision: 4 };
   const api = apiWith(async () => [{ ...original, workspaceRevision: 5 }]);

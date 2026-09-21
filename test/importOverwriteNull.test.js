@@ -70,3 +70,32 @@ test('overwrite ignores a null status instead of skipping the whole row', { skip
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('skip leaves tags untouched and an empty status on insert defaults to active', { skip: skipReason }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mskh-skip-tags-'));
+  db.initDb(dir);
+  try {
+    const company = companies.create({ name: 'Skip Co', isActive: true });
+    products.create({ companyId: company.id, sku: 'SKU-1', name: 'Keep', tags: ['keep'] });
+
+    const skipRes = products.bulkUpsert(
+      company.id,
+      [{ sku: 'SKU-1', tags: ['replaced'] }],
+      { dryRun: false, conflictPolicy: 'skip' },
+    );
+    assert.equal(skipRes.skips.length, 0);
+    assert.equal(skipRes.changes[0].action, 'no_change', 'skip must report the row as unchanged');
+    assert.deepEqual(products.getBySku(company.id, 'SKU-1').tags, ['keep'], 'skip must not replace tags');
+
+    const created = products.bulkUpsert(
+      company.id,
+      [{ sku: 'SKU-2', status: '' }],
+      { dryRun: false, conflictPolicy: 'merge' },
+    );
+    assert.equal(created.inserted, 1);
+    assert.equal(products.getBySku(company.id, 'SKU-2').status, 'active', 'an empty status on insert must default to active');
+  } finally {
+    try { db.closeDb(); } catch (_) {}
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
