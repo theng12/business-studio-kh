@@ -4,7 +4,22 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 **Scope:** personal/internal macOS (Apple Silicon) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, local release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
 
-## Current software pass — 0.1.44 (merged); no active pass
+## Current software pass — 0.1.46 (OpenAI AI rework, on `codex/ai-openai-wire`)
+
+**AI provider rework (0.1.46).** AI Studio now uses OpenAI's Images API directly.
+kie.ai and fal.ai adapters, keys, credit pills and provider task IDs are removed;
+`main/ai/providers/{kie,fal}.js` are deleted. The picker is dynamic: `main/ipc/ai.js`
+fetches `GET /v1/models`, filters to image models and caches per key, with the
+built-in fallback catalog in `main/ai/models.js` when no key is saved. Aspect ratio,
+quality and image count are capability-driven (`capabilitiesFor`,
+`main/ai/providers/openai.js`). Generation is synchronous — image edits use
+`/v1/images/edits`, prompt-only uses `/v1/images/generations` — so the queue runner
+has no poll loop; `Repair` re-submits, cancelling in flight drops the result, and
+`queueRunner.stop()` drains in-flight generations before the DB closes. Costs are
+OpenAI-only and quality-aware (`main/ai/costs.js`). Tests: `test/aiOpenaiProvider.test.js`
+(12 mocked-fetch cases), `test/aiCatalog.test.js` (8 catalog/cost cases), plus the
+rewritten queue-stop case in `test/importLifecycle.test.js`. `npm run check` 637/637,
+lint clean. Live OpenAI smoke test pending the owner adding a key.
 
 **Repository state (verified 2026-09-22):**
 

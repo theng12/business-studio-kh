@@ -25,7 +25,12 @@ test('bundle import removes extracted portable credentials after a successful me
       includes: ['database.sqlite', 'config.partial.json'],
     }));
     await fsp.writeFile(path.join(bundleRoot, 'database.sqlite'), 'synthetic sqlite fixture');
-    await fsp.writeFile(path.join(bundleRoot, 'config.partial.json'), JSON.stringify({ kieApiKey: 'dummy-secret', falApiKey: 'dummy-secret-2' }));
+    await fsp.writeFile(path.join(bundleRoot, 'config.partial.json'), JSON.stringify({
+      openaiApiKey: 'dummy-secret',
+      // Retired kie.ai / fal.ai keys must NOT travel any more.
+      kieApiKey: 'retired-secret-1',
+      falApiKey: 'retired-secret-2',
+    }));
     const archive = path.join(root, 'fixture.iskhbundle');
     await execFileAsync('/usr/bin/tar', ['-czf', archive, '-C', stageParent, 'bundle']);
 
@@ -49,7 +54,7 @@ test('bundle import removes extracted portable credentials after a successful me
     const target = path.join(root, 'target');
     await importBundle({ bundlePath: archive, targetDataDir: target });
 
-    assert.deepEqual(updates, [{ kieApiKey: 'dummy-secret', falApiKey: 'dummy-secret-2' }]);
+    assert.deepEqual(updates, [{ openaiApiKey: 'dummy-secret' }]);
     assert.equal(fs.existsSync(path.join(target, 'config.partial.json')), false);
     const names = await fsp.readdir(target);
     assert.deepEqual(names.sort(), ['database.sqlite', 'manifest.json']);

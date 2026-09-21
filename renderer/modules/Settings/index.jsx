@@ -483,53 +483,25 @@ export function Settings() {
         {!isClient && (
         <>
         <SettingRow
-          label="kie.ai API key"
-          hint="Required for kie.ai models (gpt4o-image, flux-kontext). Get a key at kie.ai/api-key."
+          label="OpenAI API key"
+          hint="Required for AI Studio image generation. Create a key at platform.openai.com/api-keys."
         >
           <ApiKeyRow
-            valueKey="kieApiKey"
+            valueKey="openaiApiKey"
             config={config}
             patch={patch}
-            testFn={(k) => window.api.ai.testKie(k)}
+            testFn={(k) => window.api.ai.testOpenai(k)}
           />
         </SettingRow>
 
         <SettingRow
-          label="kie.ai concurrency"
-          hint="Maximum simultaneous kie.ai generations (1–10)."
+          label="OpenAI concurrency"
+          hint="Maximum simultaneous image generations (1–10)."
         >
           <Input
             type="number" min="1" max="10"
-            value={config.kieConcurrency ?? 3}
-            onChange={(e) => patch('kieConcurrency', Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
-            style={{ width: 100 }}
-          />
-        </SettingRow>
-        </>
-        )}
-
-        {!isClient && (
-        <>
-        <SettingRow
-          label="fal.ai API key"
-          hint="Required for fal.ai models. Get a key at fal.ai/dashboard/keys."
-        >
-          <ApiKeyRow
-            valueKey="falApiKey"
-            config={config}
-            patch={patch}
-            testFn={(k) => window.api.ai.testFal(k)}
-          />
-        </SettingRow>
-
-        <SettingRow
-          label="fal.ai concurrency"
-          hint="Maximum simultaneous fal.ai generations (1–10)."
-        >
-          <Input
-            type="number" min="1" max="10"
-            value={config.falConcurrency ?? 3}
-            onChange={(e) => patch('falConcurrency', Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+            value={config.openaiConcurrency ?? 3}
+            onChange={(e) => patch('openaiConcurrency', Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
             style={{ width: 100 }}
           />
         </SettingRow>

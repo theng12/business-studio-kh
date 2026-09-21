@@ -368,56 +368,59 @@ for (const finish of ['consume', 'cancel', 'cancel-pending', 'error']) {
   });
 }
 
-test('AI queue stop waits for the active async tick to finish', async () => {
+test('AI queue stop waits for the active generation to finish', async () => {
   const originalLoad = Module._load;
-  let releasePoll;
-  let markPollStarted;
-  const pollStarted = new Promise((resolve) => { markPollStarted = resolve; });
-  const pollReleased = new Promise((resolve) => { releasePoll = resolve; });
+  let releaseGeneration;
+  let markGenerationStarted;
+  const generationStarted = new Promise((resolve) => { markGenerationStarted = resolve; });
+  const generationReleased = new Promise((resolve) => { releaseGeneration = resolve; });
   const task = {
-    id: 'task-1', status: 'running', provider: 'kie', providerTaskId: 'provider-1',
-    model: 'kie:test', progress: 0, options: {},
+    id: 'task-1', status: 'queued', provider: 'openai', companyId: 'co-1',
+    model: 'openai:gpt-image-1', prompt: 'a product shot', progress: 0,
+    sourceImagePath: null, options: {}, attempts: 0,
   };
   const fakeTasks = {
     listPendingForRunner: () => [task],
-    update() {},
+    update(id, patch) { Object.assign(task, patch); },
     get: () => task,
   };
   try {
     Module._load = function(request, parent, isMain) {
       if (request === '../db/aiTasks') return fakeTasks;
-      if (request === '../db/aiGallery') return {};
+      if (request === '../db/aiGallery') return { create: () => ({ id: 'g-1' }) };
       if (request === '../db/products') return {};
+      if (request === '../db/productImages') return {};
       if (request === '../db') return { getDataDir: () => '/tmp' };
       if (request === '../events') return { broadcast() {} };
-      if (request === './models') return { byKey: () => ({ supportsSource: false }) };
-      if (request === './providers/kie') {
+      if (request === './models') {
+        return { byKey: () => ({ modelId: 'gpt-image-1', supportsSource: false }) };
+      }
+      if (request === './providers/openai') {
         return {
-          pollStatus: async () => {
-            markPollStarted();
-            await pollReleased;
-            return { status: 'running', progress: 0 };
+          generate: async () => {
+            markGenerationStarted();
+            await generationReleased;
+            return { outputUrls: [] };
           },
         };
       }
-      if (request === './providers/fal') return {};
       return originalLoad.call(this, request, parent, isMain);
     };
     delete require.cache[require.resolve('../main/ai/queueRunner')];
     const queueRunner = require('../main/ai/queueRunner');
-    queueRunner.start({ getConfig: () => ({ kieApiKey: 'dummy' }) });
-    await pollStarted;
+    queueRunner.start({ getConfig: () => ({ openaiApiKey: 'dummy', openaiConcurrency: 3 }) });
+    await generationStarted;
 
     let stopped = false;
     const stopping = Promise.resolve(queueRunner.stop()).then(() => { stopped = true; });
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(stopped, false);
+    assert.equal(stopped, false, 'stop() must wait while a generation is in flight');
 
-    releasePoll();
+    releaseGeneration();
     await stopping;
     assert.equal(stopped, true);
   } finally {
-    releasePoll?.();
+    releaseGeneration?.();
     Module._load = originalLoad;
     delete require.cache[require.resolve('../main/ai/queueRunner')];
   }

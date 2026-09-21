@@ -17,7 +17,7 @@ test('bundle export rejects an asset tree that changes after the database snapsh
     await fsp.writeFile(asset, 'photo-at-snapshot');
     await fsp.writeFile(path.join(dataDir, 'database.sqlite'), 'synthetic-db');
     const fakeConfig = {
-      loadConfig: () => ({ dataDir, kieApiKey: 'dummy' }),
+      loadConfig: () => ({ dataDir, openaiApiKey: 'dummy' }),
       configPath: () => path.join(root, 'config.json'),
     };
     Module._load = function(request, parent, isMain) {
