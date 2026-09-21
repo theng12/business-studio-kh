@@ -8,13 +8,32 @@ function readWorkbook(filePath) {
   const sheets = wb.SheetNames.map((name) => {
     const sheet = wb.Sheets[name];
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false });
-    const headers = (rows[0] ?? []).map((h) => String(h ?? '').trim());
+    /* Duplicate headers must not collapse into one column. Row objects were
+     * keyed by header name, so a second "SKU" column overwrote the first and a
+     * file with a stray duplicate SKU lost every SKU value — the preview then
+     * read "out of 0 rows" with no explanation. Repeats get a numeric suffix
+     * (SKU, SKU (2), …) so both columns survive and the map screen shows them;
+     * the suffix does not auto-guess, so only the first occurrence maps. */
+    const rawHeaders = (rows[0] ?? []).map((h) => String(h ?? '').trim());
+    const occurrences = new Map();
+    const headers = rawHeaders.map((h, index) => {
+      const count = (occurrences.get(h) ?? 0) + 1;
+      occurrences.set(h, count);
+      if (count === 1) return h;
+      return h ? `${h} (${count})` : `Column ${index + 1}`;
+    });
     const body = rows.slice(1).map((r) => {
       const obj = {};
       headers.forEach((h, i) => { obj[h] = r[i] ?? ''; });
       return obj;
     });
-    return { name, headers, rows: body, rowCount: body.length };
+    /* A title row above the header row is a common export shape and currently
+     * dead-ends: the title becomes the only header, so no column is
+     * recognized and Preview stays disabled. Flag it (rather than guessing
+     * silently) so the map step can tell the user what is wrong. */
+    const nonEmpty = (row) => (row ?? []).filter((cell) => String(cell ?? '').trim() !== '').length;
+    const looksLikeTitleRow = nonEmpty(rows[0]) <= 1 && nonEmpty(rows[1]) > nonEmpty(rows[0]);
+    return { name, headers, rows: body, rowCount: body.length, looksLikeTitleRow };
   });
   return { fileName: path.basename(filePath), sheets };
 }
