@@ -2,6 +2,14 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.47',
+    date: '2026-09-22',
+    items: [
+      'POLISH — the last kie.ai / fal.ai wording is gone from AI Studio, Settings and the bulk-AI button; the app now consistently says OpenAI.',
+      'Internal — follow-up copy fix for 0.1.46.',
+    ],
+  },
+  {
     version: '0.1.46',
     date: '2026-09-22',
     items: [
