@@ -189,6 +189,13 @@ function initDb(dataDir) {
   addColumnIfMissing(db, 'product_images', 'file_size', 'INTEGER');
   addColumnIfMissing(db, 'product_images', 'dedup_exempt', 'INTEGER');
 
+  /* v0.1.50: exact AI cost + token usage, read from OpenAI's response
+     `usage` block after a generation. `cost_estimate` stays the pre-flight
+     estimate; `cost_actual` is what the request really cost. Additive, so
+     no schema-version bump. */
+  addColumnIfMissing(db, 'ai_tasks', 'cost_actual', 'REAL');
+  addColumnIfMissing(db, 'ai_tasks', 'usage_json', 'TEXT');
+
   /* v0.49.42: per-profile {INDEX} export-filename formatting. index_pad
      is the zero-pad width (1–4); index_prefix is an optional literal
      prefix (e.g. 'A' → A001). Both nullable → legacy profiles read as
@@ -576,6 +583,8 @@ function runMigrations(database) {
       provider_source_url TEXT,
       error_message TEXT,
       cost_estimate REAL,                 -- USD (not cents)
+      cost_actual REAL,                   -- USD, from the provider's usage block
+      usage_json TEXT,                    -- raw token usage JSON
       created_at INTEGER NOT NULL,
       started_at INTEGER,
       completed_at INTEGER

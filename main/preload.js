@@ -464,7 +464,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   ai: {
     listModels:    ()                                 => invoke('ai:listModels'),
-    estimateCost:  (model, count, quality)            => invoke('ai:estimateCost', { model, count, quality }),
+    estimateCost:  (model, count, opts)               => invoke('ai:estimateCost', { model, count, ...(opts ?? {}) }),
 
     listPrompts:   (companyId)                        => invoke('ai:listPrompts', companyId),
     createPrompt:  (input)                            => invoke('ai:createPrompt', input),

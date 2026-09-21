@@ -2,6 +2,19 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.50',
+    date: '2026-09-22',
+    items: [
+      'NEW — the AI cost estimate is now token-based: it prices your prompt (text input), the reference image (image input) and the generated image (image output) with OpenAI’s published rates, instead of a flat per-image guess.',
+      'NEW — the confirmation dialog shows the token breakdown behind the estimate: text tokens in, image tokens in, and output tokens per image.',
+      'NEW — after a run finishes the queue shows the ACTUAL cost, read from the token usage OpenAI reports for that request. Queued and running rows show the ≈ estimate.',
+      'NEW — more aspect ratios for GPT Image 2.5 models: 4:3, 3:4, 16:9, 9:16, 7:4, 4:7, 21:9 and 9:21, alongside square, 3:2 and 2:3.',
+      'NEW — GPT Image 2.5 models also expose the xhigh and max quality tiers.',
+      'POLISH — DALL·E is no longer offered, because OpenAI removed it in May 2026.',
+      'Internal — rates come from OpenAI’s pricing page; output-token counts for the 2.5 models were measured against the live API, and the input-image token rule was measured as a 16px grid capped at 1024 tokens.',
+    ],
+  },
+  {
     version: '0.1.49',
     date: '2026-09-22',
     items: [
