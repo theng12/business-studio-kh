@@ -456,7 +456,7 @@ export function AIStudio() {
         title="AI Studio"
         subtitle={mode === 'bulk'
           ? 'Bulk mode — pick a folder or drop images to run them through any model.'
-          : 'Image-to-image generation via kie.ai and fal.ai.'}
+          : 'Edit product photos or generate new images with OpenAI.'}
         actions={
           <>
             <div className="ws-toolbar__group" role="tablist" aria-label="AI Studio mode">
