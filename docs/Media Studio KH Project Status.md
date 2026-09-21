@@ -4,14 +4,13 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 **Scope:** personal/internal macOS (Apple Silicon) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, local release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
 
-## Current software pass — 0.1.38 (in progress); 0.1.37 integrated
+## Current software pass — 0.1.38 (merged); no active pass
 
 **Repository state (verified 2026-09-21):**
 
-- Worktree: `$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh`
-- **0.1.37 is merged:** PR #6, merge commit `172d3eb80079d8333c336a44e942cdb2aab5146d`; local `main` fast-forwarded to it. The 0.1.37 DMG below was built before integration and matches the merged app source; it was handed to the owner for the customer. The customer's import problem is resolved.
-- Current branch: `codex/import-hardening`, from `origin/main` @ `172d3eb`. This pass: import hardening (duplicate headers, title-row detection), the documentation truth pass, and a patch bump to 0.1.38.
-- Files in this pass: new `test/productImportWorkbook.test.js`; changed `main/fileHandler.js`, `renderer/modules/ProductLibrary/ImportModal.jsx`, `AGENTS.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `package.json`, `package-lock.json`, `renderer/components/WhatsNewModal.jsx`, this file.
+- Worktree: `$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh`; current branch `codex/status-0138` off `origin/main` (`866ac5b`), for this status update only.
+- **0.1.37 is merged:** PR #6, merge commit `172d3eb80079d8333c336a44e942cdb2aab5146d`; local `main` fast-forwarded. The 0.1.37 DMG below was built before integration and matches the merged app source; it was handed to the owner for the customer. The customer's import problem is resolved.
+- **0.1.38 is merged:** PR #7, merge commit `866ac5b021c52ca3e8a3cc9498f3974060a19bb0`. Import hardening (duplicate headers, title rows), the documentation truth pass, and the patch bump.
 - Plans: [2026-09-21 workspace concurrency](superpowers/plans/2026-09-21-workspace-concurrency.md) (delivered in 0.1.37); [2026-09-21 remaining work](superpowers/plans/2026-09-21-remaining-work.md).
 
 **Priority checklist** — statuses: investigation · reproduced · implemented/unverified · self-reviewed · verified · blocked · deferred/out-of-scope · closed decision.
@@ -33,10 +32,10 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 **Artifacts:**
 
 - **0.1.37 (merged, delivered):** `dist/Business Studio KH-0.1.37-arm64.dmg` — 245,044,926 bytes, SHA-256 `576ee0a91dac0211560db89d69c4db426bafed8a1ad0346a0473b95046ecfafb`. Unsigned; arm64; min macOS 12.0.0. Tested packaged asar SHA-256 `d61d293c414bbc9d98ea229b67cb237196605a70dcd507811323cd6cd7d8ddb6`; the mounted DMG's asar matches it.
-- **0.1.38:** not yet built — build and verify after this pass's checks.
+- **0.1.38 (merged):** DMG not built — this pass changed a packaged renderer file but no customer needs the artifact; build with `npm run dist` on request.
 - **Superseded, do not deliver:** the earlier `1a6d60eba5bf2c1240d4c2426d2db0ea2414335477eb90802a002203cd065a34` DMG, built before the final 0.1.37 corrections.
 
-**Verification ledger (fresh self-run, 2026-09-21, this tree):**
+**Verification ledger (fresh self-run, 2026-09-21):**
 
 | Check | Result | Log |
 | --- | --- | --- |
@@ -50,6 +49,10 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 | Packaged server/client probe | exit 0; 7 checks incl. real Catalog and Image Workspace conflict UI with persisted-row assertions | `/tmp/mskh-verify/packaged-probe.log` |
 | Focused renderer | exit 0; 27 passed (`workspaceConcurrentEditor` + `imageWorkspaceAutosave`) | `/tmp/mskh-verify/focused.log` |
 | Focused native | exit 0; 40 passed (workspace concurrency, image identity, archive round trip, validator agreement/coverage) | — |
+| `npm run check` (0.1.38) | exit 0; lint clean; **600 passed** | `/tmp/mskh-verify/check-0138.log` |
+| `npm run test:native` (0.1.38) | exit 0; **91 passed** | `/tmp/mskh-verify/native-0138.log` |
+| `vite build` (0.1.38) | exit 0; renderer compiled, 102 modules | `/tmp/mskh-verify/build-0138.log` |
+| `test/productImportWorkbook.test.js` | 5 passed (duplicate headers, repeated empty headers, title row, normal, single column) | — |
 
 Environment note: this shell exports `ELECTRON_RUN_AS_NODE=1` globally. `check:render` and the packaged probe fail under it; re-run them with `env -u ELECTRON_RUN_AS_NODE`. Host Node is v26.8.2; checks use isolated Node 24.15.0 and the bundled Electron 44 runtime (Node 24.21.0).
 
