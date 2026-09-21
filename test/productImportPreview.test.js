@@ -122,18 +122,23 @@ test('overwrite preview warns how many existing values it will clear; merge does
   assert.doesNotMatch(merge, /will clear/);
 });
 
-test('title-row advice only shows when no column name is recognized', async () => {
+test('title-row hint appears for any single-value first row, and stays conditional', async () => {
   await loadPreview();
   const { shouldSuggestTitleRow } = cached;
   assert.equal(
     shouldSuggestTitleRow({ looksLikeTitleRow: true, headers: ['Product catalogue 2026'] }),
     true,
-    'an unrecognized single header is the real dead-end the hint is for',
+    'an unrecognized single header is a title-row candidate',
+  );
+  assert.equal(
+    shouldSuggestTitleRow({ looksLikeTitleRow: true, headers: ['Code'] }),
+    true,
+    'a recognized-looking single header is still flagged — hiding it would import the real header row as data',
   );
   assert.equal(
     shouldSuggestTitleRow({ looksLikeTitleRow: true, headers: ['SKU', 'Column 2'] }),
-    false,
-    'a recognized SKU must not trigger delete-row-1 advice on a valid sheet',
+    true,
+    'ambiguous single-value first rows are surfaced conditionally, not hidden',
   );
   assert.equal(
     shouldSuggestTitleRow({ looksLikeTitleRow: false, headers: ['SKU', 'Name'] }),
