@@ -305,7 +305,7 @@ function create(input) {
       colorFinish: input.colorFinish ?? null,
       variant: input.variant ?? null,
       unit: input.unit ?? null,
-      status: input.status ?? 'active',
+      status: typeof input.status === 'string' && input.status.trim() ? input.status.trim() : 'active',
       tags: JSON.stringify(input.tags ?? []),
       description: input.description ?? null,
       priceRetail: input.priceRetail ?? null,
@@ -900,8 +900,9 @@ function bulkUpsert(companyId, rows, opts = {}) {
             }
           }
           // Tags merge is array-aware: overwrite always replaces, merge
-          // replaces only when the new list is non-empty.
-          if (Array.isArray(row.tags)) {
+          // replaces only when the new list is non-empty, and skip leaves the
+          // existing row completely alone (its docstring promises exactly that).
+          if (Array.isArray(row.tags) && policy !== 'skip') {
             const replace = policy === 'overwrite' || row.tags.length > 0;
             if (replace) {
               const oldTags = Array.isArray(existing.tags) ? existing.tags : [];
