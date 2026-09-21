@@ -129,6 +129,93 @@ const timeout = setTimeout(() => { console.error('FAIL: smoke timed out'); proce
         assert.ok(afterExport.updatedAt > beforeExport.updatedAt, `${label}: markExported must advance updatedAt`);
       }
     };
+    const assertWorkspaceConcurrency = async ({ productId, imageId }) => {
+      const readImage = async () => {
+        const rows = await invoke('images:listByProduct', productId);
+        return rows.find((row) => row.id === imageId);
+      };
+      const snapshotA = await readImage();
+      const snapshotB = await readImage();
+      assert.ok(snapshotA && snapshotB, 'workspace image fixture was not returned over RPC');
+      assert.notEqual(snapshotA, snapshotB, 'workspace snapshots must be independent responses');
+      assert.equal(snapshotA.workspaceRevision, 0, 'workspace fixture must start at revision zero');
+      assert.equal(snapshotA.workspaceRevision, snapshotB.workspaceRevision, 'workspace snapshots must start at one revision');
+
+      const winnerRows = await invoke('workspace:saveSettings', {
+        productId,
+        imageId,
+        expectedContentHash: snapshotA.contentHash,
+        expectedWorkspaceRevision: snapshotA.workspaceRevision,
+        settings: { ...snapshotA.workspaceSettings, removeBackground: false, brightness: 15 },
+      });
+      const winner = winnerRows.find((row) => row.id === imageId);
+      assert.equal(winner.workspaceSettings.brightness, 15, 'workspace winner response lost its settings');
+      assert.equal(winner.workspaceRevision, snapshotA.workspaceRevision + 1, 'workspace save did not acknowledge the next revision');
+
+      let staleError;
+      try {
+        await invoke('workspace:saveSettings', {
+          productId,
+          imageId,
+          expectedContentHash: snapshotB.contentHash,
+          expectedWorkspaceRevision: snapshotB.workspaceRevision,
+          settings: { ...snapshotB.workspaceSettings, removeBackground: false, brightness: 90 },
+        });
+      } catch (error) {
+        staleError = error;
+      }
+      assert.ok(staleError, 'stale workspace save must be rejected');
+      assert.ok(staleError.message.startsWith('CONFLICT|'), 'stale workspace save should return a conflict payload');
+      const persistedWinner = await readImage();
+      assert.equal(persistedWinner.workspaceSettings.brightness, 15, 'stale workspace save changed the persisted winner');
+      assert.equal(persistedWinner.workspaceRevision, winner.workspaceRevision, 'stale workspace save advanced the revision');
+
+      const sequentialRows = await invoke('workspace:saveSettings', {
+        productId,
+        imageId,
+        expectedContentHash: winner.contentHash,
+        expectedWorkspaceRevision: winner.workspaceRevision,
+        settings: { ...winner.workspaceSettings, removeBackground: false, brightness: 30 },
+      });
+      const sequential = sequentialRows.find((row) => row.id === imageId);
+      assert.equal(sequential.workspaceSettings.brightness, 30, 'sequential workspace ACK lost the requested settings');
+      assert.equal(sequential.workspaceRevision, winner.workspaceRevision + 1, 'sequential workspace ACK did not advance the revision');
+
+      const overwrittenRows = await invoke('workspace:saveSettings', {
+        productId,
+        imageId,
+        expectedContentHash: sequential.contentHash,
+        settings: { ...sequential.workspaceSettings, removeBackground: false, brightness: 45 },
+      });
+      const overwritten = overwrittenRows.find((row) => row.id === imageId);
+      assert.equal(overwritten.workspaceSettings.brightness, 45, 'explicit workspace overwrite lost the requested settings');
+      assert.equal(overwritten.workspaceRevision, sequential.workspaceRevision + 1, 'explicit workspace overwrite did not advance the revision');
+
+      const malformed = await postRpc('workspace:saveSettings', {
+        productId,
+        imageId,
+        expectedContentHash: overwritten.contentHash,
+        expectedWorkspaceRevision: 'not-a-number',
+        settings: { ...overwritten.workspaceSettings, removeBackground: false, brightness: 60 },
+      });
+      assert.equal(malformed.response.status, 400, 'malformed workspace revision must fail RPC validation');
+      assert.equal(malformed.body.error, 'Bad request: expectedWorkspaceRevision must be a non-negative safe integer');
+      const afterMalformed = await readImage();
+      assert.equal(afterMalformed.workspaceSettings.brightness, 45, 'malformed workspace revision changed the row');
+      assert.equal(afterMalformed.workspaceRevision, overwritten.workspaceRevision, 'malformed workspace revision advanced the row');
+
+      const processedRows = await invoke('workspace:processImage', {
+        productId,
+        imageId,
+        expectedContentHash: afterMalformed.contentHash,
+        expectedWorkspaceRevision: afterMalformed.workspaceRevision,
+        settings: { ...afterMalformed.workspaceSettings, canvasWidth: 64, canvasHeight: 64, removeBackground: false, brightness: 55 },
+      });
+      assert.ok(processedRows.processedRelativePath, 'workspace process response lost processedRelativePath');
+      const processed = processedRows.images.find((row) => row.id === imageId);
+      assert.equal(processed.workspaceSettings.brightness, 55, 'workspace process response lost its settings');
+      assert.equal(processed.workspaceRevision, afterMalformed.workspaceRevision + 1, 'workspace process did not acknowledge the next revision');
+    };
     await waitFor(() => incoming.some(e => e.channel === 'server:hello'));
     assert.equal(client.baseUrl(), base);
     const company = await invoke('companies:create', { name: 'Synthetic Company' });
@@ -149,6 +236,7 @@ const timeout = setTimeout(() => { console.error('FAIL: smoke timed out'); proce
     assert.ok((await response.arrayBuffer()).byteLength > 0);
     const denied = await fetch(`${base}/api/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${viewer.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ channel: 'users:list' }) });
     assert.equal(denied.status, 403);
+    await assertWorkspaceConcurrency({ productId: product.id, imageId: images[0].id });
     await assertDraftConcurrency({
       label: 'catalog project', kind: 'catalogProject', createChannel: 'catalogStudio:create', getChannel: 'catalogStudio:get',
       updateChannel: 'catalogStudio:update', markExportedChannel: 'catalogStudio:markExported',
@@ -170,7 +258,7 @@ const timeout = setTimeout(() => { console.error('FAIL: smoke timed out'); proce
     assert.equal((await invoke('products:get', product.id)).name, 'Edited while socket disconnected');
     const attribution = await invoke('users:listForAttribution');
     assert.ok(attribution.every(user => !('token' in user)));
-    console.log(JSON.stringify({ pass: true, version: electron.app.getVersion(), checks: ['real SQLite CRUD over actual client RPC', 'active company and write attribution over RPC', 'real WebSocket greeting, catalog event forwarding and automatic reconnect', 'client /m URL normalization', 'client source-file upload to server and asset download', 'viewer token gate and redacted attribution', 'catalog/social/label two-snapshot conflicts, persisted winners, sequential tokens, omission overwrites and malformed-token pre-write rejection', 'catalog/social markExported revision advancement'] }));
+    console.log(JSON.stringify({ pass: true, version: electron.app.getVersion(), checks: ['real SQLite CRUD over actual client RPC', 'active company and write attribution over RPC', 'real WebSocket greeting, catalog event forwarding and automatic reconnect', 'client /m URL normalization', 'client source-file upload to server and asset download', 'viewer token gate and redacted attribution', 'workspace two-snapshot conflict, persisted winner, sequential revision ACKs, explicit overwrite and malformed revision rejection over RPC', 'workspace processImage revision ACK with removeBackground=false', 'catalog/social/label two-snapshot conflicts, persisted winners, sequential tokens, omission overwrites and malformed-token pre-write rejection', 'catalog/social markExported revision advancement'] }));
   } finally {
     db?.close();
     await fs.rm(temp, { recursive: true, force: true });

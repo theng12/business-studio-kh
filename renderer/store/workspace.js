@@ -82,7 +82,9 @@ export function createWorkspaceSlice(set, get) {
       try {
         const images = await window.api.images.listByProduct(productId);
         if (!requestIsCurrent(get, productId, generation)) return get().workspaceImages;
-        set({ workspaceImages: images || [], workspaceImageIndex: 0 });
+        const selectedId = get().workspaceImages[get().workspaceImageIndex]?.id;
+        const selectedIndex = (images || []).findIndex((image) => image.id === selectedId);
+        set({ workspaceImages: images || [], workspaceImageIndex: selectedIndex < 0 ? 0 : selectedIndex });
         return images;
       } catch (err) {
         if (requestIsCurrent(get, productId, generation)) throw err;

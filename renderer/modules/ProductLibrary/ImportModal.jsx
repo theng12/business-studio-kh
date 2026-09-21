@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Button, Modal, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
+import { createNameIdResolver } from '../../lib/nameIdResolver.js';
 
 const PRODUCT_FIELDS = [
   { key: '__skip__',      label: '— Skip —' },
@@ -170,24 +171,6 @@ export function ImportModal({ open, onClose }) {
     [sheet, mapping],
   );
 
-  async function ensureBrandId(name) {
-    const trimmed = String(name || '').trim();
-    if (!trimmed) return null;
-    const hit = brands.find((b) => b.name.toLowerCase() === trimmed.toLowerCase());
-    if (hit) return hit.id;
-    const created = await createBrand({ name: trimmed });
-    return created.id;
-  }
-
-  async function ensureCategoryId(name) {
-    const trimmed = String(name || '').trim();
-    if (!trimmed) return null;
-    const hit = categories.find((c) => c.name.toLowerCase() === trimmed.toLowerCase());
-    if (hit) return hit.id;
-    const created = await createCategory({ name: trimmed });
-    return created.id;
-  }
-
   function toNumber(v) {
     if (v === '' || v == null) return null;
     const n = Number(v);
@@ -196,6 +179,14 @@ export function ImportModal({ open, onClose }) {
 
   async function buildRows() {
     const rows = [];
+    // One resolver per preview run. The `brands` / `categories` arrays above
+    // are captured for THIS render and do not change when createBrand() /
+    // createCategory() refresh the store mid-run, so without a per-run cache a
+    // file whose Brand column repeats a name would create it once per ROW —
+    // thousands of redundant IPC round trips on a large import. See
+    // renderer/lib/nameIdResolver.js.
+    const resolveBrandId = createNameIdResolver(brands, (name) => createBrand({ name }));
+    const resolveCategoryId = createNameIdResolver(categories, (name) => createCategory({ name }));
     for (const row of sheet.rows) {
       const out = {};
       for (const header of sheet.headers) {
@@ -205,9 +196,9 @@ export function ImportModal({ open, onClose }) {
         if (raw === '' || raw == null) continue;
 
         if (field === 'brand') {
-          out.brandId = await ensureBrandId(raw);
+          out.brandId = await resolveBrandId(raw);
         } else if (field === 'category') {
-          out.categoryId = await ensureCategoryId(raw);
+          out.categoryId = await resolveCategoryId(raw);
         } else if (field === 'tags') {
           out.tags = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
         } else if (field === 'priceRetail' || field === 'priceWholesale'
@@ -250,7 +241,7 @@ export function ImportModal({ open, onClose }) {
         dryRun: true,
         conflictPolicy,
       });
-      setPreview({ ...res, rowsConsidered: rows.length });
+      setPreview({ ...res, rowsConsidered: rows.length, sourceRowCount: sheet.rowCount });
       // The dry-run may have auto-created brands/categories during buildRows
       // — refresh those lookups so the diff shows resolved names.
       await Promise.all([refreshBrands(), refreshCategories()]);
@@ -273,7 +264,7 @@ export function ImportModal({ open, onClose }) {
         dryRun: true,
         conflictPolicy: nextPolicy,
       });
-      setPreview({ ...res, rowsConsidered: rows.length });
+      setPreview({ ...res, rowsConsidered: rows.length, sourceRowCount: sheet.rowCount });
     } catch (err) {
       addToast(err.message, 'error');
     } finally {
@@ -468,6 +459,12 @@ function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy }) {
   const updates = changes.filter((c) => c.action === 'update');
   const noChanges = changes.filter((c) => c.action === 'no_change');
   const skips = changes.filter((c) => c.action === 'skip');
+  // Rows the parser read but buildRows dropped because the value in the mapped
+  // SKU column was blank. They used to disappear silently: a 3-row file whose
+  // SKU column didn't line up reported "out of 1 row" with no explanation, which
+  // reads as "the import is broken" rather than "2 rows had no SKU".
+  const sourceRowCount = preview.sourceRowCount ?? preview.rowsConsidered;
+  const droppedNoSku = Math.max(0, sourceRowCount - preview.rowsConsidered);
 
   return (
     <div className="import-preview">
@@ -479,6 +476,13 @@ function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy }) {
           {(counts.skip ?? 0) > 0 ? <>, <span className="muted">{counts.skip} skipped</span></> : null}
           {' '}out of {preview.rowsConsidered} row{preview.rowsConsidered === 1 ? '' : 's'}.
         </div>
+        {droppedNoSku > 0 ? (
+          <p className="field__error" role="status">
+            {droppedNoSku} of {sourceRowCount} row{sourceRowCount === 1 ? '' : 's'} had no SKU and
+            {' '}were skipped. Check that the column mapped to <strong>SKU *</strong> is the one
+            holding each product&apos;s SKU, and that every data row has a value there.
+          </p>
+        ) : null}
 
         <div className="import-preview__policy">
           <span className="import-preview__policy-label">On conflict</span>
