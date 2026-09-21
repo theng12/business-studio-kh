@@ -540,6 +540,138 @@ test('ImageWorkspace exposes explicit conflict recovery after processing the cur
   }
 });
 
+test('review follow-up: a process conflict is explained, not shown as a raw sentinel', async () => {
+  const conflict = new Error('CONFLICT|{"kind":"workspaceImage","id":"image-1","workspaceRevision":5}');
+  const original = { id: 'image-1', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1, removeBackground: false }, workspaceRevision: 4 };
+  const api = apiWith(async () => [{ ...original, workspaceRevision: 5 }]);
+  api.workspace.processImage = async () => { throw conflict; };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, original);
+    await hook.settle(Component);
+    await settingsPanel(hook).props.onApplyThis();
+    await hook.settle(Component);
+    const toasts = store.getState().toasts;
+    const last = toasts[toasts.length - 1];
+    assert.ok(last, 'a toast explains the process conflict');
+    assert.match(last.message, /changed while processing/i);
+    assert.doesNotMatch(last.message, /CONFLICT\|/, 'the raw sentinel must not reach the user');
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('review follow-up: a retained failing context on another image does not lock the strip', async () => {
+  const first = { id: 'first', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1 }, workspaceRevision: 2 };
+  const second = { id: 'second', filepath: '2.jpg', contentHash: 'hash-2', workspaceSettings: { brightness: 2 }, workspaceRevision: 5 };
+  const api = apiWith(async () => { throw new Error('disk is full'); });
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, first);
+    store.setState({ workspaceImages: [first, second] });
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, brightness: 9 });
+    await hook.settle(Component);
+    // Remote removal selects B; A's outgoing save fails and its draft is kept.
+    api.images.listByProduct = async () => [second];
+    await store.getState().refreshWorkspaceImages('product-1');
+    await hook.settle(Component);
+    await delay(0);
+    // A is restored (reachable) while B stays the active image.
+    api.images.listByProduct = async () => [second, first];
+    await store.getState().refreshWorkspaceImages('product-1');
+    await hook.settle(Component);
+    const selected = await findNode(hook.getOutput(), (node) => node.type?.name === 'ImageStrip').props.onSelect(1);
+    assert.equal(selected, true, 'another image\u2019s retained failing context must not block the strip');
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('review follow-up: a conflicting save on the image being left says why the strip is blocked', async () => {
+  const first = { id: 'first', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1 }, workspaceRevision: 2 };
+  const second = { id: 'second', filepath: '2.jpg', contentHash: 'hash-2', workspaceSettings: { brightness: 2 }, workspaceRevision: 5 };
+  const api = apiWith(async () => { throw new Error('CONFLICT|{"kind":"workspaceImage","id":"first","workspaceRevision":3}'); });
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, first);
+    store.setState({ workspaceImages: [first, second] });
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, brightness: 9 });
+    await hook.settle(Component);
+    const selected = await findNode(hook.getOutput(), (node) => node.type?.name === 'ImageStrip').props.onSelect(1);
+    assert.equal(selected, false, 'the active image\u2019s conflicting draft still blocks the switch');
+    const toasts = store.getState().toasts;
+    assert.ok(toasts.some((t) => /changed elsewhere/i.test(t.message)), 'the blocked switch must explain itself');
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('review follow-up: overwrite-crop flushes the pending draft before rewriting the source', async () => {
+  const original = { id: 'image-1', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1 }, workspaceRevision: 4 };
+  const calls = [];
+  const api = apiWith(async (...args) => {
+    calls.push(['save', ...args]);
+    return [{ ...original, workspaceRevision: 5 }];
+  });
+  api.images.cropImage = async (...args) => {
+    calls.push(['crop', ...args]);
+    return { outW: 10, outH: 10 };
+  };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, original);
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({
+      ...settingsPanel(hook).props.settings,
+      brightness: 9,
+      cropRect: { x: 0, y: 0, width: 0.5, height: 0.5 },
+    });
+    await hook.settle(Component);
+    global.window.confirm = () => true;
+    const canvas = findNode(hook.getOutput(), (node) => typeof node.props?.onApplyCrop === 'function');
+    await canvas.props.onApplyCrop('overwrite');
+    await hook.settle(Component);
+    const saveIndex = calls.findIndex((c) => c[0] === 'save');
+    const cropIndex = calls.findIndex((c) => c[0] === 'crop');
+    assert.ok(saveIndex >= 0, 'the pending draft must be saved');
+    assert.ok(cropIndex >= 0, 'the crop must still run');
+    assert.ok(saveIndex < cropIndex, 'the draft save must complete before the source is overwritten');
+  } finally {
+    hook.cleanup();
+  }
+});
+
+test('review follow-up: a failed post-process refresh is not reported as a failed process', async () => {
+  const original = { id: 'image-1', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1, removeBackground: false }, workspaceRevision: 4 };
+  const api = apiWith(async () => [{ ...original, workspaceRevision: 5 }]);
+  api.workspace.processImage = async () => ({
+    images: [{ ...original, workspaceRevision: 5 }],
+    processedRelativePath: 'processed.jpg',
+  });
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, original);
+    await hook.settle(Component);
+    api.images.listByProduct = async () => { throw new Error('refresh unavailable'); };
+    await settingsPanel(hook).props.onApplyThis();
+    await hook.settle(Component);
+    const messages = store.getState().toasts.map((t) => t.message);
+    assert.ok(messages.some((m) => /Processed, but the image list did not refresh/.test(m)),
+      'the refresh failure must be reported separately');
+    assert.ok(messages.some((m) => /Image processed/.test(m)),
+      'the process itself must still be reported as successful');
+  } finally {
+    hook.cleanup();
+  }
+});
+
 test('review: a source flip must not leave an unreachable dirty context blocking navigation', async () => {
   const first = { id: 'first', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1 }, workspaceRevision: 2 };
   const second = { id: 'second', filepath: '2.jpg', contentHash: 'hash-2', workspaceSettings: { brightness: 2 }, workspaceRevision: 5 };

@@ -457,7 +457,8 @@ export function ImportModal({ open, onClose }) {
  * Each row's diff is collapsible. The list is virtual-ish (capped to 200
  * visible) so a 10K-row import doesn't choke the modal.
  */
-function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy }) {
+/* Exported for the rendered regression in test/productImportPreview.test.js. */
+export function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy }) {
   const changes = preview.changes ?? [];
   const counts = changes.reduce((acc, c) => {
     acc[c.action] = (acc[c.action] ?? 0) + 1;
