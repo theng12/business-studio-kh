@@ -78,17 +78,17 @@ function autoGuess(header) {
 }
 
 /**
- * Whether to tell the user that row 1 looks like a title rather than headers.
+ * Whether to hint that row 1 may be a title rather than the headers.
  *
- * The parser flags the shape (one non-empty cell in row 1, more in row 2), but
- * that shape also occurs on a perfectly valid sheet with a single named column
- * and blank trailing headers — where the advice to delete row 1 would destroy a
- * real header row. Only suggest it when NO column name is recognized, which is
- * the actual dead-end the hint exists for.
+ * A single-value first row followed by a richer second row is ambiguous: it is
+ * either a title above the headers, or a valid header row with blank trailing
+ * cells. Surface it as a conditional hint either way. Hiding it when the single
+ * value happens to be recognized (a title of "Code", say) silently imported the
+ * real header row as data; commanding deletion when it is a real header row
+ * destroyed the header. The copy is conditional and the hint does not block.
  */
 export function shouldSuggestTitleRow(sheet) {
-  if (!sheet?.looksLikeTitleRow) return false;
-  return !(sheet.headers ?? []).some((h) => autoGuess(h) !== '__skip__');
+  return !!sheet?.looksLikeTitleRow;
 }
 
 export function ImportModal({ open, onClose }) {
@@ -405,9 +405,9 @@ export function ImportModal({ open, onClose }) {
           ) : null}
 
           {shouldSuggestTitleRow(sheet) ? (
-            <p className="field__error" role="status">
-              Row 1 looks like a title, not column names — this import reads the
-              {' '}<strong>first row</strong> as the headers. Delete that title row in Excel
+            <p className="ws-hint" role="status">
+              Row 1 has a single value. This import reads the <strong>first row</strong> as the
+              column names — if that value is a title rather than column names, delete that row
               (or move the column names to row 1), save, and choose the file again.
             </p>
           ) : null}
