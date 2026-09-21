@@ -34,11 +34,10 @@
  *   - dataDirIsCloud      → that's the new Mac's iCloud state
  *
  * What DOES travel + why:
- *   - kieApiKey, falApiKey → re-typing these is the #1 friction of
- *     the manual procedure; baking them in saves the user from
- *     "wait, where's my kie token?"
- *   - kieConcurrency, falConcurrency → user-tuned defaults; should
- *     follow the data
+ *   - openaiApiKey → re-typing this is the #1 friction of
+ *     the manual procedure; baking it in saves the user from
+ *     "wait, where's my OpenAI key?"
+ *   - openaiConcurrency → user-tuned defaults; should follow the data
  *
  * (v0.49.33: removeBgApiKey + bgRemovalEngine were dropped from the
  * bundle keys when the paid bg-removal engine was removed.)
@@ -70,12 +69,12 @@ const { SCHEMA_VERSION } = require('./db');
 // new keys risks leaking machine-specific state (e.g. someone adds a
 // `lastUsedLocalPath` and we bake it into bundles).
 const PORTABLE_CONFIG_KEYS = [
-  'kieApiKey',
-  'falApiKey',
   // v0.49.33: removeBgApiKey + bgRemovalEngine removed — the paid
   // engine is gone, only the bundled local @imgly engine remains.
-  'kieConcurrency',
-  'falConcurrency',
+  // v0.1.46: kieApiKey / falApiKey / kieConcurrency / falConcurrency
+  // were removed with the kie.ai + fal.ai providers.
+  'openaiApiKey',
+  'openaiConcurrency',
   'customPresets',
   'defaultTokens',
   'defaultSeparator',

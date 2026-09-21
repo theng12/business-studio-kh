@@ -875,7 +875,7 @@ const NOT_YET_PORTABLE = [
   // (v0.16.2 moved exports:run to a local bridge — see below.)
   // Provider keys live in the client's local config (per-Mac), so
   // these reads must stay local.
-  'ai:testKie','ai:testFal','ai:getCredits',
+  'ai:testOpenai',
   // Users / server controls — admin runs these on the server's own
   // Settings page, not on a client.'users:create','users:update','users:remove','users:regenerateToken','users:ensureOwner',
   // v0.49.51: roles + permission matrix (admin manages on the server).'roles:get','roles:capabilities','roles:create','roles:update','roles:remove',

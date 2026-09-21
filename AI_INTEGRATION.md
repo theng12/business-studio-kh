@@ -1,189 +1,105 @@
 # AI Studio — Provider integration notes
 
-Captured from official docs on 2026-05-19. Used as the implementation reference for
-`main/ai/providers/*.js`.
+**OpenAI Images API only.** The kie.ai and fal.ai adapters were removed in the
+OpenAI rework; this document is the implementation reference for
+`main/ai/providers/openai.js`.
 
 ---
 
-## kie.ai
+## OpenAI
 
-- **Base URL:** `https://api.kie.ai`
-- **Auth:** `Authorization: Bearer <API_KEY>` + `Content-Type: application/json`
-- **All endpoints are async.** Submit returns `{ code: 200, data: { taskId } }`. Poll
-  `record-info` until `successFlag` is 1 (done) or 2 (failed).
-- **Rate limit:** 20 new submissions / 10 s. Up to ~100 concurrent in queue.
+- **Base URL:** `https://api.openai.com/v1`
+- **Auth:** `Authorization: Bearer <API_KEY>`
+- **The Images API is synchronous.** One request returns the image data — there
+  is no submit/poll split and no provider task id. A task moves
+  `queued → running → done/failed` in a single call (`main/ai/queueRunner.js`).
+- Responses default to base64 (`b64_json`); we wrap them as
+  `data:image/png;base64,…` data URLs and decode them straight to disk. No
+  separate file-upload step is needed — source images travel in the multipart
+  body of an edit request.
 
-### Models we expose
+### Two endpoints
 
-| Display name           | Model id (UI)         | Submit endpoint                                       | Poll endpoint                                          |
-|------------------------|-----------------------|-------------------------------------------------------|--------------------------------------------------------|
-| ChatGPT Image (4o)     | `kie:gpt4o-image`     | `POST /api/v1/gpt4o-image/generate`                   | `GET /api/v1/gpt4o-image/record-info?taskId=…`         |
-| Flux Kontext Pro       | `kie:flux-kontext-pro`| `POST /api/v1/flux/kontext/generate`                  | `GET /api/v1/flux/kontext/record-info?taskId=…`        |
-| Flux Kontext Max       | `kie:flux-kontext-max`| `POST /api/v1/flux/kontext/generate` (model:`…-max`)  | same                                                   |
+| Case | Endpoint | Body |
+|---|---|---|
+| Image edit (source image + model supports it) | `POST /v1/images/edits` | multipart: `model`, `prompt`, `n`, `size`, `quality`, `image` |
+| Text-to-image (no source, or model has no source support) | `POST /v1/images/generations` | JSON: `model`, `prompt`, `n`, `size`, `quality` |
 
-### Request body — gpt4o-image (image-to-image / variants)
-
-```json
-{
-  "prompt": "...",
-  "size": "1:1" | "3:2" | "2:3",
-  "filesUrl": ["https://..."],   // source image URL(s), up to 5
-  "maskUrl": "https://...",      // optional, for inpainting
-  "nVariants": 1 | 2 | 4,
-  "isEnhance": false,
-  "enableFallback": false
-}
-```
-
-### Request body — flux-kontext
+Response (either endpoint):
 
 ```json
 {
-  "prompt": "...",
-  "model": "flux-kontext-pro" | "flux-kontext-max",
-  "inputImage": "https://...",   // source image URL
-  "aspectRatio": "1:1" | "3:2" | "2:3" | "16:9" | "9:16" | "4:5" | "5:4" | "3:4" | "4:3",
-  "outputFormat": "jpeg" | "png",
-  "promptUpsampling": false
+  "created": 1710000000,
+  "data": [ { "b64_json": "iVBORw0KG..." }, { "b64_json": "..." } ]
 }
 ```
 
-### Poll response (both endpoints)
+We read `data[].b64_json` (falling back to `data[].url` if a response ever
+returns hosted URLs). An empty `data` array is treated as a failure, not a
+success — the task is marked failed with a clear message.
 
-```json
-{
-  "code": 200,
-  "data": {
-    "taskId": "...",
-    "successFlag": 0,          // 0 = generating, 1 = success, 2 = failed
-    "progress": "0.50",        // string fraction, only while generating
-    "response": { "result_urls": ["https://..."] },
-    "errorMessage": null,
-    "createTime": "...",
-    "completeTime": "..."
-  }
-}
-```
+### Dynamic model catalog
 
-Generated images live for 14 days then expire — we download them to disk immediately.
+The picker is **not** a hard-coded list. `main/ipc/ai.js` calls
+`GET /v1/models`, filters the result to image models
+(`/^(gpt-image|dall-e)/i` via `imageModelsFrom`), and caches it per API key for
+5 minutes. When no key is saved — or the live fetch fails — the built-in
+fallback catalog in `main/ai/models.js` keeps the UI usable.
 
-### File upload (separate domain — required because both endpoints take URLs, not bytes)
+The API does not publish per-model size / quality / source support, so
+`capabilitiesFor(modelId)` infers it from the id:
 
-- **Base URL:** `https://kieai.redpandaai.co`
-- `POST /api/file-base64-upload` — `{ base64, uploadPath, fileName }` (base64 without data: prefix; size cap unknown — fall back to stream upload if it rejects)
-- `POST /api/file-stream-upload` — multipart `file=@..., uploadPath, fileName`
-- Returns `{ data: { fileUrl, downloadUrl, expiresAt } }` — file lives 24 h, plenty for the task to complete.
+| Model family | Sizes (UI labels) | Provider size strings | Qualities | Source (edit)? | `n` max |
+|---|---|---|---|---|---|
+| `gpt-image-*` | `auto`, `1:1`, `3:2`, `2:3` | `auto`, `1024x1024`, `1536x1024`, `1024x1536` | `auto`, `low`, `medium`, `high` | yes | 10 |
+| `dall-e-3` | `1:1`, `7:4`, `4:7` | `1024x1024`, `1792x1024`, `1024x1792` | `standard`, `hd` | no | 1 |
+| `dall-e-2` | `1:1` | `1024x1024` | `standard` | yes | 10 |
+
+Unknown future `gpt-image-*` ids get the gpt-image capabilities — the safe
+default. `sizeParamFor(modelId, ratio)` maps the UI label to the exact string
+the model accepts.
 
 ### Test connection
 
-No dedicated `/account` endpoint documented. Use a HEAD or a probe submission isn't ideal.
-For now: hit `POST /api/v1/gpt4o-image/generate` with an obviously-invalid body and treat
-HTTP 400 (validation error) as "key works", 401 as "key bad", anything else as "unknown".
-*(Alternative if available: a `/me` or balance endpoint we discover empirically.)*
+`GET /v1/models` with the key. 401 → "OpenAI rejected the API key (401)"; a
+successful call reports how many image models the account lists. See the
+Settings → AI "Test" button (`ai:testOpenai`).
 
----
+### Error messages
 
-## fal.ai
-
-- **Queue base URL:** `https://queue.fal.run`
-- **Auth:** `Authorization: Key <FAL_KEY>` (note: `Key`, not `Bearer`)
-- All endpoints async via the queue API.
-
-### Submit
-
-```
-POST https://queue.fal.run/<model-id>
-Body: { ...model-specific inputs }
-```
-
-Response:
-
-```json
-{
-  "request_id": "uuid-...",
-  "response_url": "https://queue.fal.run/<model>/requests/<id>/response",
-  "status_url":   "https://queue.fal.run/<model>/requests/<id>/status",
-  "cancel_url":   "https://queue.fal.run/<model>/requests/<id>/cancel",
-  "queue_position": 0
-}
-```
-
-Store the `request_id`; status + response are reachable via either the convenience URLs or
-the canonical paths `…/requests/<id>/status` and `…/requests/<id>`.
-
-### Poll status
-
-```
-GET https://queue.fal.run/<model-id>/requests/<request_id>/status?logs=1
-```
-
-Status enum: `IN_QUEUE` | `IN_PROGRESS` | `COMPLETED`. Failure surfaces inside the COMPLETED
-status payload as `error` / `error_type` fields.
-
-### Get result
-
-```
-GET https://queue.fal.run/<model-id>/requests/<request_id>
-```
-
-Common output shape (for image models):
-
-```json
-{
-  "images": [{ "url": "https://fal.media/...png", "width": 1024, "height": 1024 }],
-  "timings": { "inference": 3.42 },
-  "seed": 1234
-}
-```
-
-### Models we expose (image-to-image / edit)
-
-| Display name              | Model id                            | Key inputs                       |
-|---------------------------|-------------------------------------|----------------------------------|
-| Flux Pro Kontext          | `fal-ai/flux-pro/kontext`           | `prompt`, `image_url`            |
-| Flux Schnell (text)       | `fal-ai/flux/schnell`               | `prompt`                         |
-| Flux Dev (text)           | `fal-ai/flux/dev`                   | `prompt`                         |
-| Nano Banana edit          | `fal-ai/nano-banana/edit`           | `prompt`, `image_urls[]`         |
-| Seedream v4 edit          | `fal-ai/seedream/v4/edit`           | `prompt`, `image_urls[]`         |
-| Recraft v3 image-to-image | `fal-ai/recraft/v3/image-to-image`  | `prompt`, `image_url`, `strength`|
-
-### File upload to fal.ai
-
-fal SDKs ship a Storage helper, but the REST shape is simply:
-
-```
-POST https://rest.alpha.fal.ai/storage/upload
-Authorization: Key <FAL_KEY>
-multipart: file=@...
-→ { url: "https://fal.media/files/..." }
-```
-
-We could also use `data:image/png;base64,...` data-URIs inline in the request body for
-smaller images — most fal image models accept that. Implementation chooses base64 when
-the image is < 4 MB, otherwise uploads.
-
-### Test connection
-
-`GET https://queue.fal.run/fal-ai/flux/schnell/requests/00000000-0000-0000-0000-000000000000/status`
-→ 401 if key bad, 404 if key good (request id doesn't exist).
-Cleaner: hit `https://rest.alpha.fal.ai/account/me` if exposed.
+| HTTP | Message |
+|---|---|
+| 401 | `OpenAI rejected the API key (401)` |
+| 429 | `OpenAI rate limit (429) — try again in a moment` |
+| other | `OpenAI <label> failed: <provider message>` (label is `image edit` or `image generation`) |
+| empty `data` | `OpenAI returned no image data` |
 
 ---
 
 ## Cost estimates (per generated image, USD)
 
-Hard-coded ballparks for the confirmation dialog. Refresh from each provider's pricing page periodically.
+Hard-coded ballparks for the confirmation dialog, in `main/ai/costs.js`.
+`estimateForModel(model, count, quality)` applies a quality multiplier on top of
+the default-quality row:
 
-| Model                            | Approx $/image |
-|----------------------------------|---------------:|
-| kie:gpt4o-image (4o)             | $0.040         |
-| kie:flux-kontext-pro             | $0.035         |
-| kie:flux-kontext-max             | $0.055         |
-| fal-ai/flux/schnell              | $0.003         |
-| fal-ai/flux/dev                  | $0.025         |
-| fal-ai/flux-pro/kontext          | $0.040         |
-| fal-ai/nano-banana/edit          | $0.035         |
-| fal-ai/seedream/v4/edit          | $0.030         |
-| fal-ai/recraft/v3/image-to-image | $0.040         |
+| Model | Default quality | Approx $/image |
+|---|---|---:|
+| `openai:gpt-image-*` | medium | $0.042 |
+| `openai:dall-e-3` | standard | $0.040 |
 
-Stored in `main/ai/costs.js` so they're easy to update in one place.
+Quality multipliers: `low` ×0.26, `medium` ×1, `high` ×4, `standard` ×1,
+`hd` ×2, `auto` ×1. Refresh from
+<https://platform.openai.com/docs/pricing> periodically.
+
+---
+
+## Queue runner behaviour
+
+- Concurrency is a single global limit (`config.openaiConcurrency`, 1–10).
+- A generation that is still in flight when the app quits is drained by
+  `queueRunner.stop()` before the database closes.
+- Because there is no provider-side task, **Repair re-submits the task** and
+  **Queue fresh** clones it. A task interrupted mid-flight is marked failed at
+  boot so Repair has a clear starting point.
+- Cancelling a task while its request is in flight drops the result when it
+  arrives rather than resurrecting a task the user stopped.

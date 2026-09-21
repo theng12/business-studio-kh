@@ -65,10 +65,10 @@ If you don't run step 3 you'll see "Media Studio KH is damaged and can't be open
 - Auto-save per-image settings; explicit "Process" button commits the run.
 
 **AI Studio**
-- Provider integration: KIE.ai (Nano Banana, GPT Image), fal.ai (Flux Pro / Kontext, etc.).
+- OpenAI Images integration: image-to-image edits (`/v1/images/edits`) and text-to-image generation (`/v1/images/generations`). The model list is fetched live from `/v1/models`, so new `gpt-image-*` / `dall-e-*` models appear without an app release.
 - Per-product flow: pick a source image + a prompt template → queue → review the gallery → promote to product (with optional "set as main").
 - Bulk / Folder flow: scan a folder of source images, batch-queue with a shared prompt, gallery shows all results.
-- Cost estimates per model, monthly usage counters, credit-balance pills.
+- Capability-driven aspect ratio, quality and image count; cost estimates per model.
 - Live queue updates (WebSocket-driven in multi-Mac mode).
 
 **Overlay Studio**

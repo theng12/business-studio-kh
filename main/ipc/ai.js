@@ -6,10 +6,10 @@
  * task queue lifecycle (create / repair / cancel / remove / fresh),
  * gallery (list / bulk-list / favorite / remove / promote-to-product),
  * bulk source upload (path-based local + bytes-based for clients),
- * provider key tests + credits, and the v0.16.1 bytes-back-to-client
+ * the OpenAI key test, and the v0.16.1 bytes-back-to-client
  * gallery export.
  *
- * Provider tests + credits stay local-only — they read API keys
+ * Provider tests stay local-only — they read API keys
  * from the per-Mac config, which means client mode never proxies
  * them.
  */
@@ -28,17 +28,44 @@ const aiPrompts = require('../db/aiPrompts');
 const aiGallery = require('../db/aiGallery');
 const aiModels = require('../ai/models');
 const aiCosts = require('../ai/costs');
-const aiKie = require('../ai/providers/kie');
-const aiFal = require('../ai/providers/fal');
+const aiOpenai = require('../ai/providers/openai');
 const queueRunner = require('../ai/queueRunner');
 const imageManager = require('../imageManager');
 const { getDataDir } = require('../db');
 
+/**
+ * Live model catalog cache. `GET /v1/models` is cheap but not free, and
+ * AI Studio mounts call `ai:listModels` on every visit — cache the result
+ * per API key for a few minutes. A key change invalidates it immediately.
+ */
+const MODEL_CACHE_MS = 5 * 60 * 1000;
+let modelCache = { key: null, models: null, at: 0 };
+
+async function loadModelCatalog() {
+  const cfg = config.loadConfig();
+  const apiKey = cfg.openaiApiKey;
+  if (!apiKey) return aiModels.MODELS;
+  if (modelCache.key === apiKey && modelCache.models && Date.now() - modelCache.at < MODEL_CACHE_MS) {
+    return modelCache.models;
+  }
+  try {
+    const ids = await aiOpenai.listModels(apiKey);
+    const models = aiModels.catalogFor(ids);
+    modelCache = { key: apiKey, models, at: Date.now() };
+    return models;
+  } catch (err) {
+    // Key present but the live fetch failed — fall back to the built-in
+    // catalog so the picker still works, and leave a breadcrumb in the log.
+    process.stderr.write(`[ai] live model list failed: ${err.message}\n`);
+    return aiModels.MODELS;
+  }
+}
+
 function register({ expose, emitCatalogChange, assertEntityInActiveCompany, assertProductInActiveCompany, exposeLocal }) {
   // v0.14.4: AI read channels portable to clients. Mutations +
   // queueing stay local until v0.15.0.
-  expose('ai:listModels', () => aiModels.MODELS);
-  expose('ai:estimateCost', ({ model, count } = {}) => aiCosts.estimateForModel(model, count));
+  expose('ai:listModels', () => loadModelCatalog());
+  expose('ai:estimateCost', ({ model, count, quality } = {}) => aiCosts.estimateForModel(model, count, quality));
 
   expose('ai:listPrompts', (companyId) => {
     if (companyId && companyId !== companies.getActiveId()) return [];
@@ -91,7 +118,7 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
       prompt: input.prompt,
       options: input.options ?? {},
       status: 'queued',
-      costEstimate: aiCosts.estimateForModel(input.model, input.options?.nVariants ?? input.options?.numImages ?? 1),
+      costEstimate: aiCosts.estimateForModel(input.model, input.options?.nVariants ?? input.options?.numImages ?? 1, input.options?.quality),
     });
     if (input.promptTemplateId) {
       try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (err) {
@@ -561,17 +588,7 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
     return filePath;
   });
 
-  exposeLocal('ai:testKie', (key) => aiKie.testConnection(key));
-  exposeLocal('ai:testFal', (key) => aiFal.testConnection(key));
-
-  exposeLocal('ai:getCredits', async () => {
-    const cfg = config.loadConfig();
-    const [kie, fal] = await Promise.all([
-      cfg.kieApiKey ? aiKie.getCredits(cfg.kieApiKey).catch(() => null) : Promise.resolve(null),
-      cfg.falApiKey ? aiFal.getCredits(cfg.falApiKey).catch(() => null) : Promise.resolve(null),
-    ]);
-    return { kie, fal, fetchedAt: Date.now() };
-  });
+  exposeLocal('ai:testOpenai', (key) => aiOpenai.testConnection(key));
 }
 
 module.exports = { register };
