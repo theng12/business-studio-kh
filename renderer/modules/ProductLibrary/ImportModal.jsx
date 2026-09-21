@@ -193,28 +193,37 @@ export function ImportModal({ open, onClose }) {
         const field = mapping[header];
         if (!field || field === '__skip__') continue;
         const raw = row[header];
-        if (raw === '' || raw == null) continue;
+        /* A mapped-but-blank cell is kept as an explicit null rather than
+         * dropping the key. The conflict policy is applied server-side and
+         * needs that distinction: Merge ignores a null/empty value, while
+         * Overwrite clears the existing value — which is what its label
+         * promises. Dropping the key here silently made Overwrite behave like
+         * Merge for every blank cell. A column mapped to "Skip" is still
+         * omitted entirely. */
+        const blank = raw === '' || raw == null;
 
         if (field === 'brand') {
-          out.brandId = await resolveBrandId(raw);
+          out.brandId = blank ? null : await resolveBrandId(raw);
         } else if (field === 'category') {
-          out.categoryId = await resolveCategoryId(raw);
+          out.categoryId = blank ? null : await resolveCategoryId(raw);
         } else if (field === 'tags') {
-          out.tags = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+          out.tags = blank ? [] : String(raw).split(',').map((s) => s.trim()).filter(Boolean);
         } else if (field === 'priceRetail' || field === 'priceWholesale'
           // v0.49.49: numeric logistics fields coerce the same way.
           || field === 'cartonQty' || field === 'cartonWCm' || field === 'cartonHCm'
           || field === 'cartonDCm' || field === 'weightPerUnitKg'
-          // v0.1.25: stock on hand. A blank cell is skipped above, so an
-          // unmapped/empty stock column leaves the existing count alone
-          // instead of wiping it to zero.
+          // v0.1.25: stock on hand. Merge ignores a null, so an empty stock
+          // column still leaves the existing count alone.
           || field === 'stockQty') {
-          out[field] = toNumber(raw);
+          out[field] = blank ? null : toNumber(raw);
         } else if (field === 'status') {
-          const v = String(raw).trim().toLowerCase();
-          out.status = ['active', 'inactive', 'draft'].includes(v) ? v : null;
+          if (blank) out.status = null;
+          else {
+            const v = String(raw).trim().toLowerCase();
+            out.status = ['active', 'inactive', 'draft'].includes(v) ? v : null;
+          }
         } else {
-          out[field] = String(raw).trim();
+          out[field] = blank ? null : String(raw).trim();
         }
       }
       if (out.sku) rows.push(out);
