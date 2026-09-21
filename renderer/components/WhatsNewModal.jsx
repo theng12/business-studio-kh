@@ -2,6 +2,14 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.49',
+    date: '2026-09-22',
+    items: [
+      'POLISH — the AI model picker no longer lists pinned dated snapshots (for example “gpt-image-2-2026-04-21”) when the plain model name is also available; they are the same model.',
+      'Internal — verified live against the owner’s OpenAI account: the model list returns the expected image models, and a gpt-image-2.5-flare image-to-image edit returned a 1024×1024 PNG.',
+    ],
+  },
+  {
     version: '0.1.48',
     date: '2026-09-22',
     items: [

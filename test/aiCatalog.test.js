@@ -46,6 +46,23 @@ test('catalogFor falls back to the built-in list when the live list has no image
   assert.deepEqual(models.catalogFor(['gpt-4o', 'text-embedding-3']).map((m) => m.key), models.MODELS.map((m) => m.key));
 });
 
+test('catalogFor hides pinned dated snapshots when the plain alias exists', () => {
+  const catalog = models.catalogFor([
+    'gpt-image-2',
+    'gpt-image-2-2026-04-21',
+    'gpt-image-2.5-flare',
+    'gpt-image-2.5-flare-2026-09-08',
+    'gpt-image-3-2027-01-01', // pinned snapshot with no alias -> kept
+  ]);
+  assert.deepEqual(catalog.map((m) => m.modelId), [
+    'gpt-image-2',
+    'gpt-image-2.5-flare',
+    'gpt-image-3-2027-01-01',
+  ]);
+  // A task that already references a hidden snapshot still resolves.
+  assert.equal(models.byKey('openai:gpt-image-2-2026-04-21').modelId, 'gpt-image-2-2026-04-21');
+});
+
 test('byKey resolves known keys, bare ids, and synthesizes unseen OpenAI models', () => {
   assert.equal(models.byKey('openai:gpt-image-1').modelId, 'gpt-image-1');
   assert.equal(models.byKey('gpt-image-1').modelId, 'gpt-image-1');
