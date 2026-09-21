@@ -63,7 +63,7 @@ async function fixture(t, { failRelaunch = false, failAfterConfig = false } = {}
     await fsp.rm(root, { recursive: true, force: true });
   });
   const config = require('../main/config');
-  config.saveConfig({ dataDir, kieConcurrency: 3, firstLaunchHandled: false });
+  config.saveConfig({ dataDir, openaiConcurrency: 3, firstLaunchHandled: false });
   db.initDb(dataDir);
   db.getDb().pragma('wal_autocheckpoint = 0');
   db.setAppState('fixture', 'original');
@@ -89,7 +89,7 @@ function archive(env, kind) {
   db.close();
   fs.writeFileSync(path.join(stage, 'assets', 'marker.txt'), 'imported');
   fs.writeFileSync(path.join(stage, kind === 'bundle' ? 'config.partial.json' : 'config.json'),
-    JSON.stringify({ kieConcurrency: 9, customPresets: [{ name: 'dummy' }] }));
+    JSON.stringify({ openaiConcurrency: 9, customPresets: [{ name: 'dummy' }] }));
   fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify({
     ...(kind === 'bundle' ? { bundleFormatVersion: 1 } : { backupFormatVersion: 1, kind: 'media-studio-kh-backup' }),
     appVersion: 'test', createdAt: Date.now(), includes: ['database.sqlite', 'assets/'],
@@ -136,7 +136,7 @@ for (const kind of ['bundle', 'backup']) {
     const env = await fixture(t, { failAfterConfig: true });
     const before = env.config.loadConfig();
     await assert.rejects(importArchive(env, kind, archive(env, kind)), /fixture failure after config merge/);
-    assert.equal(env.config.loadConfig().kieConcurrency, 3);
+    assert.equal(env.config.loadConfig().openaiConcurrency, 3);
     assert.deepEqual(env.config.loadConfig().customPresets, before.customPresets);
     assert.equal(fs.readFileSync(path.join(env.dataDir, 'assets', 'marker.txt'), 'utf8'), 'original');
     env.db.setAppState('late-write', 'visible');
@@ -148,7 +148,7 @@ for (const kind of ['bundle', 'backup']) {
     const env = await fixture(t, { failRelaunch: true });
     await assert.rejects(importArchive(env, kind, archive(env, kind)), { code: 'MAINTENANCE_RESTART_FAILED' });
     assert.equal(diskState(env.dataDir, 'fixture'), 'imported');
-    assert.equal(env.config.loadConfig().kieConcurrency, 9);
+    assert.equal(env.config.loadConfig().openaiConcurrency, 9);
     assert.equal(fs.readFileSync(path.join(env.dataDir, 'assets', 'marker.txt'), 'utf8'), 'imported');
     assert.equal(env.maintenance.isMaintenanceActive(), true);
     assert.equal(env.calls.includes('start'), false);
@@ -164,7 +164,7 @@ for (const kind of ['bundle', 'backup']) {
         return originalRename(from, to);
       };
       env.config.updateConfig = (patch) => {
-        if (fault === 'config' && patch.kieConcurrency === 3) throw new Error('fixture rollback failure');
+        if (fault === 'config' && patch.openaiConcurrency === 3) throw new Error('fixture rollback failure');
         return originalUpdate(patch);
       };
       let failure;

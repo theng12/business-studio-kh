@@ -77,11 +77,9 @@ export function AIStudio() {
   const refreshAiPrompts = useAppStore((s) => s.refreshAiPrompts);
   const refreshAiTasks = useAppStore((s) => s.refreshAiTasks);
   const refreshAiModels = useAppStore((s) => s.refreshAiModels);
-  const refreshAiCredits = useAppStore((s) => s.refreshAiCredits);
   // v0.1.21: in client mode several panels show where their settings live
-  // rather than offering a control that cannot work — see CreditPills.
+  // rather than offering a control that cannot work.
   const isClientMode = useAppStore((s) => s.appMode) === 'client';
-  const aiCredits = useAppStore((s) => s.aiCredits);
   const addToast = useAppStore((s) => s.addToast);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
   // v0.11.1: lets the user jump from AI Studio's Source picker straight
@@ -139,7 +137,6 @@ export function AIStudio() {
     if (products.length === 0) useAppStore.getState().refreshAllProducts();
     refreshAiTasks();
     refreshAiPrompts();
-    refreshAiCredits();
     // v0.26.41 (audit pass): `[]` is intentional. We want a single
     // mount-time kickoff of the AI page's data. The conditional
     // `models.length === 0` guards inside the effect mean adding
@@ -180,10 +177,10 @@ export function AIStudio() {
 
   // Recompute cost when model / options change.
   useEffect(() => {
-    const count = aiOptions.nVariants ?? aiOptions.numImages ?? 1;
-    if (!window.api) return;
-    window.api.ai.estimateCost(selectedModelKey, count).then(setCostEstimate).catch(() => setCostEstimate(null));
-  }, [selectedModelKey, aiOptions.nVariants, aiOptions.numImages]);
+    const count = aiOptions.numImages ?? aiOptions.nVariants ?? 1;
+    if (!window.api || !selectedModelKey) return;
+    window.api.ai.estimateCost(selectedModelKey, count, aiOptions.quality).then(setCostEstimate).catch(() => setCostEstimate(null));
+  }, [selectedModelKey, aiOptions.numImages, aiOptions.nVariants, aiOptions.quality]);
 
   /* v0.1.11: this was an early `return`, which made every hook declared
    * below it conditional. React requires the same hooks in the same order on
@@ -309,10 +306,7 @@ export function AIStudio() {
         setBulkFiles([]);
         setBulkRefreshKey((k) => k + 1);
       } else {
-        // For kie:gpt4o-image the count param is nVariants; everything else uses numImages.
-        const count = selectedModel?.key === 'kie:gpt4o-image'
-          ? (opts.nVariants ?? 1)
-          : (opts.numImages ?? 1);
+        const count = opts.numImages ?? opts.nVariants ?? 1;
         await queueAiTask({
           productId: sourceProductId,
           sourceImagePath: requiresSource ? sourceImagePath : null,
@@ -483,15 +477,14 @@ export function AIStudio() {
                 aria-selected={mode === 'bulk'}
               >Bulk / Folder</button>
             </div>
-            <CreditPills credits={aiCredits} onRefresh={refreshAiCredits} isClient={isClientMode} />
           </>
         }
       />
 
       <p className="ai-retention-note">
-        Tasks expire at the provider after a while —{' '}
-        <strong>kie.ai keeps results for 7 days</strong>, <strong>fal.ai retains them indefinitely</strong>.
-        Repair only works while the provider still has the task.
+        Results are saved to this Mac the moment a run completes. If a run is
+        interrupted (app quit, network drop), use <strong>Repair</strong> to submit
+        it again.
       </p>
 
       <div className="ai-layout">
@@ -649,22 +642,12 @@ export function AIStudio() {
         {/* ─── Model + options ─── */}
         <section className="ai-card">
           <h3 className="ai-card__title">3. Model</h3>
-          <Field label="Provider · model">
+          <Field label="Model">
             {({ id }) => (
-              <Select id={id} value={selectedModelKey} onChange={(e) => setAiSelectedModel(e.target.value)}>
-                <optgroup label="kie.ai">
-                  {models.filter((m) => m.provider === 'kie' && !m.deprecated).map((m) => (
-                    <option key={m.key} value={m.key}>{m.displayName}</option>
-                  ))}
-                </optgroup>
-                <optgroup label="fal.ai">
-                  {/* v0.49.25: hide deprecated models from the picker but keep them
-                      in the MODELS array so already-queued tasks still resolve a
-                      displayName + cost row when the queue runner looks them up. */}
-                  {models.filter((m) => m.provider === 'fal' && !m.deprecated).map((m) => (
-                    <option key={m.key} value={m.key}>{m.displayName}</option>
-                  ))}
-                </optgroup>
+              <Select id={id} value={selectedModelKey ?? ''} onChange={(e) => setAiSelectedModel(e.target.value)}>
+                {models.map((m) => (
+                  <option key={m.key} value={m.key}>{m.displayName}</option>
+                ))}
               </Select>
             )}
           </Field>
@@ -672,62 +655,50 @@ export function AIStudio() {
             <p className="setting-row__hint">{selectedModel.description}</p>
           ) : null}
 
-          {/* Size (kie models) */}
+          {/* Aspect ratio / size. The capability list comes from the model
+              (main/ai/providers/openai.js `capabilitiesFor`), so dall-e-3
+              shows its own 1:1 / 7:4 / 4:7 set while gpt-image-* shows
+              auto / 1:1 / 3:2 / 2:3. */}
           {selectedModel?.sizes?.length ? (
             <Field label="Aspect ratio / size">
               {({ id }) => (
-                <Select id={id} value={aiOptions.size ?? selectedModel.sizes[0]} onChange={(e) => setAiOptions({ size: e.target.value })}>
+                <Select
+                  id={id}
+                  value={selectedModel.sizes.includes(aiOptions.size) ? aiOptions.size : selectedModel.sizes[0]}
+                  onChange={(e) => setAiOptions({ size: e.target.value })}
+                >
                   {selectedModel.sizes.map((s) => <option key={s} value={s}>{s}</option>)}
                 </Select>
               )}
             </Field>
           ) : null}
 
-          {/* Resolution (newer kie market models like GPT Image-2).
-              v0.49.22: hint clarifies what 1K / 2K / 4K actually mean in
-              pixels — easy to confuse 1K (a resolution tier) with the
-              fal `1024x1024` image_size enum, and the "it\'s cheap" question
-              was really about which pixel dimensions the K labels resolve to. */}
-          {selectedModel?.resolutions?.length ? (
-            <Field label="Resolution" hint="1K ≈ 1024px on the long edge, 2K ≈ 2048px, 4K ≈ 4096px. 1K is required for 1:1 / auto aspect.">
-              {({ id }) => (
-                <Select id={id} value={aiOptions.resolution ?? selectedModel.resolutions[0]} onChange={(e) => setAiOptions({ resolution: e.target.value })}>
-                  {selectedModel.resolutions.map((r) => <option key={r} value={r}>{r}</option>)}
-                </Select>
-              )}
-            </Field>
-          ) : null}
-
-          {/* v0.49.25: Quality picker for `openai/gpt-image-2/*` models.
-              Cost varies ~6× between low and high on the same size, so
-              exposing this is a real lever. The official pricing matrix:
-                1024×1024 low=$0.015 medium=$0.061 high=$0.219.
-              "auto" defers to the model\'s own quality routing. */}
+          {/* Quality. Cost varies several-fold between low and high on the
+              same size, so exposing this is a real lever. "auto" defers to
+              the model. */}
           {selectedModel?.qualities?.length ? (
-            <Field label="Quality" hint="auto: model picks. low: cheap & fast (~$0.015/img at 1024×1024). medium: balanced (~$0.061). high: best fidelity, ~6× the cost of low.">
+            <Field label="Quality" hint="auto: model picks. low: cheap & fast. medium: balanced. high: best fidelity.">
               {({ id }) => (
-                <Select id={id} value={aiOptions.quality ?? selectedModel.qualities[0]} onChange={(e) => setAiOptions({ quality: e.target.value })}>
+                <Select
+                  id={id}
+                  value={selectedModel.qualities.includes(aiOptions.quality) ? aiOptions.quality : selectedModel.qualities[0]}
+                  onChange={(e) => setAiOptions({ quality: e.target.value })}
+                >
                   {selectedModel.qualities.map((q) => <option key={q} value={q}>{q}</option>)}
                 </Select>
               )}
             </Field>
           ) : null}
 
-          {/* Count. Only fal exposes one: it is the sole provider that honours
-              `numImages` (see main/ai/providers/fal.js). The kie provider reads
-              `nVariants`, but no model in main/ai/models.js declares it and the
-              legacy `kie:gpt4o-image` model it was added for is gone — so the
-              "Variants per task" dropdown that used to sit here could never
-              render. Removed rather than left as unreachable markup; the
-              `nVariants` support in the provider and the cost estimate stays,
-              because it defaults to 1 and costs nothing. */}
-          {selectedModel?.provider === 'fal' ? (
-            <Field label="Number of images" hint="1–4">
+          {/* Count. Driven by the model's `nMax` capability — 1 for
+              dall-e-3, up to 10 for gpt-image-*. */}
+          {selectedModel?.nMax > 1 ? (
+            <Field label="Number of images" hint={`1–${selectedModel.nMax}`}>
               {({ id }) => (
                 <Input
-                  id={id} type="number" min="1" max="4"
-                  value={aiOptions.numImages ?? 1}
-                  onChange={(e) => setAiOptions({ numImages: Math.max(1, Math.min(4, Number(e.target.value) || 1)) })}
+                  id={id} type="number" min="1" max={selectedModel.nMax}
+                  value={Math.min(aiOptions.numImages ?? 1, selectedModel.nMax)}
+                  onChange={(e) => setAiOptions({ numImages: Math.max(1, Math.min(selectedModel.nMax, Number(e.target.value) || 1)) })}
                 />
               )}
             </Field>
@@ -925,15 +896,14 @@ export function AIStudio() {
                 // recoverable — treat it like Failed for the action buttons and
                 // label it so the user sees something is off.
                 const isStuckDone = t.status === 'done' && (t.galleryCount ?? 0) === 0;
-                // v0.49.27: also surface Repair on tasks that have been
-                // running > 5 minutes AND have a providerTaskId. That covers
-                // the "fal says success, our app shows running forever"
-                // class of bug — the user can force a re-poll instead of
-                // waiting on whatever ticks left. Threshold is conservative
-                // so normal in-flight tasks don\'t get a useless button.
+                // Also surface Repair on a task that has been running for
+                // more than 5 minutes — an OpenAI request occasionally hangs.
+                // Repair re-queues the task instead of waiting forever.
+                // Threshold is conservative so normal in-flight tasks don't
+                // get a useless button.
                 const startedAtMs = t.startedAt || t.createdAt || 0;
                 const ageMin = startedAtMs ? (Date.now() - Number(startedAtMs)) / 60000 : 0;
-                const longRunning = t.status === 'running' && !!t.providerTaskId && ageMin > 5;
+                const longRunning = t.status === 'running' && ageMin > 5;
                 const needsRecovery = t.status === 'failed' || t.status === 'cancelled' || isStuckDone || longRunning;
                 let status = STATUS_TONE[t.status] ?? STATUS_TONE.queued;
                 if (isStuckDone) status = { tone: 'amber', label: 'Done · no images' };
@@ -996,7 +966,7 @@ export function AIStudio() {
                           <button
                             type="button"
                             className="row-action"
-                            title="Try to recover the result from the provider"
+                            title="Re-submit this task to OpenAI (charged again)"
                             onClick={() => Promise.resolve(repairAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}
                           >Repair</button>
                           <button
@@ -1006,29 +976,6 @@ export function AIStudio() {
                             onClick={() => Promise.resolve(queueFreshAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}
                           >Queue fresh</button>
                         </>
-                      ) : null}
-                      {/* v0.49.24: when a task drags on (no log in the UI to
-                          help diagnose why), let the user grab the provider
-                          task ID so they can look it up on the provider\'s
-                          own dashboard. Only meaningful once the provider
-                          has assigned one (i.e. submit has gone through). */}
-                      {t.providerTaskId && (t.status === 'running' || t.status === 'queued' || t.status === 'failed') ? (
-                        <button
-                          type="button"
-                          className="row-action"
-                          title={`Copy task ID — paste on ${t.provider === 'fal' ? 'fal.ai/dashboard/requests' : 'kie.ai/logs'} to look it up`}
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(t.providerTaskId);
-                              const where = t.provider === 'fal'
-                                ? 'Open fal.ai/dashboard/requests and search'
-                                : 'Open kie.ai/logs and search';
-                              addToast(`Copied ${t.providerTaskId.slice(0, 8)}… — ${where}`, 'success');
-                            } catch (err) {
-                              addToast(`Clipboard failed: ${err.message}`, 'error');
-                            }
-                          }}
-                        >Copy ID</button>
                       ) : null}
                       {t.status === 'running' || t.status === 'queued' ? (
                         <button type="button" className="row-action" onClick={() => Promise.resolve(cancelAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>Cancel</button>
@@ -1274,54 +1221,9 @@ function ProductCombobox({ id, products, value, onChange }) {
   );
 }
 
-function CreditPills({ credits, onRefresh, isClient = false }) {
-  // v0.1.21: credits belong to the account that RUNS the generations, which in
-  // client mode is the server Mac. Clicking a pill here could never load
-  // anything, so instead of two dead "—" buttons this says where they live.
-  if (isClient) {
-    return (
-      <div className="ai-credits">
-        <span className="muted" style={{ fontSize: 12.5 }}>
-          Credits are shown on the Mac that runs the generations (the one holding your data).
-        </span>
-      </div>
-    );
-  }
-  const kieLabel = credits?.kie != null
-    ? `${credits.kie.toLocaleString()} credits`
-    : '—';
-  const falLabel = credits?.fal?.balance != null
-    ? `${(credits.fal.currency || 'USD') === 'USD' ? '$' : ''}${credits.fal.balance.toFixed(2)} ${credits.fal.currency || ''}`.trim()
-    : '—';
-  return (
-    <div className="ai-credits">
-      <button
-        type="button"
-        className={`ai-credit-pill${credits?.kie == null ? ' is-empty' : ''}`}
-        onClick={onRefresh}
-        title="Click to refresh from kie.ai"
-      >
-        <span className="ai-credit-pill__label">kie</span>
-        <span className="ai-credit-pill__value">{kieLabel}</span>
-      </button>
-      <button
-        type="button"
-        className={`ai-credit-pill${credits?.fal == null ? ' is-empty' : ''}`}
-        onClick={onRefresh}
-        title="Click to refresh from fal.ai"
-      >
-        <span className="ai-credit-pill__label">fal</span>
-        <span className="ai-credit-pill__value">{falLabel}</span>
-      </button>
-    </div>
-  );
-}
-
 function ConfirmDialog({ open, model, product, sourceImg, prompt, options, cost, onConfirm, onCancel, bulkCount }) {
   if (!open) return null;
-  const perTaskCount = model?.key === 'kie:gpt4o-image'
-    ? (options.nVariants ?? 1)
-    : (options.numImages ?? 1);
+  const perTaskCount = options?.numImages ?? options?.nVariants ?? 1;
   const isBulk = typeof bulkCount === 'number' && bulkCount > 0;
   // In bulk mode the user is queueing N tasks, each producing perTaskCount
   // generations. Total = bulkCount × perTaskCount.

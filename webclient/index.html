@@ -2661,9 +2661,9 @@
      v0.48.0: variants auto-add to the product (autoAddToProduct), so the
      section doesn't list completed items or offer Promote / Remove. It
      shows: (a) a pulse while a task is in flight, (b) a Repair button per
-     failed task (provider didn't return an image — the desktop's Repair
-     flow re-fetches without spending fresh credit). On the pending → done
-     transition the regular gallery refreshes so new variants are visible. */
+     failed task. Repair re-submits the task to OpenAI (charged again). On
+     the pending → done transition the regular gallery refreshes so new
+     variants are visible. */
   function renderAiResults(productId) {
     var box = document.getElementById('aiResults');
     var requestCompanyId = state.companyId;
@@ -2706,7 +2706,7 @@
           var reason = t.errorMessage ? escapeHtml(t.errorMessage) : 'Provider didn\'t return an image';
           html += '<div class="ai-status ai-broken">' +
             '<div>⚠ ' + reason + '</div>' +
-            '<button class="btn btn--primary ai-repair" data-id="' + escapeHtml(t.id) + '">Repair (no extra credit)</button>' +
+            '<button class="btn btn--primary ai-repair" data-id="' + escapeHtml(t.id) + '">Repair</button>' +
           '</div>';
         });
         box.innerHTML = html;
@@ -2730,7 +2730,7 @@
       })
       .catch(function (e) { toast('Repair failed: ' + e.message); })
       .finally(function () {
-        if (btn) { btn.disabled = false; btn.textContent = 'Repair (no extra credit)'; }
+        if (btn) { btn.disabled = false; btn.textContent = 'Repair'; }
       });
   }
 
@@ -2780,7 +2780,7 @@
      The sheet lists every task with source-image thumb, SKU, prompt + model
      label, and a status pill. Tap a row → close the sheet + open that
      product's detail. Failed rows include an inline Repair button (same
-     no-extra-credit flow as the per-product Repair). */
+     re-submit flow as the per-product Repair). */
 
   state.aiActivityPollTimer = null;
 
@@ -2850,7 +2850,7 @@
               '<span class="sub">' + escapeHtml(prompt) + (prompt.length === 80 ? '…' : '') + '</span>' +
             '</div>' +
             '<span class="pill ' + statusClass + '">' + escapeHtml(t.status || '') + '</span>' +
-            (failed ? '<div class="repair-line"><button class="btn btn--primary ai-repair" data-id="' + escapeHtml(t.id) + '">Repair (no extra credit)</button></div>' : '');
+            (failed ? '<div class="repair-line"><button class="btn btn--primary ai-repair" data-id="' + escapeHtml(t.id) + '">Repair</button></div>' : '');
           // Row tap → close the sheet + open that product's detail. Skip
           // when the tap lands on the Repair button (separate handler below).
           row.addEventListener('click', function (ev) {

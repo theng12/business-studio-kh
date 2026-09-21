@@ -1,209 +1,87 @@
 /**
- * Curated catalog of AI models exposed in the UI. Newer kie.ai models go
- * through their unified Market endpoint (POST /api/v1/jobs/createTask,
- * GET /api/v1/jobs/recordInfo) — `kieMarketModel` carries the exact value
- * for the request body's `model` field. The older 4o-image and flux-kontext
- * endpoints stay supported for callers that already have tasks queued, but
- * the catalog points new generations at the newer Market models.
+ * AI model catalog — OpenAI only.
+ *
+ * Since the OpenAI rework the catalog is DYNAMIC: `GET /v1/models` supplies
+ * the image model ids the account can actually use, and `capabilitiesFor`
+ * in `providers/openai.js` supplies per-model size / quality / source
+ * support. A small built-in fallback list keeps the UI usable before a key
+ * is entered (and when the live fetch fails), so the picker is never empty.
+ *
+ * The stable key shape is `<provider>:<modelId>` — e.g. `openai:gpt-image-1`.
+ * The queue runner looks tasks up by that key; `byKey` also synthesizes an
+ * entry for any `openai:*` id it has not seen, so a task queued against a
+ * live-listed model still resolves after a catalog refresh.
  */
 
-const MODELS = [
-  // ───── kie.ai · GPT Image-2 (the user's primary requested model) ─────
-  {
-    key: 'kie:gpt-image-2-image-to-image',
-    provider: 'kie',
-    displayName: 'GPT Image-2 · Image-to-Image',
-    family: 'Image edit',
-    description: 'Latest OpenAI image model via kie.ai. Best fidelity for product edits.',
-    supportsSource: true,
-    kieKind: 'market',
-    kieMarketModel: 'gpt-image-2-image-to-image',
-    sourceParam: 'input_urls',
-    sizes: ['auto', '1:1', '9:16', '16:9', '4:3', '3:4'],
-    resolutions: ['1K', '2K', '4K'],
-  },
-  {
-    key: 'kie:gpt-image-2-text-to-image',
-    provider: 'kie',
-    displayName: 'GPT Image-2 · Text-to-Image',
-    family: 'Text-to-image',
-    description: 'Latest OpenAI image model — prompt-only generation.',
-    supportsSource: false,
-    kieKind: 'market',
-    kieMarketModel: 'gpt-image-2-text-to-image',
-    sizes: ['auto', '1:1', '9:16', '16:9', '4:3', '3:4'],
-    resolutions: ['1K', '2K', '4K'],
-  },
+const openai = require('./providers/openai');
 
-  // ───── kie.ai · Google Nano Banana (latest Gemini image models) ─────
-  {
-    key: 'kie:nano-banana-pro',
-    provider: 'kie',
-    displayName: 'Nano Banana Pro',
-    family: 'Image edit',
-    description: "Google's premium Gemini image model — best quality for product edits.",
-    supportsSource: true,
-    kieKind: 'market',
-    kieMarketModel: 'nano-banana-pro',
-    sourceParam: 'image_input',
-    sizes: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'],
-  },
-  {
-    key: 'kie:nano-banana-2',
-    provider: 'kie',
-    displayName: 'Nano Banana 2',
-    family: 'Image edit',
-    description: "Google's latest Gemini image model — supports up to 14 reference images.",
-    supportsSource: true,
-    kieKind: 'market',
-    kieMarketModel: 'nano-banana-2',
-    sourceParam: 'image_input',
-    sizes: ['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9'],
-  },
-  {
-    key: 'kie:nano-banana-edit',
-    provider: 'kie',
-    displayName: 'Nano Banana · Edit',
-    family: 'Image edit',
-    description: 'Original Nano Banana editing model — fast, lower cost.',
-    supportsSource: true,
-    kieKind: 'market',
-    kieMarketModel: 'nano-banana-edit',
-    sourceParam: 'image_input',
-  },
+/** Used when no key is saved yet, or the live model list is unreachable. */
+const FALLBACK_MODEL_IDS = ['gpt-image-1', 'dall-e-3'];
 
-  // ───── kie.ai · Seedream 5 Lite, Flux-2 Pro ─────
-  {
-    key: 'kie:seedream-5-lite-image-to-image',
-    provider: 'kie',
-    displayName: 'Seedream 5 Lite · Image-to-Image',
-    family: 'Image-to-image',
-    description: 'ByteDance Seedream 5 Lite — photorealistic transforms.',
-    supportsSource: true,
-    kieKind: 'market',
-    kieMarketModel: 'seedream-v5-lite-image-to-image',
-    sourceParam: 'image_urls',
-  },
-  {
-    key: 'kie:flux-2-pro-image-to-image',
-    provider: 'kie',
-    displayName: 'Flux-2 Pro · Image-to-Image',
-    family: 'Image edit',
-    description: 'Black Forest Labs Flux-2 Pro — next-gen Flux for image edits.',
-    supportsSource: true,
-    kieKind: 'market',
-    kieMarketModel: 'flux-2-pro-image-to-image',
-    sourceParam: 'image_urls',
-  },
+/** "gpt-image-2.5-flare" → "GPT Image 2.5 Flare" */
+function prettyName(modelId) {
+  return String(modelId)
+    .split(/[-_]/)
+    .map((part) => {
+      if (/^gpt$/i.test(part)) return 'GPT';
+      if (/^dall$/i.test(part)) return 'DALL';
+      if (/^e$/i.test(part)) return 'E';
+      return part ? part.charAt(0).toUpperCase() + part.slice(1) : part;
+    })
+    .join(' ');
+}
 
-  // v0.26.47: removed the legacy `kie:flux-kontext-pro` entry. The
-  // /flux/kontext endpoint stays implemented in providers/kie.js for
-  // any existing queued tasks that still reference it, but it's no
-  // longer in the catalog the UI presents — users get steered to the
-  // newer `kie:flux-2-pro-image-to-image` above.
+/** Build a catalog entry (the shape the renderer consumes) for one model id. */
+function entryFor(modelId) {
+  const caps = openai.capabilitiesFor(modelId);
+  return {
+    key: `openai:${modelId}`,
+    provider: 'openai',
+    modelId,
+    displayName: prettyName(modelId),
+    family: caps.supportsSource ? 'Image edit' : 'Text-to-image',
+    description: caps.supportsSource
+      ? 'OpenAI image model — accepts a reference image for edits.'
+      : 'OpenAI image model — prompt-only generation.',
+    supportsSource: caps.supportsSource,
+    sizes: caps.sizes,
+    qualities: caps.qualities,
+    nMax: caps.nMax,
+  };
+}
 
-  // ───── fal.ai · queue API ─────
-  // v0.49.25: fal moved GPT Image-2 to a new namespace, `openai/gpt-image-2/*`.
-  // The old `fal-ai/gpt-image-2/*` endpoints still respond, but the new ones
-  // are the officially-documented ones (per
-  // https://fal.ai/models/openai/gpt-image-2/edit). New models added below;
-  // legacy entries kept for in-flight queued tasks but marked deprecated.
-  //
-  // v0.49.16 notes still apply to BOTH old and new endpoints:
-  //   1. `image_urls` rejects inline base64 data URLs — must use fal storage.
-  //   2. `image_size` is a tight enum — we map W:H labels in submit().
-  {
-    key: 'openai/gpt-image-2/edit',
-    provider: 'fal',
-    displayName: 'GPT Image-2 · Edit',
-    family: 'Image edit',
-    description: "OpenAI's GPT Image-2 — fine-grained image edits with auto-sized output. Replaces the legacy `fal-ai/gpt-image-2/edit-image`.",
-    supportsSource: true,
-    sourceParam: 'image_urls',
-    // v0.49.26: full set per fal\'s actual error message enumeration.
-    // Internally these map to fal\'s `square_hd` / `landscape_4_3` etc.
-    sizes: ['auto', '1:1', '4:3', '3:4', '16:9', '9:16'],
-    qualities: ['auto', 'low', 'medium', 'high'], // ~6× cost spread between low and high
-    requiresFalStorage: true,
-  },
-  {
-    key: 'openai/gpt-image-2',
-    provider: 'fal',
-    displayName: 'GPT Image-2 · Text-to-Image',
-    family: 'Text-to-image',
-    description: "OpenAI's GPT Image-2 — prompt-only generation. Replaces the legacy `fal-ai/gpt-image-2/text-to-image`.",
-    supportsSource: false,
-    sizes: ['auto', '1:1', '4:3', '3:4', '16:9', '9:16'],
-    qualities: ['auto', 'low', 'medium', 'high'],
-  },
-  // Legacy endpoints — kept so already-queued tasks still resolve to a model
-  // entry (the queue runner looks up by key) and the cost estimator still
-  // returns a number. NOT in the picker because of the `deprecated` flag.
-  {
-    key: 'fal-ai/gpt-image-2/edit-image',
-    provider: 'fal',
-    displayName: 'fal · GPT Image-2 · Edit (legacy)',
-    family: 'Image edit',
-    description: "Legacy endpoint — superseded by `openai/gpt-image-2/edit` (v0.49.25).",
-    supportsSource: true,
-    sourceParam: 'image_urls',
-    sizes: ['auto', '1:1', '4:3', '3:4'],
-    requiresFalStorage: true,
-    deprecated: true,
-  },
-  {
-    key: 'fal-ai/gpt-image-2/text-to-image',
-    provider: 'fal',
-    displayName: 'fal · GPT Image-2 · Text-to-Image (legacy)',
-    family: 'Text-to-image',
-    description: "Legacy endpoint — superseded by `openai/gpt-image-2` (v0.49.25).",
-    supportsSource: false,
-    sizes: ['auto', '1:1', '4:3', '3:4'],
-    deprecated: true,
-  },
-  {
-    key: 'fal-ai/nano-banana/edit',
-    provider: 'fal',
-    displayName: 'fal · Nano Banana · Edit',
-    family: 'Image edit',
-    description: "Google's Nano Banana edit on fal. Use kie's nano-banana-2/pro for newer variants.",
-    supportsSource: true,
-    sourceParam: 'image_urls',
-  },
-  {
-    key: 'fal-ai/seedream/v4/edit',
-    provider: 'fal',
-    displayName: 'fal · Seedream v4 · Edit',
-    family: 'Image edit',
-    description: 'ByteDance Seedream v4 image editor on fal.',
-    supportsSource: true,
-    sourceParam: 'image_urls',
-  },
-  {
-    key: 'fal-ai/recraft/v3/image-to-image',
-    provider: 'fal',
-    displayName: 'fal · Recraft v3 · Image-to-Image',
-    family: 'Image-to-image',
-    description: 'Recraft v3 with controllable strength.',
-    supportsSource: true,
-    sourceParam: 'image_url',
-    extraInputs: { strength: 0.8 },
-  },
-  // v0.26.47: removed `fal-ai/flux-pro/kontext`, `fal-ai/flux/dev`,
-  // `fal-ai/flux/schnell`. The newer GPT Image-2 / Nano Banana /
-  // Seedream / Recraft entries above cover both text-to-image and
-  // image-to-image with better quality. The provider plumbing in
-  // providers/fal.js still handles `fal-ai/flux/*` keys if someone
-  // somehow queues a legacy task, but new tasks can't pick them
-  // from the dropdown.
-];
+/**
+ * Catalog from a live `/v1/models` id list. Falls back to the built-in
+ * list when the input yields no image models — so an account with an empty
+ * (or oddly-filtered) list still gets a usable picker.
+ */
+function catalogFor(modelIds) {
+  const ids = openai.imageModelsFrom(modelIds ?? []);
+  const list = ids.length ? ids : openai.imageModelsFrom(FALLBACK_MODEL_IDS);
+  return list.map(entryFor);
+}
 
+/** Built-in catalog (no key required). */
+const MODELS = catalogFor(FALLBACK_MODEL_IDS);
+
+/**
+ * Look up a catalog entry by key (`openai:<id>`) or by a bare model id.
+ * Returns null for anything that is not an OpenAI image model — which is
+ * how tasks left over from the kie.ai / fal.ai era fail cleanly.
+ */
 function byKey(key) {
-  return MODELS.find((m) => m.key === key) ?? null;
+  if (!key) return null;
+  const raw = String(key);
+  const modelId = raw.startsWith('openai:') ? raw.slice('openai:'.length) : raw;
+  if (!modelId) return null;
+  const known = MODELS.find((m) => m.key === raw || m.modelId === modelId);
+  if (known) return known;
+  if (openai.isImageModelId(modelId)) return entryFor(modelId);
+  return null;
 }
 
 function listByProvider(provider) {
   return MODELS.filter((m) => m.provider === provider);
 }
 
-module.exports = { MODELS, byKey, listByProvider };
+module.exports = { MODELS, FALLBACK_MODEL_IDS, catalogFor, entryFor, byKey, listByProvider };

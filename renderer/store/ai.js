@@ -1,4 +1,4 @@
-// AI Studio slice — models, prompts, tasks, gallery, credits, and the
+// AI Studio slice — models, prompts, tasks, gallery, and the
 // per-product source / prompt / options + queue actions.
 
 let promptsRefreshSeq = 0;
@@ -13,7 +13,9 @@ export function createAiSlice(set, get) {
     aiGalleryByProduct: {},
     aiSourceProductId: null,
     aiSourceImagePath: null,
-    aiSelectedModelKey: 'kie:nano-banana-pro',
+    // v0.1.46: the catalog is dynamic (OpenAI). `null` means "snap to the
+    // first model the catalog returns" — AIStudio resolves this below.
+    aiSelectedModelKey: null,
     aiPromptText: '',
     // v0.26.22: added `autoAddToProduct` + `autoPromoteAsMain` defaults
     // (both false). Per-product AI Studio reads these for two new
@@ -21,8 +23,7 @@ export function createAiSlice(set, get) {
     // whether to attach the first variant back onto the product
     // automatically. autoPromoteAsMain implies autoAddToProduct in the
     // runner (promote does add + setMain).
-    aiOptions: { size: '1:1', nVariants: 1, numImages: 1, autoAddToProduct: false, autoPromoteAsMain: false },
-    aiCredits: { kie: null, fal: null, fetchedAt: 0 },
+    aiOptions: { size: 'auto', numImages: 1, autoAddToProduct: false, autoPromoteAsMain: false },
 
     async refreshAiModels() {
       if (!window.api) return;
@@ -41,16 +42,6 @@ export function createAiSlice(set, get) {
       } catch (err) {
         if (seq === promptsRefreshSeq && get().activeCompanyId === companyId) get().addToast(err.message, 'error');
       }
-    },
-
-    async refreshAiCredits() {
-      if (!window.api) return;
-      // v0.1.22: in client mode the generations run on the server Mac with ITS
-      // keys, so there is nothing here to read. This used to fire anyway and fail
-      // silently on every AI Studio mount and refresh.
-      if (get().appMode === 'client') return;
-      try { set({ aiCredits: await window.api.ai.getCredits() }); }
-      catch { /* keep last known */ }
     },
 
     async refreshAiTasks() {
@@ -84,18 +75,15 @@ export function createAiSlice(set, get) {
     },
     setAiSourceImage(filepath) { set({ aiSourceImagePath: filepath }); },
     setAiSelectedModel(key) {
-      /* v0.1.27: reset the per-task count when the model changes.
-       *
-       * The count control is shown conditionally — a `nVariants` dropdown for
-       * models that declare one, a `numImages` box for fal models — but the
-       * value itself lives in `aiOptions` and survived a model switch. So
-       * picking 4 images on a fal model and then switching to a kie model left
-       * `numImages: 4` in state with no control to change it, and the
-       * confirmation dialog quoted 4 generations and 4× the cost for a run that
-       * would produce one image (fal honours `numImages`, kie honours
-       * `nVariants` — see main/ai/providers/). Clearing both on switch means a
-       * count can never outlive the model it was chosen for. */
-      set({ aiSelectedModelKey: key, aiOptions: { ...get().aiOptions, numImages: undefined, nVariants: undefined } });
+      /* Reset the per-task count when the model changes. The count control
+       * is capability-driven (only some models accept n > 1), but the value
+       * itself lives in `aiOptions` and would otherwise survive a model
+       * switch — leaving a count no control can change, so the confirmation
+       * dialog would quote generations the run would never produce. Clearing
+       * it on switch means a count can never outlive the model it was chosen
+       * for. The size/quality are likewise reset: they are validated against
+       * the new model's capability lists when the picker renders. */
+      set({ aiSelectedModelKey: key, aiOptions: { ...get().aiOptions, numImages: undefined, nVariants: undefined, size: undefined, quality: undefined } });
       // Persist as the default for the next app launch — covers the common
       // case where a user picks (say) nano-banana-pro once and wants it to
       // stick. Best-effort: if the IPC write fails (file lock, etc.) the
@@ -141,12 +129,6 @@ export function createAiSlice(set, get) {
         next[idx] = task;
         return { aiTasks: next };
       });
-      // Task just finished → balance changed. Refresh in the background.
-      if (task.status === 'done' || task.status === 'failed') {
-        // Debounce-ish: throttle to once per 10s.
-        const last = get().aiCredits?.fetchedAt ?? 0;
-        if (Date.now() - last > 10_000) get().refreshAiCredits();
-      }
     },
 
     applyGalleryAdded(entry) {

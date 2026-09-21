@@ -832,12 +832,10 @@ const VALIDATORS = {
   'users:regenerateToken':       requireNonEmptyStringArg('user id'),
 
   /* AI helpers that act on local files, plus key checks */
-  'ai:getCredits':               () => true,
   'ai:exportBulkImage':          requireNonEmptyStringFields('galleryId'),
   'ai:queueBulkBatch':           (a) => isObject(a) ? true : 'expected an object argument',
   'ai:scanBulkFolder':           requireNonEmptyStringArg('absolute folder path'),
-  'ai:testKie':                  requireNonEmptyStringArg('API key'),
-  'ai:testFal':                  requireNonEmptyStringArg('API key'),
+  'ai:testOpenai':               requireNonEmptyStringArg('API key'),
 
   /* brands / watermark icons — absolute source paths on this Mac */
   'brands:uploadIcon':           requireNonEmptyStringFields('sourcePath'),
