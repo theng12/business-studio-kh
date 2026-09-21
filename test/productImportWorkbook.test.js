@@ -60,6 +60,18 @@ test('readWorkbook disambiguates repeated empty headers instead of collapsing th
   });
 });
 
+test('readWorkbook keeps generated Column N names unique against a real header', () => {
+  withBook([
+    ['Column 3', '', ''],
+    ['a', 'b', 'c'],
+  ], (sheet) => {
+    assert.equal(new Set(sheet.headers).size, sheet.headers.length, 'headers must be unique keys');
+    assert.equal(sheet.rows[0]['Column 3'], 'a', 'the real header keeps its own column');
+    assert.equal(sheet.rows[0]['Column 2'], 'b');
+    assert.equal(sheet.rows[0]['Column 3 (2)'], 'c', 'the generated name must not overwrite the real one');
+  });
+});
+
 test('readWorkbook flags a title row above the header row', () => {
   withBook([
     ['Product catalogue 2026'],
