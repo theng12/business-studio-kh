@@ -380,15 +380,15 @@ async function waitForPersistedCatalogName(target, projectId, value, role) {
   );
 }
 
-async function waitForCatalogConflict(target, role) {
+async function waitForEditorConflict(target, role) {
   await waitFor(
     () => evaluate(target, `Boolean([...document.querySelectorAll('.modal')]
       .find((modal) => modal.textContent.includes('Edit conflict')))`),
-    `${role} edit-conflict dialog`,
+    `${role} editor edit-conflict dialog`,
   );
 }
 
-async function chooseCatalogConflict(target, choice, role) {
+async function chooseEditorConflict(target, choice, role) {
   const clicked = await evaluate(target, `(() => {
     const modal = [...document.querySelectorAll('.modal')]
       .find((candidate) => candidate.textContent.includes('Edit conflict'));
@@ -398,11 +398,11 @@ async function chooseCatalogConflict(target, choice, role) {
     button.click();
     return true;
   })()`);
-  assert.ok(clicked, `${role} could not choose ${choice} in the edit-conflict dialog`);
+  assert.ok(clicked, `${role} could not choose ${choice} in the editor edit-conflict dialog`);
   await waitFor(
     () => evaluate(target, `![...document.querySelectorAll('.modal')]
       .some((modal) => modal.textContent.includes('Edit conflict'))`),
-    `${role} edit-conflict dialog to close`,
+    `${role} editor edit-conflict dialog to close`,
   );
 }
 
@@ -441,14 +441,14 @@ async function runCatalogEditorConflictScenario({ serverTarget, clientTarget, pr
   await waitForPersistedCatalogName(serverTarget, projectId, serverName, 'server after client autosave');
 
   await clickCatalogButton(clientTarget, 'Save', 'client');
-  await waitForCatalogConflict(clientTarget, 'client');
-  await chooseCatalogConflict(clientTarget, 'Cancel', 'client');
+  await waitForEditorConflict(clientTarget, 'client');
+  await chooseEditorConflict(clientTarget, 'Cancel', 'client');
   await waitForCatalogName(clientTarget, clientDraft, 'client');
   await waitForPersistedCatalogName(serverTarget, projectId, serverName, 'server after client Cancel');
 
   await clickCatalogButton(clientTarget, 'Save', 'client');
-  await waitForCatalogConflict(clientTarget, 'client');
-  await chooseCatalogConflict(clientTarget, 'Refresh', 'client');
+  await waitForEditorConflict(clientTarget, 'client');
+  await chooseEditorConflict(clientTarget, 'Refresh', 'client');
   await waitForCatalogName(clientTarget, serverName, 'client');
   await waitForCatalogSaved(clientTarget, 'client');
   await waitForPersistedCatalogName(clientTarget, projectId, serverName, 'client after Refresh');
@@ -466,13 +466,249 @@ async function runCatalogEditorConflictScenario({ serverTarget, clientTarget, pr
   await waitForPersistedCatalogName(serverTarget, projectId, overwriteServerName, 'server after client overwrite autosave');
 
   await clickCatalogButton(clientTarget, 'Save', 'client');
-  await waitForCatalogConflict(clientTarget, 'client');
-  await chooseCatalogConflict(clientTarget, 'Overwrite', 'client');
+  await waitForEditorConflict(clientTarget, 'client');
+  await chooseEditorConflict(clientTarget, 'Overwrite', 'client');
   await Promise.all([
     waitForCatalogName(clientTarget, overwriteDraft, 'client'),
     waitForCatalogSaved(clientTarget, 'client'),
     waitForCatalogName(serverTarget, overwriteDraft, 'server'),
     waitForPersistedCatalogName(clientTarget, projectId, overwriteDraft, 'client after Overwrite'),
+  ]);
+}
+
+function workspaceBrightnessInputScript() {
+  return `(() => [...document.querySelectorAll('.ws-panel .slider-field')]
+    .find((field) => field.querySelector('.slider-field__head span')?.textContent.trim() === 'Brightness')
+    ?.querySelector('input[type="range"]'))()`;
+}
+
+function workspaceRemoveBackgroundInputScript() {
+  return `(() => [...document.querySelectorAll('.ws-panel label.toggle')]
+    .find((label) => label.textContent.trim().startsWith('Remove background'))
+    ?.querySelector('input[type="checkbox"]'))()`;
+}
+
+async function openWorkspaceEditor(target, productId, imageId, productSku, role) {
+  const openedDashboard = await evaluate(target, `(() => {
+    const button = [...document.querySelectorAll('.sidebar__item')]
+      .find((item) => item.querySelector('span:not(.sidebar__item-shortcut)')?.textContent.trim() === 'Dashboard');
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
+  })()`);
+  assert.ok(openedDashboard, `${role} could not open Dashboard from the sidebar`);
+  await waitFor(
+    () => evaluate(target, `Boolean([...document.querySelectorAll('.dash-list__row--clickable')]
+      .find((row) => row.textContent.includes(${JSON.stringify(productSku)})))`),
+    `${role} dashboard product fixture`,
+  );
+  const opened = await evaluate(target, `(() => {
+    const row = [...document.querySelectorAll('.dash-list__row--clickable')]
+      .find((candidate) => candidate.textContent.includes(${JSON.stringify(productSku)}));
+    if (!row) return false;
+    row.click();
+    return true;
+  })()`);
+  assert.ok(opened, `${role} could not open the Workspace product from Dashboard`);
+  await waitFor(
+    () => evaluate(target, `Boolean(document.querySelector('.page--workspace'))`),
+    `${role} Image Workspace page`,
+  );
+  await waitFor(
+    () => evaluate(target, `Boolean(document.querySelector('.ws-panel'))`),
+    `${role} Workspace settings panel`,
+  );
+  await waitFor(
+    () => evaluate(target, `window.api.images.listByProduct(${JSON.stringify(productId)})
+      .then((rows) => rows.some((row) => row.id === ${JSON.stringify(imageId)}))`),
+    `${role} Workspace image fixture`,
+  );
+}
+
+async function setWorkspaceRemoveBackgroundFalse(target, role) {
+  const state = await evaluate(target, `(() => {
+    const input = ${workspaceRemoveBackgroundInputScript()};
+    if (!input) return null;
+    if (input.checked) input.click();
+    return input.checked;
+  })()`);
+  assert.equal(state, false, `${role} Workspace probe must run with removeBackground=false`);
+}
+
+async function setWorkspaceBrightness(target, value, role) {
+  const changed = await evaluate(target, `(() => {
+    const input = ${workspaceBrightnessInputScript()};
+    if (!input) return false;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    input.focus();
+    setValue.call(input, ${JSON.stringify(String(value))});
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return input.value === ${JSON.stringify(String(value))};
+  })()`);
+  assert.ok(changed, `${role} could not change Workspace brightness`);
+  await waitFor(
+    () => evaluate(target, `${workspaceBrightnessInputScript()}?.value === ${JSON.stringify(String(value))}`),
+    `${role} Workspace brightness ${value}`,
+  );
+}
+
+async function clickWorkspaceSave(target, role) {
+  const clicked = await evaluate(target, `(() => {
+    const button = [...document.querySelectorAll('.ws-panel__actions button')]
+      .find((candidate) => candidate.textContent.trim() === 'Save' && !candidate.disabled);
+    if (!button) return false;
+    button.click();
+    return true;
+  })()`);
+  assert.ok(clicked, `${role} could not click Workspace Save`);
+}
+
+async function waitForWorkspaceSaved(target, role) {
+  await waitFor(
+    () => evaluate(target, `document.querySelector('.ws-save')?.textContent.includes('All changes saved')`),
+    `${role} Workspace save`,
+  );
+}
+
+async function readWorkspaceRow(target, productId, imageId, role) {
+  return waitFor(
+    () => evaluate(target, `window.api.images.listByProduct(${JSON.stringify(productId)})
+      .then((rows) => rows.find((row) => row.id === ${JSON.stringify(imageId)}) ?? null)`),
+    `${role} Workspace row`,
+  );
+}
+
+async function waitForWorkspaceBrightness(target, value, role) {
+  await waitFor(
+    () => evaluate(target, `${workspaceBrightnessInputScript()}?.value === ${JSON.stringify(String(value))}`),
+    `${role} Workspace observed brightness ${value}`,
+  );
+}
+
+async function waitForWorkspaceAutosavePending(target, role) {
+  await waitFor(
+    () => evaluate(target, `Boolean(document.querySelector('.ws-save--amber')
+      || [...document.querySelectorAll('.ws-save')].some((node) => node.textContent.includes('Saving')))`),
+    `${role} Workspace autosave pending`,
+  );
+}
+
+async function waitForWorkspaceAutosaveError(target, role) {
+  await waitFor(
+    () => evaluate(target, `Boolean(document.querySelector('.ws-save--rose')
+      || [...document.querySelectorAll('.ws-save')].some((node) => node.textContent.includes('Save failed')))`),
+    `${role} Workspace autosave failure`,
+  );
+}
+
+async function saveWorkspaceViaServerApi(target, row, productId, imageId, brightness, role) {
+  assert.ok(row, `${role} Workspace server row is required`);
+  assert.ok(Number.isSafeInteger(row.workspaceRevision) && row.workspaceRevision >= 0,
+    `${role} Workspace server row has no usable workspace revision`);
+  const settings = {
+    ...(row.workspaceSettings ?? {}),
+    removeBackground: false,
+    brightness,
+  };
+  const savedRows = await evaluate(target, `window.api.workspace.saveSettings(
+    ${JSON.stringify(productId)},
+    ${JSON.stringify(imageId)},
+    ${JSON.stringify(row.contentHash ?? null)},
+    ${JSON.stringify(settings)},
+    ${JSON.stringify(row.workspaceRevision)},
+  )`);
+  const saved = savedRows?.find((candidate) => candidate.id === imageId);
+  assert.equal(saved?.workspaceSettings?.brightness, brightness, `${role} Workspace API winner brightness`);
+  assert.equal(saved?.workspaceRevision, row.workspaceRevision + 1, `${role} Workspace API winner revision`);
+  assert.equal(saved?.workspaceSettings?.removeBackground, false, `${role} Workspace API winner removeBackground`);
+  return saved;
+}
+
+async function waitForPersistedWorkspaceBrightness(target, productId, imageId, value, role) {
+  await waitFor(
+    () => evaluate(target, `window.api.images.listByProduct(${JSON.stringify(productId)})
+      .then((rows) => rows.find((row) => row.id === ${JSON.stringify(imageId)})?.workspaceSettings?.brightness === ${JSON.stringify(value)})`),
+    `${role} persisted Workspace brightness ${value}`,
+  );
+}
+
+async function runWorkspaceEditorConflictScenario({ serverTarget, clientTarget, productId, imageId, productSku }) {
+  const clientDraft = 15;
+  const serverName = 30;
+  const overwriteDraft = 45;
+  const overwriteServerName = 60;
+
+  await Promise.all([
+    openWorkspaceEditor(serverTarget, productId, imageId, productSku, 'server'),
+    openWorkspaceEditor(clientTarget, productId, imageId, productSku, 'client'),
+  ]);
+  await Promise.all([
+    setWorkspaceRemoveBackgroundFalse(serverTarget, 'server'),
+    setWorkspaceRemoveBackgroundFalse(clientTarget, 'client'),
+  ]);
+
+  const clientOldRow = await readWorkspaceRow(clientTarget, productId, imageId, 'client before conflict');
+  const serverOldRow = await readWorkspaceRow(serverTarget, productId, imageId, 'server before conflict');
+  assert.equal(clientOldRow.workspaceRevision, serverOldRow.workspaceRevision,
+    'client/server Workspace snapshots must start at the same revision');
+  assert.equal(clientOldRow.contentHash, serverOldRow.contentHash,
+    'client/server Workspace snapshots must identify the same image');
+
+  await setWorkspaceBrightness(clientTarget, clientDraft, 'client');
+  await waitForWorkspaceAutosavePending(clientTarget, 'client');
+  await saveWorkspaceViaServerApi(serverTarget, serverOldRow, productId, imageId, serverName, 'server API');
+  await waitForPersistedWorkspaceBrightness(serverTarget, productId, imageId, serverName, 'server');
+  await waitForWorkspaceAutosaveError(clientTarget, 'client');
+  await waitForWorkspaceBrightness(clientTarget, clientDraft, 'client after autosave conflict');
+  await waitForPersistedWorkspaceBrightness(serverTarget, productId, imageId, serverName, 'server after client autosave');
+
+  await clickWorkspaceSave(clientTarget, 'client');
+  await waitForEditorConflict(clientTarget, 'client');
+  await chooseEditorConflict(clientTarget, 'Cancel', 'client');
+  await waitForWorkspaceBrightness(clientTarget, clientDraft, 'client after Cancel');
+  await waitForPersistedWorkspaceBrightness(serverTarget, productId, imageId, serverName, 'server after client Cancel');
+
+  await clickWorkspaceSave(clientTarget, 'client');
+  await waitForEditorConflict(clientTarget, 'client');
+  await chooseEditorConflict(clientTarget, 'Refresh', 'client');
+  await waitForWorkspaceBrightness(clientTarget, serverName, 'client after Refresh');
+  await waitForWorkspaceSaved(clientTarget, 'client after Refresh');
+  await waitForPersistedWorkspaceBrightness(clientTarget, productId, imageId, serverName, 'client after Refresh');
+
+  await setWorkspaceBrightness(clientTarget, overwriteDraft, 'client');
+  await waitForWorkspaceAutosavePending(clientTarget, 'client before Overwrite');
+  const serverBeforeOverwrite = await readWorkspaceRow(serverTarget, productId, imageId, 'server before Overwrite');
+  await saveWorkspaceViaServerApi(
+    serverTarget,
+    serverBeforeOverwrite,
+    productId,
+    imageId,
+    overwriteServerName,
+    'server API before Overwrite',
+  );
+  await waitForPersistedWorkspaceBrightness(serverTarget, productId, imageId, overwriteServerName, 'server before Overwrite');
+  await waitForWorkspaceAutosaveError(clientTarget, 'client before Overwrite');
+  await waitForWorkspaceBrightness(clientTarget, overwriteDraft, 'client before Overwrite');
+  const serverAfterAutosaveConflict = await readWorkspaceRow(
+    serverTarget,
+    productId,
+    imageId,
+    'server after client overwrite autosave',
+  );
+  assert.equal(serverAfterAutosaveConflict.workspaceSettings?.brightness, overwriteServerName,
+    'client overwrite autosave must not change the persisted server winner');
+  assert.equal(serverAfterAutosaveConflict.workspaceRevision, serverBeforeOverwrite.workspaceRevision + 1,
+    'client overwrite autosave must not advance the persisted server winner revision');
+
+  await clickWorkspaceSave(clientTarget, 'client');
+  await waitForEditorConflict(clientTarget, 'client');
+  await chooseEditorConflict(clientTarget, 'Overwrite', 'client');
+  await Promise.all([
+    waitForWorkspaceBrightness(clientTarget, overwriteDraft, 'client after Overwrite'),
+    waitForWorkspaceSaved(clientTarget, 'client after Overwrite'),
+    waitForPersistedWorkspaceBrightness(clientTarget, productId, imageId, overwriteDraft, 'client after Overwrite'),
+    waitForPersistedWorkspaceBrightness(serverTarget, productId, imageId, overwriteDraft, 'server after Overwrite'),
   ]);
 }
 
@@ -523,7 +759,11 @@ async function runSeed([archive, dataDir, mode, replacementName]) {
       });
     }
     const image = productImages.listByProduct(product.id)[0];
-    process.stdout.write(JSON.stringify({ companyId: company.id, productId: product.id, catalogProjectId: catalogProject.id, imagePath: image.filepath, adminToken: admin.token, viewerId: viewer.id }));
+    if (mode === 'seed') {
+      database.getDb().prepare('UPDATE product_images SET workspace_settings = ? WHERE id = ?')
+        .run(JSON.stringify({ removeBackground: false, brightness: 0 }), image.id);
+    }
+    process.stdout.write(JSON.stringify({ companyId: company.id, productId: product.id, productSku: product.sku, catalogProjectId: catalogProject.id, imageId: image.id, imagePath: image.filepath, adminToken: admin.token, viewerId: viewer.id }));
   } finally {
     database.getDb().close();
   }
@@ -590,6 +830,13 @@ async function main() {
       projectId: seed.catalogProjectId,
       projectName: 'Packaged conflict fixture',
     });
+    await runWorkspaceEditorConflictScenario({
+      serverTarget,
+      clientTarget,
+      productId: seed.productId,
+      imageId: seed.imageId,
+      productSku: seed.productSku,
+    });
 
     const clientRead = await evaluate(clientTarget, `window.api.products.get(${JSON.stringify(seed.productId)})`);
     assert.equal(clientRead.name, 'Synthetic Product');
@@ -628,6 +875,7 @@ async function main() {
         'real server and client BrowserWindows/preloads rendered matching version and modes',
         'visible Product Library sidebar navigation in both real renderers',
         'real Catalog editor conflict UI retained a cancelled client draft, refreshed the server version, and intentionally overwrote it only after explicit confirmation',
+        'real Image Workspace settings conflict UI retained Cancel, Refresh and Overwrite behavior against a server API competing write, with persisted-row assertions and removeBackground=false',
         'client renderer read and updated synthetic product; server renderer observed it',
         'client app-image protocol fetched synthetic product image',
         'client WebSocket reconnected after server restart and read refreshed state',

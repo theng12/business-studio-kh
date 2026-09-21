@@ -463,3 +463,30 @@ name is a little narrow for what actually lives there (brand logos and stamps,
 not only watermarks), but renaming the kind means migrating every existing
 user's files on disk, for a cosmetic gain. Leave both the folder and the asset
 kind alone.
+
+## 26. Git workflow — a fix lands when it is merged
+
+A fix or feature is not done when it works on this Mac. It is done when it is
+committed, pushed, and merged. This is the default for every change; do not
+leave completed work sitting uncommitted in a worktree.
+
+- Work on a topic branch (`codex/<topic>`), never directly on `main`.
+- Commit the source, tests, docs and package files that belong to that change.
+- Push normally and open a PR against `main`.
+- Merge once `npm run check` (plus `test:native` and any affected probes) is
+  green and the branch is mergeable, then fast-forward local `main` so the
+  checkout matches the merged tree.
+- Keep GitHub **code-only**: never commit `dist/`, DMGs, `node_modules`,
+  profiles, backups, graphs, credentials or generated reports. Those are local
+  artifacts.
+- Before any push, confirm hosted Actions stays disabled:
+  `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` must
+  return `false`. Never enable or dispatch a hosted workflow.
+- Never force-push, `reset --hard`, or rewrite shared history.
+- Tagging, GitHub Releases, signing/notarization and publishing an installer
+  are **separate** decisions; merging a fix does not authorize them.
+- A version bump still means both edits — `package.json` and the top
+  `CHANGELOG` entry (§24) — and stays a patch bump (§23).
+
+*(Added at Theng's request, 2026-09-21, replacing the older "ask before
+integrating" handoff habit.)*

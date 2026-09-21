@@ -8,7 +8,7 @@
 
 **Tech Stack:** Electron 44, CommonJS main process, React 18/Vite/Zustand renderer, better-sqlite3, Node `fs`, native `URL`, `ws`, system `tar`, Node test runner, Electron native test runner.
 
-**Spec:** `docs/NEW_COMPUTER_HANDOFF.md` (remaining findings H1–H15 and acceptance checks), with `AGENTS.md` as the durable project contract.
+**Spec:** `docs/PROJECT_STATUS.md` (remaining findings H1–H15 and acceptance checks), with `AGENTS.md` as the durable project contract.
 
 ## Global Constraints
 
@@ -113,7 +113,7 @@
 ### Task 6: Version/changelog, final local verification, review, and integration
 
 **Files:**
-- Modify: `package.json`, `package-lock.json`, `renderer/components/WhatsNewModal.jsx`, `docs/NEW_COMPUTER_HANDOFF.md`
+- Modify: `package.json`, `package-lock.json`, `renderer/components/WhatsNewModal.jsx`, `docs/PROJECT_STATUS.md`
 - Test/artifacts: local `dist/`, disposable profile logs, DMG verification output
 
 **Interfaces:**

@@ -4,9 +4,9 @@ A multi-purpose product media workspace for macOS, built with Electron.
 
 Media Studio KH keeps one shared Product Library at the center of three focused workspaces: image production, label design and printing, and catalog creation. Product details are entered once and can then drive edited images, AI variations, barcodes, multilingual labels, shelf cards, and print-ready catalogs. The app works standalone and retains the existing multi-Mac server/client foundation for collaborative image workflows.
 
-## Continue development on another Mac
+## Development status
 
-Start with [the new-computer handoff](docs/NEW_COMPUTER_HANDOFF.md) for the current baseline, setup commands, data-transfer options, and prioritized remaining bugs. The source is in the private [GitHub repository](https://github.com/theng12/media-studio-kh); DMGs, live data, and credentials are not included in a clone.
+See [the development status](docs/Media%20Studio%20KH%20Project%20Status.md) for the current baseline, verified results, stable findings and remaining limits. Historical migration notes are clearly marked and are not assigned work. The source is in the private [GitHub repository](https://github.com/theng12/media-studio-kh); DMGs, live data, and credentials are not included in a clone.
 
 ## Install (beta)
 

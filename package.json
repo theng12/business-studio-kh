@@ -1,7 +1,7 @@
 {
   "name": "media-studio-kh",
   "private": true,
-  "version": "0.1.36",
+  "version": "0.1.37",
   "description": "Media Studio KH — product images, labels, and catalogs in one workspace",
   "author": "TerraNash",
   "main": "dist-electron/main/index.js",
@@ -16,7 +16,7 @@
     "postdist": "npm run native:host",
     "dist:arm64": "npm run dist",
     "test": "node --test 'test/**/*.test.js'",
-    "test:native": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test test/productImageFilename.test.js test/stockQty.test.js test/assetDirCollision.test.js test/archiveRestore.test.js test/productsListQuery.test.js test/purchaseOrderTenant.test.js test/dataFolderSafety.test.js test/importLifecycle.test.js test/workspaceImageIdentity.test.js test/overlayOutcome.test.js test/archiveRoundTrip.test.js test/maintenanceRecovery.test.js test/archiveConcurrency.test.js test/editorConcurrency.test.js",
+    "test:native": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test test/productImageFilename.test.js test/stockQty.test.js test/assetDirCollision.test.js test/archiveRestore.test.js test/productsListQuery.test.js test/purchaseOrderTenant.test.js test/dataFolderSafety.test.js test/importLifecycle.test.js test/workspaceImageIdentity.test.js test/overlayOutcome.test.js test/archiveRoundTrip.test.js test/maintenanceRecovery.test.js test/archiveConcurrency.test.js test/editorConcurrency.test.js test/workspaceConcurrency.test.js",
     "lint": "eslint .",
     "check": "npm run lint && npm test",
     "postinstall": "electron-builder install-app-deps",

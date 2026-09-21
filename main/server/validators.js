@@ -257,6 +257,10 @@ const VALIDATORS = {
     if (!isString(a.imageId)) return 'imageId required';
     if (!('expectedContentHash' in a)) return 'expectedContentHash required';
     if (!isNullableString(a.expectedContentHash)) return 'expectedContentHash must be a string or null';
+    if ('expectedWorkspaceRevision' in a
+      && (!Number.isSafeInteger(a.expectedWorkspaceRevision) || a.expectedWorkspaceRevision < 0)) {
+      return 'expectedWorkspaceRevision must be a non-negative safe integer';
+    }
     return true;
   },
   'workspace:saveSettings': (a) => {
@@ -265,6 +269,10 @@ const VALIDATORS = {
     if (!isString(a.imageId)) return 'imageId required';
     if (!('expectedContentHash' in a)) return 'expectedContentHash required';
     if (!isNullableString(a.expectedContentHash)) return 'expectedContentHash must be a string or null';
+    if ('expectedWorkspaceRevision' in a
+      && (!Number.isSafeInteger(a.expectedWorkspaceRevision) || a.expectedWorkspaceRevision < 0)) {
+      return 'expectedWorkspaceRevision must be a non-negative safe integer';
+    }
     return true;
   },
 
