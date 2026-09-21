@@ -58,12 +58,12 @@ async function loadPreview() {
   return cached;
 }
 
-function renderPreview(preview) {
+function renderPreview(preview, conflictPolicy = 'merge') {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const { ImportPreview } = cached;
   return renderToStaticMarkup(React.createElement(ImportPreview, {
-    preview, conflictPolicy: 'merge', onChangePolicy: () => {}, busy: false,
+    preview, conflictPolicy, onChangePolicy: () => {}, busy: false,
   }));
 }
 
@@ -91,4 +91,33 @@ test('import preview does not show the skipped-row warning when nothing was drop
     sourceRowCount: 2,
   });
   assert.doesNotMatch(html, /had no SKU/);
+});
+
+const conflictPreview = {
+  changes: [
+    { rowIndex: 0, sku: 'SKU-1', action: 'update', diffs: [{ field: 'name', oldValue: 'Old', newValue: 'New' }] },
+    {
+      rowIndex: 1,
+      sku: 'SKU-1',
+      action: 'update',
+      diffs: [{ field: 'name', oldValue: 'New', newValue: null }],
+    },
+  ],
+  rowsConsidered: 2,
+  sourceRowCount: 2,
+};
+
+test('import preview describes the selected conflict policy so the options give visible feedback', async () => {
+  await loadPreview();
+  assert.match(renderPreview(conflictPreview, 'merge'), /Merge:<\/strong> Existing products keep any value your file leaves blank/);
+  assert.match(renderPreview(conflictPreview, 'skip'), /Skip existing:<\/strong> Existing products are left exactly as they are/);
+  assert.match(renderPreview(conflictPreview, 'overwrite'), /Overwrite:<\/strong> Every mapped column is written to existing products/);
+});
+
+test('overwrite preview warns how many existing values it will clear; merge does not', async () => {
+  await loadPreview();
+  const overwrite = renderPreview(conflictPreview, 'overwrite');
+  assert.match(overwrite, /will clear <strong>1<\/strong> existing value to blank/);
+  const merge = renderPreview(conflictPreview, 'merge');
+  assert.doesNotMatch(merge, /will clear/);
 });

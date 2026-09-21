@@ -458,6 +458,21 @@ export function ImportModal({ open, onClose }) {
  * visible) so a 10K-row import doesn't choke the modal.
  */
 /* Exported for the rendered regression in test/productImportPreview.test.js. */
+const POLICY_HELP = {
+  merge: {
+    label: 'Merge',
+    detail: 'Existing products keep any value your file leaves blank. Only the cells your file fills in are written.',
+  },
+  overwrite: {
+    label: 'Overwrite',
+    detail: 'Every mapped column is written to existing products — a blank cell in your file CLEARS that value.',
+  },
+  skip: {
+    label: 'Skip existing',
+    detail: 'Existing products are left exactly as they are. Only brand-new SKUs are added.',
+  },
+};
+
 export function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy }) {
   const changes = preview.changes ?? [];
   const counts = changes.reduce((acc, c) => {
@@ -474,6 +489,15 @@ export function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy })
   // reads as "the import is broken" rather than "2 rows had no SKU".
   const sourceRowCount = preview.sourceRowCount ?? preview.rowsConsidered;
   const droppedNoSku = Math.max(0, sourceRowCount - preview.rowsConsidered);
+  // Concrete feedback for the two policies that change existing rows: how many
+  // existing values this run would blank. Only Overwrite can clear a value, so
+  // this is the number that distinguishes it from Merge.
+  const clearedValues = conflictPolicy === 'overwrite'
+    ? changes.reduce((n, c) => n + (Array.isArray(c.diffs)
+      ? c.diffs.filter((d) => d.newValue === null || d.newValue === ''
+        || (Array.isArray(d.newValue) && d.newValue.length === 0)).length
+      : 0), 0)
+    : 0;
 
   return (
     <div className="import-preview">
@@ -519,6 +543,13 @@ export function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy })
             >Skip existing</button>
           </div>
         </div>
+        <p className="import-preview__policy-help" role="status">
+          <strong>{POLICY_HELP[conflictPolicy].label}:</strong> {POLICY_HELP[conflictPolicy].detail}
+          {clearedValues > 0 ? (
+            <> This run will clear <strong>{clearedValues}</strong> existing
+              {' '}value{clearedValues === 1 ? '' : 's'} to blank.</>
+          ) : null}
+        </p>
       </div>
 
       <p className="muted import-preview__hint">
@@ -546,7 +577,7 @@ export function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy })
           title={`Already up to date (${noChanges.length}) — no changes needed`}
           tone="slate"
           rows={noChanges}
-          collapsed
+          collapsed={inserts.length > 0 || updates.length > 0}
         />
       ) : null}
       {skips.length > 0 ? (
