@@ -633,6 +633,32 @@ async function waitForPersistedWorkspaceBrightness(target, productId, imageId, v
   );
 }
 
+async function runWorkspaceStripScenario({ clientTarget, productId, productSku, imageId }) {
+  await openWorkspaceEditor(clientTarget, productId, imageId, productSku, 'client');
+  await setWorkspaceRemoveBackgroundFalse(clientTarget, 'client');
+  const openedOnFirst = await evaluate(clientTarget, `Boolean(document.querySelector('.ws-thumb.is-active')?.textContent.includes('#1'))`);
+  assert.ok(openedOnFirst, 'client Workspace must open on the first strip image');
+  const thumbCount = await evaluate(clientTarget, `document.querySelectorAll('.ws-thumb__body').length`);
+  assert.ok(thumbCount >= 2, `client Workspace strip must show both fixture images (saw ${thumbCount})`);
+  const draft = 42;
+  await setWorkspaceBrightness(clientTarget, draft, 'client');
+  await waitForWorkspaceAutosavePending(clientTarget, 'client before strip switch');
+  // Switch before the 500 ms autosave debounce fires; the leaving image's draft
+  // must be flushed as part of the switch.
+  const switched = await evaluate(clientTarget, `(() => {
+    const thumbs = [...document.querySelectorAll('.ws-thumb__body')];
+    if (thumbs.length < 2) return false;
+    thumbs[1].click();
+    return true;
+  })()`);
+  assert.ok(switched, 'client could not click the second strip thumbnail');
+  await waitFor(
+    () => evaluate(clientTarget, `Boolean(document.querySelector('.ws-thumb.is-active')?.textContent.includes('#2'))`),
+    'client strip selection moved to image #2',
+  );
+  await waitForPersistedWorkspaceBrightness(clientTarget, productId, imageId, draft, 'client after strip switch');
+}
+
 async function runWorkspaceEditorConflictScenario({ serverTarget, clientTarget, productId, imageId, productSku }) {
   const clientDraft = 15;
   const serverName = 30;
@@ -740,30 +766,38 @@ async function runSeed([archive, dataDir, mode, replacementName]) {
       name: 'Packaged conflict fixture',
       description: 'Disposable packaged UI conflict probe fixture',
     });
-    if (!productImages.listByProduct(product.id).length) {
+    /* Two images so the probe can exercise the strip selection path, not just a
+     * single-image editor. Identical bytes on purpose: the rows are distinct
+     * identities (id + content hash) and addRow does not dedup by content. */
+    let fixtureImages = productImages.listByProduct(product.id);
+    if (fixtureImages.length < 2) {
       const png = Buffer.from(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9JH7sAAAAASUVORK5CYII=',
         'base64',
       );
-      const dir = productAssetDir(company, null, product);
-      const filename = `${productImageBasename(product, 0)}.png`;
-      const filepath = path.posix.join(dir, filename);
-      fs.mkdirSync(path.join(dataDir, 'assets', dir), { recursive: true });
-      fs.writeFileSync(path.join(dataDir, 'assets', filepath), png);
-      productImages.addRow(product.id, {
-        filepath,
-        filename,
-        originalFilepath: 'synthetic.png',
-        contentHash: createHash('sha1').update(png).digest('hex'),
-        orderIndex: 0,
-      });
+      for (let orderIndex = fixtureImages.length; orderIndex < 2; orderIndex += 1) {
+        const dir = productAssetDir(company, null, product);
+        const filename = `${productImageBasename(product, orderIndex)}.png`;
+        const filepath = path.posix.join(dir, filename);
+        fs.mkdirSync(path.join(dataDir, 'assets', dir), { recursive: true });
+        fs.writeFileSync(path.join(dataDir, 'assets', filepath), png);
+        productImages.addRow(product.id, {
+          filepath,
+          filename,
+          originalFilepath: `synthetic-${orderIndex}.png`,
+          contentHash: createHash('sha1').update(png).digest('hex'),
+          orderIndex,
+        });
+      }
+      fixtureImages = productImages.listByProduct(product.id);
     }
-    const image = productImages.listByProduct(product.id)[0];
+    const image = fixtureImages[0];
+    const secondImage = fixtureImages[1] ?? null;
     if (mode === 'seed') {
       database.getDb().prepare('UPDATE product_images SET workspace_settings = ? WHERE id = ?')
         .run(JSON.stringify({ removeBackground: false, brightness: 0 }), image.id);
     }
-    process.stdout.write(JSON.stringify({ companyId: company.id, productId: product.id, productSku: product.sku, catalogProjectId: catalogProject.id, imageId: image.id, imagePath: image.filepath, adminToken: admin.token, viewerId: viewer.id }));
+    process.stdout.write(JSON.stringify({ companyId: company.id, productId: product.id, productSku: product.sku, catalogProjectId: catalogProject.id, imageId: image.id, secondImageId: secondImage?.id ?? null, imagePath: image.filepath, adminToken: admin.token, viewerId: viewer.id }));
   } finally {
     database.getDb().close();
   }
@@ -830,6 +864,12 @@ async function main() {
       projectId: seed.catalogProjectId,
       projectName: 'Packaged conflict fixture',
     });
+    await runWorkspaceStripScenario({
+      clientTarget,
+      productId: seed.productId,
+      productSku: seed.productSku,
+      imageId: seed.imageId,
+    });
     await runWorkspaceEditorConflictScenario({
       serverTarget,
       clientTarget,
@@ -876,6 +916,7 @@ async function main() {
         'visible Product Library sidebar navigation in both real renderers',
         'real Catalog editor conflict UI retained a cancelled client draft, refreshed the server version, and intentionally overwrote it only after explicit confirmation',
         'real Image Workspace settings conflict UI retained Cancel, Refresh and Overwrite behavior against a server API competing write, with persisted-row assertions and removeBackground=false',
+        'real Image Workspace strip switch flushed the leaving image draft before selecting another image',
         'client renderer read and updated synthetic product; server renderer observed it',
         'client app-image protocol fetched synthetic product image',
         'client WebSocket reconnected after server restart and read refreshed state',

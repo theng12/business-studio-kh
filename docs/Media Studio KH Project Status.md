@@ -32,6 +32,7 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 - [x] **R3.2 — separate-agent adversarial review + fixes. Self-reviewed (a separate agent, same model family — not an independent third party).** Review of `0d0f93b..b8f1bb7`: **no P1**. Fixed from it: (P2) a retained failing context on another image no longer locks the strip, and a conflicting save explains the block; (P3) process conflicts are explained instead of showing the raw `CONFLICT|` payload; (P3) overwrite-crop flushes the pending draft before rewriting the source; (P3) a failed post-process refresh is no longer reported as a failed process; (P3) generated `Column N` import headers stay unique. Regressions in `test/workspaceConcurrentEditor.test.js`, `test/productImportWorkbook.test.js`, `test/productImportPreview.test.js`.
 - [ ] **R5 — hardware/provider validation. Runbook prepared; NOT performed.** No physical two-Mac, printer, macOS 12, iPad Safari, paid-provider or model-download check was run from this machine. See [the runbook](HARDWARE_VALIDATION_RUNBOOK.md); its results table is unfilled.
 - [x] **R6 — next bounded task chosen from fresh evidence.** See "Next action" at the end of this record.
+- [x] **R6 follow-up — real-Electron strip probe. Verified.** The packaged probe now seeds two images and drives the real client renderer's strip: edit image #1, switch to #2 before the 500 ms debounce, and assert #1's draft persisted. This closes the "component tests use a hand-rolled hook harness" gap for the strip/selection path. Packaged probe **8/8** checks on 0.1.39.
 - [x] **W1–W5 statuses above are "verified" only in the sense of fresh self-run checks on that tree; there has been no independent review since the F1–F5 corrections. 0.1.37 is nevertheless merged at the owner's direction.**
 - Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer).
 
@@ -39,7 +40,7 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 - **0.1.37 (merged, delivered):** `dist/Business Studio KH-0.1.37-arm64.dmg` — 245,044,926 bytes, SHA-256 `576ee0a91dac0211560db89d69c4db426bafed8a1ad0346a0473b95046ecfafb`. Unsigned; arm64; min macOS 12.0.0. Tested packaged asar SHA-256 `d61d293c414bbc9d98ea229b67cb237196605a70dcd507811323cd6cd7d8ddb6`; the mounted DMG's asar matches it.
 - **0.1.38 (merged):** DMG not built — no customer needed the artifact.
-- **0.1.39:** DMG not built yet — build with `npm run dist` after this pass's checks if an artifact is wanted.
+- **0.1.39 (merged):** `dist/Business Studio KH-0.1.39-arm64.dmg` — 245,042,409 bytes, SHA-256 `fdbef63dae64a11dfb4faadb1e7cf56198d3a307eb25763b53c1226261fa7a8a`. Unsigned; arm64; min macOS 12.0.0. Tested packaged asar SHA-256 `3e73b1be3fce519c607b8e36a4790c2dd0f2d88fbb6bc2d22e79f5d2e2f373c0`; the mounted DMG's asar matches it.
 - **Superseded, do not deliver:** the earlier `1a6d60eba5bf2c1240d4c2426d2db0ea2414335477eb90802a002203cd065a34` DMG, built before the final 0.1.37 corrections.
 
 **Verification ledger (fresh self-run, 2026-09-21):**
@@ -60,6 +61,11 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 | `npm run test:native` (0.1.38) | exit 0; **91 passed** | `/tmp/mskh-verify/native-0138.log` |
 | `vite build` (0.1.38) | exit 0; renderer compiled, 102 modules | `/tmp/mskh-verify/build-0138.log` |
 | `test/productImportWorkbook.test.js` | 5 passed (duplicate headers, repeated empty headers, title row, normal, single column) | — |
+| `npm run check` (0.1.39) | exit 0; lint clean; **608 passed** | `/tmp/mskh-verify/check-0139.log` |
+| `npm run test:native` (0.1.39) | exit 0; **91 passed** | `/tmp/mskh-verify/native-0139.log` |
+| `vite build` (0.1.39) | exit 0; renderer compiled | `/tmp/mskh-verify/build-0139.log` |
+| Packaged probe (0.1.39) | exit 0; **8 checks**, incl. real-renderer strip switch + Workspace conflict UI | `/tmp/mskh-verify/packaged-probe-0139.log` |
+| `npm run dist` (0.1.39) + DMG verify | exit 0; checksum VALID; read-only mount confirmed 0.1.39/arm64/minOS and asar equality | `/tmp/mskh-verify/dist-0139.log` |
 
 Environment note: this shell exports `ELECTRON_RUN_AS_NODE=1` globally. `check:render` and the packaged probe fail under it; re-run them with `env -u ELECTRON_RUN_AS_NODE`. Host Node is v26.8.2; checks use isolated Node 24.15.0 and the bundled Electron 44 runtime (Node 24.21.0).
 
