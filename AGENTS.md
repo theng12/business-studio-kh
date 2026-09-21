@@ -300,7 +300,7 @@ renderer/                # React + Vite — ESM (import/export)
   main.jsx               # entry; mounts App
   App.jsx                # PAGES map + module routing (no router library)
   index.css              # ALL styling lives here — one hand-written file
-  store/                 # Zustand: index.js composes ~16 slice files
+  store/                 # Zustand: index.js composes 13 slice files
   lib/                   # renderer-only helpers (imageUrl, presets…)
   components/            # shared UI (22 files)
     ui.jsx               # Button Input Textarea Select Field Badge

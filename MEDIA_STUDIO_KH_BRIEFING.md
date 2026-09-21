@@ -47,7 +47,7 @@ studio, an overlay/watermark studio, and a purchasing area.
 | Shell | Electron ^44.4.3 + `vite-plugin-electron/simple` (verified 2026-09-21) |
 | UI | React 18 + Vite 7 (verified 2026-09-21) |
 | Styling | One hand-written `renderer/index.css` — no Tailwind, no CSS build step |
-| State | Zustand (one store, composed of ~16 slice files) |
+| State | Zustand (one store, composed of 13 slice files; verified 2026-09-21) |
 | Database | SQLite via `better-sqlite3` |
 | Spreadsheets | SheetJS (`xlsx`) |
 | Images | `sharp` |
@@ -92,9 +92,9 @@ that no renderer-called channel is missing.
 
 ## App structure
 
-The sidebar has six sections and **nineteen pages** (17 feature modules, plus the
-Company page and Settings) (`verified 2026-09-19` in
-`renderer/components/Sidebar.jsx`):
+The sidebar has seven sections and **21 pages** — 20 sidebar items plus the
+Support page reached from the sidebar footer (`verified 2026-09-21` in
+`renderer/components/Sidebar.jsx` and `renderer/App.jsx`):
 
 | Section | Pages |
 |---|---|
@@ -102,14 +102,15 @@ Company page and Settings) (`verified 2026-09-19` in
 | Image Studio | Image Workspace · AI Studio · Overlay Studio · Export Center |
 | Label Studio | Label Templates · Generate & Print · Barcode Maker · Label History |
 | Catalog Studio | Catalog Templates · Catalog Projects |
+| Social | Social Grid |
 | Operations | Suppliers · Purchase Orders · Cost Calculator |
 | System | History · Settings |
 
-Pages in the Image Studio, Label Studio, Catalog Studio and Operations sections
-are gated by **capability**, not by role rank — a page is hidden when the signed-in
-user's role lacks its capability (e.g. `images.manage`, `labels.use`,
-`costing.view`). Workspace and System pages are ungated, so Company and Settings
-are always reachable (`verified 2026-09-19`).
+Pages in the Image Studio, Label Studio, Catalog Studio, Social and Operations
+sections are gated by **capability**, not by role rank — a page is hidden when
+the signed-in user's role lacks its capability (e.g. `images.manage`,
+`labels.use`, `catalog.design`, `costing.view`). Workspace and System pages are
+ungated, so Company and Settings are always reachable (`verified 2026-09-21`).
 
 Window: 1400 × 900 by default, minimum 1100 × 700 (`verified 2026-09-19`).
 
@@ -160,14 +161,14 @@ data-folder location, About).
 
 ## Data model
 
-SQLite, 28 tables (`verified 2026-09-19` from the schema in `main/db/index.js`):
+SQLite, 29 tables (`verified 2026-09-21` from the schema in `main/db/index.js`):
 
 ```
 companies  users  roles  brands  categories  suppliers
 products  product_images  product_landed_costs
 purchase_orders  po_lines  po_cost_components  po_payments
 label_templates  label_runs  label_generation_items
-catalog_projects
+catalog_projects  social_grid_presets
 image_templates  image_template_runs  image_merge_ops
 export_profiles  export_runs
 ai_tasks  ai_gallery  ai_prompt_templates
