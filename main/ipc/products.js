@@ -165,9 +165,15 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany }) {
     }
     // opts: { dryRun?: boolean, conflictPolicy?: 'merge'|'overwrite'|'skip' }
     const r = products.bulkUpsert(companyId, rows, opts ?? {});
-    // bulk upserts can touch hundreds of rows — emit ONE event
-    // with the row count rather than spamming one per product.
-    if (!opts?.dryRun) emitCatalogChange('product', 'bulkUpsert', null, { count: r?.upserted ?? rows?.length ?? 0 });
+    // bulk upserts can touch hundreds of rows — emit ONE event with the row
+    // count that actually changed rather than spamming one per product.
+    // (bulkUpsert does not return `upserted`; no-op rows are deliberately
+    // excluded from `updated`.)
+    if (!opts?.dryRun) {
+      emitCatalogChange('product', 'bulkUpsert', null, {
+        count: (r?.inserted ?? 0) + (r?.updated ?? 0),
+      });
+    }
     return r;
   });
 }
