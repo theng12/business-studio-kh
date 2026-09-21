@@ -8,6 +8,9 @@ import { CanvasView } from './CanvasView.jsx';
 import { SettingsPanel } from './SettingsPanel.jsx';
 import { defaultSettings, mergeSettings } from '../../lib/workspaceSettings.js';
 import { removeBackground } from '../../lib/bgRemoval.js';
+import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
+import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
+import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 
 export function ImageWorkspace() {
   const activeProductId = useAppStore((s) => s.activeProductId);
@@ -62,19 +65,17 @@ export function ImageWorkspace() {
   // are durable without clicking anything.
   const [saveStatus, setSaveStatus] = useState({ state: 'idle', lastSavedAt: null });
   // Debounce settings writes so a slider drag doesn't fire 50 IPC calls.
-  // Holds the most recent timer + the settings snapshot keyed by image
-  // filepath; the effect below cleans both up when the image switches.
+  // The actual latest drafts live in per-image editor contexts below so a
+  // switch cannot separate a dirty key from the settings it represents.
   const saveDebounceRef = useRef(null);
-  /** The not-yet-written settings change, so leaving the screen can flush it. */
-  const pendingSaveRef = useRef(null);
-  const lastSavedKeyRef = useRef(null);  // 'filepath::serialised-settings' last successfully saved
-  // Keep writes for this editor in submission order. Client-mode RPC calls
-  // use separate HTTP requests, so response order alone cannot protect the
-  // database from an older autosave arriving after a newer explicit Save.
-  const saveChainRef = useRef(Promise.resolve());
-  const queuedSaveRef = useRef(null);
-  const saveGenerationRef = useRef(0);
+  const editorContextsRef = useRef(new Map());
+  const activeEditorKeyRef = useRef(null);
+  const activeEditorGenerationRef = useRef(0);
+  const flushPendingSaveRef = useRef(null);
+  const workspaceImagesRef = useRef(images);
+  const processingRunRef = useRef(false);
   const mountedRef = useRef(true);
+  workspaceImagesRef.current = images;
   useEffect(() => {
     // React StrictMode runs effect cleanup/setup once during development;
     // reset this flag on setup so a remounted effect can still report state.
@@ -199,23 +200,6 @@ export function ImageWorkspace() {
    * (save → store update → new object → re-seed → save again). */
   const imageIdentity = (img) => (img ? `${img.id}::${img.contentHash ?? ''}` : null);
 
-  function enqueueWorkspaceSave(productId, imageId, expectedContentHash, settings) {
-    const key = `${productId}::${imageId}::${expectedContentHash ?? ''}::${JSON.stringify(settings)}`;
-    if (queuedSaveRef.current?.key === key) return queuedSaveRef.current.promise;
-    const save = () => window.api.workspace.saveSettings(productId, imageId, expectedContentHash, settings);
-    const next = saveChainRef.current.then(save, save);
-    // A failed write must not permanently block later saves. Keep the
-    // returned promise rejecting so each caller still reports its own error.
-    saveChainRef.current = next.catch(() => {});
-    const request = { key, promise: next };
-    queuedSaveRef.current = request;
-    next.then(
-      () => { if (queuedSaveRef.current === request) queuedSaveRef.current = null; },
-      () => { if (queuedSaveRef.current === request) queuedSaveRef.current = null; },
-    );
-    return next;
-  }
-
   // When the active image changes, seed settings from its stored workspace_settings.
   const activeImage = images[activeIdx] ?? null;
   const activeImageRef = useRef(activeImage);
@@ -223,20 +207,171 @@ export function ImageWorkspace() {
   const activeImageFilepath = activeImage?.filepath ?? null;
   const activeImageContentHash = activeImage?.contentHash ?? null;
   const activeImageId = activeImage?.id ?? null;
+  const activeImageWorkspaceRevision = activeImage?.workspaceRevision ?? 0;
+  const activeEditorKey = activeProductId && activeImage
+    ? `${activeProductId}::${imageIdentity(activeImage)}`
+    : null;
+  if (activeEditorKeyRef.current !== activeEditorKey) {
+    activeEditorKeyRef.current = activeEditorKey;
+    activeEditorGenerationRef.current += 1;
+  }
+
+  function findWorkspaceImage(result, imageId) {
+    return (Array.isArray(result) ? result : result?.images ?? [])
+      .find((image) => image.id === imageId) ?? null;
+  }
+
+  function isCurrentContext(context, generation = activeEditorGenerationRef.current) {
+    return mountedRef.current
+      && generation === activeEditorGenerationRef.current
+      && activeProductIdRef.current === context.productId
+      && imageIdentity(activeImageRef.current) === context.identity;
+  }
+
+  function acknowledgeContext(context, row) {
+    const revision = row?.workspaceRevision ?? 0;
+    if (!row || revision < context.acknowledgedRevision) return false;
+    context.acknowledgedRevision = revision;
+    context.acknowledgedSettings = mergeSettings(row.workspaceSettings);
+    context.acknowledgedKey = `${context.identity}::${JSON.stringify(context.acknowledgedSettings)}`;
+    context.lastSavedAt = Date.now();
+    context.queue?.setRevision(revision);
+    return true;
+  }
+
+  function ensureEditorContext(image, productId = activeProductIdRef.current) {
+    const identity = imageIdentity(image);
+    let context = editorContextsRef.current.get(identity);
+    if (context) return context;
+    const acknowledgedSettings = mergeSettings(image.workspaceSettings);
+    context = {
+      identity,
+      productId,
+      imageId: image.id,
+      expectedContentHash: image.contentHash ?? null,
+      acknowledgedRevision: image.workspaceRevision ?? 0,
+      acknowledgedSettings,
+      acknowledgedKey: `${identity}::${JSON.stringify(acknowledgedSettings)}`,
+      lastSavedAt: image.workspaceSettings ? Date.now() : null,
+      latestDraft: null,
+      dirty: false,
+      queue: null,
+    };
+    editorContextsRef.current.set(identity, context);
+    return context;
+  }
+
+  function ensureSaveQueue(context) {
+    if (context.queue) return context.queue;
+    context.queue = createLatestSaveQueue({
+      initialRevision: context.acknowledgedRevision,
+      persist: async (draft, expectedWorkspaceRevision) => {
+        const result = await window.api.workspace.saveSettings(
+          draft.productId,
+          draft.imageId,
+          draft.expectedContentHash,
+          draft.settings,
+          expectedWorkspaceRevision,
+        );
+        const row = findWorkspaceImage(result, draft.imageId);
+        if (!row) throw new Error('Saved image is no longer attached to this product');
+        return { ...row, updatedAt: row.workspaceRevision ?? 0 };
+      },
+      onStart: () => {
+        if (isCurrentContext(context)) setSaveStatus((status) => ({ ...status, state: 'saving' }));
+      },
+      onSuccess: (row, draft) => {
+        acknowledgeContext(context, row);
+        if (context.latestDraft !== draft) return;
+        context.latestDraft = null;
+        context.dirty = false;
+        if (isCurrentContext(context)) {
+          setSaveStatus({ state: 'saved', lastSavedAt: context.lastSavedAt });
+        }
+      },
+      onError: (error) => {
+        // Autosave and navigation flushes retain the draft but never open a
+        // conflict dialog. Only the explicit Save action offers choices.
+        context.dirty = !!context.latestDraft;
+        if (!isCurrentContext(context)) return;
+        setSaveStatus({ state: 'error', lastSavedAt: null });
+        if (!parseConflictError(error)) addToast(`Save failed: ${error.message}`, 'error');
+      },
+    });
+    return context.queue;
+  }
+
+  function setLatestDraft(context, nextSettings) {
+    const draft = {
+      productId: context.productId,
+      imageId: context.imageId,
+      expectedContentHash: context.expectedContentHash,
+      settings: nextSettings,
+      key: `${context.identity}::${JSON.stringify(nextSettings)}`,
+      identity: context.identity,
+    };
+    context.latestDraft = draft;
+    context.dirty = true;
+    return draft;
+  }
+
+  function enqueueDirtyContext(context) {
+    if (context?.dirty && context.latestDraft) ensureSaveQueue(context).enqueue(context.latestDraft);
+  }
+
+  function flushContext(context) {
+    if (!context?.dirty && !context?.queue?.hasPending()) return Promise.resolve();
+    return ensureSaveQueue(context).flush(() => context.dirty ? context.latestDraft : null);
+  }
+
+  async function flushPendingSave() {
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = null;
+    const productId = activeProductIdRef.current;
+    const reachableIdentities = new Set(workspaceImagesRef.current.map(imageIdentity));
+    for (const context of editorContextsRef.current.values()) {
+      if (context.productId !== productId || !reachableIdentities.has(context.identity)) continue;
+      await flushContext(context);
+    }
+  }
+  flushPendingSaveRef.current = flushPendingSave;
+
   const seededIdentityRef = useRef(null);
+  const displayedIdentityRef = useRef(null);
   useEffect(() => {
     const image = activeImageRef.current;
     if (!image) return;
-    seededIdentityRef.current = imageIdentity(image);
-    saveGenerationRef.current += 1;
-    setSettings(mergeSettings(image.workspaceSettings));
-    // The freshly-seeded settings are by definition "saved" — track that
-    // key so the debounce below doesn't fire a redundant write.
-    lastSavedKeyRef.current = `${imageIdentity(image)}::${JSON.stringify(mergeSettings(image.workspaceSettings))}`;
-    setSaveStatus({ state: 'idle', lastSavedAt: image.workspaceSettings ? Date.now() : null });
+    const identity = imageIdentity(image);
+    const context = ensureEditorContext(image, activeProductIdRef.current);
+    const enteringIdentity = displayedIdentityRef.current !== identity;
+    displayedIdentityRef.current = identity;
+    // A remote refresh repaints an idle editor only when it is not older than
+    // our last ACK. Dirty editors keep both the draft and its original base.
+    if (context.dirty) {
+      if (!enteringIdentity) return;
+      seededIdentityRef.current = identity;
+      setSettings(context.latestDraft.settings);
+      // A write is scheduled for the restored draft, so 'saving' is accurate
+      // here; if that retry fails the queue's onError downgrades this to
+      // 'error' and the explicit Save / conflict recovery becomes available.
+      setSaveStatus((status) => ({ ...status, state: 'saving' }));
+      return;
+    }
+    if ((image.workspaceRevision ?? 0) >= context.acknowledgedRevision) {
+      acknowledgeContext(context, image);
+    }
+    if (settings === context.acknowledgedSettings) {
+      seededIdentityRef.current = null;
+    } else {
+      seededIdentityRef.current = identity;
+      setSettings(context.acknowledgedSettings);
+    }
+    setSaveStatus({ state: 'idle', lastSavedAt: context.lastSavedAt });
     // Re-seed when the user navigates to a different image file, or when the
     // SAME path now holds different bytes (a renumber from another Mac).
-  }, [activeImageFilepath, activeImageContentHash, activeImageId]);
+    // `settings` and the ref-only helper are intentionally not triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeImageFilepath, activeImageContentHash, activeImageId, activeImageWorkspaceRevision]);
 
   // Auto-save: 500ms debounce after the last settings change. We compare a
   // serialised key per (image, settings) tuple to skip writes when nothing
@@ -252,49 +387,23 @@ export function ImageWorkspace() {
       seededIdentityRef.current = null;
       return undefined;
     }
+    const context = ensureEditorContext(image, activeProductId);
     const key = `${identity}::${JSON.stringify(settings)}`;
-    if (key === lastSavedKeyRef.current) return undefined;
+    if (!context.dirty && key === context.acknowledgedKey) return undefined;
 
     setSaveStatus((s) => ({ ...s, state: 'saving' }));
-    /* v0.1.27: remember what is owed, so it can still be written if the user
-     * moves on before the debounce elapses. It used to be dropped: the cleanup
-     * only cleared the timer, so nudging a slider and immediately switching
-     * image or product lost the change with no sign anything had happened. */
-    const saveGeneration = ++saveGenerationRef.current;
-    pendingSaveRef.current = {
-      productId: activeProductId,
-      imageId: image.id,
-      expectedContentHash: image.contentHash ?? null,
-      settings,
-      key,
-      identity,
-      saveGeneration,
-    };
-    const handle = setTimeout(async () => {
-      const owed = pendingSaveRef.current;
-      pendingSaveRef.current = null;      // claim it — the flush must not repeat it
+    const draft = setLatestDraft(context, settings);
+    const handle = setTimeout(() => {
       saveDebounceRef.current = null;
-      if (!owed) return;
-      try {
-        await enqueueWorkspaceSave(owed.productId, owed.imageId, owed.expectedContentHash, owed.settings);
-        if (!mountedRef.current || saveGenerationRef.current !== owed.saveGeneration ||
-          activeProductIdRef.current !== owed.productId ||
-          imageIdentity(activeImageRef.current) !== owed.identity) return;
-        lastSavedKeyRef.current = owed.key;
-        setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
-      } catch (err) {
-        const stillCurrent = mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
-          activeProductIdRef.current === owed.productId &&
-          imageIdentity(activeImageRef.current) === owed.identity;
-        if (stillCurrent) {
-          setSaveStatus({ state: 'error', lastSavedAt: null });
-          addToast(`Save failed: ${err.message}`, 'error');
-        }
-      }
+      if (context.latestDraft === draft) enqueueDirtyContext(context);
     }, 500);
     saveDebounceRef.current = handle;
     return () => clearTimeout(handle);
-  }, [settings, activeImageFilepath, activeImageContentHash, activeImageId, activeProductId, addToast]);
+    // Ref-only helpers are intentionally stable outside this debounce key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, activeImageFilepath, activeImageContentHash, activeImageId, activeProductId]);
+
+  useEffect(() => registerCompanySwitchFlusher(() => flushPendingSaveRef.current()), []);
 
   /* Flush ONLY when the image or product being edited changes, or on unmount.
    *
@@ -304,24 +413,12 @@ export function ImageWorkspace() {
    * image and is still valid — so it is sent rather than cancelled. Splitting
    * the two concerns is what makes both behaviours correct. */
   useEffect(() => () => {
-    const owed = pendingSaveRef.current;
-    pendingSaveRef.current = null;
-    if (!owed) return;
-    enqueueWorkspaceSave(owed.productId, owed.imageId, owed.expectedContentHash, owed.settings)
-      .then(() => {
-        if (mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
-          activeProductIdRef.current === owed.productId &&
-          imageIdentity(activeImageRef.current) === owed.identity) {
-          lastSavedKeyRef.current = owed.key;
-        }
-      })
-      .catch((err) => {
-        const stillCurrent = mountedRef.current && saveGenerationRef.current === owed.saveGeneration &&
-          activeProductIdRef.current === owed.productId &&
-          imageIdentity(activeImageRef.current) === owed.identity;
-        if (stillCurrent) addToast(`Save failed: ${err.message}`, 'error');
-      });
-  }, [activeImageFilepath, activeImageContentHash, activeImageId, activeProductId, addToast]);
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = null;
+    enqueueDirtyContext(editorContextsRef.current.get(imageIdentity(activeImage)));
+    // Flush on immutable identity changes, not row-object refreshes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeImageFilepath, activeImageContentHash, activeImageId, activeProductId]);
 
   // Refresh the "X min ago" display every 30s without re-fetching anything —
   // matches the AGENTS.md §6 auto-refresh requirement for the indicator.
@@ -348,7 +445,7 @@ export function ImageWorkspace() {
     }
   }
 
-  async function processOne(image) {
+  async function processOne(image, runSettings, expectedWorkspaceRevision, runProductId) {
     /* v0.1.29: pin the product this run belongs to.
      *
      * `activeProductId` is read again after the awaits below, and it is a
@@ -358,12 +455,11 @@ export function ImageWorkspace() {
      * header. Capturing it once, and skipping the repaint when it no longer
      * matches, keeps the screen consistent. (The product switcher is also
      * disabled while a run is in flight; this is the belt to that braces.) */
-    const runProductId = activeProductId;
     if (!image.contentHash) {
       throw new Error('Image identity unavailable; re-import the image and try again');
     }
     let foregroundBytes = null;
-    if (settings.removeBackground) {
+    if (runSettings.removeBackground) {
       // v0.49.33: only one engine remains — the bundled local @imgly
       // WASM. The remove.bg cloud path (and its upload/download progress
       // states) were removed.
@@ -392,13 +488,27 @@ export function ImageWorkspace() {
       foregroundBytes = { bytes, sourceHash };
     }
     setProcessingLabel('Compositing…');
-    const res = await window.api.workspace.processImage(
-      runProductId,
-      image.id,
-      image.contentHash ?? null,
-      settings,
-      foregroundBytes,
-    );
+    const context = ensureEditorContext(image, runProductId);
+    let res;
+    try {
+      res = await window.api.workspace.processImage(
+        runProductId,
+        image.id,
+        image.contentHash ?? null,
+        runSettings,
+        foregroundBytes,
+        expectedWorkspaceRevision,
+      );
+    } catch (error) {
+      // A process conflict did not dirty the save queue, but the explicit Save
+      // button must still be able to reopen the normal recovery choices.
+      if (parseConflictError(error) && isCurrentContext(context)) {
+        setSaveStatus({ state: 'error', lastSavedAt: null });
+      }
+      throw error;
+    }
+    const row = findWorkspaceImage(res, image.id);
+    if (row) acknowledgeContext(context, row);
     // Only repaint if we are still looking at the product this run was for.
     if (activeProductIdRef.current === runProductId) {
       await refreshWorkspaceImages(runProductId);
@@ -421,77 +531,156 @@ export function ImageWorkspace() {
     const productId = activeProductId;
     const identity = imageIdentity(image);
     const key = `${identity}::${JSON.stringify(settings)}`;
-    if (key === lastSavedKeyRef.current && saveStatus.state !== 'error') {
+    const context = ensureEditorContext(image, productId);
+    if (!context.dirty && key === context.acknowledgedKey && saveStatus.state !== 'error') {
       // Already saved — give a friendly nudge so the click doesn't feel
       // ignored.
       addToast('Already saved', 'info');
-      return;
+      return true;
     }
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
-    if (pendingSaveRef.current?.identity === identity &&
-      pendingSaveRef.current.productId === productId) {
-      pendingSaveRef.current = null;
-    }
-    const saveGeneration = ++saveGenerationRef.current;
+    saveDebounceRef.current = null;
+    if (!context.dirty || context.latestDraft?.key !== key) setLatestDraft(context, settings);
+    const generation = activeEditorGenerationRef.current;
     setSaveStatus((s) => ({ ...s, state: 'saving' }));
     try {
-      await enqueueWorkspaceSave(productId, image.id, image.contentHash ?? null, settings);
-      const stillCurrent = mountedRef.current && saveGenerationRef.current === saveGeneration &&
-        activeProductIdRef.current === productId &&
-        imageIdentity(activeImageRef.current) === identity;
-      if (stillCurrent) {
-        lastSavedKeyRef.current = key;
-        setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
-        addToast('Saved', 'success');
-      }
+      await flushContext(context);
+      if (isCurrentContext(context, generation)) addToast('Saved', 'success');
+      return true;
     } catch (err) {
-      const stillCurrent = mountedRef.current && saveGenerationRef.current === saveGeneration &&
-        activeProductIdRef.current === productId &&
-        imageIdentity(activeImageRef.current) === identity;
-      if (stillCurrent) {
+      if (!isCurrentContext(context, generation)) return false;
+      if (!parseConflictError(err)) return false;
+      let overwrittenDraft = null;
+      try {
+        const result = await resolveSaveConflict(err, {
+          refresh: async () => {
+            if (!isCurrentContext(context, generation)) throw new Error('Editor changed before conflict resolution');
+            const rows = await window.api.images.listByProduct(productId);
+            const row = findWorkspaceImage(rows, context.imageId);
+            if (!row || imageIdentity(row) !== identity) throw new Error('Image changed; reload and try again');
+            return row;
+          },
+          overwrite: async () => {
+            if (!isCurrentContext(context, generation)) throw new Error('Editor changed before conflict resolution');
+            overwrittenDraft = context.latestDraft;
+            if (!overwrittenDraft) throw new Error('No draft remains to overwrite');
+            const rows = await window.api.workspace.saveSettings(
+              productId,
+              context.imageId,
+              context.expectedContentHash,
+              overwrittenDraft.settings,
+            );
+            const row = findWorkspaceImage(rows, context.imageId);
+            if (!row) throw new Error('Saved image is no longer attached to this product');
+            return row;
+          },
+        });
+        if (!isCurrentContext(context, generation)) return false;
+        if (result.choice === 'cancel') {
+          setSaveStatus({ state: 'error', lastSavedAt: null });
+          return false;
+        }
+        acknowledgeContext(context, result.row);
+        if (result.choice === 'refresh') {
+          context.latestDraft = null;
+          context.dirty = false;
+          seededIdentityRef.current = identity;
+          setSettings(context.acknowledgedSettings);
+          setSaveStatus({ state: 'saved', lastSavedAt: context.lastSavedAt });
+        } else if (context.latestDraft === overwrittenDraft) {
+          context.latestDraft = null;
+          context.dirty = false;
+          setSaveStatus({ state: 'saved', lastSavedAt: context.lastSavedAt });
+        } else {
+          await flushContext(context);
+        }
+        addToast('Saved', 'success');
+        return true;
+      } catch (nextError) {
+        context.dirty = !!context.latestDraft;
+        if (!isCurrentContext(context, generation)) return false;
         setSaveStatus({ state: 'error', lastSavedAt: null });
-        addToast(`Save failed: ${err.message}`, 'error');
+        addToast(`Save failed: ${nextError.message}`, 'error');
+        return false;
       }
     }
   }
 
   async function handleApplyThis() {
-    if (!activeImage) return;
+    if (!activeImage || processing || processingRunRef.current) return false;
+    const image = activeImage;
+    const productId = activeProductId;
+    processingRunRef.current = true;
     setWorkspaceProcessing(true);
     try {
-      await processOne(activeImage);
+      const context = ensureEditorContext(image, productId);
+      if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+      saveDebounceRef.current = null;
+      await flushContext(context);
+      await processOne(
+        image,
+        context.acknowledgedSettings,
+        context.acknowledgedRevision,
+        productId,
+      );
       // Refresh the products list so the table reflects the new process status.
       useAppStore.getState().refreshProducts();
       addToast('Image processed', 'success');
+      return true;
     } catch (err) {
       addToast(err.message, 'error');
+      return false;
     } finally {
       setProcessingLabel(null);
       setWorkspaceProcessing(false);
+      processingRunRef.current = false;
     }
   }
 
   async function handleApplyAll() {
-    if (images.length === 0) return;
-    setWorkspaceProcessing(true, { current: 0, total: images.length });
-    let failures = 0;
-    for (let i = 0; i < images.length; i++) {
-      const img = images[i];
-      setWorkspaceProcessing(true, { current: i, total: images.length });
-      setProcessingLabel(`Processing ${i + 1} of ${images.length}…`);
+    if (images.length === 0 || processing || processingRunRef.current) return false;
+    const runProductId = activeProductId;
+    const runImages = [...images];
+    processingRunRef.current = true;
+    setWorkspaceProcessing(true, { current: 0, total: runImages.length });
+    try {
       try {
-        await processOne(img);
+        await flushPendingSave();
       } catch (err) {
-        failures += 1;
-        // Continue with the rest, but record the issue.
-        console.warn(`Failed to process ${img.filename}:`, err);
+        addToast(`Save failed: ${err.message}`, 'error');
+        return false;
       }
+      const sourceContext = ensureEditorContext(activeImage ?? runImages[0], runProductId);
+      const batchSettings = sourceContext.acknowledgedSettings;
+      let failures = 0;
+      for (let i = 0; i < runImages.length; i++) {
+        const img = runImages[i];
+        const context = ensureEditorContext(img, runProductId);
+        setWorkspaceProcessing(true, { current: i, total: runImages.length });
+        setProcessingLabel(`Processing ${i + 1} of ${runImages.length}…`);
+        try {
+          await flushContext(context);
+          await processOne(
+            img,
+            batchSettings,
+            context.acknowledgedRevision,
+            runProductId,
+          );
+        } catch (err) {
+          failures += 1;
+          // Continue with the rest, but record the issue.
+          console.warn(`Failed to process ${img.filename}:`, err);
+        }
+      }
+      useAppStore.getState().refreshProducts();
+      if (failures === 0) addToast(`Processed ${runImages.length} image${runImages.length === 1 ? '' : 's'}`, 'success');
+      else addToast(`${runImages.length - failures} processed, ${failures} failed`, failures === runImages.length ? 'error' : 'info');
+      return failures === 0;
+    } finally {
+      setProcessingLabel(null);
+      setWorkspaceProcessing(false, null);
+      processingRunRef.current = false;
     }
-    setProcessingLabel(null);
-    setWorkspaceProcessing(false, null);
-    useAppStore.getState().refreshProducts();
-    if (failures === 0) addToast(`Processed ${images.length} image${images.length === 1 ? '' : 's'}`, 'success');
-    else addToast(`${images.length - failures} processed, ${failures} failed`, failures === images.length ? 'error' : 'info');
   }
 
   // v0.26.14: destructive flip of the active source image. Same IPC
@@ -500,16 +689,59 @@ export function ImageWorkspace() {
   // thumb + canvas re-fetch with the new content hash. Errors land
   // in a toast rather than alert() since we have toast plumbing here.
   async function handleFlipActive(axis) {
-    if (!activeImage || !activeProductId) return;
+    if (!activeImage || !activeProductId || processing || processingRunRef.current) return false;
+    const image = activeImage;
+    const productId = activeProductId;
+    const context = ensureEditorContext(image, productId);
+    const generation = activeEditorGenerationRef.current;
+    processingRunRef.current = true;
+    setWorkspaceProcessing(true);
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = null;
     try {
-      await window.api.images.flipSource(activeProductId, activeImage.filepath, axis);
-      await refreshWorkspaceImages(activeProductId);
-      if (activeProductIdRef.current !== activeProductId) return;
+      try {
+        await flushContext(context);
+      } catch (_) {
+        return false;
+      }
+      if (!isCurrentContext(context, generation)) return false;
+      await window.api.images.flipSource(productId, image.filepath, axis);
+      if (!isCurrentContext(context, generation)) return false;
+      await refreshWorkspaceImages(productId);
+      editorContextsRef.current.delete(context.identity);
+      if (activeProductIdRef.current !== productId) return false;
       bumpProcessedTick();
       addToast(`Flipped ${axis === 'h' ? 'horizontally' : 'vertically'}`, 'success');
+      return true;
     } catch (err) {
       addToast(`Flip failed: ${err.message}`, 'error');
+      return false;
+    } finally {
+      setWorkspaceProcessing(false);
+      processingRunRef.current = false;
     }
+  }
+
+  async function handleSelectImage(index) {
+    const targetId = images[index]?.id;
+    if (!targetId) return false;
+    if (index === activeIdx) {
+      setWorkspaceViewMode('single');
+      return true;
+    }
+    const productId = activeProductId;
+    const identity = imageIdentity(activeImage);
+    try {
+      await flushPendingSave();
+    } catch (_) {
+      return false;
+    }
+    if (activeProductIdRef.current !== productId || imageIdentity(activeImageRef.current) !== identity) return false;
+    const currentIndex = useAppStore.getState().workspaceImages.findIndex((image) => image.id === targetId);
+    if (currentIndex < 0) return false;
+    setWorkspaceImageIndex(currentIndex);
+    setWorkspaceViewMode('single');
+    return true;
   }
 
   // Top toolbar (view mode + flip + fill preview)
@@ -598,7 +830,7 @@ export function ImageWorkspace() {
           <ImageStrip
             images={images}
             activeIndex={activeIdx}
-            onSelect={(idx) => { setWorkspaceImageIndex(idx); setWorkspaceViewMode('single'); }}
+            onSelect={handleSelectImage}
             onPreview={(idx) => setLightbox({ open: true, idx })}
           />
           <CanvasView

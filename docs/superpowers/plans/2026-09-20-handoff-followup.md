@@ -6,7 +6,7 @@
 
 **Architecture:** Retain existing Electron IPC/RPC, SQLite, Zustand and standalone browser flows. Fix context ownership at the shared boundary, reuse existing queues and validators, and reject unsafe operations rather than adding migration or synchronization frameworks.
 
-**Spec:** Owner-approved audit in the conversation; original acceptance criteria in `docs/NEW_COMPUTER_HANDOFF.md` at handoff commit `c31d7afc9af5d50c48819698f70df21bddd35cc3`. Current source is authoritative.
+**Spec:** Owner-approved audit in the conversation; original acceptance criteria in `docs/PROJECT_STATUS.md` at handoff commit `c31d7afc9af5d50c48819698f70df21bddd35cc3`. Current source is authoritative.
 
 **Base:** `54616464153b4960a4e75e0f77e39f189549f0a3` (0.1.34).
 

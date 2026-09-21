@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.37',
+    date: '2026-09-21',
+    items: [
+      'FIX — Image Workspace detects another editor’s changes before saving settings or replacing a processed image.',
+      'FIX — Conflicting image settings stay unsaved for Refresh, Overwrite or Cancel instead of silently replacing newer work.',
+      'FIX — importing a product spreadsheet resolves each repeated brand or category name once instead of once per row, so a large import no longer stalls in the preview step.',
+      'FIX — the import preview now reports rows it skipped because their SKU cell was empty, instead of dropping them silently.',
+      'Internal — per-image revisions and retained concurrency checks; project documentation now tracks development status rather than a computer handoff.',
+    ],
+  },
+  {
     version: '0.1.36',
     date: '2026-09-21',
     items: [

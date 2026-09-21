@@ -322,10 +322,23 @@ contextBridge.exposeInMainWorld('api', {
     uploadFromBytes: (bytes, ext, name)        => invoke('watermarks:uploadFromBytes', { bytes, ext, name }),
   },
   workspace: {
-    processImage: (productId, imageId, expectedContentHash, settings, foregroundBytes) =>
-      invoke('workspace:processImage', { productId, imageId, expectedContentHash, settings, foregroundBytes }),
-    saveSettings: (productId, imageId, expectedContentHash, settings) =>
-      invoke('workspace:saveSettings', { productId, imageId, expectedContentHash, settings }),
+    processImage: (productId, imageId, expectedContentHash, settings, foregroundBytes, expectedWorkspaceRevision) =>
+      invoke('workspace:processImage', {
+        productId,
+        imageId,
+        expectedContentHash,
+        settings,
+        foregroundBytes,
+        ...(expectedWorkspaceRevision === undefined ? {} : { expectedWorkspaceRevision }),
+      }),
+    saveSettings: (productId, imageId, expectedContentHash, settings, expectedWorkspaceRevision) =>
+      invoke('workspace:saveSettings', {
+        productId,
+        imageId,
+        expectedContentHash,
+        settings,
+        ...(expectedWorkspaceRevision === undefined ? {} : { expectedWorkspaceRevision }),
+      }),
   },
   exports: {
     listProfiles:    (companyId)         => invoke('exports:listProfiles', companyId),

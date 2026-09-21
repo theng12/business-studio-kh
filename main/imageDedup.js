@@ -236,6 +236,7 @@ function mergeGroups({ decisions = [], thresholdPct = 95, mode = 'review', compa
           is_processed: row.is_processed,
           processed_filepath: row.processed_filepath,
           workspace_settings: row.workspace_settings,
+          workspace_revision: row.workspace_revision,
           content_hash: row.content_hash,
           perceptual_hash: row.perceptual_hash,
           created_at: row.created_at,
@@ -379,14 +380,17 @@ function revertMergeOp(opId) {
       const nextOrder = (db.prepare('SELECT COALESCE(MAX(order_index), -1) AS m FROM product_images WHERE product_id = ?')
         .get(r.product_id).m ?? -1) + 1;
       const newId = db.prepare('SELECT id FROM product_images WHERE id = ?').get(r.id) ? crypto.randomUUID() : r.id;
+      const workspaceRevision = Number.isSafeInteger(r.workspace_revision) && r.workspace_revision >= 0
+        ? r.workspace_revision + 1
+        : 1;
       db.prepare(
         `INSERT INTO product_images
-          (id, product_id, filename, filepath, original_filepath, order_index, is_processed, processed_filepath, workspace_settings, content_hash, perceptual_hash, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, product_id, filename, filepath, original_filepath, order_index, is_processed, processed_filepath, workspace_settings, workspace_revision, content_hash, perceptual_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         newId, r.product_id, path.posix.basename(restoredFilepath), restoredFilepath,
         r.original_filepath, nextOrder, r.is_processed, r.processed_filepath,
-        r.workspace_settings || '{}', r.content_hash, r.perceptual_hash, r.created_at,
+        r.workspace_settings || '{}', workspaceRevision, r.content_hash, r.perceptual_hash, r.created_at,
       );
       touchedProducts.add(r.product_id);
       restored++;

@@ -129,6 +129,7 @@ function initDb(dataDir) {
 
   // Additive column migrations — safe to run on every boot.
   addColumnIfMissing(db, 'product_images', 'content_hash', 'TEXT');
+  addColumnIfMissing(db, 'product_images', 'workspace_revision', 'INTEGER NOT NULL DEFAULT 0');
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_product_images_content_hash ON product_images(content_hash);`); }
   catch (_) { /* index race, ignore */ }
 
@@ -503,6 +504,7 @@ function runMigrations(database) {
       is_processed INTEGER NOT NULL DEFAULT 0,
       processed_filepath TEXT,
       workspace_settings TEXT NOT NULL DEFAULT '{}',
+      workspace_revision INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_product_images_product ON product_images(product_id);
