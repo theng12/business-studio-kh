@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.45',
+    date: '2026-09-22',
+    items: [
+      'FIX — a repeated SKU in a large spreadsheet previews and imports the same way now; the preview no longer disagrees with the batched apply.',
+      'FIX — the product-import catalog-refresh count reflects the rows that actually changed.',
+      'Internal — the RPC reconciliation test no longer depends on Node-version-specific timer behaviour, so the suite is green on the host Node as well as the supported Node 24.',
+    ],
+  },
+  {
     version: '0.1.44',
     date: '2026-09-21',
     items: [

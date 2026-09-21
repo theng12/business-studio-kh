@@ -940,6 +940,12 @@ function bulkUpsert(companyId, rows, opts = {}) {
               update(existing.id, patch);
               updatedIds.push(existing.id);
             }
+            /* Keep this call's baseline current so a later duplicate row in the
+             * SAME call compares against the effective state — exactly as a
+             * later Apply batch (which re-queries the DB) does. Without this a
+             * single-call Preview and the batched Apply could disagree about a
+             * repeated existing SKU straddling a 250-row boundary. */
+            existingMap.set(sku, { ...existing, ...patch });
             changes.push({ rowIndex: idx, sku, action: 'update', existingId: existing.id, diffs });
           }
         } else {

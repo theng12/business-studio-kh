@@ -132,3 +132,33 @@ test('status is normalized at the boundary and no-op rows are not counted as upd
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a repeated SKU in one call compares against the effective state, so preview matches batched Apply', { skip: skipReason }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mskh-repeat-sku-'));
+  db.initDb(dir);
+  try {
+    const company = companies.create({ name: 'Repeat Co', isActive: true });
+    products.create({ companyId: company.id, sku: 'X', name: 'orig' });
+
+    // One dry-run over both rows (what ImportPreview shows).
+    const dry = products.bulkUpsert(
+      company.id,
+      [{ sku: 'X', name: 'one' }, { sku: 'X', name: 'orig' }],
+      { dryRun: true, conflictPolicy: 'merge' },
+    );
+
+    // The batched Apply the dialog actually performs: one call per batch.
+    const batch1 = products.bulkUpsert(company.id, [{ sku: 'X', name: 'one' }], { dryRun: false, conflictPolicy: 'merge' });
+    const batch2 = products.bulkUpsert(company.id, [{ sku: 'X', name: 'orig' }], { dryRun: false, conflictPolicy: 'merge' });
+
+    assert.deepEqual(
+      dry.changes.map((c) => c.action),
+      [...batch1.changes, ...batch2.changes].map((c) => c.action),
+      'the single-call preview and the batched apply must agree on a repeated SKU',
+    );
+    assert.equal(products.getBySku(company.id, 'X').name, 'orig', 'the last row wins in both');
+  } finally {
+    try { db.closeDb(); } catch (_) {}
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
