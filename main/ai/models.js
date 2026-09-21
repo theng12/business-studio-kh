@@ -18,6 +18,9 @@ const openai = require('./providers/openai');
 /** Used when no key is saved yet, or the live model list is unreachable. */
 const FALLBACK_MODEL_IDS = ['gpt-image-1', 'dall-e-3'];
 
+/** Pinned dated snapshot suffix, e.g. `gpt-image-2.5-flare-2026-09-08`. */
+const DATED_SNAPSHOT = /-\d{4}-\d{2}-\d{2}$/;
+
 /** "gpt-image-2.5-flare" → "GPT Image 2.5 Flare" */
 function prettyName(modelId) {
   return String(modelId)
@@ -58,7 +61,14 @@ function entryFor(modelId) {
 function catalogFor(modelIds) {
   const ids = openai.imageModelsFrom(modelIds ?? []);
   const list = ids.length ? ids : openai.imageModelsFrom(FALLBACK_MODEL_IDS);
-  return list.map(entryFor);
+  // OpenAI's `/v1/models` lists both a moving alias and its pinned dated
+  // snapshots (e.g. `gpt-image-2.5-flare` and
+  // `gpt-image-2.5-flare-2026-09-08`). They are the same model, so hide the
+  // pinned one when the alias is present — six useful entries instead of
+  // nine cluttered ones. A snapshot with no matching alias is kept.
+  const names = new Set(list);
+  const visible = list.filter((id) => !(DATED_SNAPSHOT.test(id) && names.has(id.replace(DATED_SNAPSHOT, ''))));
+  return visible.map(entryFor);
 }
 
 /** Built-in catalog (no key required). */
