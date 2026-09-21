@@ -4,16 +4,15 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 **Scope:** personal/internal macOS (Apple Silicon) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, local release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
 
-## Current software pass — 0.1.39 (self-review fixes, pre-merge)
+## Current software pass — 0.1.44 (merged); no active pass
 
-**Repository state (verified 2026-09-21):**
+**Repository state (verified 2026-09-22):**
 
-- Worktree: `$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh`; branch `codex/review-fixes` off `origin/main` (`b8f1bb7`).
-- **0.1.37 merged:** PR #6, merge commit `172d3eb80079d8333c336a44e942cdb2aab5146d`; its DMG was handed to the owner for the customer.
-- **0.1.38 merged:** PR #7, merge commit `866ac5b021c52ca3e8a3cc9498f3974060a19bb0` (import hardening + documentation truth pass).
-- **Docs merged:** PR #8, merge commit `b8f1bb7` (status record + plan checkboxes).
-- This pass (0.1.39): a separate-agent adversarial review of `0d0f93b..b8f1bb7`, its fixes, the R3.1 rendered test, and the R5 runbook — [hardware validation runbook](HARDWARE_VALIDATION_RUNBOOK.md).
-- Plans: [2026-09-21 workspace concurrency](superpowers/plans/2026-09-21-workspace-concurrency.md) (delivered in 0.1.37); [2026-09-21 remaining work](superpowers/plans/2026-09-21-remaining-work.md).
+- Worktree: `$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh`.
+- Merged in order: **0.1.37** PR #6 (`172d3eb`); **0.1.38** PR #7 (`866ac5b`); docs PR #8 (`b8f1bb7`); **0.1.39** PR #9 (`8c734f7`); **0.1.40** PR #12 (`6638cf4`); **0.1.41** PR #13 (`f2a8776`); **0.1.42** PR #14 (`b757860`); rpcOutcome test stabilization PR #15 (`8cdca5f`); **0.1.43** PR #16 (`8d0c583`); **0.1.44** PR #17 (`217779d`). Local `main` is fast-forwarded after each.
+- The 0.1.37 DMG was handed to the owner for the customer; the customer's import problem is resolved.
+- **Four separate-agent adversarial reviews** ran over the batches (`0d0f93b→b8f1bb7`, `→f2a8776`, `→8cdca5f`, `→8d0c583`). Every finding is fixed with a retained regression; the last pass found only P3s on RPC-only paths.
+- Plans: [2026-09-21 remaining work](superpowers/plans/2026-09-21-remaining-work.md); R5 runbook: [hardware validation](HARDWARE_VALIDATION_RUNBOOK.md).
 
 **Priority checklist** — statuses: investigation · reproduced · implemented/unverified · self-reviewed · verified · blocked · deferred/out-of-scope · closed decision.
 
@@ -33,6 +32,14 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 - [ ] **R5 — hardware/provider validation. Runbook prepared; NOT performed.** No physical two-Mac, printer, macOS 12, iPad Safari, paid-provider or model-download check was run from this machine. See [the runbook](HARDWARE_VALIDATION_RUNBOOK.md); its results table is unfilled.
 - [x] **R6 — next bounded task chosen from fresh evidence.** See "Next action" at the end of this record.
 - [x] **R6 follow-up — real-Electron strip probe. Verified.** The packaged probe now seeds two images and drives the real client renderer's strip: edit image #1, switch to #2 before the 500 ms debounce, and assert #1's draft persisted. This closes the "component tests use a hand-rolled hook harness" gap for the strip/selection path. Packaged probe **8/8** checks on 0.1.39.
+
+**Review passes (0.1.39–0.1.44)** — four separate-agent adversarial reviews; every finding is fixed with a retained regression. All were run as part of self-review (separate agent, same model family), not as an independent third party.
+
+- [x] **Review 1** (`0d0f93b..b8f1bb7`): P2 one image's failing save locked the whole strip silently (only the leaving image may block now, with an explanatory message); P3 raw process-conflict payload; P3 overwrite-crop did not flush the pending draft; P3 a failed post-process refresh read as a failed process; P3 generated `Column N` header collision.
+- [x] **Review 2** (`b8f1bb7..f2a8776`): **P1** a blank mapped `Status` emitted `status: null`, and `products.status` is `NOT NULL`, so Overwrite skipped the whole row and lost every other update — the import now omits blank status and `bulkUpsert` ignores null/empty status at the DB boundary; P2 title-row warning fired on valid single-column-header sheets; P3 crop-conflict message.
+- [x] **Test reliability** (PR #15): `test/rpcOutcome.test.js` flaked under full-suite parallelism (50 ms/30 ms/80 ms real timers). Margins widened to 750/250/300 ms with the fake clock still driving every assertion; **8/8** consecutive full-suite runs green.
+- [x] **Review 3** (`f2a8776..8cdca5f`): P2 **Skip existing replaced Tags** (the tags block ignored the policy); P3 `create()` stored a blank status; P3 title-row hint gating.
+- [x] **Review 4** (`8cdca5f..8d0c583`): P3 status normalized once at the `bulkUpsert` boundary (blank/whitespace = not supplied; insert defaults `active`, existing rows untouched, dry-run and live agree); P3 no-op rows are no longer counted as `updated`, so the post-Apply review matches the preview and the Skip label.
 - [x] **W1–W5 statuses above are "verified" only in the sense of fresh self-run checks on that tree; there has been no independent review since the F1–F5 corrections. 0.1.37 is nevertheless merged at the owner's direction.**
 - Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer).
 
@@ -41,6 +48,8 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 - **0.1.37 (merged, delivered):** `dist/Business Studio KH-0.1.37-arm64.dmg` — 245,044,926 bytes, SHA-256 `576ee0a91dac0211560db89d69c4db426bafed8a1ad0346a0473b95046ecfafb`. Unsigned; arm64; min macOS 12.0.0. Tested packaged asar SHA-256 `d61d293c414bbc9d98ea229b67cb237196605a70dcd507811323cd6cd7d8ddb6`; the mounted DMG's asar matches it.
 - **0.1.38 (merged):** DMG not built — no customer needed the artifact.
 - **0.1.39 (merged):** `dist/Business Studio KH-0.1.39-arm64.dmg` — 245,042,409 bytes, SHA-256 `fdbef63dae64a11dfb4faadb1e7cf56198d3a307eb25763b53c1226261fa7a8a`. Unsigned; arm64; min macOS 12.0.0. Tested packaged asar SHA-256 `3e73b1be3fce519c607b8e36a4790c2dd0f2d88fbb6bc2d22e79f5d2e2f373c0`; the mounted DMG's asar matches it.
+- **0.1.40–0.1.43 (merged):** import conflict-policy feedback, the blank-cell Overwrite fix, the review fixes, and the Skip-tags/status fixes. No DMGs built for these patches.
+- **0.1.44 (merged):** `dist/Business Studio KH-0.1.44-arm64.dmg` — 245,044,403 bytes, SHA-256 `5d47a5073c91b650e7c9949975091d059dc1d0926c99405893b5eb791fda020a`. Unsigned; arm64; min macOS 12.0.0. Tested packaged asar SHA-256 `2ebe160dc67e2057d4408259fbd0eb9fcd9db8bec77aff49eb860e427f3bd5ae`; the mounted DMG's asar matches it.
 - **Superseded, do not deliver:** the earlier `1a6d60eba5bf2c1240d4c2426d2db0ea2414335477eb90802a002203cd065a34` DMG, built before the final 0.1.37 corrections.
 
 **Verification ledger (fresh self-run, 2026-09-21):**
@@ -62,6 +71,10 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 | `vite build` (0.1.38) | exit 0; renderer compiled, 102 modules | `/tmp/mskh-verify/build-0138.log` |
 | `test/productImportWorkbook.test.js` | 5 passed (duplicate headers, repeated empty headers, title row, normal, single column) | — |
 | `npm run check` (0.1.39) | exit 0; lint clean; **608 passed** | `/tmp/mskh-verify/check-0139.log` |
+| `npm test` (final, 0.1.44) | exit 0; **616 passed**; 8/8 consecutive full-suite runs green after the rpcOutcome stabilization | `/tmp/mskh-verify/full-*.log` |
+| `npm run test:native` (final, 0.1.44) | exit 0; **94 passed** | `/tmp/mskh-verify/native-0144.log` |
+| Packaged probe (0.1.44) | exit 0; **8 checks**, incl. real-renderer strip switch + Workspace conflict UI | `/tmp/mskh-verify/packaged-probe-0144.log` |
+| `npm run dist` (0.1.44) + DMG verify | exit 0; checksum VALID; read-only mount; mounted asar equals the tested build | `/tmp/mskh-verify/dist-0144.log` |
 | `npm run test:native` (0.1.39) | exit 0; **91 passed** | `/tmp/mskh-verify/native-0139.log` |
 | `vite build` (0.1.39) | exit 0; renderer compiled | `/tmp/mskh-verify/build-0139.log` |
 | Packaged probe (0.1.39) | exit 0; **8 checks**, incl. real-renderer strip switch + Workspace conflict UI | `/tmp/mskh-verify/packaged-probe-0139.log` |
