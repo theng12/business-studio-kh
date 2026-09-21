@@ -51,13 +51,15 @@ The API does not publish per-model size / quality / source support, so
 
 | Model family | Sizes (UI labels) | Provider size strings | Qualities | Source (edit)? | `n` max |
 |---|---|---|---|---|---|
-| `gpt-image-*` | `auto`, `1:1`, `3:2`, `2:3` | `auto`, `1024x1024`, `1536x1024`, `1024x1536` | `auto`, `low`, `medium`, `high` | yes | 10 |
-| `dall-e-3` | `1:1`, `7:4`, `4:7` | `1024x1024`, `1792x1024`, `1024x1792` | `standard`, `hd` | no | 1 |
-| `dall-e-2` | `1:1` | `1024x1024` | `standard` | yes | 10 |
+| `gpt-image-2.5-*` | 13 ratios: `auto`, `1:1`, `3:2`, `2:3`, `4:3`, `3:4`, `16:9`, `9:16`, `7:4`, `4:7`, `21:9`, `9:21` | `auto` + `WxH` (e.g. `1536x864`, `2016x864`) | `auto`, `low`, `medium`, `high`, `xhigh`, `max` | yes | 10 |
+| `gpt-image-2` / `1.5` / `1` / `1-mini` | `auto`, `1:1`, `3:2`, `2:3` | `auto`, `1024x1024`, `1536x1024`, `1024x1536` | `auto`, `low`, `medium`, `high` | yes | 10 |
+| `dall-e-3` / `dall-e-2` | retained for safety only — OpenAI removed both on 2026-05-12 | — | — | — | — |
 
-Unknown future `gpt-image-*` ids get the gpt-image capabilities — the safe
-default. `sizeParamFor(modelId, ratio)` maps the UI label to the exact string
-the model accepts.
+Only the 2.5 models accept custom dimensions (multiples of 16, aspect 1:3–3:1,
+no edge over 3840, 655,360–8,294,400 px), which is how the extra ratios are
+offered. Unknown future `gpt-image-*` ids get the standard gpt-image
+capabilities — the safe default. `sizeParamFor(modelId, ratio)` maps the UI
+label to the exact string the model accepts.
 
 ### Test connection
 
@@ -76,20 +78,63 @@ Settings → AI "Test" button (`ai:testOpenai`).
 
 ---
 
-## Cost estimates (per generated image, USD)
+## Cost estimation — token-based
 
-Hard-coded ballparks for the confirmation dialog, in `main/ai/costs.js`.
-`estimateForModel(model, count, quality)` applies a quality multiplier on top of
-the default-quality row:
+OpenAI bills an image request as **tokens**, not per image:
 
-| Model | Default quality | Approx $/image |
-|---|---|---:|
-| `openai:gpt-image-*` | medium | $0.042 |
-| `openai:dall-e-3` | standard | $0.040 |
+```
+ text input tokens   (the prompt)
++ image input tokens (the reference image, edits only)
++ image output tokens (the generated image, × n)
+```
 
-Quality multipliers: `low` ×0.26, `medium` ×1, `high` ×4, `standard` ×1,
-`hd` ×2, `auto` ×1. Refresh from
-<https://platform.openai.com/docs/pricing> periodically.
+`main/ai/pricing.js` is the single source of truth. The response carries the
+real counts in its `usage` block, so the app shows an exact cost after a run
+and only *estimates* before it.
+
+### Token rates (USD per 1M tokens, standard tier)
+
+Source: <https://developers.openai.com/api/docs/pricing>. Verified 2026-09-22.
+
+| Model | Text input | Image input | Image output |
+|---|---:|---:|---:|
+| `gpt-image-2.5-sunburst` / `-flare` | $5.00 | $8.00 | $30.00 |
+| `gpt-image-2` | $5.00 | $8.00 | $30.00 |
+| `gpt-image-1.5` | $5.00 | $8.00 | $32.00 |
+| `gpt-image-1-mini` | $2.00 | $2.50 | $8.00 |
+| `gpt-image-1` | $5.00 | $10.00 | $40.00 |
+
+### Output tokens per image
+
+`gpt-image-1` counts are published by OpenAI (272 / 1056 / 4160 at 1024×1024
+for low / medium / high; 408 / 1584 / 6240 at 1536×1024). The **2.5 models
+are not published**, so they were measured on 2026-09-22 and stored in
+`LOW_OUTPUT_TOKENS` + `QUALITY_MULTIPLIER`:
+
+| Ratio | low | medium | high | xhigh | max |
+|---|---:|---:|---:|---:|---:|
+| `1:1` (1024×1024) | 196 | 439 | 1756 | 3122 | 7024 |
+| `3:2` / `2:3` | 158 | 354 | 1416 | 2517 | 5662 |
+| `4:3` / `3:4` | 155 | 347 | 1389 | 2469 | 5555 |
+| `7:4` / `4:7` | 139 | 311 | 1245 | 2214 | 4981 |
+| `16:9` / `9:16` | 120 | 269 | 1075 | 1911 | 4300 |
+| `21:9` / `9:21` | 105 | 235 | 941 | 1673 | 3763 |
+
+Non-square images are *cheaper* than square, so a pixel-area formula would be
+wrong — this is a measured per-ratio table. Non-1:1 quality cells apply the
+square-derived multipliers and are therefore approximate; the exact figure
+comes from `usage` after the run.
+
+### Input image tokens
+
+Measured: `300×200 → 247`, `400×400 → 625`, `512×512 → 1024`, `640×480 → 768`,
+`800×600 → 768`, `1024×1024 → 1024`. That fits a **16px token grid capped at
+a 32×32 (1024-token) budget** — images already under budget are charged their
+native grid, larger ones are downscaled proportionally into it. So a large
+product photo costs the same as a 512×512 one. See `imageInputTokens()`.
+
+Text input tokens are estimated at ~3.5 chars/token (`textInputTokens()`);
+text is the cheapest input, so the approximation is invisible in the total.
 
 ---
 

@@ -61,11 +61,28 @@ async function loadModelCatalog() {
   }
 }
 
+/**
+ * Build the estimator's option bag from a queue/estimate payload. The
+ * renderer sends the source image's pixel dimensions so image input tokens
+ * can be priced without main reading the file.
+ */
+function costOptions(payload = {}) {
+  const options = payload.options ?? {};
+  const w = Number(options.sourceWidth ?? payload.sourceWidth);
+  const h = Number(options.sourceHeight ?? payload.sourceHeight);
+  return {
+    quality: options.quality ?? payload.quality,
+    size: options.size ?? payload.size,
+    prompt: payload.prompt ?? options.prompt,
+    sourceImage: (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) ? { width: w, height: h } : null,
+  };
+}
+
 function register({ expose, emitCatalogChange, assertEntityInActiveCompany, assertProductInActiveCompany, exposeLocal }) {
   // v0.14.4: AI read channels portable to clients. Mutations +
   // queueing stay local until v0.15.0.
   expose('ai:listModels', () => loadModelCatalog());
-  expose('ai:estimateCost', ({ model, count, quality } = {}) => aiCosts.estimateForModel(model, count, quality));
+  expose('ai:estimateCost', ({ model, count, ...rest } = {}) => aiCosts.estimateDetailed(model, count, costOptions(rest)));
 
   expose('ai:listPrompts', (companyId) => {
     if (companyId && companyId !== companies.getActiveId()) return [];
@@ -118,7 +135,11 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
       prompt: input.prompt,
       options: input.options ?? {},
       status: 'queued',
-      costEstimate: aiCosts.estimateForModel(input.model, input.options?.nVariants ?? input.options?.numImages ?? 1, input.options?.quality),
+      costEstimate: aiCosts.estimateForModel(
+        input.model,
+        input.options?.numImages ?? input.options?.nVariants ?? 1,
+        costOptions(input),
+      ),
     });
     if (input.promptTemplateId) {
       try { aiPrompts.bumpUseCount(input.promptTemplateId); } catch (err) {
@@ -358,7 +379,8 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
             status: 'queued',
             costEstimate: aiCosts.estimateForModel(
               input.model,
-              taskOptions?.nVariants ?? taskOptions?.numImages ?? 1,
+              taskOptions?.numImages ?? taskOptions?.nVariants ?? 1,
+              costOptions({ options: taskOptions, prompt: input.prompt }),
             ),
           });
           queued.push(created);
@@ -439,7 +461,8 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
             status: 'queued',
             costEstimate: aiCosts.estimateForModel(
               input.model,
-              input.options?.nVariants ?? input.options?.numImages ?? 1,
+              input.options?.numImages ?? input.options?.nVariants ?? 1,
+              costOptions(input),
             ),
           });
           queued.push(created);
@@ -510,7 +533,8 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
             status: 'queued',
             costEstimate: aiCosts.estimateForModel(
               input.model,
-              input.options?.nVariants ?? input.options?.numImages ?? 1,
+              input.options?.numImages ?? input.options?.nVariants ?? 1,
+              costOptions(input),
             ),
           });
           queued.push(created);

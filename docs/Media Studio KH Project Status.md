@@ -4,7 +4,23 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 **Scope:** personal/internal macOS (Apple Silicon) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, local release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
 
-## Current software pass — 0.1.46 (OpenAI AI rework, on `codex/ai-openai-wire`)
+## Current software pass — 0.1.50 (OpenAI pricing + ratios)
+
+**Pricing + ratios (0.1.50).** The AI cost estimate is now token-based
+(`main/ai/pricing.js`): text input + image input + image output, priced with
+OpenAI's published per-1M-token rates. Output-token counts for the 2.5 models
+were **measured against the live API** (1024×1024: low 196, medium 439, high
+1756, xhigh 3122, max 7024; non-square is cheaper, e.g. 16:9 low = 120), and the
+input-image rule was measured as a 16px grid capped at a 32×32 (1024-token)
+budget. The confirmation dialog shows the token breakdown; after a run the queue
+shows the **actual** cost read from the response's `usage` block (new additive
+`ai_tasks.cost_actual` / `usage_json` columns, no schema bump). GPT Image 2.5
+also gained eight aspect ratios (4:3, 3:4, 16:9, 9:16, 7:4, 4:7, 21:9, 9:21) and
+the xhigh/max quality tiers; DALL·E was dropped (OpenAI removed it 2026-05-12).
+Live-verified: the account lists 9 image models; one gpt-image-2.5-flare
+image-to-image edit returned a 1024×1024 PNG and a 16:9 edit returned
+1536×864 with `usage` 37 text-in / 1024 image-in / 120 out.
+`npm run check` 644/644, `test:native` 95/95, lint clean.
 
 **AI provider rework (0.1.46).** AI Studio now uses OpenAI's Images API directly.
 kie.ai and fal.ai adapters, keys, credit pills and provider task IDs are removed;
@@ -15,11 +31,12 @@ quality and image count are capability-driven (`capabilitiesFor`,
 `main/ai/providers/openai.js`). Generation is synchronous — image edits use
 `/v1/images/edits`, prompt-only uses `/v1/images/generations` — so the queue runner
 has no poll loop; `Repair` re-submits, cancelling in flight drops the result, and
-`queueRunner.stop()` drains in-flight generations before the DB closes. Costs are
-OpenAI-only and quality-aware (`main/ai/costs.js`). Tests: `test/aiOpenaiProvider.test.js`
-(12 mocked-fetch cases), `test/aiCatalog.test.js` (8 catalog/cost cases), plus the
-rewritten queue-stop case in `test/importLifecycle.test.js`. `npm run check` 637/637,
-lint clean. Live OpenAI smoke test pending the owner adding a key.
+`queueRunner.stop()` drains in-flight generations before the DB closes. Costs moved
+to the token model in 0.1.50 (`main/ai/pricing.js`). Tests:
+`test/aiOpenaiProvider.test.js` (mocked-fetch cases), `test/aiCatalog.test.js`
+(catalog/cost/pricing cases), plus the rewritten queue-stop case in
+`test/importLifecycle.test.js`. Live OpenAI smoke test done (owner added a key
+2026-09-22): model list + image-to-image edit verified.
 
 **Repository state (verified 2026-09-22):**
 
