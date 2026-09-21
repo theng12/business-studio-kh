@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.44',
+    date: '2026-09-21',
+    items: [
+      'FIX — the import result screen no longer reports rows that already matched as “updated”; its counts now agree with the preview.',
+      'FIX — a blank or whitespace Status can no longer be stored as an empty value; existing products are left as they are, and new products default to active.',
+      'Internal — Status is normalized once at the products bulk-upsert boundary so the preview and Apply always agree; regressions added.',
+    ],
+  },
+  {
     version: '0.1.43',
     date: '2026-09-21',
     items: [

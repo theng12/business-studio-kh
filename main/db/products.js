@@ -792,11 +792,26 @@ function bulkUpsert(companyId, rows, opts = {}) {
   if (!companyId) throw new Error('companyId is required');
   const db = getDb();
 
+  /* Normalize status once at the boundary so every policy, and the dry-run and
+   * live paths, agree. A blank/whitespace/non-string status is treated as "not
+   * supplied": an insert defaults to 'active' and an existing row is left
+   * alone. Without this, a whitespace-only status could reach the update path
+   * and store a value that matches no status filter, and the dry-run insert
+   * record could disagree with what create() stores. */
+  const normalizedRows = rows.map((row) => {
+    if (!row || typeof row !== 'object' || !('status' in row)) return row;
+    const value = row.status;
+    if (typeof value === 'string' && value.trim() !== '') return { ...row, status: value.trim() };
+    const copy = { ...row };
+    delete copy.status;
+    return copy;
+  });
+
   // Pre-fetch existing SKUs in ONE query (instead of getBySku per row).
   // For a 1000-row import this drops 1000 SELECTs to 1 — the per-row check
   // becomes an O(1) Map lookup. The full row from the DB is still needed
   // because update() uses the existing id to build the WHERE clause.
-  const trimmedRows = rows
+  const trimmedRows = normalizedRows
     .map((r) => ({ raw: r, sku: r && r.sku ? String(r.sku).trim() : '' }))
     .filter((x) => x.sku);
   const existingMap = new Map();
@@ -915,10 +930,11 @@ function bulkUpsert(companyId, rows, opts = {}) {
           }
 
           if (diffs.length === 0) {
-            // Existing row already matches — nothing to do. Counts as a
-            // "no-op" change so the user can see we considered it.
+            // Existing row already matches — nothing to do. Reported as a
+            // "no-op" change so the user can see we considered it, and NOT
+            // counted as an update: the preview and the post-Apply review must
+            // agree about how many rows actually changed.
             changes.push({ rowIndex: idx, sku, action: 'no_change', existingId: existing.id });
-            if (!dryRun) updatedIds.push(existing.id);
           } else {
             if (!dryRun) {
               update(existing.id, patch);
@@ -1004,9 +1020,9 @@ function bulkUpsert(companyId, rows, opts = {}) {
   // Dry-run skips the transaction entirely — no writes means no rollback
   // needed. The work() function is otherwise identical to the live run so
   // the user is guaranteed to see exactly what would happen.
-  if (dryRun) return work(rows);
+  if (dryRun) return work(normalizedRows);
   const tx = db.transaction(work);
-  return tx(rows);
+  return tx(normalizedRows);
 }
 
 /**
