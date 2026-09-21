@@ -464,7 +464,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   ai: {
     listModels:    ()                                 => invoke('ai:listModels'),
-    estimateCost:  (model, count)                     => invoke('ai:estimateCost', { model, count }),
+    estimateCost:  (model, count, quality)            => invoke('ai:estimateCost', { model, count, quality }),
 
     listPrompts:   (companyId)                        => invoke('ai:listPrompts', companyId),
     createPrompt:  (input)                            => invoke('ai:createPrompt', input),
@@ -496,9 +496,7 @@ contextBridge.exposeInMainWorld('api', {
     queueBulkForProducts: (input)                     => invoke('ai:queueBulkForProducts', input),
     exportBulkImage:(galleryId)                       => invoke('ai:exportBulkImage', { galleryId }),
 
-    testKie: (key) => invoke('ai:testKie', key),
-    testFal: (key) => invoke('ai:testFal', key),
-    getCredits: ()  => invoke('ai:getCredits'),
+    testOpenai: (key) => invoke('ai:testOpenai', key),
 
     /* Event subscriptions — main → renderer */
     onTaskUpdate:    (cb) => {

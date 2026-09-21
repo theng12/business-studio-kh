@@ -1,13 +1,15 @@
 /**
  * AI queue runner. Lives in the main process. Owns:
- *  - Concurrency control per provider
- *  - Polling each running task and updating progress
- *  - Auto-retry (up to 3 attempts, exponential backoff)
- *  - Downloading outputs to <dataDir>/ai-gallery/<sku>/
+ *  - Concurrency control (a single OpenAI provider)
+ *  - Calling the OpenAI Images API and turning the result into gallery rows
+ *  - Downloading / decoding outputs into <dataDir>/ai-gallery/<sku>/
  *  - Emitting `ai:taskUpdate` events to the renderer so the UI stays live
  *
- * The runner is awakened by ticks (every 2 s) and by `nudge()` from IPC
- * (whenever a new task is enqueued or settings change).
+ * OpenAI's Images API is SYNCHRONOUS — one request returns the image bytes —
+ * so there is no submit/poll split and no provider task id. A task moves
+ * queued → running → done/failed in a single generation call. The runner is
+ * awakened by ticks (every 2 s) and by `nudge()` from IPC (whenever a new
+ * task is enqueued or settings change).
  */
 
 const fs = require('node:fs');
@@ -18,24 +20,21 @@ const products = require('../db/products');
 const { getDataDir } = require('../db');
 const { slugify } = require('../util/slug');
 const { byKey: modelByKey } = require('./models');
-const kie = require('./providers/kie');
-const fal = require('./providers/fal');
+const openai = require('./providers/openai');
 
 const TICK_MS = 2000;
 
 let ctx = null;     // { getMainWindow, getConfig }
 let timer = null;
-let running = false;
+let running = false; // a tick's scheduling loop is in progress
 let enabled = false;
 const pendingTicks = new Set();
 const idleWaiters = new Set();
 
-/* in-memory per-provider counters of currently in-flight tasks */
-const inflightByProvider = { kie: new Set(), fal: new Set() };
-
-function provider(name) {
-  return name === 'kie' ? kie : name === 'fal' ? fal : null;
-}
+/* ids of tasks currently being generated in this process */
+const inflight = new Set();
+/* in-flight generation promises, so stop() can drain them before the DB closes */
+const inflightPromises = new Set();
 
 // v0.15.1: route AI events through the shared broadcast bus so they
 // fan out to WebSocket clients in addition to the local renderer.
@@ -53,15 +52,14 @@ function getCfg() {
   try { return ctx?.getConfig?.() ?? {}; } catch { return {}; }
 }
 
-function concurrencyLimit(name) {
+function concurrencyLimit() {
   const cfg = getCfg();
-  const v = name === 'kie' ? cfg.kieConcurrency : cfg.falConcurrency;
-  return Math.max(1, Math.min(10, Number(v) || 3));
+  return Math.max(1, Math.min(10, Number(cfg.openaiConcurrency) || 3));
 }
 
-function apiKeyFor(name) {
+function apiKeyFor() {
   const cfg = getCfg();
-  return name === 'kie' ? cfg.kieApiKey : cfg.falApiKey;
+  return cfg.openaiApiKey;
 }
 
 /* ── Tick loop ─────────────────────────────────────────────── */
@@ -69,33 +67,20 @@ function apiKeyFor(name) {
 async function tick() {
   if (!enabled || running) return; // stopped, or a single tick already owns the runner
   running = true;
-  let hasWork = false;
   try {
     const pending = aiTasks.listPendingForRunner();
-    // Early-exit when nothing is queued or in flight — skip both inner loops.
-    // The interval keeps ticking in the background; this just avoids the
-    // wasted iterations when there's literally no work for the runner.
     if (pending.length === 0) return;
-    hasWork = true;
 
-    // Advance running tasks (poll provider for status).
-    for (const t of pending) {
-      if (!enabled) break;
-      if (t.status !== 'running') continue;
-      if (!inflightByProvider[t.provider]?.has(t.id)) {
-        // Resumed after restart — mark as inflight and re-poll.
-        inflightByProvider[t.provider]?.add(t.id);
-      }
-      await pollOne(t);
-    }
-
-    // Start queued tasks subject to per-provider concurrency limits.
+    // Start queued tasks subject to the concurrency limit. `startOne`
+    // reserves the slot synchronously and kicks off the (slow) generation
+    // in the background, so several generations can genuinely overlap.
+    const limit = concurrencyLimit();
     for (const t of pending) {
       if (!enabled) break;
       if (t.status !== 'queued') continue;
-      const live = inflightByProvider[t.provider]?.size ?? 0;
-      if (live >= concurrencyLimit(t.provider)) continue;
-      await startOne(t);
+      if (inflight.size >= limit) break;
+      inflight.add(t.id);
+      startOne(t);
     }
   } catch (err) {
     process.stderr.write(`[ai/queue] tick error: ${err.message}\n`);
@@ -104,43 +89,39 @@ async function tick() {
     for (const resolve of idleWaiters) resolve();
     idleWaiters.clear();
   }
-  // Hint: nothing observable changes here — the early-exit is purely a
-  // micro-perf win. The interval keeps the runner alive for the next nudge.
-  void hasWork;
 }
 
 /* ── Start one task ────────────────────────────────────────── */
 
-async function startOne(task) {
-  // v0.26.11: be lenient about the `task.model` field. The catalog's
-  // primary key is `<provider>:<modelName>` (e.g. `kie:gpt-image-2-image-to-image`)
-  // and all writers should store the full key. But the v0.22.0 bulk-from-
-  // Library path used to strip the prefix and persist only the tail,
-  // leaving older queue rows that fail forever on retry. So we first try
-  // the field as-is, then try the prefixed form if a provider is set.
+function resolveModel(task) {
+  // Be lenient about legacy rows written before the key shape was
+  // standardised: first try `task.model` as-is, then try it prefixed with
+  // the task's provider.
   let model = modelByKey(task.model);
   if (!model && task.provider && !String(task.model || '').includes(':')) {
     model = modelByKey(`${task.provider}:${task.model}`);
   }
+  return model;
+}
+
+function startOne(task) {
+  const model = resolveModel(task);
   if (!model) {
-    aiTasks.update(task.id, { status: 'failed', errorMessage: `Unknown model ${task.model}`, completedAt: Date.now() });
-    emitTaskUpdate(aiTasks.get(task.id));
+    inflight.delete(task.id);
+    handleFailure(task, `Unknown or unsupported model "${task.model}". This task predates the OpenAI rework — click Queue fresh to re-run it on an OpenAI model.`);
     return;
   }
 
-  const apiKey = apiKeyFor(task.provider);
+  const apiKey = apiKeyFor();
   if (!apiKey) {
-    aiTasks.update(task.id, { status: 'failed', errorMessage: `${task.provider} API key not configured`, completedAt: Date.now() });
-    emitTaskUpdate(aiTasks.get(task.id));
+    inflight.delete(task.id);
+    handleFailure(task, 'OpenAI API key not configured — add it in Settings → AI.');
     return;
   }
 
-  // Reserve the concurrency slot synchronously, *then* persist the running
-  // state. The two need to be paired: if the DB write throws (file lock,
-  // etc.) we have to release the slot or it leaks forever and starves the
-  // provider — every subsequent tick would see live=limit and refuse to
-  // start any new task.
-  inflightByProvider[task.provider]?.add(task.id);
+  // Persist the running state *after* reserving the slot. If the DB write
+  // throws (file lock, etc.) release the slot or it leaks forever and
+  // starves the provider.
   try {
     aiTasks.update(task.id, {
       status: 'running',
@@ -149,85 +130,56 @@ async function startOne(task) {
       errorMessage: null,
     });
   } catch (err) {
-    inflightByProvider[task.provider]?.delete(task.id);
+    inflight.delete(task.id);
     process.stderr.write(`[ai/queue] failed to mark task ${task.id} running: ${err.message}\n`);
     return;
   }
   emitTaskUpdate(aiTasks.get(task.id));
 
+  const promise = generateFor(task, model, apiKey);
+  inflightPromises.add(promise);
+  void promise.finally(() => inflightPromises.delete(promise));
+}
+
+async function generateFor(task, model, apiKey) {
   try {
-    // 1. Upload source image (if any) once per task — reuse on retries.
-    let sourceUrl = task.providerSourceUrl;
-    if (model.supportsSource && task.sourceImagePath && !sourceUrl) {
-      const srcAbs = absForRelative(task.sourceImagePath);
-      if (!srcAbs) throw new Error(`Source image missing on disk: ${task.sourceImagePath}`);
-      // v0.49.16: pass the model so the provider can opt out of the inline-
-      // data-URL shortcut for endpoints that require fetchable HTTPS URLs
-      // (notably fal-ai/gpt-image-2/edit-image).
-      const up = await provider(task.provider).uploadSource(apiKey, { absPath: srcAbs, model });
-      sourceUrl = up.url;
-      aiTasks.update(task.id, { providerSourceUrl: sourceUrl });
+    let sourceImageAbs = null;
+    if (model.supportsSource && task.sourceImagePath) {
+      sourceImageAbs = absForRelative(task.sourceImagePath);
+      if (!sourceImageAbs) throw new Error(`Source image missing on disk: ${task.sourceImagePath}`);
     }
 
-    // 2. Submit to provider.
-    const { providerTaskId } = await provider(task.provider).submit(apiKey, {
-      model,
+    const { outputUrls } = await openai.generate(apiKey, {
+      model: model.modelId,
       prompt: task.prompt,
-      sourceUrl,
+      sourceImageAbs,
       options: task.options ?? {},
     });
-    aiTasks.update(task.id, { providerTaskId, progress: 0.05 });
-    emitTaskUpdate(aiTasks.get(task.id));
+    await onDone(task, outputUrls);
   } catch (err) {
-    inflightByProvider[task.provider]?.delete(task.id);
+    inflight.delete(task.id);
     handleFailure(task, err.message);
   }
 }
 
-/* ── Poll one task ─────────────────────────────────────────── */
-
-async function pollOne(task) {
-  const model = modelByKey(task.model);
-  const apiKey = apiKeyFor(task.provider);
-  if (!model || !apiKey || !task.providerTaskId) return;
-
-  try {
-    const res = await provider(task.provider).pollStatus(apiKey, {
-      providerTaskId: task.providerTaskId,
-      model,
-    });
-    if (res.status === 'running') {
-      if (typeof res.progress === 'number' && Math.abs((task.progress ?? 0) - res.progress) > 0.01) {
-        aiTasks.update(task.id, { progress: res.progress });
-        emitTaskUpdate(aiTasks.get(task.id));
-      }
-      return;
-    }
-    if (res.status === 'done') {
-      await onDone(task, res.outputUrls ?? []);
-      return;
-    }
-    if (res.status === 'failed') {
-      inflightByProvider[task.provider]?.delete(task.id);
-      handleFailure(task, res.error || 'Provider returned failure');
-    }
-  } catch (err) {
-    inflightByProvider[task.provider]?.delete(task.id);
-    handleFailure(task, err.message);
-  }
-}
-
-/* ── Done: download outputs, file in gallery ──────────────── */
+/* ── Done: decode outputs, file in gallery ────────────────── */
 
 async function onDone(task, outputUrls) {
-  // Empty outputs after a "success" poll is a provider-side weirdness that
-  // would otherwise vanish silently. Surface it as a Failed task so the user
-  // sees something actionable instead of "Done" with nothing in the gallery.
+  // The task may have been cancelled (or removed) while the request was in
+  // flight — the API call cannot be aborted mid-flight, so drop the result
+  // rather than resurrecting a task the user stopped.
+  const current = aiTasks.get(task.id);
+  if (!current) { inflight.delete(task.id); return; }
+  if (current.status === 'cancelled') { inflight.delete(task.id); return; }
+
+  // Empty outputs after a "success" response would otherwise vanish
+  // silently. Surface it as a Failed task so the user sees something
+  // actionable instead of "Done" with nothing in the gallery.
   if (!Array.isArray(outputUrls) || outputUrls.length === 0) {
-    inflightByProvider[task.provider]?.delete(task.id);
+    inflight.delete(task.id);
     aiTasks.update(task.id, {
       status: 'failed',
-      errorMessage: 'Provider reported success but returned no image URLs. Check the provider dashboard (kie.ai/logs or fal.ai) for the actual output, then Retry.',
+      errorMessage: 'OpenAI reported success but returned no image data. Click Repair to try again.',
       completedAt: Date.now(),
     });
     emitTaskUpdate(aiTasks.get(task.id));
@@ -239,7 +191,7 @@ async function onDone(task, outputUrls) {
     // For per-product tasks, outputs land in `ai-gallery/<sku>/`. For
     // bulk-mode tasks (no productId), they go in `ai-gallery/_bulk/<yyyymmdd>/`
     // so the dir is browseable in Finder, scoped by date, and clearly
-    // separate from per-product results. v0.11.0.
+    // separate from per-product results.
     let relativeDir;
     if (product) {
       const skuSlug = slugify(product.sku || 'unassigned', 'unassigned');
@@ -252,7 +204,7 @@ async function onDone(task, outputUrls) {
     const galleryDir = path.join(getDataDir(), relativeDir);
     await fs.promises.mkdir(galleryDir, { recursive: true });
 
-    /* v0.11.5: bulk-mode output naming + optional external export.
+    /* Bulk-mode output naming + optional external export.
        - Naming: when the task has a sourceImagePath (always true for bulk
          mode), derive the output basename from the source file so the
          user can match results to inputs at a glance. Per-product mode
@@ -272,31 +224,20 @@ async function onDone(task, outputUrls) {
       catch (err) { process.stderr.write(`[ai/queue] mkdir exportDir failed: ${err.message}\n`); }
     }
 
-    // Pre-compute the source basename for bulk tasks. `sourceImagePath` is
-    // a relative path like `ai-source/cat.jpg`; we want `cat`.
     const sourceBasename = (!product && task.sourceImagePath)
       ? path.basename(task.sourceImagePath, path.extname(task.sourceImagePath))
       : null;
 
-    // v0.26.40: bounded by TIMEOUT_DOWNLOAD (60s) so a hung CDN
-    // doesn't freeze the runner mid-fan-out. Image bytes can be many
-    // MB so we use the most generous ceiling — but it's still
-    // bounded, unlike the bare fetch this replaced.
-    const { fetchWithTimeout, TIMEOUT_DOWNLOAD } = require('./_fetchTimeouts');
     let i = 0;
     for (const url of outputUrls) {
       i += 1;
       try {
-        const res = await fetchWithTimeout(url, {}, TIMEOUT_DOWNLOAD);
-        if (!res.ok) throw new Error(`download ${url} failed (${res.status})`);
-        const buf = Buffer.from(await res.arrayBuffer());
-        const ext = guessExt(res.headers.get('content-type'), url);
+        const buf = await readImageBytes(url);
+        const ext = guessExt(url);
 
         // Pick a non-colliding filename inside galleryDir.
         let name;
         if (sourceBasename) {
-          // Bulk: prefer `<sourceBasename>.ext`, then `-2`, `-3`, ... for
-          // collisions (re-running the same image, multi-variant returns).
           const suffix = outputUrls.length > 1 ? `-${i}` : '';
           name = `${sourceBasename}${suffix}${ext}`;
           let n = 2;
@@ -323,51 +264,20 @@ async function onDone(task, outputUrls) {
         });
         emitGalleryAdded(entry);
 
-        // v0.22.0: auto-promote first successful variant. Set when
-        // the task was created via `ai:queueBulkForProducts` with
-        // `autoPromoteAsMain: true`. We promote only the FIRST
-        // output of each task so multi-variant runs don't keep
-        // stomping the main image — the rest stay in the gallery
-        // as alternates the user can flip to later.
-        //
-        // v0.26.12: the gate used to read `i === 0` — DEAD CODE.
-        // `i` is incremented at the top of the for-loop above
-        // (`i += 1` runs before this block), so it's 1 on the
-        // first iteration and never 0. The gate was unreachable
-        // from v0.22.0 → v0.26.11, which is why bulk-from-Library
-        // tasks never replaced the product's main image even with
-        // the checkbox ticked. Fix: check `i === 1` to match the
-        // 1-indexed counter the loop now uses (also used by the
-        // `-1, -2, -3` filename suffixes for multi-variant runs).
-        //
-        // Guarded:
-        //   - must have a productId (no orphan auto-promotes)
-        //   - i must be 1 (first variant only)
-        //   - failures are logged + swallowed so a broken promote
-        //     doesn't crash the whole queue runner; the gallery
-        //     entry is already recorded so the user can promote
-        //     manually if needed.
-        // v0.26.22: two distinct auto-attach modes. `autoPromoteAsMain`
-        // (existing): add to product AND move to position 0 — original
-        // demotes to position 1. `autoAddToProduct` (new): add to
-        // product at the END of the image list, original images
-        // untouched. Promote-as-main implies add, so we check it
-        // first; if it's off we fall through to the add-only path.
-        // Both share the gallery-link / recompute / touch / broadcast
-        // tail because the user-visible side effects are the same.
+        // Auto-attach. Two distinct modes:
+        //   `autoPromoteAsMain`: add to product AND move to position 0 —
+        //     original demotes to position 1 (first variant only, so
+        //     multi-variant runs don't repeatedly stomp the main image).
+        //   `autoAddToProduct`: append every variant at the END of the
+        //     image list; original images untouched.
+        // Promote-as-main implies add, so it's checked first.
         const wantPromote = !!task.options?.autoPromoteAsMain;
         const wantAdd     = wantPromote || !!task.options?.autoAddToProduct;
-        // v0.48.0: split the gate. Promote-as-main MUST be first-variant-only
-        // so multi-variant runs don't repeatedly stomp the main image. Plain
-        // auto-add wants ALL variants saved as images on the product — every
-        // alternate becomes a real image the user can keep, set as main, or
-        // delete from the regular gallery. The mobile AI flow uses pure
-        // auto-add, which is why this gate matters now.
         const variantEligible = wantPromote ? (i === 1) : true;
         if (variantEligible && wantAdd && task.productId) {
           try {
             const productImages = require('../db/productImages');
-            const products = require('../db/products');
+            const productsDb = require('../db/products');
             const { image: addedImage } = await productImages.addFromSource(task.productId, abs, {
               originalFilepath: abs,
             });
@@ -376,13 +286,10 @@ async function onDone(task, outputUrls) {
               productImages.setMain(task.productId, relativePath);
             }
             aiGallery.markPromoted(entry.id);
-            products.recomputeProcessStatus(task.productId);
-            // v0.26.21: bump product.updated_at so the Library grid +
-            // table thumbs cache-bust. Without this the grid kept
-            // showing the OLD main image's pixels (browser cache) until
-            // a second mutation forced updated_at to change. Same fix
-            // pattern as v0.22.8's images:setMainImage IPC.
-            products.touchUpdated(task.productId);
+            productsDb.recomputeProcessStatus(task.productId);
+            // Bump product.updated_at so the Library grid + table thumbs
+            // cache-bust (browser caches images by URL).
+            productsDb.touchUpdated(task.productId);
             const events = require('../events');
             events.broadcast('catalog:changed', { kind: 'images', op: wantPromote ? 'promote' : 'add', id: task.productId });
             events.broadcast('catalog:changed', { kind: 'aiGallery', op: 'promote', id: entry.id, productId: task.productId });
@@ -413,7 +320,7 @@ async function onDone(task, outputUrls) {
       }
     }
 
-    inflightByProvider[task.provider]?.delete(task.id);
+    inflight.delete(task.id);
     aiTasks.update(task.id, {
       status: 'done',
       progress: 1,
@@ -422,7 +329,7 @@ async function onDone(task, outputUrls) {
     });
     emitTaskUpdate(aiTasks.get(task.id));
   } catch (err) {
-    inflightByProvider[task.provider]?.delete(task.id);
+    inflight.delete(task.id);
     handleFailure(task, err.message);
   }
 }
@@ -456,12 +363,30 @@ function absForRelative(relative) {
   return fs.existsSync(abs) ? abs : null;
 }
 
-function guessExt(contentType, url) {
-  if (contentType?.includes('jpeg')) return '.jpg';
-  if (contentType?.includes('png'))  return '.png';
-  if (contentType?.includes('webp')) return '.webp';
-  const m = url.match(/\.(jpe?g|png|webp)(\?|$)/i);
-  if (m) return `.${m[1].toLowerCase().replace('jpeg', 'jpg')}`;
+/**
+ * Bytes for one output. OpenAI returns base64 data URLs by default (no
+ * hosting), so decode those locally; an ordinary http(s) URL is fetched
+ * with the shared download timeout.
+ */
+async function readImageBytes(url) {
+  const m = /^data:([^;,]*);base64,(.*)$/s.exec(String(url ?? ''));
+  if (m) return Buffer.from(m[2], 'base64');
+  const { fetchWithTimeout, TIMEOUT_DOWNLOAD } = require('./_fetchTimeouts');
+  const res = await fetchWithTimeout(url, {}, TIMEOUT_DOWNLOAD);
+  if (!res.ok) throw new Error(`download ${url} failed (${res.status})`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+function guessExt(url) {
+  const m = String(url ?? '').match(/^data:(image\/[a-z+.-]+);/i);
+  if (m) {
+    const sub = m[1].slice('image/'.length);
+    if (sub === 'jpeg' || sub === 'jpg') return '.jpg';
+    if (sub === 'webp') return '.webp';
+    if (sub === 'png') return '.png';
+  }
+  const ext = String(url ?? '').match(/\.(jpe?g|png|webp)(\?|$)/i);
+  if (ext) return `.${ext[1].toLowerCase().replace('jpeg', 'jpg')}`;
   return '.png';
 }
 
@@ -482,10 +407,9 @@ function start(_ctx) {
   if (timer) clearInterval(timer);
   for (const pending of pendingTicks) clearTimeout(pending);
   pendingTicks.clear();
-  // Boot sweep: any tasks left in 'running' without a provider task id were
-  // interrupted (process killed mid-submit). Mark them failed so Repair has
-  // a clear place to start from. Tasks with provider_task_id stay 'running'
-  // and the tick loop will re-poll them.
+  // Boot sweep: generations are synchronous and in-process, so any task
+  // still marked 'running' at boot was interrupted (process killed
+  // mid-request). Mark it failed so Repair has a clear place to start.
   interruptStaleTasks();
   timer = setInterval(tick, TICK_MS);
   scheduleTick(100);
@@ -498,6 +422,9 @@ async function stop() {
   for (const pending of pendingTicks) clearTimeout(pending);
   pendingTicks.clear();
   if (running) await new Promise((resolve) => idleWaiters.add(resolve));
+  // Drain in-flight generations so none writes to the DB after it closes.
+  // `generateFor` swallows its own errors, so allSettled never rejects.
+  if (inflightPromises.size) await Promise.allSettled([...inflightPromises]);
 }
 
 function nudge() {
@@ -509,10 +436,10 @@ function interruptStaleTasks() {
     const all = aiTasks.listPendingForRunner();
     const now = Date.now();
     for (const t of all) {
-      if (t.status === 'running' && !t.providerTaskId) {
+      if (t.status === 'running') {
         aiTasks.update(t.id, {
           status: 'failed',
-          errorMessage: 'Interrupted before the provider received it. Click Repair to retry, or Queue fresh to start over.',
+          errorMessage: 'Interrupted before OpenAI returned a result. Click Repair to try again, or Queue fresh to start over.',
           completedAt: now,
         });
         emitTaskUpdate(aiTasks.get(t.id));
@@ -524,43 +451,27 @@ function interruptStaleTasks() {
 }
 
 /**
- * Repair: try to recover the result from the provider. Used for tasks that
- * ended up failed, cancelled, or Done-without-gallery. Behavior:
- *   - If we have a providerTaskId, mark the task running and let the tick
- *     loop poll the provider. If the provider returns success with image
- *     URLs we download them; if it returns no URLs / expired / not-found we
- *     mark failed with a clearer "result unavailable" message so the user
- *     knows to Queue fresh.
- *   - If there's no providerTaskId, just re-queue: the task never reached
- *     the provider, so a fresh submission is the only path.
+ * Repair: re-queue a failed / cancelled / stuck task. OpenAI has no
+ * provider-side task to re-poll, so a fresh submission is the only
+ * recovery path.
  */
 function repair(taskId) {
   const t = aiTasks.get(taskId);
   if (!t) return null;
-  inflightByProvider[t.provider]?.delete(t.id);
-
-  if (t.providerTaskId) {
-    aiTasks.update(taskId, {
-      status: 'running',
-      errorMessage: null,
-      progress: 0.1,
-    });
-    inflightByProvider[t.provider]?.add(t.id);
-  } else {
-    aiTasks.update(taskId, {
-      status: 'queued',
-      progress: 0,
-      errorMessage: null,
-    });
-  }
+  inflight.delete(t.id);
+  aiTasks.update(taskId, {
+    status: 'queued',
+    progress: 0,
+    errorMessage: null,
+  });
   emitTaskUpdate(aiTasks.get(taskId));
   nudge();
   return aiTasks.get(taskId);
 }
 
 /**
- * Queue fresh: clone the task as a brand-new queued task. Used when Repair
- * has determined the original result is gone (expired / not-found).
+ * Queue fresh: clone the task as a brand-new queued task. Used when the
+ * original task is unrecoverable and the user wants a clean run.
  */
 function queueFresh(taskId) {
   const t = aiTasks.get(taskId);
@@ -584,7 +495,7 @@ function queueFresh(taskId) {
 function cancel(taskId) {
   const t = aiTasks.get(taskId);
   if (!t) return null;
-  inflightByProvider[t.provider]?.delete(t.id);
+  inflight.delete(t.id);
   aiTasks.update(taskId, { status: 'cancelled', completedAt: Date.now() });
   emitTaskUpdate(aiTasks.get(taskId));
   return aiTasks.get(taskId);

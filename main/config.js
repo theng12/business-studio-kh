@@ -50,23 +50,18 @@ function defaultConfig() {
     theme: 'light',            // 'light' | 'dark' | 'system'
     customPresets: [],         // [{ id, name, width, height, format, colorProfile }]
 
-    // AI Studio
-    kieApiKey: null,
-    falApiKey: null,
-    kieConcurrency: 3,         // 1–10
-    falConcurrency: 3,         // 1–10
-    // v0.26.47: default bumped from `fal-ai/flux-pro/kontext` (removed
-    // from catalog) to GPT Image-2 — the best-quality option in the
-    // current dropdown. Existing installs that have a saved
-    // aiDefaultModel pointing at the old flux key will fall back to
-    // the first available model via the renderer's snap-to-valid
-    // guard in modules/AIStudio/index.jsx.
-    aiDefaultModel: 'kie:gpt-image-2-image-to-image',
-    aiSuggestionProvider: 'kie', // 'kie' | 'fal' — for prompt suggestions
+    // AI Studio — OpenAI image generation (edits + generations)
+    openaiApiKey: null,
+    openaiConcurrency: 3,      // 1–10
+    // v0.1.46: the catalog is dynamic (fetched from GET /v1/models), so
+    // there is no fixed default key. `null` means "use the first model the
+    // catalog returns"; the renderer snaps to a valid model on mount.
+    // A saved key from the retired kie.ai / fal.ai era will not match any
+    // model and is likewise snapped away.
+    aiDefaultModel: null,
     aiUsage: {                 // monthly counters, reset on month rollover
       month: monthKey(),
-      kieCalls: 0,
-      falCalls: 0,
+      openaiCalls: 0,
     },
 
     /* ─── v0.14.0: multi-Mac server mode foundation ─────────────────

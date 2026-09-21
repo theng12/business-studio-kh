@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.46',
+    date: '2026-09-22',
+    items: [
+      'NEW — AI Studio now uses OpenAI directly. Add your OpenAI API key in Settings → AI and generate image edits or prompt-only images without leaving the app.',
+      'NEW — the model list is fetched live from OpenAI, so every image model your account can use appears in the picker automatically — including newer GPT Image models — without an app update.',
+      'NEW — aspect ratio, quality and image count now come from each model’s own capabilities, so the options you see are the ones the selected model actually accepts.',
+      'POLISH — kie.ai and fal.ai have been removed, along with their keys, credit pills and provider task IDs. The Settings page now has a single OpenAI key and a single concurrency setting.',
+      'POLISH — the queue can no longer be left “running” forever by a provider-side task: a generation either returns an image or fails with the real OpenAI message.',
+      'Internal — OpenAI image generation is synchronous (edits / generations), so the provider adapters for kie.ai and fal.ai, their tests and the poll-based queue runner were deleted; the catalog and cost estimate are now OpenAI-only with quality-aware pricing.',
+    ],
+  },
+  {
     version: '0.1.45',
     date: '2026-09-22',
     items: [
