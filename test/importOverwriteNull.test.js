@@ -99,3 +99,36 @@ test('skip leaves tags untouched and an empty status on insert defaults to activ
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('status is normalized at the boundary and no-op rows are not counted as updates', { skip: skipReason }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mskh-status-norm-'));
+  db.initDb(dir);
+  try {
+    const company = companies.create({ name: 'Status Co', isActive: true });
+    const product = products.create({ companyId: company.id, sku: 'SKU-1', name: 'Keep', status: 'draft' });
+
+    // A whitespace-only status must never be stored on an existing row.
+    for (const policy of ['merge', 'overwrite']) {
+      products.update(product.id, { status: 'draft' });
+      products.bulkUpsert(company.id, [{ sku: 'SKU-1', status: '   ' }], { dryRun: false, conflictPolicy: policy });
+      assert.equal(products.getBySku(company.id, 'SKU-1').status, 'draft', `${policy}: whitespace status must not overwrite`);
+    }
+
+    // Dry-run and live runs must agree about the status of a new row.
+    const rows = [{ sku: 'SKU-2', status: '' }, { sku: 'SKU-2', status: 'active' }];
+    const dry = products.bulkUpsert(company.id, rows.map((r) => ({ ...r })), { dryRun: true, conflictPolicy: 'merge' });
+    const live = products.bulkUpsert(company.id, rows.map((r) => ({ ...r })), { dryRun: false, conflictPolicy: 'merge' });
+    assert.equal(products.getBySku(company.id, 'SKU-2').status, 'active');
+    const dryStatusDiff = (dry.changes[1].diffs ?? []).some((d) => d.field === 'status');
+    const liveStatusDiff = (live.changes[1].diffs ?? []).some((d) => d.field === 'status');
+    assert.equal(dryStatusDiff, liveStatusDiff, 'dry-run and live must agree on the status change');
+
+    // A row that already matches is unchanged, not an update.
+    const skip = products.bulkUpsert(company.id, [{ sku: 'SKU-1' }], { dryRun: false, conflictPolicy: 'skip' });
+    assert.equal(skip.changes[0].action, 'no_change');
+    assert.equal(skip.updated, 0, 'no-op rows must not be counted as updates');
+  } finally {
+    try { db.closeDb(); } catch (_) {}
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
