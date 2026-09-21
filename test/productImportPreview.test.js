@@ -121,3 +121,22 @@ test('overwrite preview warns how many existing values it will clear; merge does
   const merge = renderPreview(conflictPreview, 'merge');
   assert.doesNotMatch(merge, /will clear/);
 });
+
+test('title-row advice only shows when no column name is recognized', async () => {
+  await loadPreview();
+  const { shouldSuggestTitleRow } = cached;
+  assert.equal(
+    shouldSuggestTitleRow({ looksLikeTitleRow: true, headers: ['Product catalogue 2026'] }),
+    true,
+    'an unrecognized single header is the real dead-end the hint is for',
+  );
+  assert.equal(
+    shouldSuggestTitleRow({ looksLikeTitleRow: true, headers: ['SKU', 'Column 2'] }),
+    false,
+    'a recognized SKU must not trigger delete-row-1 advice on a valid sheet',
+  );
+  assert.equal(
+    shouldSuggestTitleRow({ looksLikeTitleRow: false, headers: ['SKU', 'Name'] }),
+    false,
+  );
+});

@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.42',
+    date: '2026-09-21',
+    items: [
+      'FIX — Overwrite no longer skips an existing product when its Status cell is blank; the other changes on that row now apply, and the current status is left alone.',
+      'FIX — the “row 1 looks like a title” warning no longer appears on a valid sheet with a single named column, where following it would have destroyed the real header row.',
+      'FIX — a crop blocked by a concurrent edit now explains the conflict instead of showing a raw error payload.',
+      'Internal — regressions for blank Status under Overwrite, the title-row hint, and the crop conflict message.',
+    ],
+  },
+  {
     version: '0.1.41',
     date: '2026-09-21',
     items: [
