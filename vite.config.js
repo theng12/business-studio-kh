@@ -114,6 +114,13 @@ export default defineConfig({
         vite: {
           build: {
             outDir: path.resolve(__dirname, 'dist-electron/main'),
+            // v0.1.48: this outDir is outside the Vite root, so Rollup does
+            // NOT empty it by default — a deleted or renamed main-process
+            // module stayed in dist-electron/ and shipped inside the asar
+            // forever. `emptyOutDir: true` overrides that. Each electron
+            // target (main, preload) has its own outDir, so emptying one
+            // cannot clobber the other.
+            emptyOutDir: true,
             lib: false,
             rollupOptions: {
               // Auto-collected from main/**/*.js. Add a new file under main/
@@ -144,6 +151,8 @@ export default defineConfig({
         vite: {
           build: {
             outDir: path.resolve(__dirname, 'dist-electron/preload'),
+            // v0.1.48: see the main target above — same stale-output bug.
+            emptyOutDir: true,
             rollupOptions: {
               external: ['electron'],
             },

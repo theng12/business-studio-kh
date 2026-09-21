@@ -2,6 +2,14 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.48',
+    date: '2026-09-22',
+    items: [
+      'Internal — the packaged app no longer carries stale compiled files from modules that were removed or renamed; the main-process build output is cleared before every build.',
+      'Internal — follow-up to the 0.1.46 OpenAI rework: the 0.1.47 installer still bundled the retired kie.ai / fal.ai compiled adapters even though nothing loaded them.',
+    ],
+  },
+  {
     version: '0.1.47',
     date: '2026-09-22',
     items: [
