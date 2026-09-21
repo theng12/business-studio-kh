@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.41',
+    date: '2026-09-21',
+    items: [
+      'FIX — Overwrite now truly clears a value when the matching cell in your file is blank. Blank cells were being dropped before the choice was applied, so Overwrite quietly behaved like Merge.',
+      'FIX — the import preview’s “will clear N existing values to blank” warning is now accurate, because those blank cells reach the preview too.',
+      'Internal — regression for the rows the import builds before the dry-run.',
+    ],
+  },
+  {
     version: '0.1.40',
     date: '2026-09-21',
     items: [
