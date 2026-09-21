@@ -4,15 +4,15 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 **Scope:** personal/internal macOS (Apple Silicon) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, local release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
 
-## Current software pass — 0.1.37 (release candidate prepared, not integrated)
+## Current software pass — 0.1.38 (in progress); 0.1.37 integrated
 
 **Repository state (verified 2026-09-21):**
 
 - Worktree: `/Users/vengtheng/.codex/worktrees/workspace-concurrency/media-studio-kh`
-- Branch: `codex/workspace-concurrency`
-- Base/HEAD: `0d0f93b2bf6d870ef50133f4b78b2ca08c816886` (0.1.36, PR #5); `origin/main` is the same SHA; no commits for this pass.
-- Work is **uncommitted and untracked**. Tracked edits include `main/db/{index,productImages}.js`, `main/imageDedup.js`, `main/ipc/workspace.js`, `main/preload.js`, `main/server/validators.js`, `renderer/modules/ImageWorkspace/index.jsx`, `renderer/store/workspace.js`, `scripts/probe-*.js`, `test/imageWorkspaceAutosave.test.js`, `renderer/modules/ProductLibrary/ImportModal.jsx`, `renderer/components/WhatsNewModal.jsx`, `package.json`, `package-lock.json`, README and three plan docs. Untracked: `docs/Media Studio KH Project Status.md`, `docs/superpowers/plans/2026-09-21-workspace-concurrency.md`, `test/workspaceConcurrency.test.js`, `test/workspaceConcurrentEditor.test.js`, `test/productImportNameResolver.test.js`, `renderer/lib/nameIdResolver.js`. `docs/NEW_COMPUTER_HANDOFF.md` is deleted as part of the rename to this file. `CLAUDE.md` remains a symlink to `AGENTS.md`.
-- Plan: [2026-09-21 workspace concurrency](superpowers/plans/2026-09-21-workspace-concurrency.md).
+- **0.1.37 is merged:** PR #6, merge commit `172d3eb80079d8333c336a44e942cdb2aab5146d`; local `main` fast-forwarded to it. The 0.1.37 DMG below was built before integration and matches the merged app source; it was handed to the owner for the customer. The customer's import problem is resolved.
+- Current branch: `codex/import-hardening`, from `origin/main` @ `172d3eb`. This pass: import hardening (duplicate headers, title-row detection), the documentation truth pass, and a patch bump to 0.1.38.
+- Files in this pass: new `test/productImportWorkbook.test.js`; changed `main/fileHandler.js`, `renderer/modules/ProductLibrary/ImportModal.jsx`, `AGENTS.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `package.json`, `package-lock.json`, `renderer/components/WhatsNewModal.jsx`, this file.
+- Plans: [2026-09-21 workspace concurrency](superpowers/plans/2026-09-21-workspace-concurrency.md) (delivered in 0.1.37); [2026-09-21 remaining work](superpowers/plans/2026-09-21-remaining-work.md).
 
 **Priority checklist** — statuses: investigation · reproduced · implemented/unverified · self-reviewed · verified · blocked · deferred/out-of-scope · closed decision.
 
@@ -23,15 +23,18 @@ Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of 
 - [x] **W5 — retained-editor lifecycle (F1–F5). Self-reviewed; corrections verified by focused and full checks; not independently reviewed.** Corrections present: source flip locks + flushes before mutating; navigation flushes only reachable identities (product + image id/hash); removed/replaced drafts are retained for exact-identity return and never rebound to different bytes; dirty re-entry restores the context's own draft and revision; delayed selection follows target ID; processing locks before its first await and releases in `finally`; stale conflict completions check editor generation. Retained regressions: five in `test/workspaceConcurrentEditor.test.js`. Self-review (2026-09-21) traced context map, seed effect, `flushPendingSave`, `handleFlipActive`, `handleProcess*`, selection and conflict paths; additionally pinned that a restored dirty draft is retried and a failed retry surfaces as `error` (not a stuck `saving`). The prior independent whole-branch review FAIL describes the pre-correction tree and is **not** approval of these corrections.
 - [x] **I1 — product import created each brand/category once per row. Verified (self-reviewed).** Reproduced with an actual-component harness: 3 rows sharing one brand produced 3 `brands.create` IPC calls. Fixed via `renderer/lib/nameIdResolver.js`, a per-run case-insensitive resolver seeded from the store lookups. Harness now reports 1; `test/productImportNameResolver.test.js` (3 cases) passes. Limitation: fixes redundant work, not the customer's un-reproduced failure below.
 - [x] **I2 — import silently dropped rows with no SKU. Implemented/unverified (UI).** `buildRows` dropped rows whose mapped SKU cell was blank and the preview reported only the smaller count. The preview now states "N of M rows had no SKU and were skipped". Data path verified by the component harness (`sourceRowCount`/`rowsConsidered` differ correctly); no DOM-level repo test exists for the rendered message.
-- [ ] **I3 — customer "Excel import doesn't work". Blocked on artifact.** The customer's supplied workbook (`media-studio-kh-products-sample.xlsx`, 3 rows, barcode SKUs) imports correctly here end-to-end (3 inserted, re-import 3 unchanged). The import UI + `main/fileHandler.js` are byte-identical from 0.1.32 → 0.1.37, and `xlsx` is present in the packaged asar. Customer is on a pre-0.1.36 build and reported a preview of roughly "0 new, 0 updated, 1 of 1 rows", which points at their actual file (header/mapping/sheet/SKU cells), not the supplied file. Next action: obtain the exact failing file + version, or confirm the supplied file's outcome on the new build.
-- [x] **W1–W5 statuses above are "verified" only in the sense of fresh self-run checks on this exact tree; there has been no independent review since the F1–F5 corrections.**
+- [x] **I3 — customer "Excel import doesn't work". Closed: resolved by the owner.** The supplied workbook imports correctly end-to-end. The 0.1.37 import improvements plus this pass's hardening cover the reproduced shapes.
+- [x] **R4.1 — duplicate header columns blanked every row. Verified (self-reviewed).** `readWorkbook` keyed row objects by header name, so a second "SKU" column overwrote the first and a file with a stray duplicate lost every SKU ("out of 0 rows"). Repeats now get a numeric suffix so both columns survive. Tests: `test/productImportWorkbook.test.js`.
+- [x] **R4.2 — a title row above the headers dead-ended. Verified (self-reviewed).** `readWorkbook` now sets `looksLikeTitleRow`; the map step explains it instead of showing one useless column. Same test file.
+- [x] **R2 — documentation truth pass. Verified (self-reviewed).** Corrected `AGENTS.md` §8 (default data folder is `~/Pictures/Media Studio KH`; `userData/data` is legacy) and §17 counts (`test/` 81, `main/util/` 25), and corrected the briefing's Electron 44 / Vite 7 and data-folder claims.
+- [x] **W1–W5 statuses above are "verified" only in the sense of fresh self-run checks on that tree; there has been no independent review since the F1–F5 corrections. 0.1.37 is nevertheless merged at the owner's direction.**
 - Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer).
 
-**Final artifact (current):**
+**Artifacts:**
 
-- `dist/Media Studio KH-0.1.37-arm64.dmg` — 245,044,926 bytes, SHA-256 `576ee0a91dac0211560db89d69c4db426bafed8a1ad0346a0473b95046ecfafb`. Built 2026-09-21 after all source changes; unsigned; arm64; min macOS 12.0.0.
-- Tested packaged app.asar SHA-256 `d61d293c414bbc9d98ea229b67cb237196605a70dcd507811323cd6cd7d8ddb6`; the mounted DMG's asar matches it. `xlsx` present (25 entries).
-- **Stale, do not deliver:** the previous `dist/Media Studio KH-0.1.37-arm64.dmg` (245,043,028 bytes, SHA-256 `1a6d60eba5bf2c1240d4c2426d2db0ea2414335477eb90802a002203cd065a34`) was built before the last corrections and has been replaced by the file above.
+- **0.1.37 (merged, delivered):** `dist/Media Studio KH-0.1.37-arm64.dmg` — 245,044,926 bytes, SHA-256 `576ee0a91dac0211560db89d69c4db426bafed8a1ad0346a0473b95046ecfafb`. Unsigned; arm64; min macOS 12.0.0. Tested packaged asar SHA-256 `d61d293c414bbc9d98ea229b67cb237196605a70dcd507811323cd6cd7d8ddb6`; the mounted DMG's asar matches it.
+- **0.1.38:** not yet built — build and verify after this pass's checks.
+- **Superseded, do not deliver:** the earlier `1a6d60eba5bf2c1240d4c2426d2db0ea2414335477eb90802a002203cd065a34` DMG, built before the final 0.1.37 corrections.
 
 **Verification ledger (fresh self-run, 2026-09-21, this tree):**
 

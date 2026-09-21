@@ -86,7 +86,11 @@ Top-tab navigation across feature areas is forbidden. Sub-tabs *inside* a single
 
 For desktop apps:
 
-- Default location: `app.getPath('userData')/data/`.
+- Default location: `~/Pictures/Media Studio KH` (`defaultDataDir()` in
+  `main/config.js`; verified 2026-09-21). `app.getPath('userData')/data` is the
+  **legacy** path — `legacyDataDir()` still exposes it so existing installs are
+  detected, but new installs do not use it. Do not "fix" the code to match this
+  rule's old wording or move anyone's data.
 - Settings UI lets the user pick a different folder (Documents, Dropbox, external drive, etc.).
 - Persist the choice in `config.json` under userData (not the DB — chicken/egg).
 - "Move existing data" checkbox when switching, default ON.
@@ -265,7 +269,7 @@ per-app choice, not the house default.
 
 ## 17. File layout (Electron apps)
 
-*(Counts re-verified 2026-09-20.)*
+*(Counts re-verified 2026-09-21.)*
 
 The shape below is what this app actually uses. Two things to note, because
 they're the parts newcomers get wrong: `db` and `ipc` are **directories with
@@ -281,7 +285,7 @@ main/                    # main process — CommonJS (require/module.exports)
   ipc/                   # 23 files, one per domain (products.js, images.js, …)
   db/                    # 27 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 20 pure helpers (slug, capabilities, landedCost,
+  util/                  # 25 pure helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode
@@ -309,7 +313,7 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 32 files — `node --test test/**/*.test.js`
+test/                    # 81 files — `node --test test/**/*.test.js`
 scripts/                 # build-icon.js, build-webclient.js,
                          # probe-overlay-renderer.js, probe-render-paint.js
                          #   (`npm run check:render` — needs a real Electron app)
