@@ -105,7 +105,7 @@ test('the production RPC client reports unknown while a delayed HTTP mutation co
   const completed = deferred();
   server.registerHandler('products:update', async () => {
     entered = true;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 2000));
     committed += 1;
     completed.resolve();
     return { committed: true };
@@ -129,7 +129,10 @@ test('the production RPC client reports unknown while a delayed HTTP mutation co
   }
 
   const nativeTimeout = AbortSignal.timeout;
-  AbortSignal.timeout = () => nativeTimeout(50);
+  // The timeout must be long enough that the request reliably reaches the
+  // server even when the full suite is running many files in parallel. The
+  // test asserts ordering (timeout, then commit), not the absolute duration.
+  AbortSignal.timeout = () => nativeTimeout(750);
   try {
     await assert.rejects(
       client.rpc('products:update', { id: 'synthetic-product', patch: {} }),
@@ -138,7 +141,7 @@ test('the production RPC client reports unknown while a delayed HTTP mutation co
     assert.equal(entered, true, 'the production HTTP dispatcher should enter the mutation before timeout');
     await Promise.race([
       completed.promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('delayed mutation did not finish within 1 second')), 1000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('delayed mutation did not finish within 8 seconds')), 8000)),
     ]);
     assert.equal(committed, 1);
   } finally {
@@ -243,7 +246,7 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
           else abortTimer = nativeSetTimeout(() => {
             clock += delay;
             controller.abort(new DOMException('synthetic status deadline', 'TimeoutError'));
-          }, 30);
+          }, 250);
           return controller.signal;
         };
         global.setTimeout = (callback, delay, ...args) => {
@@ -283,7 +286,7 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
         timeoutDelays.length = 0;
         AbortSignal.timeout = (delay) => {
           timeoutDelays.push(delay);
-          return nativeTimeout(80);
+          return nativeTimeout(300);
         };
         if (scenario === 'generic-abort') {
           // Some runtimes expose AbortError instead of the signal's timeout
