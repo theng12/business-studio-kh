@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.40',
+    date: '2026-09-21',
+    items: [
+      'POLISH — the import preview now explains what Merge, Overwrite and Skip existing each do, including how many existing values Overwrite would clear to blank.',
+      'POLISH — when an option would change nothing else, the rows that already match are shown expanded instead of hidden, so switching options never looks like it did nothing.',
+      'Internal — rendered regression tests for the conflict-policy feedback.',
+    ],
+  },
+  {
     version: '0.1.39',
     date: '2026-09-21',
     items: [
