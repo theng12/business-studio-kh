@@ -8294,6 +8294,15 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   text-align: right;
 }
 
+/* Per-task cost: the exact figure from OpenAI's token usage once the task is
+   done, or the ≈ estimate while it's queued/running. */
+.ai-queue__cost {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--c-text-subtle);
+  white-space: nowrap;
+}
+
 /* Promotion column: holds the "★ N/M on product" / "M awaiting review"
    badge. Always rendered (even when empty) so the surrounding grid stays
    aligned across rows. */

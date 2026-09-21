@@ -20,6 +20,8 @@ function rowToTask(row) {
     providerSourceUrl: row.provider_source_url,
     errorMessage: row.error_message,
     costEstimate: row.cost_estimate,
+    costActual: row.cost_actual,
+    usage: parseJson(row.usage_json, null),
     galleryCount: row.gallery_count ?? 0,
     promotedCount: row.promoted_count ?? 0,
     createdAt: row.created_at,
@@ -86,6 +88,8 @@ const UPDATABLE = {
   errorMessage:       { col: 'error_message' },
   startedAt:          { col: 'started_at' },
   completedAt:        { col: 'completed_at' },
+  costActual:         { col: 'cost_actual' },
+  usageJson:          { col: 'usage_json' },
 };
 
 function update(id, patch) {

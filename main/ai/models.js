@@ -15,8 +15,11 @@
 
 const openai = require('./providers/openai');
 
-/** Used when no key is saved yet, or the live model list is unreachable. */
-const FALLBACK_MODEL_IDS = ['gpt-image-1', 'dall-e-3'];
+/**
+ * Used when no key is saved yet, or the live model list is unreachable.
+ * DALL·E was removed by OpenAI on 2026-05-12, so it is no longer seeded.
+ */
+const FALLBACK_MODEL_IDS = ['gpt-image-2'];
 
 /** Pinned dated snapshot suffix, e.g. `gpt-image-2.5-flare-2026-09-08`. */
 const DATED_SNAPSHOT = /-\d{4}-\d{2}-\d{2}$/;
@@ -50,6 +53,7 @@ function entryFor(modelId) {
     sizes: caps.sizes,
     qualities: caps.qualities,
     nMax: caps.nMax,
+    customSizes: !!caps.customSizes,
   };
 }
 

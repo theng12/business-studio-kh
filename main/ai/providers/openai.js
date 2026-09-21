@@ -21,6 +21,34 @@ const { fetchWithTimeout, TIMEOUT_SUBMIT, TIMEOUT_HEALTH } = require('../_fetchT
 
 const API_BASE = 'https://api.openai.com/v1';
 
+/**
+ * UI ratio label → the exact `size` string the API accepts.
+ *
+ * Every gpt-image model takes the three recommended sizes. The 2.5 models
+ * additionally accept custom `WIDTHxHEIGHT` dimensions (multiples of 16,
+ * aspect between 1:3 and 3:1, no edge over 3840, 655,360–8,294,400 px), which
+ * is how the extra ratios below are offered. All of them were confirmed
+ * accepted by the live API on 2026-09-22.
+ */
+const STANDARD_SIZES = {
+  auto: 'auto',
+  '1:1': '1024x1024',
+  '3:2': '1536x1024',
+  '2:3': '1024x1536',
+};
+const EXTENDED_SIZES = {
+  ...STANDARD_SIZES,
+  '4:3': '1280x960',
+  '3:4': '960x1280',
+  '16:9': '1536x864',
+  '9:16': '864x1536',
+  '7:4': '1792x1024',
+  '4:7': '1024x1792',
+  '21:9': '2016x864',
+  '9:21': '864x2016',
+};
+const DALL_E_3_SIZES = { '1:1': '1024x1024', '7:4': '1792x1024', '4:7': '1024x1792' };
+
 /** Model ids that are image models. */
 function isImageModelId(id) {
   return /^(gpt-image|dall-e)/i.test(String(id ?? '').trim());
@@ -39,23 +67,32 @@ function imageModelsFrom(ids) {
 function capabilitiesFor(modelId) {
   const id = String(modelId ?? '').toLowerCase();
   if (id.includes('dall-e-3')) {
-    return { sizes: ['1:1', '7:4', '4:7'], qualities: ['standard', 'hd'], supportsSource: false, nMax: 1 };
+    return { sizes: Object.keys(DALL_E_3_SIZES), qualities: ['standard', 'hd'], supportsSource: false, nMax: 1, customSizes: false };
   }
   if (id.includes('dall-e-2')) {
-    return { sizes: ['1:1'], qualities: ['standard'], supportsSource: true, nMax: 10 };
+    return { sizes: ['1:1'], qualities: ['standard'], supportsSource: true, nMax: 10, customSizes: false };
   }
-  return { sizes: ['auto', '1:1', '3:2', '2:3'], qualities: ['auto', 'low', 'medium', 'high'], supportsSource: true, nMax: 10 };
+  // gpt-image-2.5-* adds xhigh/max quality and custom dimensions.
+  if (id.includes('gpt-image-2.5')) {
+    return {
+      sizes: Object.keys(EXTENDED_SIZES),
+      qualities: ['auto', 'low', 'medium', 'high', 'xhigh', 'max'],
+      supportsSource: true,
+      nMax: 10,
+      customSizes: true,
+    };
+  }
+  return { sizes: Object.keys(STANDARD_SIZES), qualities: ['auto', 'low', 'medium', 'high'], supportsSource: true, nMax: 10, customSizes: false };
 }
 
 /** Map a UI ratio label to the exact size string the model accepts. */
 function sizeParamFor(modelId, ratio) {
   const id = String(modelId ?? '').toLowerCase();
   const key = String(ratio ?? 'auto');
-  if (id.includes('dall-e-3')) {
-    return { '1:1': '1024x1024', '7:4': '1792x1024', '4:7': '1024x1792' }[key] ?? '1024x1024';
-  }
+  if (id.includes('dall-e-3')) return DALL_E_3_SIZES[key] ?? '1024x1024';
   if (id.includes('dall-e-2')) return '1024x1024';
-  return { auto: 'auto', '1:1': '1024x1024', '3:2': '1536x1024', '2:3': '1024x1536' }[key] ?? 'auto';
+  if (id.includes('gpt-image-2.5')) return EXTENDED_SIZES[key] ?? 'auto';
+  return STANDARD_SIZES[key] ?? 'auto';
 }
 
 /** Extract output URLs (data URLs for b64 payloads) from an Images response. */
@@ -156,7 +193,9 @@ async function generate(apiKey, { model, prompt, sourceImageAbs, options = {} } 
   assertOk(res, body, useEdits ? 'image edit' : 'image generation');
   const outputUrls = outputUrlsFrom(body);
   if (outputUrls.length === 0) throw new Error('OpenAI returned no image data');
-  return { outputUrls };
+  // `usage` carries the real token counts (text/image in, image out), which
+  // the queue runner turns into an exact cost. Older responses may omit it.
+  return { outputUrls, usage: body?.usage ?? null };
 }
 
 module.exports = {
@@ -168,4 +207,6 @@ module.exports = {
   capabilitiesFor,
   sizeParamFor,
   outputUrlsFrom,
+  STANDARD_SIZES,
+  EXTENDED_SIZES,
 };
