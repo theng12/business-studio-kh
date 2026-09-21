@@ -150,6 +150,23 @@ export function ImageWorkspace() {
     }
     setCropApplying(true);
     try {
+      if (destination === 'overwrite') {
+        /* Overwriting rewrites the source bytes and changes the content hash,
+         * which orphans the current editor identity. Flush any pending settings
+         * draft first — the same reason handleFlipActive flushes before it
+         * flips. Without this, a slider changed inside the 500 ms debounce
+         * window before "Apply crop → overwrite" was stranded in latestDraft
+         * and never written. */
+        const context = ensureEditorContext(activeImage, activeProductId);
+        if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+        saveDebounceRef.current = null;
+        try {
+          await flushContext(context);
+        } catch (err) {
+          addToast(`Save failed: ${err.message} — the crop was not applied.`, 'error');
+          return;
+        }
+      }
       const res = await window.api.images.cropImage({
         productId: activeProductId,
         filepath: activeImage.filepath,
@@ -511,8 +528,14 @@ export function ImageWorkspace() {
     if (row) acknowledgeContext(context, row);
     // Only repaint if we are still looking at the product this run was for.
     if (activeProductIdRef.current === runProductId) {
-      await refreshWorkspaceImages(runProductId);
-      if (activeProductIdRef.current === runProductId) bumpProcessedTick();
+      try {
+        await refreshWorkspaceImages(runProductId);
+        if (activeProductIdRef.current === runProductId) bumpProcessedTick();
+      } catch (refreshError) {
+        // The DB write and output attachment already succeeded, so a failed
+        // list refresh must not be reported as a failed process.
+        addToast(`Processed, but the image list did not refresh: ${refreshError.message}`, 'error');
+      }
     }
     return res;
   }
@@ -628,7 +651,13 @@ export function ImageWorkspace() {
       addToast('Image processed', 'success');
       return true;
     } catch (err) {
-      addToast(err.message, 'error');
+      // A process conflict is not a failure — the image changed elsewhere.
+      // Do not show the raw CONFLICT| sentinel; point at the Save recovery.
+      if (parseConflictError(err)) {
+        addToast('This image changed while processing. Use Save to refresh or overwrite, then process again.', 'error');
+      } else {
+        addToast(err.message, 'error');
+      }
       return false;
     } finally {
       setProcessingLabel(null);
@@ -653,6 +682,7 @@ export function ImageWorkspace() {
       const sourceContext = ensureEditorContext(activeImage ?? runImages[0], runProductId);
       const batchSettings = sourceContext.acknowledgedSettings;
       let failures = 0;
+      let conflicts = 0;
       for (let i = 0; i < runImages.length; i++) {
         const img = runImages[i];
         const context = ensureEditorContext(img, runProductId);
@@ -667,15 +697,26 @@ export function ImageWorkspace() {
             runProductId,
           );
         } catch (err) {
-          failures += 1;
+          // A conflict means another editor changed this image, not that the
+          // run failed — report it separately so the user knows to refresh.
+          if (parseConflictError(err)) conflicts += 1;
+          else failures += 1;
           // Continue with the rest, but record the issue.
           console.warn(`Failed to process ${img.filename}:`, err);
         }
       }
       useAppStore.getState().refreshProducts();
-      if (failures === 0) addToast(`Processed ${runImages.length} image${runImages.length === 1 ? '' : 's'}`, 'success');
-      else addToast(`${runImages.length - failures} processed, ${failures} failed`, failures === runImages.length ? 'error' : 'info');
-      return failures === 0;
+      const processed = runImages.length - failures - conflicts;
+      if (failures === 0 && conflicts === 0) {
+        addToast(`Processed ${runImages.length} image${runImages.length === 1 ? '' : 's'}`, 'success');
+      } else {
+        const parts = [];
+        if (processed > 0) parts.push(`${processed} processed`);
+        if (conflicts > 0) parts.push(`${conflicts} changed elsewhere (save or refresh, then retry)`);
+        if (failures > 0) parts.push(`${failures} failed`);
+        addToast(parts.join(', '), processed === 0 ? 'error' : 'info');
+      }
+      return failures === 0 && conflicts === 0;
     } finally {
       setProcessingLabel(null);
       setWorkspaceProcessing(false, null);
@@ -731,10 +772,31 @@ export function ImageWorkspace() {
     }
     const productId = activeProductId;
     const identity = imageIdentity(activeImage);
-    try {
-      await flushPendingSave();
-    } catch (_) {
-      return false;
+    /* Only the image being left can strand the user's on-screen edit, so only
+     * that context blocks the switch. Other dirty contexts are retained in
+     * memory and retried on a later flush; letting one of them lock the whole
+     * strip (a save that keeps failing elsewhere) was the defect. */
+    const leavingContext = activeImage ? ensureEditorContext(activeImage, productId) : null;
+    if (leavingContext) {
+      if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+      saveDebounceRef.current = null;
+      try {
+        await flushContext(leavingContext);
+      } catch (err) {
+        // The queue's onError already surfaced a non-conflict failure for the
+        // current context; a conflict is silent there, so name it here.
+        if (parseConflictError(err)) {
+          addToast('This image changed elsewhere. Use Save to refresh or overwrite before leaving it.', 'error');
+        }
+        return false;
+      }
+    }
+    const reachable = new Set(workspaceImagesRef.current.map(imageIdentity));
+    for (const context of editorContextsRef.current.values()) {
+      if (context === leavingContext) continue;
+      if (context.productId !== productId || !reachable.has(context.identity)) continue;
+      // Best-effort: keep the draft, do not block this switch.
+      flushContext(context).catch(() => {});
     }
     if (activeProductIdRef.current !== productId || imageIdentity(activeImageRef.current) !== identity) return false;
     const currentIndex = useAppStore.getState().workspaceImages.findIndex((image) => image.id === targetId);
