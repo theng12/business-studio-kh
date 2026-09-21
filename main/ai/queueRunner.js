@@ -21,6 +21,7 @@ const { getDataDir } = require('../db');
 const { slugify } = require('../util/slug');
 const { byKey: modelByKey } = require('./models');
 const openai = require('./providers/openai');
+const aiCosts = require('./costs');
 
 const TICK_MS = 2000;
 
@@ -149,13 +150,16 @@ async function generateFor(task, model, apiKey) {
       if (!sourceImageAbs) throw new Error(`Source image missing on disk: ${task.sourceImagePath}`);
     }
 
-    const { outputUrls } = await openai.generate(apiKey, {
+    const { outputUrls, usage } = await openai.generate(apiKey, {
       model: model.modelId,
       prompt: task.prompt,
       sourceImageAbs,
       options: task.options ?? {},
     });
-    await onDone(task, outputUrls);
+    // Exact cost from the provider's usage block (null on older responses,
+    // in which case the pre-flight estimate remains the only number).
+    const actual = usage ? aiCosts.actualForModel(model.modelId, usage) : null;
+    await onDone(task, outputUrls, { usage, actualUsd: actual?.usd ?? null });
   } catch (err) {
     inflight.delete(task.id);
     handleFailure(task, err.message);
@@ -164,7 +168,7 @@ async function generateFor(task, model, apiKey) {
 
 /* ── Done: decode outputs, file in gallery ────────────────── */
 
-async function onDone(task, outputUrls) {
+async function onDone(task, outputUrls, billing = {}) {
   // The task may have been cancelled (or removed) while the request was in
   // flight — the API call cannot be aborted mid-flight, so drop the result
   // rather than resurrecting a task the user stopped.
@@ -326,6 +330,8 @@ async function onDone(task, outputUrls) {
       progress: 1,
       completedAt: Date.now(),
       errorMessage: null,
+      costActual: billing.actualUsd ?? null,
+      usageJson: billing.usage ? JSON.stringify(billing.usage) : null,
     });
     emitTaskUpdate(aiTasks.get(task.id));
   } catch (err) {

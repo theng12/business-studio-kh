@@ -94,6 +94,9 @@ export function AIStudio() {
   // v0.39.0: built-in prompt-library browser.
   const [promptLibraryOpen, setPromptLibraryOpen] = useState(false);
   const [costEstimate, setCostEstimate] = useState(null);
+  // Pixel dimensions of the selected source image — priced as image input
+  // tokens in the cost estimate (see main/ai/pricing.js).
+  const [sourceDims, setSourceDims] = useState(null);
   const [previewingPath, setPreviewingPath] = useState(null);
   const [queuePage, setQueuePage] = useState(0);
 
@@ -175,13 +178,6 @@ export function AIStudio() {
     return () => { cancelled = true; };
   }, [sourceProductId, refreshAiGalleryFor]);
 
-  // Recompute cost when model / options change.
-  useEffect(() => {
-    const count = aiOptions.numImages ?? aiOptions.nVariants ?? 1;
-    if (!window.api || !selectedModelKey) return;
-    window.api.ai.estimateCost(selectedModelKey, count, aiOptions.quality).then(setCostEstimate).catch(() => setCostEstimate(null));
-  }, [selectedModelKey, aiOptions.numImages, aiOptions.nVariants, aiOptions.quality]);
-
   /* v0.1.11: this was an early `return`, which made every hook declared
    * below it conditional. React requires the same hooks in the same order on
    * every render, so switching to (or away from) a company with no active
@@ -261,6 +257,42 @@ export function AIStudio() {
 
   const filledPrompt = fillTemplate(promptText, productCtx);
 
+  /* Source image pixel dimensions. Loading it through the app-image protocol
+   * is the cheapest way to learn its real size without a main-process read;
+   * the estimate turns that into image input tokens. */
+  useEffect(() => {
+    if (!requiresSource || !sourceImagePath) { setSourceDims(null); return undefined; }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => { if (!cancelled) setSourceDims({ width: img.naturalWidth, height: img.naturalHeight }); };
+    img.onerror = () => { if (!cancelled) setSourceDims(null); };
+    img.src = `app-image://local/${encodeURIComponent(sourceImagePath)}`;
+    return () => { cancelled = true; img.onload = null; img.onerror = null; };
+  }, [requiresSource, sourceImagePath]);
+
+  /* Pre-flight cost estimate — text input + image input + image output
+   * tokens, priced with OpenAI's published rates (main/ai/pricing.js). The
+   * exact cost is recorded from the API's `usage` block after each run. */
+  useEffect(() => {
+    const count = aiOptions.numImages ?? aiOptions.nVariants ?? 1;
+    if (!window.api || !selectedModelKey) return undefined;
+    let cancelled = false;
+    window.api.ai
+      .estimateCost(selectedModelKey, count, {
+        quality: aiOptions.quality,
+        size: aiOptions.size,
+        prompt: filledPrompt,
+        sourceWidth: requiresSource ? sourceDims?.width : undefined,
+        sourceHeight: requiresSource ? sourceDims?.height : undefined,
+      })
+      .then((est) => { if (!cancelled) setCostEstimate(est); })
+      .catch(() => { if (!cancelled) setCostEstimate(null); });
+    return () => { cancelled = true; };
+  }, [
+    selectedModelKey, aiOptions.numImages, aiOptions.nVariants, aiOptions.quality,
+    aiOptions.size, filledPrompt, requiresSource, sourceDims,
+  ]);
+
   function handleApplyTemplate(tpl) {
     setAiPrompt(tpl.body);
     addToast(`Applied template "${tpl.name}"`, 'info');
@@ -280,6 +312,12 @@ export function AIStudio() {
     setConfirmOpen(false);
     try {
       const opts = { ...aiOptions };
+      // Attach the source image's pixel size so the stored cost estimate
+      // prices image input tokens (the runner re-reads the file anyway).
+      if (requiresSource && sourceDims) {
+        opts.sourceWidth = sourceDims.width;
+        opts.sourceHeight = sourceDims.height;
+      }
       if (mode === 'bulk') {
         const sourcePaths = bulkFiles.map((f) => f.abs);
         // v0.11.5: thread the export folder into each task's options so
@@ -759,8 +797,8 @@ export function AIStudio() {
 
           <div className="ai-cost-line">
             <span>{queueLen > 0 ? `${queueLen} task${queueLen === 1 ? '' : 's'} in queue` : 'Queue is idle'}</span>
-            {costEstimate != null ? (
-              <span className="ai-cost-line__money">Est. ${costEstimate.toFixed(3)} / generation</span>
+            {costEstimate?.usd != null ? (
+              <span className="ai-cost-line__money">Est. ${costEstimate.usd.toFixed(4)} / task</span>
             ) : null}
           </div>
 
@@ -957,6 +995,18 @@ export function AIStudio() {
                         </Badge>
                       ) : null}
                     </span>
+                    {t.costActual != null || t.costEstimate != null ? (
+                      <span
+                        className="ai-queue__cost"
+                        title={t.costActual != null
+                          ? 'Actual cost from OpenAI token usage'
+                          : 'Estimated cost — the actual cost is recorded when the run finishes'}
+                      >
+                        {t.costActual != null
+                          ? `$${Number(t.costActual).toFixed(4)}`
+                          : `≈$${Number(t.costEstimate).toFixed(4)}`}
+                      </span>
+                    ) : null}
                     {t.status === 'running' ? (
                       <span className="ai-queue__progress">{Math.round((t.progress ?? 0) * 100)}%</span>
                     ) : <span className="ai-queue__progress" />}
@@ -1228,7 +1278,11 @@ function ConfirmDialog({ open, model, product, sourceImg, prompt, options, cost,
   // In bulk mode the user is queueing N tasks, each producing perTaskCount
   // generations. Total = bulkCount × perTaskCount.
   const totalGenerations = isBulk ? bulkCount * perTaskCount : perTaskCount;
-  const totalCost = cost != null ? cost * totalGenerations : null;
+  // `cost` is the detailed estimate for ONE task (input tokens once + output
+  // tokens × perTaskCount), so bulk multiplies it by the number of tasks.
+  const perTaskUsd = cost?.usd ?? null;
+  const totalCost = perTaskUsd != null ? (isBulk ? perTaskUsd * bulkCount : perTaskUsd) : null;
+  const tokens = cost?.tokens;
   const srcUrl = sourceImg ? `app-image://local/${encodeURIComponent(sourceImg.filepath)}` : null;
 
   return (
@@ -1281,7 +1335,15 @@ function ConfirmDialog({ open, model, product, sourceImg, prompt, options, cost,
           {totalCost != null ? (
             <div className="detail-card">
               <div className="detail-card__label">Est. cost</div>
-              <div className="detail-card__value">${totalCost.toFixed(3)}</div>
+              <div className="detail-card__value">${totalCost.toFixed(4)}</div>
+            </div>
+          ) : null}
+          {tokens ? (
+            <div className="detail-card detail-card--wide">
+              <div className="detail-card__label">Tokens (per task)</div>
+              <div className="detail-card__value">
+                {tokens.textIn} text in · {tokens.imageIn} image in · {tokens.output} × {tokens.count} image out
+              </div>
             </div>
           ) : null}
           <div className="detail-card detail-card--wide">

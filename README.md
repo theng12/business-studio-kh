@@ -68,7 +68,8 @@ If you don't run step 3 you'll see "Media Studio KH is damaged and can't be open
 - OpenAI Images integration: image-to-image edits (`/v1/images/edits`) and text-to-image generation (`/v1/images/generations`). The model list is fetched live from `/v1/models`, so new `gpt-image-*` / `dall-e-*` models appear without an app release.
 - Per-product flow: pick a source image + a prompt template → queue → review the gallery → promote to product (with optional "set as main").
 - Bulk / Folder flow: scan a folder of source images, batch-queue with a shared prompt, gallery shows all results.
-- Capability-driven aspect ratio, quality and image count; cost estimates per model.
+- Capability-driven aspect ratio, quality and image count; GPT Image 2.5 exposes 13 ratios and the xhigh/max tiers.
+- Token-based cost estimates (prompt + reference image + output), with the actual cost recorded from OpenAI's usage after each run.
 - Live queue updates (WebSocket-driven in multi-Mac mode).
 
 **Overlay Studio**

@@ -38,8 +38,20 @@ test('imageModelsFrom filters to image models, de-duplicates and sorts', () => {
 });
 
 test('capabilitiesFor covers gpt-image, dall-e-3 and dall-e-2', () => {
-  assert.deepEqual(openai.capabilitiesFor('gpt-image-2.5-flare').sizes, ['auto', '1:1', '3:2', '2:3']);
-  assert.equal(openai.capabilitiesFor('gpt-image-2.5-flare').supportsSource, true);
+  const flare = openai.capabilitiesFor('gpt-image-2.5-flare');
+  assert.ok(flare.sizes.includes('1:1'));
+  assert.ok(flare.sizes.includes('3:2'));
+  assert.ok(flare.sizes.includes('16:9'));
+  assert.ok(flare.sizes.includes('21:9'));
+  assert.equal(flare.customSizes, true);
+  assert.deepEqual(flare.qualities, ['auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.equal(flare.supportsSource, true);
+
+  const plain = openai.capabilitiesFor('gpt-image-2');
+  assert.deepEqual(plain.sizes, ['auto', '1:1', '3:2', '2:3']);
+  assert.equal(plain.customSizes, false);
+  assert.deepEqual(plain.qualities, ['auto', 'low', 'medium', 'high']);
+
   assert.deepEqual(openai.capabilitiesFor('dall-e-3').sizes, ['1:1', '7:4', '4:7']);
   assert.equal(openai.capabilitiesFor('dall-e-3').supportsSource, false);
   assert.equal(openai.capabilitiesFor('dall-e-2').supportsSource, true);
@@ -52,6 +64,16 @@ test('sizeParamFor maps ratio labels to the provider size strings', () => {
   assert.equal(openai.sizeParamFor('dall-e-3', '7:4'), '1792x1024');
   assert.equal(openai.sizeParamFor('dall-e-2', '1:1'), '1024x1024');
   assert.equal(openai.sizeParamFor('gpt-image-1', 'nonsense'), 'auto');
+});
+
+test('sizeParamFor maps the extended 2.5 ratios to custom dimensions', () => {
+  assert.equal(openai.sizeParamFor('gpt-image-2.5-flare', '16:9'), '1536x864');
+  assert.equal(openai.sizeParamFor('gpt-image-2.5-flare', '21:9'), '2016x864');
+  assert.equal(openai.sizeParamFor('gpt-image-2.5-flare', '4:3'), '1280x960');
+  assert.equal(openai.sizeParamFor('gpt-image-2.5-flare', '1:1'), '1024x1024');
+  // The standard-only models must NOT receive a custom ratio.
+  assert.equal(openai.sizeParamFor('gpt-image-2', '16:9'), 'auto');
+  assert.equal(openai.sizeParamFor('gpt-image-2', '3:2'), '1536x1024');
 });
 
 test('listModels reads /v1/models and filters to image models', async () => {
@@ -116,6 +138,21 @@ test('generate falls back to generations when the model does not support a sourc
     await openai.generate('sk-test', { model: 'dall-e-3', prompt: 'x', sourceImageAbs: file });
     assert.match(m.calls[0].url, /\/v1\/images\/generations$/);
   } finally { m.restore(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('generate returns the usage block for exact cost accounting', async () => {
+  const usage = {
+    input_tokens: 1061,
+    input_tokens_details: { image_tokens: 1024, text_tokens: 37 },
+    output_tokens: 120,
+    output_tokens_details: { image_tokens: 120, text_tokens: 0 },
+    total_tokens: 1181,
+  };
+  const m = mockFetch(() => ({ status: 200, body: { data: [{ b64_json: 'QQ==' }], usage } }));
+  try {
+    const out = await openai.generate('sk-test', { model: 'gpt-image-1', prompt: 'x' });
+    assert.deepEqual(out.usage, usage);
+  } finally { m.restore(); }
 });
 
 test('generate surfaces a 429 rate limit', async () => {
