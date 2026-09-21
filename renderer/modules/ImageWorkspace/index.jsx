@@ -163,7 +163,11 @@ export function ImageWorkspace() {
         try {
           await flushContext(context);
         } catch (err) {
-          addToast(`Save failed: ${err.message} — the crop was not applied.`, 'error');
+          // A conflict has no queue toast of its own; translate it rather than
+          // leaking the raw CONFLICT| sentinel.
+          addToast(parseConflictError(err)
+            ? 'This image changed elsewhere. Use Save to refresh or overwrite before cropping — the crop was not applied.'
+            : `Save failed: ${err.message} — the crop was not applied.`, 'error');
           return;
         }
       }

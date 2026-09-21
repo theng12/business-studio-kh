@@ -100,11 +100,11 @@ test('ImportModal keeps a mapped-but-blank cell so Overwrite can clear it', asyn
     fileName: 'blank-cell.xlsx',
     sheets: [{
       name: 'Sheet1',
-      headers: ['SKU', 'Name'],
+      headers: ['SKU', 'Name', 'Status'],
       rowCount: 2,
       rows: [
-        { SKU: 'SKU-1', Name: 'Imported' },
-        { SKU: 'SKU-2', Name: '' },
+        { SKU: 'SKU-1', Name: 'Imported', Status: '' },
+        { SKU: 'SKU-2', Name: '', Status: 'active' },
       ],
     }],
   };
@@ -189,8 +189,12 @@ test('ImportModal keeps a mapped-but-blank cell so Overwrite can clear it', asyn
     assert.ok(blankRow, 'the blank-name row must survive');
     assert.ok('name' in blankRow, 'a mapped-but-blank cell must keep its key');
     assert.equal(blankRow.name, null, 'a blank cell must be an explicit null');
+    assert.equal(blankRow.status, 'active', 'a supplied status must be preserved');
     const filledRow = captured.rows.find((r) => r.sku === 'SKU-1');
     assert.equal(filledRow.name, 'Imported', 'a supplied value must be preserved');
+    // status is NOT NULL. A blank status must be omitted, not sent as null:
+    // nulling it would fail the whole row's update and skip the row.
+    assert.ok(!('status' in filledRow), 'a blank status must be omitted entirely');
   } finally {
     Module._load = originalLoad;
     fs.rmSync(dir, { recursive: true, force: true });
