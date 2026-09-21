@@ -29,12 +29,12 @@ Intel/universal packaging) stay closed.
 
 ## R1 — Land the 0.1.37 batch *(authorization-gated)*
 
-- [ ] **R1.1** Commit the reviewed source on `codex/workspace-concurrency`
+- [x] **R1.1** Commit the reviewed source on `codex/workspace-concurrency`
       locally (durable checkpoint; no push). Files: the tracked edits plus
       `docs/Media Studio KH Project Status.md`,
       `docs/superpowers/plans/2026-09-21-workspace-concurrency.md`,
       `renderer/lib/nameIdResolver.js`, and the three new/modified test files.
-- [ ] **R1.2** Request explicit push/PR/merge authorization. On grant: verify
+- [x] **R1.2** Request explicit push/PR/merge authorization. On grant: verify
       `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled`
       returns `false`, push the codex branch, open a code-only PR, verify
       mergeability, merge, fast-forward clean `main`, confirm the tree.
@@ -46,18 +46,18 @@ Intel/universal packaging) stay closed.
 
 Rules that name paths/numbers drift silently (AGENTS §22). Confirmed drift:
 
-- [ ] **R2.1** `AGENTS.md` §8 says the default data folder is
+- [x] **R2.1** `AGENTS.md` §8 says the default data folder is
       `app.getPath('userData')/data`. The code's
       `defaultDataDir()` is `~/Pictures/Media Studio KH`
       (`main/config.js:27`); `userData/data` is the **legacy** path
       (`legacyDataDir()`). Correct the rule, keep the legacy note, and do not
       change runtime behavior or move anyone's data.
-- [ ] **R2.2** `AGENTS.md` §17 drifted: `test/` is stated as 32 files but is
+- [x] **R2.2** `AGENTS.md` §17 drifted: `test/` is stated as 32 files but is
       **81**; `main/util/` is stated as 20 but is **25**. `main/ipc` 23,
       `main/db` 27, `renderer/components` 22, `renderer/modules` 18 and
       `renderer/index.css` ~10,358 lines are still accurate. Refresh counts and
       re-stamp the `(verified YYYY-MM-DD)` markers.
-- [ ] **R2.3** `MEDIA_STUDIO_KH_BRIEFING.md` is stale on the stack: it claims
+- [x] **R2.3** `MEDIA_STUDIO_KH_BRIEFING.md` is stale on the stack: it claims
       Electron 33.4.11 + Vite 5 (`package.json`: Electron ^44.4.3, Vite ^7.3.6)
       and repeats the wrong `userData/data` default (line 188). Correct both;
       the "no Tailwind / no Puppeteer" claims remain true.
@@ -86,12 +86,12 @@ Rules that name paths/numbers drift silently (AGENTS §22). Confirmed drift:
 The customer's file works, but the shapes probe reproduced real defects on the
 same path, worth a bounded fix if the owner wants import to be more forgiving:
 
-- [ ] **R4.1** Duplicate column headers silently overwrite: with headers
+- [x] **R4.1** Duplicate column headers silently overwrite: with headers
       `["SKU","Name","SKU",…]` the later empty `SKU` wins, so every row loses
       its SKU and the preview reads "out of 0 rows". Fix so a later
       duplicate/empty column cannot blank a value already read, and surface
       duplicate headers on the map screen.
-- [ ] **R4.2** A title row above the header row produces a dead-end (no SKU
+- [x] **R4.2** A title row above the header row produces a dead-end (no SKU
       column). Add detection/guidance ("headers don't look like row 1") without
       guessing silently.
 - Acceptance: retained tests for both shapes; existing valid imports unchanged;
