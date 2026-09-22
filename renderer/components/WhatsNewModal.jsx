@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.59',
+    date: '2026-09-22',
+    items: [
+      'FIX — “Apply to this image” in the Image Workspace failed with a bare “Failed to fetch” whenever Remove background was on, which is the default. The engine has to read the image’s pixels before it can cut them out, and the app was refusing its own image files when read that way — the preview beside the button rendered perfectly, which is exactly why this went unnoticed. Applying now runs to completion.',
+      'Internal — root cause: the app-image scheme served its files to a different origin (app://local asks app-image://local) without being registered as CORS-enabled, so Chromium rejected the request before it left the renderer. The Content-Security-Policy had already been opened up for this once; CSP and CORS are two separate gates and only the first one was ever open.',
+      'Internal — new scripts/probe-app-image-cors.js (`npm run check:images`) boots a real window and fetches an image over app-image://, so this cannot silently regress again. test/appImageScheme.test.js guards the scheme privilege without needing Electron.',
+    ],
+  },
+  {
     version: '0.1.58',
     date: '2026-09-22',
     items: [
