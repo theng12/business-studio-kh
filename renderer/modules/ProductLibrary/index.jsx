@@ -219,6 +219,10 @@ export function ProductLibrary() {
   // the detail panel follows it — so "Hide filters" always yields the
   // grid maximum width, and the toolbar button and the panel's own
   // chevron can never disagree about the state.
+  // ponytail: ceiling — the filter rail and the 480px detail panel share
+  // this boolean, so you cannot retract the filters while keeping the
+  // detail panel. Splitting them would mean a second state and a second
+  // toolbar control; do that only if someone asks for it.
   const [panelVisible, setPanelVisible] = useState(loadPanelVisible);
   function togglePanel() {
     setPanelVisible((prev) => {
