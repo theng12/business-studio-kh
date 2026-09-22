@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.57',
+    date: '2026-09-22',
+    items: [
+      'NEW — Overlay Studio’s Font family is now a picker, not a text box. It lists the fonts actually installed on this Mac, so you choose a name instead of typing one and hoping it matches.',
+      'POLISH — a font that is not a single installed family (an older template’s “Inter, Helvetica Neue, Arial, sans-serif” stack) is kept as-is, and can still be edited through “Custom stack…”.',
+      'Internal — reads the system list through Chromium’s Local Font Access API; main/index.js grants the local-fonts permission, and a short built-in list is used if the API is unavailable.',
+    ],
+  },
+  {
     version: '0.1.56',
     date: '2026-09-22',
     items: [
