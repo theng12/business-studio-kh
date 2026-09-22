@@ -16,6 +16,8 @@
 const fs = require('node:fs');
 const { dialog } = require('electron');
 const fileHandler = require('../fileHandler');
+const companies = require('../db/companies');
+const productsDb = require('../db/products');
 // v0.1.18: the accepted file kinds live in a shared module because the
 // VALIDATORS enforce the same rule (so it applies in client mode too, which has
 // its own copy of these handlers). See main/util/fileKinds.js.
@@ -108,13 +110,22 @@ function register({ exposeLocal }) {
   });
 
   exposeLocal('samples:generateProductSheet', async () => {
+    /* v0.1.65: the sample sheet is built from the ACTIVE company, so it carries
+     * a column for every price group the user has defined plus the custom fields
+     * they already use. It used to be a fixed header list, which is why a new
+     * price group had nowhere to be imported. */
+    const activeCompanyId = companies.getActiveId();
+    const company = activeCompanyId ? companies.get(activeCompanyId) : null;
     const res = await dialog.showSaveDialog({
       title: 'Save sample workbook',
       defaultPath: 'media-studio-kh-products-sample.xlsx',
       filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
     });
     if (res.canceled || !res.filePath) return null;
-    fileHandler.writeProductSampleWorkbook(res.filePath);
+    fileHandler.writeProductSampleWorkbook(res.filePath, {
+      priceGroups: company?.priceGroups ?? [],
+      customFields: activeCompanyId ? productsDb.customFieldKeys(activeCompanyId) : [],
+    });
     return res.filePath;
   });
 }

@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.65',
+    date: '2026-09-22',
+    items: [
+      'FIX — the import sample sheet now includes a column for every price group you have made. Previously the sheet was a fixed list written before price groups existed, so a group like “Export” had nowhere to put its number and the column could only be set to Skip — the price never reached the product.',
+      'NEW — each price column has a currency column beside it (Retail currency, Wholesale currency, and one for every group), because each price field stores its own currency. Type USD, CNY, KHR, THB, VND, EUR, JPY, KRW, INR, IDR, MYR or SGD; blank means USD.',
+      'NEW — custom fields your products already use get a column too, so a sheet can carry “material” or “voltage” without anyone having to invent the column name.',
+      'FIX — re-importing a price list no longer wipes the price groups the sheet does not mention. The price map and the custom fields are merged per key (blank cells leave the stored value alone; the Overwrite policy clears only the keys it actually names).',
+      'Internal — main/fileHandler.js now builds the workbook from the active company (price groups + custom-field keys discovered from the products table), and main/db/products.js learned to merge products.prices and products.custom_fields during bulkUpsert — the mapper could not have worked without it. main/db/products.js also exposes customFieldKeys() for the sheet.',
+      'Internal — tests: test/importSampleWorkbook.test.js (the workbook read back with SheetJS), test/importPriceGroups.test.js (native — create, merge, overwrite, preview diff, currencies, custom fields) and test/importPriceGroupMapping.test.js (the mapper offers the target and the header guesses onto it).',
+    ],
+  },
+  {
     version: '0.1.64',
     date: '2026-09-22',
     items: [
