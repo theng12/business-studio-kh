@@ -105,6 +105,10 @@ export function Suppliers() {
   // search runs server-side (LIKE on name + country + contact, so the
   // client-mode race guard in test/operationsFreshness.test.js still
   // covers it), debounced 200ms so typing is one query, not four.
+  // ponytail: ceiling — unlike Brands/Categories this screen does NOT use
+  // listTools.filterRows; moving the search into the renderer would drop the
+  // debounce + out-of-order guard the test pins. If the guard is ever
+  // reworked, the search can move client-side and match contact fields there.
   useEffect(() => {
     if (!activeCompanyId) {
       setRows([]);
@@ -319,6 +323,9 @@ export function Suppliers() {
     if (!ok) return;
 
     setDeleting(true);
+    // ponytail: ceiling — loops the raw suppliers:remove IPC (the same
+    // channel the single-row delete calls) so the batch refreshes once. The
+    // PO pre-check above is the only protection; the DB RESTRICT is the backstop.
     let deleted = 0;
     const failed = [];
     for (const s of deletable) {

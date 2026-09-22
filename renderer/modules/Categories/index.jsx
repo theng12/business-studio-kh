@@ -250,6 +250,9 @@ export function CategoriesBody({ autoFocus = false }) {
     if (!ok) return;
 
     setDeleting(true);
+    // ponytail: ceiling — loops the raw categories:remove IPC (the same
+    // channel removeCategory calls) so the batch refreshes once. Any
+    // side-effect later added to the store's removeCategory must be mirrored here.
     let deleted = 0;
     const failed = [];
     for (const c of selectedCategories) {

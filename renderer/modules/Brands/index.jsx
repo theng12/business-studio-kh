@@ -196,6 +196,9 @@ export function Brands() {
     if (!ok) return;
 
     setDeleting(true);
+    // ponytail: ceiling — loops the raw brands:remove IPC (the same channel
+    // removeBrand calls) so the batch refreshes once, not once per row. Any
+    // side-effect later added to the store's removeBrand must be mirrored here.
     let deleted = 0;
     const failed = [];
     for (const b of selectedBrands) {
