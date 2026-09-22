@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.51',
+    date: '2026-09-22',
+    items: [
+      'FIX — Multi-Mac: you can enter the server address and user token again. A guard stopped you switching to Client mode without them, but the fields only appeared once you were already in Client mode — so Client mode was impossible to set up.',
+      'POLISH — the client connection fields are now always shown in Settings → Multi-Mac, with a note saying they are needed before switching Mode to Client.',
+      'POLISH — typing a server address or token while in Standalone or Server mode no longer asks you to restart; those values only take effect when you switch to Client.',
+      'Internal — regressions render the client connection panel and the restart banner outside client mode.',
+    ],
+  },
+  {
     version: '0.1.50',
     date: '2026-09-22',
     items: [
