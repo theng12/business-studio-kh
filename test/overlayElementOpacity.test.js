@@ -17,6 +17,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const sharp = require('sharp');
 
@@ -158,4 +160,81 @@ test('barcode — the white scanner-contrast plate stays opaque when faded', asy
     if (lum > lightest) lightest = lum;
   }
   assert.equal(lightest, 255, 'the background between bars must stay pure white');
+});
+
+/* ── Image elements ──────────────────────────────────────────────────────
+ *
+ * v0.1.53 regression. The image path masked with `1 - opacity` under a
+ * `dest-in` blend, which INVERTED the control: opacity 0 rendered fully
+ * opaque, 80% rendered at 20% alpha, and only 100% (which skips the mask
+ * branch) looked right. Text and barcode had no such bug — and the test file
+ * covered only those two, so nothing caught it. These cases close that gap. */
+
+function imageTemplate(extra = {}) {
+  return {
+    canvasWidth: 400,
+    canvasHeight: 400,
+    elements: [{
+      id: 'i1',
+      type: 'image',
+      x: 0.5, y: 0.5, anchor: 'c',
+      width: 0.25, height: 0.25,
+      source: 'asset:opacity-test/black.png',
+      ...extra,
+    }],
+  };
+}
+
+/** A solid-black PNG on disk, resolvable via a stubbed `resolveAsset`. */
+async function blackSquarePng() {
+  const file = path.join(os.tmpdir(), `iskh-opacity-black-${process.pid}.png`);
+  await sharp({
+    create: { width: 80, height: 80, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 1 } },
+  }).png().toFile(file);
+  return file;
+}
+
+async function renderImage(asset, extra) {
+  const base = await whiteBase();
+  return templateRenderer.compose({
+    inputImage: base,
+    template: imageTemplate(extra),
+    context: {},
+    resolveAsset: () => asset,
+  });
+}
+
+test('image — a legacy template with no opacity key renders fully opaque', async () => {
+  const asset = await blackSquarePng();
+  try {
+    const out = await renderImage(asset);
+    assert.ok(await darkestLuminance(out) < 40, 'legacy image element must stay solid');
+  } finally { fs.rmSync(asset, { force: true }); }
+});
+
+test('image — opacity 1 is identical to omitting the key', async () => {
+  const asset = await blackSquarePng();
+  try {
+    const legacy = await renderImage(asset);
+    const explicit = await renderImage(asset, { opacity: 1 });
+    assert.equal(Buffer.compare(legacy, explicit), 0, 'opacity:1 must be byte-identical to no opacity key');
+  } finally { fs.rmSync(asset, { force: true }); }
+});
+
+test('image — lowering opacity fades monotonically toward the background', async () => {
+  const asset = await blackSquarePng();
+  try {
+    const lums = [];
+    for (const op of [1, 0.8, 0.5]) lums.push(await darkestLuminance(await renderImage(asset, { opacity: op })));
+    assert.ok(lums[0] < lums[1], `0.8 should be lighter than 1 (got ${lums})`);
+    assert.ok(lums[1] < lums[2], `0.5 should be lighter than 0.8 (got ${lums})`);
+  } finally { fs.rmSync(asset, { force: true }); }
+});
+
+test('image — opacity 0 renders nothing (the inversion bug)', async () => {
+  const asset = await blackSquarePng();
+  try {
+    const out = await renderImage(asset, { opacity: 0 });
+    assert.equal(await darkestLuminance(out), 255, 'opacity:0 must hide the image, not make it glare');
+  } finally { fs.rmSync(asset, { force: true }); }
 });
