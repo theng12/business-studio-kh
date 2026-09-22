@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.52',
+    date: '2026-09-22',
+    items: [
+      'NEW — Settings → Multi-Mac → Client connection now has an explicit Save button with an “All changes saved / Unsaved changes / Saving…” indicator. The server address and user token still auto-save as you type, so you can also just fill them in and switch.',
+      'NEW — the app ships for both Apple Silicon and Intel Macs. Each release now has two installers: Media Studio KH-<version>-arm64.dmg and Media Studio KH-<version>-x64.dmg.',
+      'Internal — the release build produces both architectures; the x64 sharp/libvips binaries are installed alongside the arm64 ones.',
+    ],
+  },
+  {
     version: '0.1.51',
     date: '2026-09-22',
     items: [

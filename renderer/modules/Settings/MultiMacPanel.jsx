@@ -5,7 +5,9 @@
  *
  *  - ModeSegment      — Standalone / Server / Client picker (top of tab)
  *  - ServerModePanel  — server status + users table (server mode only)
- *  - ClientModePanel  — server URL + token + diagnostic (client mode only)
+ *  - ClientModePanel  — server URL + token + diagnostic (shown in every
+ *                       mode: the fields must be reachable BEFORE switching
+ *                       to Client, or the Mode guard deadlocks)
  *  - RestartBanner    — sticky banner shown at the top of Settings
  *                       whenever a restart-sensitive field has drifted
  *  - MigrationPanel   — Export / Import .iskhbundle (bottom of tab)
@@ -14,10 +16,11 @@
  * Settings/index.jsx) — the two files would otherwise have a circular
  * import. Keep the two copies in sync if you ever change SettingRow.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Input, Select } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
+import { SaveStatus } from '../../components/SaveStatus.jsx';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx). See the
 // file docblock for why this is duplicated rather than imported.
@@ -467,13 +470,80 @@ export function ClientModePanel({ config, patch }) {
   const [diagnostic, setDiagnostic] = useState(null); // { overall, steps, serverVersion?, user? } | null
   const addToast = useAppStore((s) => s.addToast);
 
+  /* ── Auto-save with an explicit Save button (house convention) ──────
+   * The address and token used to write on every keystroke with no visible
+   * Save affordance. They now live in a local draft that auto-saves after a
+   * short pause AND can be committed immediately with the Save button, with
+   * a status pill ("Unsaved changes" / "Saving…" / "All changes saved"). */
+  const [draft, setDraft] = useState(() => ({
+    url: config?.clientServerUrl ?? '',
+    token: config?.clientToken ?? '',
+  }));
+  const [saveState, setSaveState] = useState('saved');
+  const [savedAt, setSavedAt] = useState(null);
+  const latest = useRef(draft);
+  const dirty = useRef(false);
+  const saveTimer = useRef(null);
+  const mounted = useRef(true);
+
+  const doSave = useCallback(async (values) => {
+    if (mounted.current) setSaveState('saving');
+    try {
+      await patch('clientServerUrl', values.url);
+      await patch('clientToken', values.token);
+      latest.current = values;
+      dirty.current = false;
+      if (mounted.current) { setSavedAt(Date.now()); setSaveState('saved'); }
+    } catch (err) {
+      dirty.current = true;
+      if (mounted.current) setSaveState('error');
+      addToast?.(err.message, 'error');
+    }
+  }, [patch, addToast]);
+
+  const saveNow = useCallback(async () => {
+    clearTimeout(saveTimer.current);
+    await doSave(latest.current);
+  }, [doSave]);
+
+  // Adopt a config change made elsewhere (first load, or another control).
+  useEffect(() => {
+    const url = config?.clientServerUrl ?? '';
+    const token = config?.clientToken ?? '';
+    if (dirty.current) return;
+    if (url === latest.current.url && token === latest.current.token) return;
+    const next = { url, token };
+    latest.current = next;
+    setDraft(next);
+  }, [config?.clientServerUrl, config?.clientToken]);
+
+  // Never lose a pending edit: flush the draft on unmount (mode tab switch,
+  // navigating away) without touching state on an unmounted component.
+  useEffect(() => () => {
+    mounted.current = false;
+    clearTimeout(saveTimer.current);
+    if (dirty.current) {
+      void patch('clientServerUrl', latest.current.url);
+      void patch('clientToken', latest.current.token);
+    }
+  }, [patch]);
+
+  function applyNext(next) {
+    setDraft(next);
+    latest.current = next;
+    dirty.current = true;
+    setSaveState('dirty');
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => { void doSave(latest.current); }, 600);
+  }
+
   async function testConnection() {
     setTesting(true);
     setTestResult(null);
     try {
       const r = await window.api.client.testConnection(
-        (config.clientServerUrl ?? '').trim(),
-        (config.clientToken ?? '').trim(),
+        (draft.url ?? '').trim(),
+        (draft.token ?? '').trim(),
       );
       setTestResult(r);
       addToast?.(`Connected as ${r.user.name}`, 'success');
@@ -493,8 +563,8 @@ export function ClientModePanel({ config, patch }) {
     setDiagnostic(null);
     try {
       const r = await window.api.client.diagnoseServer(
-        (config.clientServerUrl ?? '').trim(),
-        (config.clientToken ?? '').trim(),
+        (draft.url ?? '').trim(),
+        (draft.token ?? '').trim(),
       );
       setDiagnostic(r);
       if (r.overall === 'ok') {
@@ -538,8 +608,8 @@ export function ClientModePanel({ config, patch }) {
         hint="The IP or hostname where the Server-mode Mac is reachable, with http:// and the port (default 13180). Over Tailscale that's a 100.x.x.x address; on LAN it's a 192.168 / 10.x address. Do NOT use the Mobile web viewer address — that one ends in /m and is for a phone browser; if you paste it, the /m is removed for you."
       >
         <Input
-          value={config.clientServerUrl ?? ''}
-          onChange={(e) => patch('clientServerUrl', e.target.value)}
+          value={draft.url}
+          onChange={(e) => applyNext({ ...latest.current, url: e.target.value })}
           placeholder="http://100.64.0.5:13180"
         />
       </SettingRow>
@@ -549,10 +619,16 @@ export function ClientModePanel({ config, patch }) {
       >
         <Input
           type="password"
-          value={config.clientToken ?? ''}
-          onChange={(e) => patch('clientToken', e.target.value)}
+          value={draft.token}
+          onChange={(e) => applyNext({ ...latest.current, token: e.target.value })}
           placeholder="64-character hex token"
         />
+      </SettingRow>
+      <SettingRow
+        label="Save connection"
+        hint="The address and token save automatically a moment after you stop typing. Use Save to commit them immediately — needed before switching Mode to Client."
+      >
+        <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
       </SettingRow>
       <SettingRow
         label="Connection"
