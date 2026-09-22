@@ -330,10 +330,13 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 81 files — `node --test test/**/*.test.js`
+test/                    # 93 files — `node --test test/**/*.test.js`
 scripts/                 # build-icon.js, build-webclient.js,
-                         # probe-overlay-renderer.js, probe-render-paint.js
-                         #   (`npm run check:render` — needs a real Electron app)
+                         # probe-overlay-renderer.js,
+                         # probe-render-paint.js  (`npm run check:render`)
+                         # probe-app-image-cors.js (`npm run check:images`)
+                         # probe-ui-crawl.js       (drive every screen over CDP)
+                         #   — the last three need a real Electron app
 assets/                  # bundled resources that ship in the DMG (fonts/)
 ```
 

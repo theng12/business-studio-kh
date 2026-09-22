@@ -59,8 +59,31 @@ migrateLegacyUserData();
 
 protocol.registerSchemesAsPrivileged([
   {
+    // v0.1.59: `corsEnabled` is load-bearing, not decoration.
+    //
+    // The renderer's origin is `app://local`; an image lives at
+    // `app-image://local/...` — a DIFFERENT origin. An <img> tag doesn't care,
+    // but `fetch()` does, and Chromium refuses to even attempt a cross-origin
+    // request to a scheme that is not registered as CORS-enabled:
+    //
+    //   Access to fetch at 'app-image://local/…' from origin 'app://local' has
+    //   been blocked by CORS policy: Cross origin requests are only supported
+    //   for protocol schemes: app, chrome, chrome-extension, chrome-untrusted,
+    //   data, http, https.
+    //
+    // That killed every Image Workspace "Apply" run with Remove background on
+    // (the default) — the local @imgly engine reads the source pixels with
+    // fetchImageBlob() in renderer/lib/bgRemoval.js, so the run died with a
+    // bare "Failed to fetch". The CSP already allowed `app-image:` in
+    // connect-src; CSP and CORS are separate gates and only the first was open.
+    //
+    // Measured with scripts/probe-app-image-cors.js: this one privilege is the
+    // whole fix. Adding an `Access-Control-Allow-Origin` header to the protocol
+    // response changes nothing (Electron does not CORS-check the response of a
+    // scheme registered this way), so the handler is left alone — no reason to
+    // re-wrap every thumbnail's response body.
     scheme: 'app-image',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true },
+    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
   },
   {
     // Production renderer is served via app://local/... so blob URLs created
