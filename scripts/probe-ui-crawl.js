@@ -289,6 +289,12 @@ class Crawl {
     await this.cdp.send('Emulation.setDeviceMetricsOverride', {
       width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false,
     });
+    // A crawl page is never the front window, and Chromium reports it as
+    // hidden — which makes window.queryLocalFonts() reject with "Page needs to
+    // be visible" before it reads anything. Focus emulation puts the page in the
+    // state a real user's window is in, so the font-picker check below tests the
+    // real code path instead of the fallback list.
+    await this.cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
     await this.eval(TOOLKIT);
   }
 
@@ -497,6 +503,116 @@ async function deepImageFlow(crawl, photoPath) {
     crawl.step('deep: apply to this image', !crashAfter && okToast && okRow,
       crashAfter ? `CRASHED: ${crashAfter}` : `toast: ${toast || '(none)'} · rows: ${JSON.stringify(processed).slice(0, 200)}`);
   }
+}
+
+/**
+ * Overlay Studio's template editor — the most complex screen in the app, and
+ * the only one the page loop never opens (the module's landing page is a list).
+ * Covers the two controls v0.1.58 migrated here (background Opacity, Product
+ * size), the v0.1.57 system font picker, and that adding an element does not
+ * drop the editor into its error boundary.
+ */
+async function deepOverlayFlow(crawl) {
+  crawl.phase = 'deep: overlay editor';
+  await crawl.goto('Overlay Studio');
+  const opened = await crawl.eval(`window.__ui.clickExact('+ New template')`);
+  if (opened !== 'ok') { crawl.step('deep: open the new-template modal', false, opened); return; }
+  await crawl.waitFor(`window.__ui.fieldInput('Template name') !== null`, 8000, 'the new-template modal');
+  await crawl.eval(`window.__ui.clickExact('Create template')`);
+  await crawl.waitFor(`!!document.querySelector('.ovl-inset-controls')`, 15_000, 'the overlay template editor');
+  await crawl.settle(800);
+  const crash = await crawl.eval('window.__ui.crash()');
+  if (crash) { crawl.step('deep: overlay editor opens', false, `CRASHED: ${crash}`); return; }
+  await crawl.shot('overlay-editor');
+  crawl.step('deep: overlay editor opens', true, '');
+
+  /* + Text is the button whose absence crashed the whole editor in v0.1.8. */
+  await crawl.eval(`window.__ui.clickExact('+ Text')`);
+  await crawl.settle(800);
+  const crash2 = await crawl.eval('window.__ui.crash()');
+  if (crash2) { crawl.step('deep: add a text element', false, `CRASHED: ${crash2}`); return; }
+  const boxes = await crawl.eval(`window.__ui.all('.slider-field input[type="number"]').map((i) => i.getAttribute('aria-label'))`);
+  const bare = await crawl.eval('window.__ui.bareRanges()');
+  await crawl.shot('overlay-text-selected');
+  crawl.step('deep: add a text element', bare.length === 0,
+    bare.length ? `bare range(s): ${JSON.stringify(bare)}` : `value boxes: ${JSON.stringify(boxes)}`);
+
+  const bgBox = await crawl.eval(`!!document.querySelector('input[aria-label="Opacity value"]')`);
+  if (!bgBox) {
+    crawl.step('deep: element background Opacity has a value box', false, 'number box missing');
+  } else {
+    await crawl.eval(`window.__ui.typeAndEnter('input[aria-label="Opacity value"]', 40)`);
+    await crawl.settle(500);
+    const v = await crawl.eval(`(() => {
+      const b = document.querySelector('input[aria-label="Opacity value"]');
+      return { box: b.value, range: b.closest('.slider-field').querySelector('input[type="range"]').value };
+    })()`);
+    crawl.step('deep: typed background Opacity 40 sticks', v.box === '40' && v.range === '40', JSON.stringify(v));
+  }
+
+  /* v0.1.57 font picker. A new text element carries a font STACK, so the field
+   * renders as free text + "Pick from list"; clicking that is what has to
+   * reveal the list. This step is why the "the button did nothing" bug was
+   * found — reading the DOM without clicking showed a perfectly reasonable
+   * input box. */
+  const fonts = await crawl.eval(`(async () => {
+    const field = window.__ui.field('Font family');
+    if (!field) return { error: 'no Font family field' };
+    const before = field.querySelectorAll('select').length;
+    const btn = Array.from(field.querySelectorAll('button')).find((b) => /pick from list/i.test(b.innerText));
+    if (btn) {
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      btn.click();
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+    const sel = field.querySelector('select');
+    if (!sel) return { error: 'the list never appeared', hadButton: !!btn, selectsBefore: before };
+    const hint = field.querySelector('.field__hint');
+    return {
+      families: sel.options.length,
+      sample: Array.from(sel.options).slice(0, 3).map((o) => o.textContent),
+      value: sel.value,
+      hint: hint ? hint.textContent : null,
+    };
+  })()`, true);
+  await crawl.shot('overlay-font-picker');
+  const fontsOk = fonts && fonts.families > 20 && !fonts.error;
+  crawl.step('deep: Font family opens the list of installed fonts', fontsOk, JSON.stringify(fonts).slice(0, 240));
+
+  /* v0.1.58: the inset Product-size slider lives behind this toggle. */
+  await crawl.eval(`window.__ui.pressEscape()`);
+  await crawl.settle(250);
+  const inset = await crawl.eval(`(() => {
+    const b = Array.from(document.querySelectorAll('button')).find((x) => /inset/i.test(x.innerText));
+    if (!b) return 'MISS';
+    if (b.getAttribute('aria-pressed') !== 'true') b.click();
+    return 'ok';
+  })()`);
+  if (inset !== 'ok') {
+    crawl.step('deep: inset Product size has a value box', false, inset);
+  } else {
+    await crawl.settle(600);
+    const box = await crawl.eval(`!!document.querySelector('input[aria-label="Product size value"]')`);
+    if (!box) {
+      crawl.step('deep: inset Product size has a value box', false, 'number box missing after enabling Inset');
+    } else {
+      await crawl.eval(`window.__ui.typeAndEnter('input[aria-label="Product size value"]', 72)`);
+      await crawl.settle(500);
+      const v = await crawl.eval(`(() => {
+        const b = document.querySelector('input[aria-label="Product size value"]');
+        return { box: b.value, range: b.closest('.slider-field').querySelector('input[type="range"]').value, hint: !!b.closest('.slider-field').querySelector('.slider-field__hint') };
+      })()`);
+      await crawl.shot('overlay-inset');
+      crawl.step('deep: typed Product size 72 sticks', v.box === '72' && v.range === '72' && v.hint, JSON.stringify(v));
+    }
+  }
+
+  const crashFinal = await crawl.eval('window.__ui.crash()');
+  const bareFinal = await crawl.eval('window.__ui.bareRanges()');
+  if (crashFinal) crawl.step('deep: overlay editor survives the flow', false, `CRASHED: ${crashFinal}`);
+  else if (bareFinal.length) crawl.step('deep: overlay editor survives the flow', false, `bare ranges: ${JSON.stringify(bareFinal)}`);
+  else crawl.step('deep: overlay editor survives the flow', true, '');
 }
 
 const PAGE_LABELS = [
@@ -715,6 +831,13 @@ async function main() {
     await deepImageFlow(crawl, photoPath);
   } catch (err) {
     crawl.step('deep image flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 9 ── the overlay editor, which no page loop reaches */
+  try {
+    await deepOverlayFlow(crawl);
+  } catch (err) {
+    crawl.step('deep overlay flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */

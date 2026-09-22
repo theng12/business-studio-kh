@@ -20,12 +20,21 @@ export function FontFamilyPicker({ id, value, onChange, disabled = false }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [custom, setCustom] = useState(false);
+  /* v0.1.61: the value the user clicked "Pick from list" for.
+   *
+   * `custom` alone could not switch the field out of free-text mode, because a
+   * legacy (or just-created) template carries a font STACK — "Inter, Helvetica
+   * Neue, Arial, sans-serif" — and `isStack` forced the text input to stay, so
+   * the button looked dead on every new template and the list of installed
+   * fonts was unreachable. Tracking which value the user asked to browse also
+   * means switching to another element falls back to the plain text view. */
+  const [listFor, setListFor] = useState(null);
 
   const current = String(value ?? '').trim();
   const list = families ?? [];
   const known = list.some((f) => f.toLowerCase() === current.toLowerCase());
   const isStack = current.includes(','); // legacy multi-family value
-  const showCustom = custom || isStack;
+  const showCustom = custom || (isStack && listFor !== current);
 
   const load = useCallback(async () => {
     if (families || loading) return;
@@ -61,7 +70,9 @@ export function FontFamilyPicker({ id, value, onChange, disabled = false }) {
           variant="ghost"
           disabled={disabled}
           onMouseDown={() => { void load(); }}
-          onClick={() => { setCustom(false); if (!isStack) onChange(current); }}
+          /* load() here too: the button is reachable by keyboard, and Enter
+           * fires click without any mousedown. */
+          onClick={() => { void load(); setCustom(false); setListFor(current); if (!isStack) onChange(current); }}
           title="Pick from the fonts installed on this Mac"
         >
           Pick from list
