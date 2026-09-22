@@ -584,19 +584,14 @@ function BgSection({ element, patchBg }) {
             <Input id={id} type="color" value={bg.color ?? '#ffffff'} onChange={(e) => patchBg({ color: e.target.value })} />
           )}
         </Field>
-        <Field label="Opacity">
-          {({ id }) => (
-            <Input
-              id={id}
-              type="range"
-              min="0"
-              max="100"
-              step="1"
-              value={Math.round((bg.opacity ?? 1) * 100)}
-              onChange={(e) => patchBg({ opacity: Math.max(0, Math.min(1, Number(e.target.value) / 100)) })}
-            />
-          )}
-        </Field>
+        <SliderField
+          label="Opacity"
+          value={Math.round((bg.opacity ?? 1) * 100)}
+          min={0}
+          max={100}
+          suffix="%"
+          onChange={(v) => patchBg({ opacity: Math.max(0, Math.min(1, v / 100)) })}
+        />
       </div>
       <div className="grid-2">
         <Field label="Padding">

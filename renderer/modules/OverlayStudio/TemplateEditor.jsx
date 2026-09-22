@@ -16,7 +16,7 @@ const CANVAS_PRESETS = [
   { key: 'wide-fb',   label: 'Wide 1200 × 630 (FB / OG)',  w: 1200, h: 630  },
 ];
 import { useAppStore } from '../../store/index.js';
-import { Button, Field, Input, Select } from '../../components/ui.jsx';
+import { Button, Field, Input, Select, SliderField } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { defaultElement } from './elementDefaults.js';
 import { EditorCanvas } from './EditorCanvas.jsx';
@@ -628,17 +628,15 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
           </button>
           {inset?.enabled && (
             <>
-              <label className="ovl-inset-pct" title="Product size as a percentage of the canvas. Lower = more margin.">
-                <input
-                  type="range"
-                  min="40"
-                  max="100"
-                  step="1"
-                  value={insetPct}
-                  onChange={(e) => updateInset({ scale: Number(e.target.value) / 100 })}
-                />
-                <span className="muted">{insetPct}%</span>
-              </label>
+              <SliderField
+                label="Product size"
+                value={insetPct}
+                min={40}
+                max={100}
+                suffix="%"
+                hint="Percentage of the canvas. Lower = more margin."
+                onChange={(v) => updateInset({ scale: v / 100 })}
+              />
               <div className="ws-toolbar__group">
                 <button
                   type="button"

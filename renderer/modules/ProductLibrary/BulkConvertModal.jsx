@@ -13,7 +13,7 @@
 // format-specific form body and IPC call.
 
 import { useCallback } from 'react';
-import { Field, Select } from '../../components/ui.jsx';
+import { Field, Select, SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { BulkOpModal } from './BulkOpModal.jsx';
 import { SCOPE_OPTIONS } from './libraryConstants.js';
@@ -106,24 +106,15 @@ export function BulkConvertModal({ open, productIds, onClose, onDone }) {
             </Field>
 
             {qualityRelevant ? (
-              <Field
-                label={`Quality: ${state.quality}`}
+              <SliderField
+                label="Quality"
+                value={state.quality}
+                min={1}
+                max={100}
                 hint="85 is the catalog sweet spot. JPEG / WebP only — PNG is lossless and ignores this."
-              >
-                {({ id }) => (
-                  <input
-                    id={id}
-                    type="range"
-                    min="1"
-                    max="100"
-                    step="1"
-                    value={state.quality}
-                    onChange={(e) => set('quality', Number(e.target.value))}
-                    disabled={running}
-                    style={{ width: '100%' }}
-                  />
-                )}
-              </Field>
+                disabled={running}
+                onChange={(v) => set('quality', v)}
+              />
             ) : null}
 
             <Field label="Scope">

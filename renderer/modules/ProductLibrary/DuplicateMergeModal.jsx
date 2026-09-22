@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Modal } from '../../components/ui.jsx';
+import { Button, Modal, SliderField } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { confirmWithBackup } from '../../components/BackupReminder.jsx';
 import { useAppStore } from '../../store/index.js';
@@ -244,19 +244,14 @@ export function DuplicateMergeModal({ open, onClose }) {
             groups images on the <em>same</em> product, never across products.
           </p>
           <div className="dedup-threshold">
-            <label htmlFor="dedup-sim">How similar counts as a duplicate?</label>
-            <div className="dedup-threshold__row">
-              <input
-                id="dedup-sim"
-                type="range"
-                min="80"
-                max="100"
-                step="1"
-                value={thresholdPct}
-                onChange={(e) => setThresholdPct(Number(e.target.value))}
-              />
-              <span className="dedup-threshold__val">≥ {thresholdPct}%</span>
-            </div>
+            <SliderField
+              label="How similar counts as a duplicate?"
+              value={thresholdPct}
+              min={80}
+              max={100}
+              suffix="%"
+              onChange={setThresholdPct}
+            />
             <p className="ws-hint">
               {thresholdPct >= 98
                 ? 'Near-identical only (re-encodes / EXIF / tiny resizes). Lowest false-positive risk.'
