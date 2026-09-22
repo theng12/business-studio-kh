@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.61',
+    date: '2026-09-22',
+    items: [
+      'FIX — Overlay Studio: “Pick from list” beside Font family did nothing. Every template starts on a font stack (“Inter, Helvetica Neue, Arial, sans-serif”), and the field stayed in free-text mode because of it — so the list of fonts installed on this Mac could never be opened. It opens now, and the stack you had is kept as the “(custom)” entry until you choose a font or go back to “Custom stack…”.',
+      'Internal — the field kept the text input whenever the stored value contained a comma, so the button’s “show me the list” state could not win. It now records which value the user asked to browse, which also resets the field to plain text when you select a different element.',
+      'Internal — found with scripts/probe-ui-crawl.js (which needed Emulation.setFocusEmulationEnabled: the Local Font Access API refuses to answer on a window Chromium considers hidden, and the crawl page never has real focus).',
+    ],
+  },
+  {
     version: '0.1.60',
     date: '2026-09-22',
     items: [
