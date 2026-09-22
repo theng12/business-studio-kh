@@ -10394,3 +10394,10 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .font-family-field { display: flex; align-items: center; gap: 6px; }
 .font-family-field > .input:first-child { flex: 1 1 auto; min-width: 0; }
 .font-family-field > .btn { flex: 0 0 auto; white-space: nowrap; }
+
+/* v0.1.58: SliderField gained an optional hint line. */
+.slider-field__hint {
+  font-size: 11.5px;
+  color: var(--c-text-muted);
+  line-height: 1.35;
+}

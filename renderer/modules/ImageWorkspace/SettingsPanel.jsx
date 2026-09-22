@@ -1,4 +1,4 @@
-import { Button, Input } from '../../components/ui.jsx';
+import { Button, Input, SliderField } from '../../components/ui.jsx';
 import { Section } from '../../components/Section.jsx';
 import { FILL_SWATCHES, MARKETPLACE_PRESETS, WATERMARK_CORNERS, getPreset } from '../../lib/presets.js';
 
@@ -138,20 +138,14 @@ export function SettingsPanel({
             </label>
           </div>
 
-          <label className="slider-field">
-            <div className="slider-field__head">
-              <span>Product fill</span>
-              <span className="slider-field__value">{settings.productFillPct}%</span>
-            </div>
-            <input
-              type="range"
-              min="50"
-              max="100"
-              step="1"
-              value={settings.productFillPct}
-              onChange={(e) => patch({ productFillPct: Number(e.target.value) })}
-            />
-          </label>
+          <SliderField
+            label="Product fill"
+            value={settings.productFillPct}
+            min={50}
+            max={100}
+            suffix="%"
+            onChange={(v) => patch({ productFillPct: v })}
+          />
         </Section>
 
         {/* v0.49.17: the "Orient" section (90° rotate left/right/reset) moved
@@ -379,21 +373,8 @@ export function SettingsPanel({
 // v0.49.17: RotateGlyph moved to CanvasView (it\'s where the rotate buttons
 // now live — alongside Crop, in the canvas tools row).
 
-function SliderField({ label, value, min, max, suffix = '', onChange }) {
-  return (
-    <label className="slider-field">
-      <div className="slider-field__head">
-        <span>{label}</span>
-        <span className="slider-field__value">{value}{suffix}</span>
-      </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step="1"
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
-    </label>
-  );
-}
+/* v0.1.58: the LOCAL SliderField that used to live here is gone. It shadowed
+ * the shared one from components/ui.jsx, so every slider in this panel —
+ * including the watermark Opacity control — kept the old read-only number and
+ * never got the typeable value box. Importing the shared component means this
+ * panel cannot drift from the rest of the app again. */

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { appImageSrc } from '../../lib/imageUrl.js';
+import { SliderField } from '../../components/ui.jsx';
 
 // v0.49.15: aspect-ratio presets exposed on the crop toolbar. The chip ids
 // are also the value persisted in `settings.cropAspectRatio`. "free" is
@@ -553,19 +554,15 @@ export function CanvasView({
               the server rotates the source by this angle before extracting
               the crop region. */}
           <div className="ws-crop-bar__straighten">
-            <span className="ws-crop-bar__label">Straighten</span>
-            <input
-              type="range"
-              min="-45"
-              max="45"
-              step="0.1"
+            <SliderField
+              label="Straighten"
               value={Number(settings.cropStraighten || 0)}
-              onChange={(e) => onCropAspectChange?.(`__straighten:${e.target.value}`)}
-              aria-label="Straighten angle"
+              min={-45}
+              max={45}
+              step={0.1}
+              suffix="°"
+              onChange={(v) => onCropAspectChange?.(`__straighten:${v}`)}
             />
-            <span className="ws-crop-bar__angle">
-              {Number(settings.cropStraighten || 0).toFixed(1)}°
-            </span>
             {Number(settings.cropStraighten || 0) !== 0 ? (
               <button
                 type="button"

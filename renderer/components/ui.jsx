@@ -66,7 +66,7 @@ export function Badge({ tone = 'slate', children }) {
  * live; blur/Enter normalises to the clamped value; the range and the number
  * always agree. `suffix` is shown after the box (e.g. '%' or '°').
  */
-export function SliderField({ label, value, min, max, step = 1, suffix = '', onChange, disabled = false }) {
+export function SliderField({ label, value, min, max, step = 1, suffix = '', hint = '', onChange, disabled = false }) {
   const id = useId();
   const [draft, setDraft] = useState(String(value));
   const [editing, setEditing] = useState(false);
@@ -127,6 +127,7 @@ export function SliderField({ label, value, min, max, step = 1, suffix = '', onC
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
       />
+      {hint ? <span className="slider-field__hint">{hint}</span> : null}
     </div>
   );
 }

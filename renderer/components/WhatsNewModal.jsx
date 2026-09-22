@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.58',
+    date: '2026-09-22',
+    items: [
+      'NEW — every remaining slider now has the typeable value box. Product fill, watermark Opacity, overlay background Opacity, overlay Product size, Auto crop, Auto enhance, Duplicates, and the Quality sliders in Bulk convert and Bulk compress all accept an exact typed number now, not just a drag.',
+      'FIX — Image Workspace had its own private copy of the slider control, so its sliders (Product fill and the watermark Opacity slider in particular) still showed the old read-only number while the rest of the app had a box you could type in. There is one slider control again.',
+      'Internal — SettingsPanel.jsx no longer defines a local SliderField that shadowed the shared one; SliderField gained a hint line for the overlay Product size tooltip, and five bulk modals were migrated to it. No bare type="range" inputs remain outside components/ui.jsx.',
+    ],
+  },
+  {
     version: '0.1.57',
     date: '2026-09-22',
     items: [
