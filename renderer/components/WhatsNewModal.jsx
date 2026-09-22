@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.53',
+    date: '2026-09-22',
+    items: [
+      'FIX — Overlay Studio: an image element’s Opacity slider was inverted. 0% made the artwork fully solid, 80% faded it to nearly nothing, and only 100% looked right. It now fades the way the number says.',
+      'NEW — sliders now have a typeable value box. Click the number beside any slider, type an exact value (for example 37), press Enter, and the slider and preview follow.',
+      'Internal — the image-element opacity mask used 1 − opacity under a dest-in blend; corrected to opacity. Image elements are now covered by the opacity tests, which previously only exercised text and barcode.',
+    ],
+  },
+  {
     version: '0.1.52',
     date: '2026-09-22',
     items: [

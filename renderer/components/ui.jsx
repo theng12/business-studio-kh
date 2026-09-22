@@ -1,4 +1,4 @@
-import { useEffect, useRef, useId } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 export function Button({ variant = 'default', children, ...props }) {
   const cls = ['btn'];
@@ -53,24 +53,72 @@ export function Badge({ tone = 'slate', children }) {
 }
 
 /**
- * v0.1.5: label + live numeric readout + range input.
+ * v0.1.5: label + live readout + range input.
  *
  * Extracted from ImageWorkspace/SettingsPanel.jsx, where it was a private
  * helper. The readout is the point: a bare `<input type="range">` gives no
  * indication of the value you are actually setting, which made the
  * Overlay Studio opacity/rotation sliders feel like they did nothing.
- * Reuses the existing `.slider-field` styles.
  *
- * `suffix` renders straight after the number (e.g. '%' or '°').
+ * v0.1.53: the readout is now an editable NUMBER input, not a static span.
+ * A slider alone cannot hit an exact value (try setting 37% by dragging), and
+ * people reasonably try to click the number and type. Typing drives the slider
+ * live; blur/Enter normalises to the clamped value; the range and the number
+ * always agree. `suffix` is shown after the box (e.g. '%' or '°').
  */
 export function SliderField({ label, value, min, max, step = 1, suffix = '', onChange, disabled = false }) {
+  const id = useId();
+  const [draft, setDraft] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+
+  // Follow the range/preview while the user is NOT typing in the box.
+  useEffect(() => {
+    if (!editing) setDraft(String(value));
+  }, [value, editing]);
+
+  const clamp = (n) => Math.max(min, Math.min(max, n));
+
+  function handleTyped(raw) {
+    setDraft(raw);
+    if (raw === '' || raw === '-' || raw === '.') return; // let them finish
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    const next = clamp(n);
+    if (next !== value) onChange(next);
+  }
+
+  function normalise() {
+    setEditing(false);
+    const n = Number(draft);
+    const next = Number.isFinite(n) ? clamp(n) : value;
+    setDraft(String(next));
+    if (next !== value) onChange(next);
+  }
+
   return (
-    <label className="slider-field">
+    <div className="slider-field">
       <div className="slider-field__head">
-        <span>{label}</span>
-        <span className="slider-field__value">{value}{suffix}</span>
+        <label htmlFor={id}>{label}</label>
+        <span className="slider-field__entry">
+          <input
+            type="number"
+            className="slider-field__input"
+            aria-label={`${label} value`}
+            min={min}
+            max={max}
+            step={step}
+            value={draft}
+            disabled={disabled}
+            onFocus={() => setEditing(true)}
+            onChange={(e) => handleTyped(e.target.value)}
+            onBlur={normalise}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+          />
+          {suffix ? <span className="slider-field__suffix">{suffix}</span> : null}
+        </span>
       </div>
       <input
+        id={id}
         type="range"
         min={min}
         max={max}
@@ -79,7 +127,7 @@ export function SliderField({ label, value, min, max, step = 1, suffix = '', onC
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
       />
-    </label>
+    </div>
   );
 }
 
