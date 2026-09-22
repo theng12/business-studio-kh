@@ -2,6 +2,14 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.60',
+    date: '2026-09-22',
+    items: [
+      'POLISH — Settings → General → Price groups: the “Add group” button no longer squeezes its label onto two lines. The text box beside it was taking the whole row and squashing the button.',
+      'Internal — the add row was missing the flex rules the font-family field already had (flex: 0 0 auto + white-space: nowrap). Found by looking at the screen after the automated UI crawl passed it.',
+    ],
+  },
+  {
     version: '0.1.59',
     date: '2026-09-22',
     items: [
