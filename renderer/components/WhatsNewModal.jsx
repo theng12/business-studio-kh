@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.54',
+    date: '2026-09-22',
+    items: [
+      'FIX — Reframe: the Nudge ↔ / Nudge ↕ sliders were sending percentages where the reframer expects a fraction, so any value past 1 snapped straight to the far edge and the whole slider was effectively three positions. The nudge now moves proportionally through the available margin.',
+      'POLISH — Reframe’s Size and Nudge sliders now use the typeable value box like the other sliders, so an exact value can be typed.',
+      'Internal — added test/overlayPositioning.test.js: overlay image placement (canvas-based on both axes, size, all nine anchors), editor↔renderer box parity, watermark corner placement, and reframe nudge direction/scale. The overlay image position maths is canvas-based in both the editor and the renderer — no inversion was found there.',
+    ],
+  },
+  {
     version: '0.1.53',
     date: '2026-09-22',
     items: [
