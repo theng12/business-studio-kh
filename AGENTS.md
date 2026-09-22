@@ -357,27 +357,33 @@ Every Electron app must:
 - Mirror those events to stdout too so they're visible in `npm run dev`.
 - Set `ELECTRON_ENABLE_LOGGING=1` in the dev script so Chromium logs are not swallowed.
 
-## 20. Build for arm64 AND x64 (Apple Silicon + Intel)
+## 20. Every release ships arm64 AND x64 DMGs (Apple Silicon + Intel)
 
-Every `npm run dist` produces **two** DMGs:
-`Media Studio KH-X.Y.Z-arm64.dmg` and `Media Studio KH-X.Y.Z-x64.dmg`.
-Configured in `package.json` under `build.mac.target[].arch: ["arm64", "x64"]`.
+**Standing rule (2026-09-22):** every stable release must produce **two**
+DMGs — `Media Studio KH-X.Y.Z-arm64.dmg` and `Media Studio KH-X.Y.Z-x64.dmg`.
+Theng runs a new (Apple Silicon) Mac and an old (Intel) Mac, so a release that
+only builds one is not a release. Do not ship a single-arch DMG unless he says
+so for that specific build.
 
-> **Reversed 2026-09-22 (v0.1.52) at Theng's explicit request.** v0.1.9 had
-> dropped x64 ("the Intel Macs left the test fleet"); he asked for an Intel
-> DMG again, so both are built. Flip it back only if he says so.
+Configured in `package.json` under
+`build.mac.target[].arch: ["arm64", "x64"]`, and pinned by
+`test/releaseScripts.test.js` — if someone trims the array, that test fails.
 
+> History: v0.1.9 dropped x64 when the Intel Macs left the test fleet; on
+> 2026-09-22 he asked for an Intel DMG again, so both are built. The old
+> reasoning is preserved here only so the reversal isn't re-litigated.
+
+- Every `npm run dist` emits both DMGs (no extra flag needed).
 - Per-arch scripts exist for a single-arch build: `npm run dist:arm64` and
   `npm run dist:x64` (each overrides the config arch on the CLI).
 - `predist` installs BOTH arches' `sharp` / `@img` binaries (`install:sharp`),
   so either target can be packaged without a re-install.
 - `postdist` runs `native:host` (arm64) so the dev checkout keeps working
   after a release build.
-- Electron 44 requires macOS 12 or newer, reflected in `build.mac.minimumSystemVersion` (verified 2026-09-20). An Intel Mac older than macOS 12 cannot run the x64 DMG.
+- Electron 44 requires macOS 12 or newer, reflected in `build.mac.minimumSystemVersion` (verified 2026-09-20). An Intel Mac older than macOS 12 cannot run the x64 DMG — check the target Mac's macOS version before promising an Intel build will run.
 - Do NOT use `arch: ["universal"]` — a universal binary bundles both slices into
   one app, roughly doubling the file size. Two separate DMGs are the house
-  choice; if only one arch is ever needed again, prefer trimming the arch array
-  over going universal.
+  choice.
 
 ## 21. Packaging-safe paths — dev layout ≠ packaged layout
 
