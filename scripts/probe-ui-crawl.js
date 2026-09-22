@@ -1229,8 +1229,15 @@ async function deepBulkTableFlow(crawl, photoPath) {
    * list. */
   const seeded = await crawl.eval(`(async () => {
     const cid = await window.api.companies.getActiveId();
+    let brands = await window.api.brands.list(cid);
+    if (!brands.length) {
+      await window.api.brands.create({ companyId: cid, name: 'UI Crawl Brand' });
+      brands = await window.api.brands.list(cid);
+    }
     const ps = await window.api.products.list(cid, {});
     const p = ps[0];
+    // A brand on row 0 gives the "— Unassigned —" option something to clear.
+    await window.api.products.update(p.id, { brandId: brands[0].id });
     let imgs = await window.api.images.listByProduct(p.id);
     let list = imgs.images || imgs;
     if (list.length === 0) {
@@ -1238,7 +1245,10 @@ async function deepBulkTableFlow(crawl, photoPath) {
       imgs = await window.api.images.listByProduct(p.id);
       list = imgs.images || imgs;
     }
-    return { sku: p.sku, id: p.id, count: list.length, first: list[0] ? list[0].filepath : null };
+    return {
+      sku: p.sku, id: p.id, count: list.length, first: list[0] ? list[0].filepath : null,
+      brandId: brands[0].id, brandName: brands[0].name,
+    };
   })()`, true).catch((err) => ({ error: err.message }));
   if (!seeded || seeded.error) { crawl.step('deep bulk table: row 0 has a main image', false, JSON.stringify(seeded)); return; }
 
@@ -1279,6 +1289,23 @@ async function deepBulkTableFlow(crawl, photoPath) {
   crawl.step('deep bulk table: both image modes and the hint are offered',
     chrome.modes.join('|') === 'Add|Make main' && /⌘V/.test(chrome.hint) && /⇧⌘V/.test(chrome.hint),
     `modes ${JSON.stringify(chrome.modes)} · hint “${chrome.hint.slice(0, 80)}…”`);
+
+  /* The brand/category selects must offer an explicit "— Unassigned —" that
+   * CLEARS the field. Row 0 was given a brand above, so both the option and the
+   * current value are checkable. */
+  await crawl.waitFor(`(() => {
+    const sel = document.querySelector('select[data-row="0"][data-col="brandId"]');
+    return sel && Array.from(sel.options).some((o) => o.value === ${JSON.stringify(seeded.brandId)});
+  })()`, 8000, 'the brand option to reach the grid');
+  const brandCell = await crawl.eval(`(() => {
+    const sel = document.querySelector('select[data-row="0"][data-col="brandId"]');
+    if (!sel) return { error: 'no brand cell' };
+    const opts = Array.from(sel.options).map((o) => ({ value: o.value, label: o.textContent }));
+    return { value: sel.value, unassigned: opts.some((o) => o.value === '' && /Unassigned/.test(o.label)), options: opts.length };
+  })()`);
+  crawl.step('deep bulk table: brand offers an explicit Unassigned that clears',
+    !brandCell.error && brandCell.unassigned && brandCell.value === seeded.brandId,
+    JSON.stringify(brandCell));
 
   const sku0 = await crawl.eval(`(document.querySelector('input[data-row="0"][data-col="sku"]') || {}).value || null`);
   const sku1 = await crawl.eval(`(document.querySelector('input[data-row="1"][data-col="sku"]') || {}).value || null`);
@@ -1329,6 +1356,15 @@ async function deepBulkTableFlow(crawl, photoPath) {
   crawl.step('deep bulk table: a fitting paste fills the cells',
     filledPaste === 'ok' && filled.a === 'Paste A' && filled.b === 'Paste B',
     JSON.stringify(filled));
+
+  /* 3b ── an edited SKU is a rename. bulkUpsert is keyed by SKU and can only
+   *       match or insert, so the save has to rename through products:update
+   *       and then find the product under its NEW sku. */
+  const renamedSku = `${sku1}-R`;
+  await crawl.eval(`window.__ui.set('input[data-row="1"][data-col="sku"]', ${JSON.stringify(renamedSku)})`);
+  await crawl.settle(250);
+  const skuCellNow = await crawl.eval(`document.querySelector('input[data-row="1"][data-col="sku"]').value`);
+  crawl.step('deep bulk table: an edited SKU is accepted in the cell', skuCellNow === renamedSku, JSON.stringify({ skuCellNow }));
 
   /* 4 ── never edit product images here: paste text into the image cell and it
    *      says so instead of writing anything. */
@@ -1417,6 +1453,13 @@ async function deepBulkTableFlow(crawl, photoPath) {
     `mode ${modeOn} · ${beforeMain.count}→${afterMain.count} · first ${String(beforeMain.first).split('/').pop()} → ${String(afterMain.first).split('/').pop()}`);
 
   /* 7 ── Save all: dry run first, then the summary, then the commit. */
+  /* Clearing row 0's brand through the select must send null, which overwrite
+   * applies as "clear the field" — the reason the Unassigned option exists. */
+  await crawl.eval(`window.__ui.set('select[data-row="0"][data-col="brandId"]', '')`);
+  await crawl.settle(250);
+  const brandCleared = await crawl.eval(`document.querySelector('select[data-row="0"][data-col="brandId"]').value`);
+  crawl.step('deep bulk table: choosing Unassigned clears the cell', brandCleared === '', JSON.stringify({ brandCleared }));
+
   const saveAll = await crawl.eval(`window.__ui.clickExact('Save all')`);
   if (saveAll !== 'ok') { crawl.step('deep bulk table: Save all runs a dry run', false, saveAll); return; }
   await crawl.waitFor(`!!document.querySelector('.bulk-table__confirm')`, 15_000, 'the dry-run summary');
@@ -1443,12 +1486,21 @@ async function deepBulkTableFlow(crawl, photoPath) {
   const afterSave = await crawl.eval(`(async () => {
     const ps = await window.api.products.list(await window.api.companies.getActiveId(), {});
     const a = ps.find((x) => x.sku === ${JSON.stringify(sku0)});
-    const b = ps.find((x) => x.sku === ${JSON.stringify(sku1)});
-    return { a: a ? a.subcategory : null, b: b ? b.subcategory : null, c: b ? b.colorFinish : null };
+    const b = ps.find((x) => x.sku === ${JSON.stringify(renamedSku)});
+    const old = ps.find((x) => x.sku === ${JSON.stringify(sku1)});
+    return {
+      a: a ? a.subcategory : null, brand: a ? a.brandId : 'missing',
+      b: b ? b.subcategory : null, c: b ? b.colorFinish : null,
+      oldSkuStillThere: !!old,
+    };
   })()`, true);
   await crawl.shot('bulk-table-saved');
-  crawl.step('deep bulk table: Confirm save writes the cells', /Saved \d+ product/.test(savedToast || '') && afterSave.a === 'Crawl A' && afterSave.b === 'Paste A' && afterSave.c === 'Paste B',
+  crawl.step('deep bulk table: Confirm save writes the cells', /Saved 2 products/.test(savedToast || '') && afterSave.a === 'Crawl A' && afterSave.b === 'Paste A' && afterSave.c === 'Paste B',
     `toast: ${savedToast || '(none)'} · rows: ${JSON.stringify(afterSave)}`);
+  crawl.step('deep bulk table: the edited SKU renamed the product', afterSave.oldSkuStillThere === false && afterSave.b === 'Paste A',
+    `old ${sku1} still present: ${afterSave.oldSkuStillThere} · renamed to ${renamedSku}`);
+  crawl.step('deep bulk table: Unassigned cleared the brand in the database', afterSave.brand === null,
+    `brandId after save: ${JSON.stringify(afterSave.brand)} (was ${seeded.brandId})`);
 }
 
 const PAGE_LABELS = [
