@@ -2,6 +2,20 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.66',
+    date: '2026-09-22',
+    items: [
+      'NEW — a bulk edit table for products: tick products in the Library, open Image operations ▾ → Edit in table, and edit up to 200 of them in a spreadsheet-style grid. Type straight into a cell, or copy a block out of Excel and paste it in — Name, SKU, brand, category, prices, currencies, stock, tags, your custom price groups, your custom fields, and a photo column, all in one place.',
+      'NEW — photos paste into the table too, but only into the Image column, so a paste is always deliberate. Two non-destructive modes: Add (the default) appends the photo and leaves your main image alone, and Make main puts the pasted photo at position 0 and slides the old main to #2. ⌘V is Add, ⇧⌘V is Make main, and the Add · Make main control in the toolbar sticks. There is no overwrite mode — the original is never replaced.',
+      'NEW — Save all runs a dry run first and shows exactly what will happen ("9 updated · 1 skipped — row 4: duplicate SKU") before anything is written, then commits on Confirm save. Closing with unsaved edits warns, and ⌘Z undoes cell edits inside the grid.',
+      'NEW — the scope is either the products you ticked or everything the current Library filter matches (the table shows the first 200 and says so when a filter matches more). Pasting a block that is wider than the columns left, or taller than the products below the cell, is refused whole with the reason and the fix — nothing lands half-applied.',
+      'FIX — non-destructive everywhere else: one photo with several rows ticked only touches the focused row, several photos on the clipboard are refused ("one at a time"), a blank clipboard cell leaves the field alone, and a product already at the 50-image cap is refused by name.',
+      'Internal — renderer/modules/ProductLibrary/BulkTableModal.jsx is the grid; it reuses the slice-1 paste planner (bulkGridPaste.js) unchanged. Saving goes through the existing products:bulkUpsert with conflictPolicy overwrite (dry run then live), and the Image column through the existing images:importFromBytes / images:setMainImage. No new IPC channel, no main-process change, no new dependency.',
+      'Internal — a changed SKU is a rename, and bulkUpsert is keyed by SKU (it can only match or insert), so renames go through the existing products:update first, then bulkUpsert writes the touched fields under the new SKU. Duplicate-SKU collisions are caught from the dry run and refuse the whole save with the row named.',
+      'Internal — tests: test/bulkTableWiring.test.js (static wiring, version/changelog agreement) and a deepBulkTableFlow leg in scripts/probe-ui-crawl.js that ticks two products, edits a cell, pastes a wide block, pastes a valid block, pastes a real clipboard image in both modes, and saves.',
+    ],
+  },
+  {
     version: '0.1.65',
     date: '2026-09-22',
     items: [

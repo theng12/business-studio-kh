@@ -10560,3 +10560,88 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .ld-layers__toggle:hover { background: var(--c-hover-bg); color: var(--c-text); }
 .ld-inspector-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--c-text-muted); }
 @media(max-width:1100px){ .designer-shell--v2 { grid-template-columns: minmax(0,1fr) 260px; } .ld-stage { padding: 24px; } }
+
+/* ── v0.1.66: the bulk edit table ────────────────────────────────────────
+ * A spreadsheet-style grid opened from the Library's bulk "Image operations"
+ * menu. Real <input> cells so typing/pasting behave natively; the Image cell
+ * is the only one that accepts a clipboard photo. Hand-written like the rest
+ * of this file — no build step. */
+.bulk-table { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.bulk-table__toolbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding-bottom: 10px; border-bottom: 1px solid var(--c-border);
+}
+.bulk-table__scope { display: flex; align-items: center; gap: 14px; padding: 4px 12px 4px; }
+.bulk-table__scope .bulk-overlay-run__radio { padding: 0; }
+.bulk-table__imagectl { display: flex; align-items: center; gap: 8px; }
+.bulk-table__imagectl-label {
+  font-size: 12px; font-weight: 600; color: var(--c-text-subtle);
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.bulk-table__spacer { flex: 1; }
+.bulk-table__notice {
+  margin: 0; font-size: 12px; line-height: 1.5; color: var(--c-amber);
+}
+.bulk-table__scroll {
+  overflow: auto; max-height: 52vh;
+  border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-surface);
+}
+.bulk-table__grid { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.bulk-table__grid th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--c-sidebar); color: var(--c-text-muted);
+  font-size: 11px; font-weight: 600; text-align: left; white-space: nowrap;
+  padding: 6px 8px; border-bottom: 1px solid var(--c-border);
+}
+.bulk-table__grid td {
+  padding: 2px 4px; border-bottom: 1px solid var(--c-border); vertical-align: middle;
+}
+.bulk-table__row:hover td { background: var(--c-hover-bg); }
+.bulk-table__rownum {
+  position: sticky; left: 0; z-index: 1; background: var(--c-surface);
+  color: var(--c-text-subtle); text-align: right; font-variant-numeric: tabular-nums;
+  padding: 2px 8px !important; min-width: 34px;
+}
+.bulk-table__grid thead .bulk-table__rownum { z-index: 3; background: var(--c-sidebar); }
+.bulk-table__cell { white-space: nowrap; }
+.bulk-table__input, .bulk-table__cell select {
+  width: 100%; min-width: 96px; max-width: 220px;
+  padding: 4px 6px; border: 1px solid transparent; border-radius: 5px;
+  background: transparent; font-size: 12px; color: var(--c-text);
+}
+.bulk-table__input--num { min-width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
+.bulk-table__input:hover, .bulk-table__cell select:hover { border-color: var(--c-border-strong); }
+.bulk-table__input:focus, .bulk-table__cell select:focus {
+  outline: none; border-color: var(--c-blue); background: var(--c-surface);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+.bulk-table__cell--image { padding: 4px 8px !important; }
+.bulk-table__image {
+  display: flex; align-items: center; gap: 8px; padding: 2px 4px;
+  border: 1px dashed transparent; border-radius: 6px; cursor: pointer;
+}
+.bulk-table__image:hover { border-color: var(--c-border-strong); }
+.bulk-table__image:focus {
+  outline: none; border-color: var(--c-blue); border-style: solid;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+.bulk-table__thumb {
+  width: 34px; height: 34px; object-fit: cover; border-radius: 5px;
+  background: var(--c-hover-bg); border: 1px solid var(--c-border); flex: none;
+}
+.bulk-table__thumb--empty { display: inline-block; }
+.bulk-table__image-count {
+  font-size: 11px; color: var(--c-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.bulk-table__hint {
+  margin: 0; font-size: 12px; line-height: 1.5; color: var(--c-text-muted);
+}
+.bulk-table__hint strong { color: var(--c-text); font-weight: 600; }
+.bulk-table__confirm {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 8px;
+  background: rgba(37, 99, 235, 0.08); border: 1px solid rgba(37, 99, 235, 0.25);
+}
+.bulk-table__confirm.is-error { background: rgba(185, 28, 28, 0.08); border-color: rgba(185, 28, 28, 0.25); }
+.bulk-table__confirm-text { font-size: 13px; line-height: 1.45; color: var(--c-text); }
+.bulk-table__footer-note { font-size: 12px; color: var(--c-text-subtle); }

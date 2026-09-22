@@ -9,6 +9,10 @@ import { DuplicateMergeModal } from './DuplicateMergeModal.jsx';
 import { ImportModal } from './ImportModal.jsx';
 import { ProcessDestinationModal } from '../../components/ProcessDestinationModal.jsx';
 import { BulkEditModal } from './BulkEditModal.jsx';
+// v0.1.66: spreadsheet-style bulk edit table — real cells, Excel paste, and
+// photos pasted into the dedicated Image cell. Opened from the bulk
+// "Image operations" menu below.
+import { BulkTableModal } from './BulkTableModal.jsx';
 import { BulkProductsAIRunModal } from './BulkProductsAIRunModal.jsx';
 import { BulkOverlayRunModal } from './BulkOverlayRunModal.jsx';
 import { BulkSocialRunModal } from './BulkSocialRunModal.jsx';
@@ -215,6 +219,8 @@ export function ProductLibrary() {
   // ids; the toolbar appears as soon as the set is non-empty.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  // v0.1.66: the bulk edit table modal.
+  const [bulkTableOpen, setBulkTableOpen] = useState(false);
   // v0.22.0: bulk AI run modal + bulk delete confirm state.
   const [bulkAiOpen, setBulkAiOpen] = useState(false);
   // v0.26.15: Overlay Studio bulk-apply modal. Same toolbar
@@ -787,12 +793,24 @@ export function ProductLibrary() {
                           { label: 'Resize',              hint: 'Change pixel dimensions — cap the long edge, or set exact W × H with a fit mode and (for Contain) a background colour.', onClick: () => setBulkResizeOpen(true) },
                         ],
                       },
+                      {
+                        // v0.1.66: the spreadsheet grid. Placed here because
+                        // that is where the owner asked for it — it is the
+                        // one bulk surface that pastes photos as well as text.
+                        label: 'Table',
+                        items: [
+                          {
+                            label: 'Edit in table',
+                            hint: 'Spreadsheet-style grid: type or paste a block of cells across many products, and paste a photo into the Image cell (Add or Make main — never overwrites). Nothing is written until you confirm the Save all summary.',
+                            onClick: () => setBulkTableOpen(true),
+                          },
+                        ],
+                      },
                     ]}
                   />
                   <Button onClick={() => setBulkEditOpen(true)} disabled={bulkDeleting} title="Bulk-update metadata fields (brand, category, status, etc.) — doesn’t touch the image bytes.">
                     Edit fields ({selectedIds.size})
-                  </Button>
-                  <Button variant="danger" onClick={handleBulkDelete} disabled={bulkDeleting}>
+                  </Button>                  <Button variant="danger" onClick={handleBulkDelete} disabled={bulkDeleting}>
                     {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size}`}
                   </Button>
                   <Button onClick={clearSelection} disabled={bulkDeleting}>Clear</Button>
@@ -878,6 +896,14 @@ export function ProductLibrary() {
         productIds={Array.from(selectedIds)}
         onClose={() => setBulkEditOpen(false)}
         onDone={() => { setBulkEditOpen(false); clearSelection(); }}
+      />
+
+      <BulkTableModal
+        open={bulkTableOpen}
+        productIds={Array.from(selectedIds)}
+        filters={filters}
+        onClose={() => setBulkTableOpen(false)}
+        onDone={() => { setBulkTableOpen(false); clearSelection(); }}
       />
 
       <BulkProductsAIRunModal
