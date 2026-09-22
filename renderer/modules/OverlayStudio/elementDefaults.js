@@ -150,5 +150,16 @@ export function elementBox(el, canvasW, canvasH, previewText = null, designW = 2
     case 'tl':
     default:   left = ax;         top = ay;         break;
   }
-  return { left, top, width: w, height: h };
+  // v0.1.54: clamp to the canvas on both ends, exactly like the renderer's
+  // resolveBox. Without it the editor drew a corner-anchored element off the
+  // left/top edge (negative left) while the exported render pinned it to 0 —
+  // the preview and the file disagreed, which read as "the position is wrong".
+  const maxLeft = Math.max(0, canvasW - w);
+  const maxTop  = Math.max(0, canvasH - h);
+  return {
+    left: Math.min(Math.max(0, left), maxLeft),
+    top:  Math.min(Math.max(0, top),  maxTop),
+    width: w,
+    height: h,
+  };
 }
