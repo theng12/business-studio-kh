@@ -15,8 +15,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  DEFAULTS, normalizeConfig, resolvePrice, formatPrice, describeStock,
-  matchesStock, selectProducts, paginate, itemsPerPage, summarize,
+  DEFAULTS, normalizeConfig, designOnly, applyDesign, resolvePrice, formatPrice, describeStock,
+  matchesStock, selectProducts, paginate, itemsPerPage, summarize, SELECTION_KEYS,
 } = require('../main/util/socialGridModel');
 
 function product(over = {}) {
@@ -295,4 +295,63 @@ test('summarize reports counts, missing photos and uncounted stock', () => {
   assert.equal(s.withPhoto, 2);
   assert.equal(s.withoutPhoto, 1);
   assert.equal(s.uncounted, 1);
+});
+
+/* ── v0.1.62: the design/selection split that templates are built on ────── */
+
+test('designOnly keeps the look and drops every way of choosing products', () => {
+  const design = designOnly({
+    width: 1080, height: 1350, columns: 2, rows: 2, background: '#111827',
+    showPrice: false, title: 'Weekend sale', sortBy: 'priceLow', format: 'jpeg', quality: 70,
+    source: 'brand', brandId: 'b1', categoryId: 'c1', subcategory: 'Taps',
+    productIds: ['p1', 'p2'], limit: 9, excludeInactive: false,
+    stockScope: 'low', lowStockAt: 3, stockMin: 1, stockMax: 4,
+  });
+  assert.equal(design.width, 1080);
+  assert.equal(design.height, 1350);
+  assert.equal(design.columns, 2);
+  assert.equal(design.title, 'Weekend sale');
+  assert.equal(design.sortBy, 'priceLow');
+  assert.equal(design.format, 'jpeg');
+  // Every selection key is back at its default.
+  for (const key of SELECTION_KEYS) {
+    assert.deepEqual(design[key], DEFAULTS[key], `designOnly kept "${key}"`);
+  }
+});
+
+test('applyDesign puts a selection under a saved look', () => {
+  const design = designOnly({ columns: 4, rows: 4, background: '#ffffff', title: 'In stock', sortBy: 'asSelected' });
+  const config = applyDesign(design, { source: 'picked', productIds: ['p9', 'p8'] });
+  assert.equal(config.columns, 4);
+  assert.equal(config.title, 'In stock');
+  assert.equal(config.source, 'picked');
+  assert.deepEqual(config.productIds, ['p9', 'p8']);
+  // Nothing from the design's own (absent) selection leaks in.
+  assert.equal(config.brandId, null);
+});
+
+test('applyDesign keeps a half-empty template valid instead of throwing', () => {
+  const config = applyDesign({}, { source: 'picked', productIds: ['a'] });
+  assert.equal(config.columns, DEFAULTS.columns);
+  assert.equal(config.width, DEFAULTS.width);
+});
+
+test('a picked selection keeps the order it was picked in', () => {
+  const products = [product({ id: 'a', name: 'Alpha' }), product({ id: 'b', name: 'Bravo' }), product({ id: 'c', name: 'Charlie' })];
+  const asPicked = selectProducts(products, { source: 'picked', productIds: ['c', 'a', 'b'], sortBy: 'asSelected' });
+  assert.deepEqual(asPicked.map((p) => p.id), ['c', 'a', 'b']);
+  // The default sort still wins when the user did not ask for "as picked".
+  const byName = selectProducts(products, { source: 'picked', productIds: ['c', 'a', 'b'], sortBy: 'name' });
+  assert.deepEqual(byName.map((p) => p.id), ['a', 'b', 'c']);
+});
+
+test('asSelected with an id that no longer exists does not lose the others', () => {
+  const products = [product({ id: 'a' }), product({ id: 'b' })];
+  const list = selectProducts(products, { source: 'picked', productIds: ['gone', 'b', 'a'], sortBy: 'asSelected' });
+  assert.deepEqual(list.map((p) => p.id), ['b', 'a']);
+});
+
+test('asSelected is accepted as a sort key by normalizeConfig', () => {
+  assert.equal(normalizeConfig({ sortBy: 'asSelected' }).sortBy, 'asSelected');
+  assert.equal(normalizeConfig({ sortBy: 'nonsense' }).sortBy, DEFAULTS.sortBy);
 });

@@ -300,9 +300,9 @@ main/                    # main process — CommonJS (require/module.exports)
   preload.js             # contextBridge surface — the ONLY api entry point
   ipc.js                 # barrel: registers every domain module in ipc/
   ipc/                   # 23 files, one per domain (products.js, images.js, …)
-  db/                    # 27 files: index.js owns the schema + migrations,
+  db/                    # 28 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 25 pure helpers (slug, capabilities, landedCost,
+  util/                  # 27 pure helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode
@@ -330,7 +330,7 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 93 files — `node --test test/**/*.test.js`
+test/                    # 95 files — `node --test test/**/*.test.js`
 scripts/                 # build-icon.js, build-webclient.js,
                          # probe-overlay-renderer.js,
                          # probe-render-paint.js  (`npm run check:render`)

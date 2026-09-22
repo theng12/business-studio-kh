@@ -11,6 +11,7 @@ import { ProcessDestinationModal } from '../../components/ProcessDestinationModa
 import { BulkEditModal } from './BulkEditModal.jsx';
 import { BulkProductsAIRunModal } from './BulkProductsAIRunModal.jsx';
 import { BulkOverlayRunModal } from './BulkOverlayRunModal.jsx';
+import { BulkSocialRunModal } from './BulkSocialRunModal.jsx';
 // v0.49.34: the combined "Convert · compress · resize" modal was split into
 // three independent modals — one knob per tool. Same backend IPC; the
 // renderer just gates which form fields each modal exposes.
@@ -220,6 +221,9 @@ export function ProductLibrary() {
   // position as the AI bulk modal so the two batch surfaces are
   // discoverable side-by-side.
   const [bulkOverlayOpen, setBulkOverlayOpen] = useState(false);
+  // v0.1.62: apply a Social Grid template to selected products / the filter.
+  const [bulkSocialOpen, setBulkSocialOpen] = useState(false);
+  const [socialApplyProductId, setSocialApplyProductId] = useState(null);
   // v0.49.34: three independent bulk modals replace the combined
   // "Convert · compress · resize" — same backend, focused UIs.
   const [bulkConvertOpen, setBulkConvertOpen] = useState(false);
@@ -492,6 +496,16 @@ export function ProductLibrary() {
     setBulkOverlayOpen(true);
   }, [processingProduct]);
 
+  // v0.1.62: fourth destination — Social Grid. Same trick as the overlay
+  // route: hand the modal a single-product productIds array so it mounts on
+  // "Selected (1)" and the user can widen it from there.
+  const goToSocial = useCallback(() => {
+    if (!processingProduct) return;
+    setSocialApplyProductId(processingProduct.id);
+    setProcessingProduct(null);
+    setBulkSocialOpen(true);
+  }, [processingProduct]);
+
   // Thumbnail click → open the lightbox with all the product's images.
   // We hit IPC at click time (rather than preloading every product's image
   // list) so a 500-product library doesn't carry image arrays in memory.
@@ -748,6 +762,7 @@ export function ProductLibrary() {
                         items: [
                           { label: 'Remove background',  hint: 'Cutout via @imgly. Adds the result as a new image and promotes it to main; original demotes to #2.', onClick: () => setBulkBgOpen(true) },
                           { label: 'Apply overlay',      hint: 'Composite an Overlay template onto the main image. Defaults to Append (new image); Replace main is opt-in.', onClick: () => setBulkOverlayOpen(true) },
+                          { label: 'Social post',        hint: 'Render a Social Grid template from these products into one or more post-sized images (saved to a folder, and optionally kept as a Social Grid post).', onClick: () => setBulkSocialOpen(true) },
                         ],
                       },
                       {
@@ -883,6 +898,13 @@ export function ProductLibrary() {
         onDone={() => { setBulkOverlayOpen(false); setOverlayApplyProductId(null); }}
       />
 
+      <BulkSocialRunModal
+        open={bulkSocialOpen}
+        productIds={socialApplyProductId ? [socialApplyProductId] : Array.from(selectedIds)}
+        onClose={() => { setBulkSocialOpen(false); setSocialApplyProductId(null); }}
+        onDone={() => { setBulkSocialOpen(false); setSocialApplyProductId(null); }}
+      />
+
       <AutoCropRunModal
         open={autoCropOpen}
         productIds={Array.from(selectedIds)}
@@ -933,6 +955,7 @@ export function ProductLibrary() {
         onPickWorkspace={goToWorkspace}
         onPickAiStudio={goToAiStudio}
         onPickOverlay={goToOverlay}
+        onPickSocial={goToSocial}
       />
 
       <Lightbox

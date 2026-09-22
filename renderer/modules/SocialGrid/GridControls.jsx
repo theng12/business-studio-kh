@@ -39,6 +39,9 @@ export const SORT_OPTIONS = [
   { value: 'priceHigh', label: 'Price — highest first' },
   { value: 'priceLow',  label: 'Price — lowest first' },
   { value: 'newest',    label: 'Newest products first' },
+  // v0.1.62: "whatever order the products arrived in" — the order they were
+  // ticked in when a template is applied to a hand-picked Library selection.
+  { value: 'asSelected', label: 'As picked (keep the order I chose)' },
 ];
 
 /** The stock filters. `any` is the default so the grid still works for a

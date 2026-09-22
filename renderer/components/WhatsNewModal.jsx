@@ -2,6 +2,19 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.62',
+    date: '2026-09-22',
+    items: [
+      'NEW — Social Grid has templates now. A template is the look of a post — size, grid, headline text, what each tile shows — with no products in it. Save one from any post with “Save as template”, then start new posts from it or reuse it forever.',
+      'NEW — you can apply a Social Grid template from the Product Library. Select the products you want (or use the current filter), pick a template, and the finished grid images are written to a folder you choose. There is a tick-box to also keep the result as a Social Grid post, so you can tweak the layout and export again later.',
+      'NEW — “Process → Social Grid” on any product: build a post-sized image from a single product, or widen it to the whole filter inside the dialog.',
+      'NEW — new “Arrange by: As picked (keep the order I chose)” option, so a hand-picked selection renders in the order you ticked it instead of alphabetically.',
+      'Internal — new social_grid_templates table (additive; no schema bump), the matching socialGrid:listTemplates / saveTemplate / updateTemplate / deleteTemplate / duplicateTemplate channels, and socialGrid:plan — a count that runs the same selection code the export does, so the dialog can promise an exact number of images before you commit.',
+      'Internal — a template can never store which products it was designed on: main/db/socialGridTemplates.js strips every selection key through designOnly(), so applying it cannot drag in a half-remembered product list.',
+      'Internal — test/socialTemplateWiring.test.js scans the whole chain (screen → preload → IPC → validator → client-mode proxy) so this feature cannot silently become unreachable again, and the UI crawl now saves a template and applies it from the Library against real data.',
+    ],
+  },
+  {
     version: '0.1.61',
     date: '2026-09-22',
     items: [

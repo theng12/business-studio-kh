@@ -10405,3 +10405,30 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   color: var(--c-text-muted);
   line-height: 1.35;
 }
+
+/* ─── v0.1.62: Social Grid templates ──────────────────────────────
+ * A template is the reusable look of a post with no products in it. The cards
+ * sit above the saved posts on the Social Grid landing page, so the two are
+ * visually distinct: posts show a "3 x 3" grid badge, templates say
+ * "Template", and a template card's headline action is "Use in a new post". */
+.social-templates { display: flex; flex-direction: column; gap: 10px; margin-bottom: 22px; }
+.social-templates__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.social-templates__title { margin: 0; font-size: 14px; letter-spacing: .02em; }
+.social-templates__head .muted { font-size: 12px; max-width: 74ch; line-height: 1.45; }
+.social-templates__empty {
+  margin: 0; padding: 14px 16px; font-size: 12.5px; color: var(--c-text-muted);
+  border: 1px dashed var(--c-border); border-radius: 12px;
+}
+.social-card--template { border-style: dashed; }
+.social-card__badge--template { border: 1px solid var(--c-border); }
+.social-card__traits { color: var(--c-text-subtle) !important; }
+
+/* The apply modal's pre-flight count — the number the footer button repeats,
+   computed by the same selection code the renderer uses. */
+.bulk-overlay-run__plan {
+  display: flex; align-items: baseline; gap: 5px; flex-wrap: wrap;
+  padding: 10px 12px; border-radius: 10px; font-size: 12.5px;
+  background: var(--c-hover-bg); border: 1px solid var(--c-border);
+}
+.bulk-overlay-run__plan .muted { font-size: 12px; }
+.bulk-overlay-run__empty { margin: 0; font-size: 12px; color: var(--c-text-muted); }
