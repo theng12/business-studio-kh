@@ -94,6 +94,32 @@ async function loadComponent(file, exportName, harness) {
   return mod.exports[exportName];
 }
 
+/**
+ * v0.1.64: the label designer added window-level listeners (keyboard shortcuts)
+ * and a ResizeObserver (fit-to-view zoom). The harness stands in for a browser,
+ * so it has to provide them — this is a stub gap, not a product change.
+ */
+function fakeWindow(api) {
+  const listeners = new Map();
+  return {
+    api,
+    addEventListener: (type, fn) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type).add(fn);
+    },
+    removeEventListener: (type, fn) => { listeners.get(type)?.delete(fn); },
+    dispatch: (type, event) => { for (const fn of listeners.get(type) ?? []) fn(event); },
+    // Not used by the tests, but the components may poke at them.
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+  };
+}
+class FakeResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
 function deferred() {
   let resolve;
   const promise = new Promise((r) => { resolve = r; });
@@ -113,7 +139,8 @@ test('CatalogEditor serializes delayed saves and export flushes the latest draft
     files: { pickFolder: async () => '/tmp/catalog' },
     events: { onCatalogChanged: () => () => {}, onServerHello: () => () => {} },
   };
-  global.window = { api };
+  global.window = fakeWindow(api);
+  global.ResizeObserver = global.ResizeObserver || FakeResizeObserver;
   const storeState = { products: [], addToast() {} };
   const harness = makeReactHarness(storeState);
   const CatalogEditor = await loadComponent('renderer/modules/CatalogStudio/index.jsx', 'CatalogEditor', harness);
@@ -181,7 +208,8 @@ test('LabelTemplates refreshes live rows while preserving an edited draft', asyn
     },
     events: { onCatalogChanged: (callback) => { catalogChanged = callback; return () => { if (catalogChanged === callback) catalogChanged = null; }; }, onServerHello: () => () => {} },
   };
-  global.window = { api };
+  global.window = fakeWindow(api);
+  global.ResizeObserver = global.ResizeObserver || FakeResizeObserver;
   const storeState = { activeCompanyId: 'company-1', products: [], addToast() {} };
   const harness = makeReactHarness(storeState);
   const LabelTemplates = await loadComponent('renderer/modules/LabelStudio/LabelTemplates.jsx', 'LabelTemplates', harness);
@@ -238,7 +266,8 @@ test('SocialGrid export flushes a newer debounce draft after an earlier save', a
     files: { pickFolder: async () => '/tmp/social' },
     events: { onCatalogChanged: () => () => {}, onServerHello: () => () => {} },
   };
-  global.window = { api };
+  global.window = fakeWindow(api);
+  global.ResizeObserver = global.ResizeObserver || FakeResizeObserver;
   const storeState = { activeCompanyId: 'company-1', brands: [], categories: [], products: [], addToast() {}, refreshBrands() {}, refreshCategories() {} };
   const harness = makeReactHarness(storeState);
   const PresetEditor = await loadComponent('renderer/modules/SocialGrid/index.jsx', 'PresetEditor', harness);

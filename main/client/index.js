@@ -739,7 +739,7 @@ const PROXIED_CHANNELS = [
   'templates:list',
   'templates:get',
   'templates:listRuns',
-  'labels:listTemplates','labels:getTemplate','labels:preview','labels:barcodePreview','labels:listRuns',
+  'labels:listTemplates','labels:getTemplate','labels:preview','labels:previewDraft','labels:barcodePreview','labels:listRuns',
   'catalogStudio:list','catalogStudio:get','catalogStudio:preview',
   // v0.27.0: eyedropper — server holds the image bytes, so proxy it.
   'templates:sampleBgColor',
