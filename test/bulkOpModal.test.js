@@ -225,14 +225,14 @@ const MODALS = [
     entry: 'renderer/modules/ProductLibrary/BulkConvertModal.jsx',
     export: 'BulkConvertModal',
     storageKey: 'Library.bulkConvert',
-    expect: ['Convert format · 2 products', 'Convert 2', 'Target format', 'JPEG (.jpg)', 'Quality: 85', 'Main image of each product'],
+    expect: ['Convert format · 2 products', 'Convert 2', 'Target format', 'JPEG (.jpg)', 'aria-label="Quality value"', 'Main image of each product'],
   },
   {
     label: 'Compress',
     entry: 'renderer/modules/ProductLibrary/BulkCompressModal.jsx',
     export: 'BulkCompressModal',
     storageKey: 'Library.bulkCompress',
-    expect: ['Compress · 2 products', 'Compress 2', 'Quality: 85', 'Catalog default (85)', 'Main image of each product'],
+    expect: ['Compress · 2 products', 'Compress 2', 'aria-label="Quality value"', 'Catalog default (85)', 'Main image of each product'],
   },
   {
     label: 'Resize',
@@ -281,13 +281,16 @@ test('bulk modal — remembered state still drives the conditional fields', asyn
   const convert = await loadRenderer('renderer/modules/ProductLibrary/BulkConvertModal.jsx');
   const pngHtml = render(convert.BulkConvertModal, { open: true, productIds: ['a'], onClose: () => {} });
   assert.ok(pngHtml.includes('PNG (.png)'), 'PNG should be selectable');
-  assert.ok(!pngHtml.includes('Quality:'), 'Quality must be hidden for PNG');
+  assert.ok(!pngHtml.includes('aria-label="Quality value"'), 'Quality must be hidden for PNG');
   assert.ok(!pngHtml.includes('type="range"'), 'no slider should render for PNG');
 
   // …and shown for JPEG.
   storage = { 'Library.bulkConvert': JSON.stringify({ v: 1, s: { targetFormat: 'jpeg' } }) };
   const jpegHtml = render(convert.BulkConvertModal, { open: true, productIds: ['a'], onClose: () => {} });
-  assert.ok(jpegHtml.includes('Quality: 85'), 'Quality should be shown for JPEG');
+  // v0.1.58: the quality control is now the shared SliderField (label + typeable
+  // value box + range), not a bare range with "Quality: 85" in its label.
+  assert.ok(jpegHtml.includes('aria-label="Quality value"'), 'Quality should be shown for JPEG');
+  assert.ok(jpegHtml.includes('type="range"'), 'the quality slider should render for JPEG');
 
   // Resize: the background picker only exists for exact + contain.
   storage = { 'Library.bulkResize': JSON.stringify({ v: 1, s: { resizeMode: 'exact', fit: 'contain' } }) };

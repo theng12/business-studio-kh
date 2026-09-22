@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Modal, Button, Field, Select } from '../../components/ui.jsx';
+import { Modal, Button, Field, Select, SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { useBulkPreview } from './useBulkPreview.js';
 
@@ -144,23 +144,27 @@ export function AutoEnhanceRunModal({ open, productIds, onClose, onDone }) {
           </label>
         </div>
 
-        <Field label="Saturation" hint={`${saturation}% — 100% leaves colour unchanged.`}>
-          {({ id }) => (
-            <div className="autocrop-run__slider">
-              <input id={id} type="range" min="50" max="150" step="1" value={saturation} onChange={(e) => setSaturation(Number(e.target.value))} disabled={submitting} />
-              <span className="autocrop-run__slider-val">{saturation}%</span>
-            </div>
-          )}
-        </Field>
+        <SliderField
+          label="Saturation"
+          value={saturation}
+          min={50}
+          max={150}
+          suffix="%"
+          hint="100% leaves colour unchanged."
+          disabled={submitting}
+          onChange={setSaturation}
+        />
 
-        <Field label="Brightness" hint={`${brightness}% — 100% leaves brightness unchanged.`}>
-          {({ id }) => (
-            <div className="autocrop-run__slider">
-              <input id={id} type="range" min="70" max="130" step="1" value={brightness} onChange={(e) => setBrightness(Number(e.target.value))} disabled={submitting} />
-              <span className="autocrop-run__slider-val">{brightness}%</span>
-            </div>
-          )}
-        </Field>
+        <SliderField
+          label="Brightness"
+          value={brightness}
+          min={70}
+          max={130}
+          suffix="%"
+          hint="100% leaves brightness unchanged."
+          disabled={submitting}
+          onChange={setBrightness}
+        />
 
         <Field label="Apply to">
           {({ id }) => (

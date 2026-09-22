@@ -25,7 +25,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Modal, Button, Field, Select } from '../../components/ui.jsx';
+import { Modal, Button, Field, Select, SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { useBulkPreview } from './useBulkPreview.js';
 
@@ -148,44 +148,26 @@ export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
           </div>
         ) : null}
 
-        <Field label="Product fill" hint={`Product fills ~${fillPct}% of the frame; the rest is margin.`}>
-          {({ id }) => (
-            <div className="autocrop-run__slider">
-              <input
-                id={id}
-                type="range"
-                min="60"
-                max="100"
-                step="1"
-                value={fillPct}
-                onChange={(e) => setFillPct(Number(e.target.value))}
-                disabled={submitting}
-              />
-              <span className="autocrop-run__slider-val">{fillPct}%</span>
-            </div>
-          )}
-        </Field>
+        <SliderField
+          label="Product fill"
+          value={fillPct}
+          min={60}
+          max={100}
+          suffix="%"
+          hint={`Product fills ~${fillPct}% of the frame; the rest is margin.`}
+          disabled={submitting}
+          onChange={setFillPct}
+        />
 
-        <Field
+        <SliderField
           label="Background tolerance"
+          value={tolerance}
+          min={2}
+          max={40}
           hint="How aggressively to treat near-corner colours as background. Raise it if off-white / noisy backgrounds aren't trimming; lower it if the product edge gets clipped."
-        >
-          {({ id }) => (
-            <div className="autocrop-run__slider">
-              <input
-                id={id}
-                type="range"
-                min="2"
-                max="40"
-                step="1"
-                value={tolerance}
-                onChange={(e) => setTolerance(Number(e.target.value))}
-                disabled={submitting}
-              />
-              <span className="autocrop-run__slider-val">{tolerance}</span>
-            </div>
-          )}
-        </Field>
+          disabled={submitting}
+          onChange={setTolerance}
+        />
 
         <Field label="Margin fill">
           {({ id }) => (

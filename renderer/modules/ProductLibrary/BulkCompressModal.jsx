@@ -16,7 +16,7 @@
 // compress-specific form body and IPC call.
 
 import { useCallback } from 'react';
-import { Field, Select } from '../../components/ui.jsx';
+import { Field, Select, SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { BulkOpModal } from './BulkOpModal.jsx';
 import { SCOPE_OPTIONS } from './libraryConstants.js';
@@ -90,24 +90,15 @@ export function BulkCompressModal({ open, productIds, onClose, onDone }) {
     >
       {({ state, set, running }) => (
         <>
-          <Field
-            label={`Quality: ${state.quality}`}
+          <SliderField
+            label="Quality"
+            value={state.quality}
+            min={1}
+            max={100}
             hint="Lower = smaller file, more visible compression artefacts. 85 is the catalog default — visible artefacts begin to show below ~75 on flat backgrounds."
-          >
-            {({ id }) => (
-              <input
-                id={id}
-                type="range"
-                min="1"
-                max="100"
-                step="1"
-                value={state.quality}
-                onChange={(e) => set('quality', Number(e.target.value))}
-                disabled={running}
-                style={{ width: '100%' }}
-              />
-            )}
-          </Field>
+            disabled={running}
+            onChange={(v) => set('quality', v)}
+          />
 
           <div className="quality-presets" style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
             {QUALITY_PRESETS.map((p) => (
