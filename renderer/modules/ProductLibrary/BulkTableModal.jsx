@@ -462,7 +462,13 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
         if (Object.keys(prices).length > 0) out.prices = prices;
         if (Object.keys(customFields).length > 0) out.customFields = customFields;
         saveRows.push(out);
-        meta.push({ id: product.id, rowNo, sku, originalSku: product.sku, skuEdited: sku !== product.sku });
+        meta.push({
+          id: product.id, rowNo, sku, originalSku: product.sku,
+          skuEdited: sku !== product.sku,
+          // A rename with no other touched cell leaves bulkUpsert with no diff
+          // to report, so the success message has to count it itself.
+          onlySku: touched.size === 1 && touched.has('sku'),
+        });
       }
     }
     return { saveRows, meta, problems };
@@ -538,15 +544,15 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
        * products:update channel first, then bulkUpsert sees the new SKUs and
        * writes the rest of the touched fields. */
       for (const m of pending.meta) {
-        if (m.skuEdited) await window.api.products.update({ id: m.id, patch: { sku: m.sku } });
+        if (m.skuEdited) await window.api.products.update(m.id, { sku: m.sku });
       }
       const live = await window.api.products.bulkUpsert(activeCompanyId, pending.rows, {
         conflictPolicy: 'overwrite', dryRun: false,
       });
-      // A pure SKU rename reports no field diff, so count the renames too or
+      // A pure SKU rename reports no field diff, so count those too or
       // "Saved 0 products" would be printed for a save that did rename one.
-      const renamed = pending.meta.filter((m) => m.skuEdited).length;
-      const saved = (live?.updated ?? 0) + renamed;
+      const pureRenames = pending.meta.filter((m) => m.skuEdited && m.onlySku).length;
+      const saved = (live?.updated ?? 0) + pureRenames;
       const added = imagesAddedRef.current;
       addToast(
         `Saved ${saved} product${saved === 1 ? '' : 's'}${added ? ` · ${added} image${added === 1 ? '' : 's'} added` : ''}.`,
