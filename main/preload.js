@@ -429,6 +429,9 @@ contextBridge.exposeInMainWorld('api', {
     deleteTemplate: (id) => invoke('labels:deleteTemplate', { id }),
     duplicateTemplate: (id) => invoke('labels:duplicateTemplate', { id }),
     preview: (input) => invoke('labels:preview', input),
+    // v0.1.64: preview the template ON SCREEN, unsaved — the designer renders it
+    // through the same path the printer uses.
+    previewDraft: (template, productId, layout) => invoke('labels:previewDraft', { template, productId, layout }),
     barcodePreview: (value, format) => invoke('labels:barcodePreview', { value, format }),
     saveBarcode: (value, format, outputFolder) => invoke('labels:saveBarcode', { value, format, outputFolder }),
     importAsset: (sourcePath, name) => invoke('labels:importAsset', { sourcePath, name }),

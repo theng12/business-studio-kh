@@ -244,6 +244,72 @@ window.__ui = (() => {
       hit.click();
       return 'ok';
     },
+    /* Real mouse gestures. React's synthetic handlers listen on the root, and
+     * the designer's drag code listens on window, so dispatching a genuine
+     * mousedown on the target and mousemove/mouseup on window is the same path a
+     * hand takes — a plain .click() cannot exercise a drag at all. */
+    mouseDragPoint: async (target, fromX, fromY, toX, toY) => {
+      const fire = (node, type, cx, cy) => node.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0,
+        buttons: type === 'mouseup' ? 0 : 1,
+      }));
+      fire(target, 'mousedown', fromX, fromY);
+      await new Promise((r) => setTimeout(r, 30));
+      fire(window, 'mousemove', (fromX + toX) / 2, (fromY + toY) / 2);
+      await new Promise((r) => setTimeout(r, 30));
+      fire(window, 'mousemove', toX, toY);
+      await new Promise((r) => setTimeout(r, 30));
+      fire(window, 'mouseup', toX, toY);
+      return 'ok';
+    },
+    /* Drag a selector from its centre by (dx, dy) client pixels. */
+    mouseDrag: async (sel, dx, dy, text) => {
+      const candidates = all(sel);
+      const el = text
+        ? candidates.find((e) => (e.getAttribute('title') || '').includes(text)) || candidates[candidates.length - 1]
+        : candidates[candidates.length - 1];
+      if (!el) return 'MISS ' + sel;
+      if (!el) return 'MISS ' + sel;
+      const r = el.getBoundingClientRect();
+      return api.mouseDragPoint(el, r.left + r.width / 2, r.top + r.height / 2,
+        r.left + r.width / 2 + dx, r.top + r.height / 2 + dy);
+    },
+    /* Shift-click the Nth canvas element (0 = first). Used to build a
+     * multi-selection without depending on where the boxes happen to sit. */
+    clickElAt: (index, shift) => {
+      const list = all('.ld-el');
+      const el = list[index];
+      if (!el) return 'MISS index ' + index;
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2; const y = r.top + r.height / 2;
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1, shiftKey: !!shift }));
+      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 0, shiftKey: !!shift }));
+      return 'ok';
+    },
+    /* Drag the 'se' handle of the selected element's box. */
+    mouseDragHandle: async (sel, dir, dx, dy) => {
+      const handle = document.querySelector(sel + ' .ld-handle--' + dir)
+        || document.querySelector('.ld-el[title*="Text"] .ld-handle--' + dir);
+      if (!handle) return 'MISS handle ' + dir;
+      const r = handle.getBoundingClientRect();
+      return api.mouseDragPoint(handle, r.left + r.width / 2, r.top + r.height / 2,
+        r.left + r.width / 2 + dx, r.top + r.height / 2 + dy);
+    },
+    /* Element boxes on the designer canvas carry their kind in the title
+     * attribute (their text is the product value they will print), so match
+     * on that rather than on text content. */
+    elBox: (sel, title) => {
+      const list = all(sel);
+      // No title → the LAST box in paint order, which is the element most
+      // recently added (equal z sorts stable). Picking by title is ambiguous
+      // when several elements share a kind.
+      const el = title
+        ? list.find((e) => (e.getAttribute('title') || '').includes(title))
+        : list[list.length - 1];
+      if (!el) return null;
+      return { left: parseFloat(el.style.left) || 0, top: parseFloat(el.style.top) || 0,
+        width: parseFloat(el.style.width) || 0, height: parseFloat(el.style.height) || 0 };
+    },
     crash: () => {
       const box = document.querySelector('.page__error');
       if (!box) return null;
@@ -948,6 +1014,182 @@ async function deepCatalogTemplateFlow(crawl) {
   await crawl.settle(400);
 }
 
+/**
+ * The label designer — the part the customer said was unusable.
+ *
+ * "hard to pick or select elements, hard to drag and drop around": this drives
+ * real mouse gestures (mousedown/mousemove/mouseup, not .click()) and checks the
+ * four things that were broken — a click selects and STAYS selected, a drag
+ * moves the box, a marquee selects, a handle resizes — plus multi-select,
+ * undo/redo, the layer list and the exact print preview.
+ */
+async function deepLabelDesignerFlow(crawl) {
+  crawl.phase = 'deep: label designer';
+  await crawl.goto('Label Templates');
+
+  /* A brand-new template, not an existing one: the canvas then starts empty and
+   * the geometry below is exact. Opening whatever happens to be in the profile
+   * would make this leg depend on leftover data from earlier runs. */
+  const opened = await crawl.eval(`window.__ui.clickExact('+ New label template')`);
+  if (opened !== 'ok') { crawl.step('deep: open a label template', false, opened); return; }
+  await crawl.waitFor(`window.__ui.fieldInput('Template name') !== null`, 8000, 'the new-template modal');
+  await crawl.eval(`window.__ui.fieldSet('Template name', 'UI Crawl Label')`);
+  await crawl.eval(`window.__ui.clickExact('Create')`);
+  await crawl.waitFor(`!!document.querySelector('.ld-canvas')`, 12_000, 'the designer canvas');
+  await crawl.settle(900);
+  const crash = await crawl.eval('window.__ui.crash()');
+  if (crash) { crawl.step('deep: the label designer opens', false, `CRASHED: ${crash}`); return; }
+  const chrome = await crawl.eval(`({
+    canvas: !!document.querySelector('.ld-canvas'),
+    align: !!document.querySelector('.ld-align'),
+    layers: !!document.querySelector('.ld-layers'),
+    zoomBar: !!document.querySelector('.ld-bar__tools'),
+    palette: document.querySelectorAll('.designer-toolbar__tools button').length,
+    current: document.querySelectorAll('.ld-el').length,
+  })`);
+  await crawl.shot('label-designer');
+  crawl.step('deep: the designer opens with canvas, align bar and layers',
+    chrome.canvas && chrome.align && chrome.layers && chrome.zoomBar && chrome.palette > 5,
+    JSON.stringify(chrome));
+
+  /* 1 ── click a palette item: it must be added AND stay selected. This is the
+   *      exact bug — the canvas's own mousedown used to clear it in the same tick. */
+  await crawl.eval(`window.__ui.click('.designer-toolbar__tools button', 'Text')`);
+  await crawl.settle(500);
+  const afterAdd = await crawl.eval(`({
+    count: document.querySelectorAll('.ld-el').length,
+    alignLabel: (document.querySelector('.ld-align__label') || {}).innerText || null,
+    inspector: (document.querySelector('.inspector-title strong') || {}).innerText || null,
+    selected: document.querySelectorAll('.ld-el [class*="ld-handle"]').length > 0,
+  })`);
+  crawl.step('deep: adding an element leaves it selected',
+    afterAdd.count > chrome.current && /1 selected/.test(afterAdd.alignLabel || '') && afterAdd.selected,
+    JSON.stringify(afterAdd));
+
+  /* 2 ── drag it: the box must move, by roughly the pixel delta. */
+  const boxBefore = await crawl.eval(`window.__ui.elBox('.ld-el')`);
+  const dragged = await crawl.eval(`window.__ui.mouseDrag('.ld-el', 40, 24)`, true);
+  await crawl.settle(400);
+  const boxAfter = await crawl.eval(`window.__ui.elBox('.ld-el')`);
+  const moved = boxBefore && boxAfter
+    && Math.abs(boxAfter.left - boxBefore.left) > 10 && Math.abs(boxAfter.top - boxBefore.top) > 5;
+  await crawl.shot('label-designer-dragged');
+  crawl.step('deep: dragging an element moves it', dragged === 'ok' && moved,
+    `before ${JSON.stringify(boxBefore)} → after ${JSON.stringify(boxAfter)}`);
+
+  /* 3 ── a resize handle changes the size, and undo puts it back. */
+  const beforeResize = await crawl.eval(`window.__ui.elBox('.ld-el')`);
+  const resized = await crawl.eval(`window.__ui.mouseDragHandle('.ld-el', 'se', 30, 0)`, true);
+  await crawl.settle(400);
+  const afterResize = await crawl.eval(`window.__ui.elBox('.ld-el')`);
+  await crawl.eval(`window.__ui.clickExact('Undo')`);
+  await crawl.settle(400);
+  const afterUndo = await crawl.eval(`window.__ui.elBox('.ld-el')`);
+  crawl.step('deep: the resize handle resizes and Undo restores',
+    resized === 'ok' && afterResize.width > beforeResize.width + 5
+      && Math.abs(afterUndo.width - beforeResize.width) < 1.5,
+    `${Math.round(beforeResize.width)} → ${Math.round(afterResize.width)} → undo ${Math.round(afterUndo.width)}`);
+
+  /* 4 ── click empty canvas: deselect. Marquee across the element: select. */
+  await crawl.eval(`(async () => {
+    const canvas = document.querySelector('.ld-canvas');
+    const r = canvas.getBoundingClientRect();
+    await window.__ui.mouseDragPoint(canvas, r.right - 6, r.bottom - 6, r.right - 5, r.bottom - 5);
+  })()`, true);
+  await crawl.settle(300);
+  const cleared = await crawl.eval(`(document.querySelector('.ld-align__label') || {}).innerText || ''`);
+  await crawl.eval(`(async () => {
+    const canvas = document.querySelector('.ld-canvas');
+    const r = canvas.getBoundingClientRect();
+    await window.__ui.mouseDragPoint(canvas, r.right - 6, r.bottom - 6, r.left + 4, r.top + 4);
+  })()`, true);
+  await crawl.settle(400);
+  const marqueeLabel = await crawl.eval(`(document.querySelector('.ld-align__label') || {}).innerText || ''`);
+  crawl.step('deep: clicking empty canvas clears, marquee selects',
+    /Align/.test(cleared) && /selected/.test(marqueeLabel),
+    `cleared → “${cleared}” · marquee → “${marqueeLabel}”`);
+
+  /* 5 ── a second element + an explicit two-element selection (click, then
+   *      shift-click): both must travel together by the same delta. */
+  await crawl.eval(`window.__ui.click('.designer-toolbar__tools button', 'QR code')`);
+  await crawl.settle(500);
+  const total = await crawl.eval(`document.querySelectorAll('.ld-el').length`);
+  await crawl.eval(`window.__ui.clickElAt(0, false)`, true);
+  await crawl.settle(250);
+  await crawl.eval(`window.__ui.clickElAt(${total - 1}, true)`, true);
+  await crawl.settle(400);
+  const multiLabel = await crawl.eval(`(document.querySelector('.ld-align__label') || {}).innerText || ''`);
+  const beforeMulti = await crawl.eval(`Array.from(document.querySelectorAll('.ld-el')).map((el) => el.style.left)`);
+  await crawl.eval(`window.__ui.mouseDrag('.ld-el', 30, 0)`, true);
+  await crawl.settle(400);
+  const afterMulti = await crawl.eval(`Array.from(document.querySelectorAll('.ld-el')).map((el) => el.style.left)`);
+  const movedCount = afterMulti.filter((v, i) => v !== beforeMulti[i]).length;
+  await crawl.shot('label-designer-multi');
+  crawl.step('deep: multi-select drags every selected element',
+    /2 selected/.test(multiLabel) && movedCount === 2,
+    `${total} element(s) · “${multiLabel}” · ${movedCount} moved · ${JSON.stringify(beforeMulti)} → ${JSON.stringify(afterMulti)}`);
+
+  /* 6 ── the exact print preview renders the real document. */
+  await crawl.eval(`window.__ui.click('.ld-bar__tools button', 'Exact preview')`);
+  await crawl.waitFor(`!!document.querySelector('.ld-exact')`, 12_000, 'the exact preview iframe');
+  await crawl.settle(600);
+  const exact = await crawl.eval(`(() => {
+    const frame = document.querySelector('.ld-exact');
+    const doc = frame && (frame.contentDocument || frame.contentWindow?.document);
+    if (!doc || !doc.body) return { ok: false };
+    return { ok: true, bytes: doc.body.innerHTML.length, label: !!doc.querySelector('.label'),
+      transform: getComputedStyle(frame).transform };
+  })()`);
+  await crawl.shot('label-designer-exact');
+  crawl.step('deep: the exact preview is the real print document',
+    exact.ok && exact.bytes > 200 && exact.label, JSON.stringify(exact));
+  await crawl.eval(`window.__ui.click('.ld-bar__tools button', 'Editing view')`);
+  await crawl.settle(300);
+
+  /* 7 ── the layer list selects. */
+  const layerClick = await crawl.eval(`(() => {
+    const row = document.querySelectorAll('.ld-layers li button.ld-layers__name');
+    if (!row.length) return 'MISS';
+    row[0].click();
+    return { label: (document.querySelector('.ld-align__label') || {}).innerText || '', rows: row.length };
+  })()`);
+  await crawl.settle(300);
+  crawl.step('deep: the layer list selects elements',
+    typeof layerClick === 'object' && layerClick.rows >= 2 && /selected/.test(layerClick.label),
+    JSON.stringify(layerClick));
+
+  /* 8 ── snapping toggles the grid, and the keyboard nudges. */
+  const snapOn = await crawl.eval(`(() => {
+    const btn = Array.from(document.querySelectorAll('.ld-bar__tools button')).find((b) => /^Snap/.test(b.innerText));
+    if (!btn) return null;
+    const before = getComputedStyle(document.querySelector('.ld-canvas')).backgroundImage;
+    btn.click();
+    return { before };
+  })()`);
+  await crawl.settle(400);
+  const snapState = await crawl.eval(`({
+    after: getComputedStyle(document.querySelector('.ld-canvas')).backgroundImage,
+    label: Array.from(document.querySelectorAll('.ld-bar__tools button')).find((b) => /^Snap/.test(b.innerText))?.innerText,
+  })`);
+  crawl.step('deep: the snap toggle drives the grid',
+    !!snapOn && snapOn.before !== snapState.after, `${snapOn?.label ?? ''} → ${snapState.label}`);
+
+  const beforeKey = await crawl.eval(`window.__ui.elBox('.ld-el')`);
+  await crawl.eval(`(() => {
+    document.body.focus();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    return 'ok';
+  })()`);
+  await crawl.settle(400);
+  const afterKey = await crawl.eval(`window.__ui.elBox('.ld-el')`);
+  crawl.step('deep: arrow keys nudge the selection',
+    beforeKey && afterKey && afterKey.left > beforeKey.left,
+    `${Math.round(beforeKey?.left)} → ${Math.round(afterKey?.left)}`);
+
+  const finalCrash = await crawl.eval('window.__ui.crash()');
+  crawl.step('deep: the designer survives the whole flow', !finalCrash, finalCrash || '');
+}
+
 const PAGE_LABELS = [
   ['company', 'Company'],
   ['dashboard', 'Dashboard'],
@@ -1185,6 +1427,13 @@ async function main() {
     await deepCatalogTemplateFlow(crawl);
   } catch (err) {
     crawl.step('deep catalog template flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 12 ── the label designer (ported interaction model) */
+  try {
+    await deepLabelDesignerFlow(crawl);
+  } catch (err) {
+    crawl.step('deep label designer flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */

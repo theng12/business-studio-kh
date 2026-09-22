@@ -721,6 +721,11 @@ const VALIDATORS = {
   'labels:duplicateTemplate': requireScalarOrField('id'),
   'labels:deleteRun':         requireScalarOrField('id'),
   'labels:preview':           (a) => isObject(a) ? true : 'expected an object',
+  'labels:previewDraft': (a) => {
+    if (!isObject(a)) return 'expected an object with template';
+    if (!isObject(a.template)) return 'template must be an object';
+    return true;
+  },
   'labels:barcodePreview':    (a) => isObject(a) ? true : 'expected an object',
   'labels:saveBarcode':       (a) => isObject(a) ? true : 'expected an object',
   'labels:generate':          (a) => isObject(a) ? true : 'expected an object',

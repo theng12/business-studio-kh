@@ -330,7 +330,7 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 98 files — `node --test test/**/*.test.js`
+test/                    # 100 files — `node --test test/**/*.test.js`
 scripts/                 # build-icon.js, build-webclient.js,
                          # probe-overlay-renderer.js,
                          # probe-render-paint.js  (`npm run check:render`)
