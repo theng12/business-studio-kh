@@ -3,7 +3,14 @@ import { Button, Modal, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { createNameIdResolver } from '../../lib/nameIdResolver.js';
 
-const PRODUCT_FIELDS = [
+/* v0.1.65: the target list is built per company.
+ *
+ * A price group the user created in Settings had no destination here, so the
+ * sheet could contain an "Export price" column and the mapper could only call it
+ * Skip — the number never reached the product. The builder below appends one
+ * target per group (plus a currency target for groups and for retail/wholesale),
+ * and one per custom field already in use. */
+export function buildProductFields(priceGroups = [], customFieldKeys = []) { return [
   { key: '__skip__',      label: '— Skip —' },
   { key: 'sku',           label: 'SKU *',          required: true },
   { key: 'name',          label: 'Name' },
@@ -35,11 +42,42 @@ const PRODUCT_FIELDS = [
   { key: 'weightPerUnitKg', label: 'Weight per unit (kg)' },
   // v0.1.25: units on hand, for the Social Grid filters + sorting.
   { key: 'stockQty',        label: 'Stock on hand' },
-];
+  // Price currencies. Retail and wholesale are real columns; a custom group's
+  // currency lives inside its `prices` entry.
+  { key: 'priceRetailCurrency',    label: 'Retail currency' },
+  { key: 'priceWholesaleCurrency', label: 'Wholesale currency' },
+  ...priceGroups.flatMap((g) => [
+    { key: `price.${g.key}`, label: `${g.label} price` },
+    { key: `price.${g.key}.currency`, label: `${g.label} currency` },
+  ]),
+  ...customFieldKeys.map((key) => ({ key, label: `Custom field · ${key.replace(/^custom\./, '')}` })),
+]; }
 
-function autoGuess(header) {
-  const h = String(header || '').toLowerCase().trim();
+/** The base list, for callers that only need the labels (and for tests). */
+export const PRODUCT_FIELDS = buildProductFields();
+
+export function autoGuess(header, priceGroups = [], customFieldKeys = []) {
+  const raw = String(header || '').trim();
+  const h = raw.toLowerCase();
   if (!h) return '__skip__';
+  /* A custom field column is named after its key, so it maps by exact match
+   * before any heuristic can steal it. */
+  const custom = customFieldKeys.find((key) => key.toLowerCase() === h || key.slice(7).toLowerCase() === h);
+  if (custom) return custom;
+  /* Price groups: "Export price", "price export", "Export" and "Export amount"
+   * all mean the same column; "Export currency" is the currency beside it.
+   * Checked BEFORE the retail/wholesale rules so a group the user named
+   * "Wholesale export" is not read as the wholesale column. */
+  for (const group of priceGroups) {
+    const label = String(group.label || '').toLowerCase();
+    const key = String(group.key || '').toLowerCase();
+    const names = [label, key].filter(Boolean);
+    const isCurrency = names.some((n) => h === `${n} currency` || h === `currency ${n}` || h === `${n} ccy`);
+    if (isCurrency) return `price.${group.key}.currency`;
+    const isAmount = names.some((n) => h === `${n} price` || h === `${n} amount` || h === n
+      || h === `price ${n}` || h === `price(${n})` || h === `${n} (price)`);
+    if (isAmount) return `price.${group.key}`;
+  }
   if (h === 'sku' || h === 'code' || h === 'item code') return 'sku';
   if (h === 'name' || h === 'product' || h === 'product name') return 'name';
   if (h === 'brand') return 'brand';
@@ -71,6 +109,8 @@ function autoGuess(header) {
   if (h === 'variant') return 'variant';
   if (h === 'tags') return 'tags';
   if (h === 'status') return 'status';
+  if (h.includes('retail') && h.includes('currency')) return 'priceRetailCurrency';
+  if (h.includes('wholesale') && h.includes('currency')) return 'priceWholesaleCurrency';
   if (h.includes('retail') && h.includes('price')) return 'priceRetail';
   if (h.includes('wholesale') && h.includes('price')) return 'priceWholesale';
   if (h === 'price') return 'priceRetail';
@@ -107,6 +147,30 @@ export function ImportModal({ open, onClose }) {
   const [workbook, setWorkbook] = useState(null);
   const [sheetIdx, setSheetIdx] = useState(0);
   const [mapping, setMapping] = useState({});
+  /* v0.1.65: build the mapping targets from THIS company — one per price group
+   * it has defined, one per custom field its products already use. A `?? []`
+   * because component tests stub the store with only what a case needs. */
+  const importCompanies = useAppStore((s) => s.companies);
+  const priceGroups = useMemo(
+    () => ((importCompanies ?? []).find((c) => c.id === activeCompanyId)?.priceGroups) ?? [],
+    [importCompanies, activeCompanyId],
+  );
+  /* Custom fields have no company-level registry — they exist because a sheet
+   * or the user put them on a product — so the columns offered are the ones the
+   * loaded products already carry. Read once per open: the list is a
+   * convenience, not something that must track every later edit. */
+  const [customFieldKeys] = useState(() => {
+    const keys = new Set();
+    for (const product of (useAppStore.getState?.().products ?? [])) {
+      for (const key of Object.keys(product.customFields ?? {})) keys.add(`custom.${key}`);
+    }
+    return Array.from(keys).sort();
+  });
+  const productFields = useMemo(
+    () => buildProductFields(priceGroups, customFieldKeys),
+    [priceGroups, customFieldKeys],
+  );
+
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   // v0.33.0: batched-apply progress { done, total } | null.
@@ -160,7 +224,7 @@ export function ImportModal({ open, onClose }) {
       setWorkbook(wb);
       const headers = wb.sheets[0].headers;
       const guessed = {};
-      headers.forEach((h) => { guessed[h] = autoGuess(h); });
+      headers.forEach((h) => { guessed[h] = autoGuess(h, priceGroups, customFieldKeys); });
       setMapping(guessed);
       setSheetIdx(0);
       setStep('map');
@@ -230,6 +294,24 @@ export function ImportModal({ open, onClose }) {
           // column still leaves the existing count alone.
           || field === 'stockQty') {
           out[field] = blank ? null : toNumber(raw);
+        } else if (field.startsWith('price.')) {
+          /* A custom price group: `price.<key>` is the amount, and
+           * `price.<key>.currency` the currency beside it. They arrive as
+           * separate columns, so they are folded into ONE `prices` entry here —
+           * a blank amount stays explicit as null so Overwrite can clear the
+           * group while Merge leaves it alone. */
+          const rest = field.slice('price.'.length);
+          const isCurrency = rest.endsWith('.currency');
+          const groupKey = isCurrency ? rest.slice(0, -'.currency'.length) : rest;
+          const entry = { ...(out.prices?.[groupKey] || {}) };
+          if (isCurrency) {
+            if (!blank) entry.currency = String(raw).trim().toUpperCase();
+          } else {
+            entry.amount = blank ? null : toNumber(raw);
+          }
+          out.prices = { ...(out.prices || {}), [groupKey]: entry };
+        } else if (field.startsWith('custom.')) {
+          out.customFields = { ...(out.customFields || {}), [field.slice('custom.'.length)]: blank ? null : String(raw).trim() };
         } else if (field === 'status') {
           /* status is NOT NULL (default 'active'). A blank or unrecognized
            * value must leave the existing value alone — emitting null would
@@ -393,7 +475,7 @@ export function ImportModal({ open, onClose }) {
                   setSheetIdx(next);
                   const headers = workbook.sheets[next].headers;
                   const guessed = {};
-                  headers.forEach((h) => { guessed[h] = autoGuess(h); });
+                  headers.forEach((h) => { guessed[h] = autoGuess(h, priceGroups, customFieldKeys); });
                   applyMapping(guessed);
                 }}
               >
@@ -439,7 +521,7 @@ export function ImportModal({ open, onClose }) {
                           value={mapping[h] ?? '__skip__'}
                           onChange={(e) => applyMapping({ ...mapping, [h]: e.target.value })}
                         >
-                          {PRODUCT_FIELDS.map((f) => (
+                          {productFields.map((f) => (
                             <option key={f.key} value={f.key}>{f.label}</option>
                           ))}
                         </Select>
