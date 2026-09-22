@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ANCHORS, BARCODE_FORMATS, IMAGE_SOURCES, TOKENS } from './elementDefaults.js';
 import { Field, Input, Select, Textarea, SliderField } from '../../components/ui.jsx';
+import { FontFamilyPicker } from './FontFamilyPicker.jsx';
 
 /**
  * v0.26.17: NumberInput — a controlled number input that doesn't
@@ -353,13 +354,12 @@ function TextProps({ element, patchEl, patchFont, patchBg }) {
       </Section>
 
       <Section title="Font">
-        <Field label="Font family">
+        <Field label="Font family" hint="Picked from the fonts installed on this Mac.">
           {({ id }) => (
-            <Input
+            <FontFamilyPicker
               id={id}
               value={element.font?.family ?? ''}
-              onChange={(e) => patchFont({ family: e.target.value })}
-              placeholder="Inter, Helvetica Neue, Arial, sans-serif"
+              onChange={(family) => patchFont({ family })}
             />
           )}
         </Field>

@@ -559,6 +559,17 @@ app.whenReady().then(() => {
     });
   }
 
+  /* v0.1.57: Overlay Studio's font picker lists the fonts actually installed
+   * on this Mac, via the Local Font Access API (`window.queryLocalFonts()`).
+   * Chromium gates that behind the `local-fonts` permission, and Electron
+   * auto-approves permission requests by default — but registering a handler
+   * REPLACES that default, so this one keeps approving requests and simply
+   * makes `local-fonts` explicit. The renderer only ever loads local content
+   * (file:// in a packaged build, app:// / localhost in dev) and there is no
+   * untrusted origin, so approve-all is the same posture as before. */
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(true));
+  session.defaultSession.setPermissionCheckHandler(() => true);
+
   // Start AI queue runner. Reads config on each tick so settings changes
   // (API keys, concurrency) take effect without restarting the app.
   aiQueueRunner.start({

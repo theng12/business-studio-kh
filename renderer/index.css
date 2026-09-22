@@ -10389,3 +10389,8 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 }
 .price-groups__add { display: flex; align-items: center; gap: 6px; }
 .price-groups__add > .input:first-child { flex: 1 1 auto; min-width: 0; }
+
+/* ─── v0.1.57: system font family picker ─────────────────────── */
+.font-family-field { display: flex; align-items: center; gap: 6px; }
+.font-family-field > .input:first-child { flex: 1 1 auto; min-width: 0; }
+.font-family-field > .btn { flex: 0 0 auto; white-space: nowrap; }
