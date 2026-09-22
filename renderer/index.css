@@ -2776,6 +2776,57 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   margin-top: auto;
 }
 
+.entity-card__check { flex: none; margin-right: 2px; }
+.entity-card.is-selected {
+  border-color: var(--c-accent);
+  box-shadow: 0 0 0 1px var(--c-accent);
+}
+
+/* ───────────────────────────────────────────────────────────────────
+ *  v0.1.67 — list tools (Brands / Categories / Suppliers)
+ *  The search + sort + select-all toolbar and the bulk action bar the
+ *  three simple list screens share. The behavior lives in
+ *  renderer/lib/listTools.js; this is only the chrome.
+ * ─────────────────────────────────────────────────────────────────── */
+
+.list-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  padding: var(--s-3) 0;
+}
+
+.list-tools .search-wrap { flex: 0 1 280px; min-width: 200px; }
+.list-tools__sort { width: auto; }
+.list-tools__spacer { flex: 1; }
+
+.list-tools__all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--c-text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.list-tools__unassigned { white-space: nowrap; }
+
+.list-bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  margin-bottom: var(--s-3);
+  background: var(--c-active-bg, rgba(37, 99, 235, 0.06));
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+.list-bulk-bar__count { font-size: 12.5px; font-weight: 600; }
+.list-bulk-bar__spacer { flex: 1; }
+
 /* Color preset row (for Company / Brand forms) */
 
 .color-presets {
@@ -4052,12 +4103,74 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   grid-template-columns: 200px 1fr 480px;
 }
 
+/* v0.1.67: the filter column retracts IN PLACE to a narrow rail. A real
+   column (and the chevron inside it) stays, so the grid never collapses
+   to a blank gap and there is always a visible way back. */
+.lib-layout--filters-collapsed {
+  grid-template-columns: 40px 1fr;
+}
+.lib-layout--filters-collapsed.lib-layout--has-panel {
+  grid-template-columns: 40px 1fr 480px;
+}
+
 .lib-filters {
   display: flex;
   flex-direction: column;
-  gap: var(--s-5);
+  gap: var(--s-4);
   overflow-y: auto;
   padding-bottom: var(--s-6);
+  min-width: 0;
+}
+
+.lib-filters__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.lib-filters__title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-text-subtle);
+}
+
+.lib-filters__collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  flex: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text-muted);
+  cursor: pointer;
+}
+.lib-filters__collapse:hover {
+  background: var(--c-hover-bg);
+  color: var(--c-text);
+  border-color: var(--c-border);
+}
+
+.lib-filters__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  min-width: 0;
+}
+
+/* Collapsed rail: the chevron and nothing else. */
+.lib-filters.is-collapsed {
+  gap: 0;
+  overflow: visible;
+}
+.lib-filters.is-collapsed .lib-filters__head {
+  justify-content: center;
 }
 
 .filter-group__head {
@@ -4074,6 +4187,24 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   text-transform: uppercase;
   color: var(--c-text-subtle);
 }
+
+/* v0.1.67: the group label is a collapse toggle. */
+.filter-group__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+.filter-group__toggle:hover .filter-group__label { color: var(--c-text); }
+.filter-group__chevron {
+  color: var(--c-text-subtle);
+  transition: transform 140ms ease;
+}
+.filter-group__chevron.is-closed { transform: rotate(-90deg); }
 
 .filter-group__clear {
   background: transparent;
@@ -9261,7 +9392,7 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 }
 .categories-list__row {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: auto 1fr auto auto auto;
   gap: 10px;
   align-items: center;
   padding: 8px 12px;
@@ -9269,6 +9400,8 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 }
 .categories-list__row:last-child { border-bottom: none; }
 .categories-list__row:hover { background: rgba(0, 0, 0, 0.02); }
+.categories-list__row.is-selected { background: var(--c-active-bg, rgba(37, 99, 235, 0.06)); }
+.categories-list__check { flex: none; }
 .categories-list__name {
   background: transparent;
   border: none;
@@ -9475,6 +9608,14 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .suppliers-row.is-archived td strong {
   text-decoration: line-through;
   text-decoration-thickness: 1px;
+}
+.suppliers-table th.suppliers-check,
+.suppliers-table td.suppliers-check {
+  width: 28px;
+  padding-right: 0;
+}
+.suppliers-row.is-selected {
+  background: var(--c-active-bg, rgba(37, 99, 235, 0.06));
 }
 
 /* Form sections inside the supplier modal — visually group the Contact

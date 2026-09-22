@@ -2,6 +2,19 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.67',
+    date: '2026-09-22',
+    items: [
+      'NEW — the Product Library’s filter column can be put away. A chevron on the column’s own header, the toolbar button, or ⌘B retracts it to a slim rail so the product table or grid gets the width back; the rail keeps the chevron, so it is one click to bring the filters back. The toolbar button and the header chevron are the same switch.',
+      'NEW — every filter group in the Library (Brand, Category, Status, Process status, Images) collapses from its own heading, and each group remembers whether you left it open or closed. “Reset all filters” moved from the bottom of the column to the top, right under the search box, so it is reachable without scrolling past every brand.',
+      'NEW — Brands, Categories and Suppliers have the same list tools: a search box, a sort (Name A–Z, Name Z–A, and most products / most purchase orders first), tick boxes with a select-all-visible header, ⌘A to select the rows in view and Esc to clear, and a bulk bar that appears with Delete N and Clear.',
+      'NEW — bulk delete is one confirm and one summary. Brands and Categories tell you how many products will lose their brand or category (their photos and other details are not affected). A Supplier that any purchase order references is refused by name and PO count — archive it instead — so a delete is never half-applied silently.',
+      'NEW — Brands and Categories carry an “All · Unassigned (N)” / “All · Uncategorized (N)” chip in the toolbar that opens the Product Library already filtered to the products with no brand or category, where they can be fixed in bulk (including from Edit in table). The chip is a filter, not a row, so select-all and bulk delete can never touch it.',
+      'Internal — the four list rules (search, sort, range-selection, select-all-visible) live in one module, renderer/lib/listTools.js, and all three screens drive them; the collapse controls reuse the one ProductLibrary.panelVisible state and the ProductLibrary.filterGroups map. No new dependency, no new IPC, no data-table framework. Suppliers keeps its server-side search — now also matching contact name and email — so the existing client-mode out-of-order guard is untouched.',
+      'Internal — tests: test/listToolsWiring.test.js (static wiring: import, search box, sort select, checkboxes, bulk Delete, the refusal copy, the Unassigned chips, the shared panel key and the group toggles), test/listToolsDelete.test.js (native: brands/categories SET NULL, suppliers RESTRICT), and a deepListToolsFlow leg in scripts/probe-ui-crawl.js that retracts and expands the filter column, collapses a filter group, and drives all three list toolbars.',
+    ],
+  },
+  {
     version: '0.1.66',
     date: '2026-09-22',
     items: [
