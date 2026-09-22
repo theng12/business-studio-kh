@@ -109,14 +109,35 @@ function loadPanelVisible() {
     if (v === 'on') return true;
     if (v === 'off') return false;
   } catch {}
-  // First-load default depends on viewport. Below ~1400px the
-  // panel + filter sidebar + table is too tight to be useful.
-  try {
-    return window.innerWidth >= 1400;
-  } catch { return true; }
+  // v0.1.67: ONE state now backs the FILTER column (and, with it, the
+  // detail panel — see togglePanel). The filter column must default
+  // open at every window size: the old viewport-based default existed
+  // only to give the 480px detail panel room on a 13" screen, and
+  // leaving first-run filters collapsed would hide the very controls
+  // this feature is about. The user retracts it deliberately.
+  return true;
 }
 function savePanelVisible(on) {
   try { localStorage.setItem(PANEL_VISIBLE_STORAGE_KEY, on ? 'on' : 'off'); } catch {}
+}
+
+/**
+ * v0.1.67: per-group open/closed state for the Library filter column.
+ * One key holds a `{ [label]: boolean }` map; a group missing from the
+ * map is OPEN, so the default is exactly the pre-v0.1.67 behaviour and
+ * a corrupt/absent value degrades to "everything open". Same
+ * localStorage load-on-init / save-on-change pattern as
+ * PANEL_VISIBLE_STORAGE_KEY above and the sidebar's closed sections.
+ */
+const FILTER_GROUPS_STORAGE_KEY = 'ProductLibrary.filterGroups';
+function loadFilterGroups() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FILTER_GROUPS_STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+}
+function saveFilterGroups(map) {
+  try { localStorage.setItem(FILTER_GROUPS_STORAGE_KEY, JSON.stringify(map)); } catch {}
 }
 
 /**
@@ -193,6 +214,11 @@ export function ProductLibrary() {
   // v0.22.1: side-panel visibility toggle. When OFF the right
   // column is removed from the layout grid, freeing ~480px of
   // horizontal width — crucial on smaller MacBook displays.
+  // v0.1.67: this ONE boolean now backs the filter column too. The
+  // filter column collapses to a narrow rail instead of vanishing, and
+  // the detail panel follows it — so "Hide filters" always yields the
+  // grid maximum width, and the toolbar button and the panel's own
+  // chevron can never disagree about the state.
   const [panelVisible, setPanelVisible] = useState(loadPanelVisible);
   function togglePanel() {
     setPanelVisible((prev) => {
@@ -204,6 +230,34 @@ export function ProductLibrary() {
       return next;
     });
   }
+  // v0.1.67: per-group open/closed state, persisted in localStorage.
+  const [filterGroups, setFilterGroups] = useState(loadFilterGroups);
+  const isGroupOpen = (label) => filterGroups[label] !== false;
+  function toggleFilterGroup(label) {
+    setFilterGroups((prev) => {
+      const next = { ...prev, [label]: prev[label] === false };
+      saveFilterGroups(next);
+      return next;
+    });
+  }
+  // v0.1.67: ⌘/Ctrl+B retracts the filter column, mirroring the
+  // sidebar's collapse control. Bound here (not in App.jsx) because it
+  // only means anything on this screen, and it must respect the same
+  // single `panelVisible` state the two buttons use.
+  useEffect(() => {
+    function onKey(e) {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key !== 'b' && e.key !== 'B') return;
+      e.preventDefault();
+      setPanelVisible((prev) => {
+        const next = !prev;
+        savePanelVisible(next);
+        return next;
+      });
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   // v0.12.3: respect the user's hover-preview preference. Read once on
   // mount — if the user flips it in Settings, navigating back here
   // re-mounts the module and picks up the new value.
@@ -585,17 +639,22 @@ export function ProductLibrary() {
             {/* v0.22.1: side-panel show/hide. Persists in
                 localStorage. Defaults OFF on narrow first-load
                 viewports (<1400px) so small MacBook screens
-                don't feel squashed. */}
+                don't feel squashed.
+                v0.1.67: the same boolean retracts the FILTER column
+                to a rail (and the detail panel with it), so the
+                tooltip names the filter column — the width win is
+                the point. The panel header has a twin control. */}
             <button
               type="button"
               className={`segment lib-panel-toggle${panelVisible ? ' is-active' : ''}`}
               onClick={togglePanel}
               title={panelVisible
-                ? 'Hide product side panel'
-                : 'Show product side panel when you click a row'}
+                ? 'Hide filters for a bigger view (⌘B)'
+                : 'Show filters (⌘B)'}
+              aria-label={panelVisible ? 'Hide filters' : 'Show filters'}
               aria-pressed={panelVisible}
             >
-              {panelVisible ? '◧ Panel on' : '◧ Panel off'}
+              {panelVisible ? '◧ Filters on' : '◧ Filters off'}
             </button>
             {view === 'grid' ? (
               <>
@@ -646,68 +705,108 @@ export function ProductLibrary() {
         }
       />
 
-      <div className={`lib-layout${panelVisible ? ' lib-layout--has-panel' : ''}`}>
-        <aside className="lib-filters" aria-label="Filters">
-          <FilterGroup label="Brand" canClear={!brandFilterEmpty} onClear={clearBrandFilter}>
-            {brands.map((b) => (
-              <FilterPill
-                key={b.id}
-                active={(filters.brandIds ?? []).includes(b.id)}
-                onClick={() => toggleBrandFilter(b.id)}
-              >{b.name}</FilterPill>
-            ))}
-            <FilterPill
-              active={(filters.brandIds ?? []).includes(null)}
-              onClick={() => toggleBrandFilter(null)}
-            >Unassigned</FilterPill>
-          </FilterGroup>
-
-          <FilterGroup label="Category" canClear={!categoryFilterEmpty} onClear={clearCategoryFilter}>
-            {categories.map((c) => (
-              <FilterPill
-                key={c.id}
-                active={(filters.categoryIds ?? []).includes(c.id)}
-                onClick={() => toggleCategoryFilter(c.id)}
-              >{c.name}</FilterPill>
-            ))}
-            <FilterPill
-              active={(filters.categoryIds ?? []).includes(null)}
-              onClick={() => toggleCategoryFilter(null)}
-            >Uncategorized</FilterPill>
-          </FilterGroup>
-
-          <FilterGroup label="Status">
-            <FilterPill active={filters.status === null} onClick={() => setStatusFilter(null)}>Any</FilterPill>
-            {STATUS_OPTIONS.map((o) => (
-              <FilterPill
-                key={o.value}
-                active={filters.status === o.value}
-                onClick={() => setStatusFilter(o.value)}
-              >{o.label}</FilterPill>
-            ))}
-          </FilterGroup>
-
-          <FilterGroup label="Process status">
-            <FilterPill active={filters.processStatus === null} onClick={() => setProcessStatusFilter(null)}>Any</FilterPill>
-            {PROCESS_STATUS_OPTIONS.map((o) => (
-              <FilterPill
-                key={o.value}
-                active={filters.processStatus === o.value}
-                onClick={() => setProcessStatusFilter(o.value)}
-              >{o.label}</FilterPill>
-            ))}
-          </FilterGroup>
-
-          <FilterGroup label="Images">
-            <FilterPill active={filters.hasImages === null} onClick={() => setHasImagesFilter(null)}>Any</FilterPill>
-            <FilterPill active={filters.hasImages === 'with'} onClick={() => setHasImagesFilter('with')}>With images</FilterPill>
-            <FilterPill active={filters.hasImages === 'without'} onClick={() => setHasImagesFilter('without')}>No images</FilterPill>
-          </FilterGroup>
-
-          {hasActiveFilters ? (
-            <button type="button" className="lib-filters__reset" onClick={resetFilters}>
-              Reset all filters
+      <div className={`lib-layout${panelVisible ? ' lib-layout--has-panel' : ' lib-layout--filters-collapsed'}`}>
+        <aside className={`lib-filters${panelVisible ? '' : ' is-collapsed'}`} aria-label="Filters">
+          {/* v0.1.67: the filter column's own retract control, mirroring
+              Sidebar.jsx's collapse button: chevron flips direction,
+              title/aria-label flips too, aria-pressed tracks the
+              collapsed state, and it is always visible — collapsed
+              leaves this rail and the chevron is the way back. It
+              shares the ONE `panelVisible` boolean with the toolbar
+              button, so the two can never disagree. */}
+          <div className="lib-filters__head">
+            <button
+              type="button"
+              className="lib-filters__collapse"
+              onClick={togglePanel}
+              title={panelVisible
+                ? 'Hide filters for a bigger view (⌘B)'
+                : 'Show filters (⌘B)'}
+              aria-label={panelVisible
+                ? 'Hide filters for a bigger view'
+                : 'Show filters'}
+              aria-pressed={!panelVisible}
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d={panelVisible ? 'M10 4 6 8l4 4' : 'M6 4l4 4-4 4'}
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </button>
+            {panelVisible ? <span className="lib-filters__title">Filters</span> : null}
+          </div>
+
+          {panelVisible ? (
+            <div className="lib-filters__body">
+              {/* v0.1.67: reset moved from the bottom of the column to
+                  the top, directly under the search box, so it is
+                  reachable without scrolling past every brand. */}
+              {hasActiveFilters ? (
+                <button type="button" className="lib-filters__reset" onClick={resetFilters}>
+                  Reset all filters
+                </button>
+              ) : null}
+
+              <FilterGroup label="Brand" open={isGroupOpen('Brand')} onToggle={() => toggleFilterGroup('Brand')} canClear={!brandFilterEmpty} onClear={clearBrandFilter}>
+                {brands.map((b) => (
+                  <FilterPill
+                    key={b.id}
+                    active={(filters.brandIds ?? []).includes(b.id)}
+                    onClick={() => toggleBrandFilter(b.id)}
+                  >{b.name}</FilterPill>
+                ))}
+                <FilterPill
+                  active={(filters.brandIds ?? []).includes(null)}
+                  onClick={() => toggleBrandFilter(null)}
+                >Unassigned</FilterPill>
+              </FilterGroup>
+
+              <FilterGroup label="Category" open={isGroupOpen('Category')} onToggle={() => toggleFilterGroup('Category')} canClear={!categoryFilterEmpty} onClear={clearCategoryFilter}>
+                {categories.map((c) => (
+                  <FilterPill
+                    key={c.id}
+                    active={(filters.categoryIds ?? []).includes(c.id)}
+                    onClick={() => toggleCategoryFilter(c.id)}
+                  >{c.name}</FilterPill>
+                ))}
+                <FilterPill
+                  active={(filters.categoryIds ?? []).includes(null)}
+                  onClick={() => toggleCategoryFilter(null)}
+                >Uncategorized</FilterPill>
+              </FilterGroup>
+
+              <FilterGroup label="Status" open={isGroupOpen('Status')} onToggle={() => toggleFilterGroup('Status')}>
+                <FilterPill active={filters.status === null} onClick={() => setStatusFilter(null)}>Any</FilterPill>
+                {STATUS_OPTIONS.map((o) => (
+                  <FilterPill
+                    key={o.value}
+                    active={filters.status === o.value}
+                    onClick={() => setStatusFilter(o.value)}
+                  >{o.label}</FilterPill>
+                ))}
+              </FilterGroup>
+
+              <FilterGroup label="Process status" open={isGroupOpen('Process status')} onToggle={() => toggleFilterGroup('Process status')}>
+                <FilterPill active={filters.processStatus === null} onClick={() => setProcessStatusFilter(null)}>Any</FilterPill>
+                {PROCESS_STATUS_OPTIONS.map((o) => (
+                  <FilterPill
+                    key={o.value}
+                    active={filters.processStatus === o.value}
+                    onClick={() => setProcessStatusFilter(o.value)}
+                  >{o.label}</FilterPill>
+                ))}
+              </FilterGroup>
+
+              <FilterGroup label="Images" open={isGroupOpen('Images')} onToggle={() => toggleFilterGroup('Images')}>
+                <FilterPill active={filters.hasImages === null} onClick={() => setHasImagesFilter(null)}>Any</FilterPill>
+                <FilterPill active={filters.hasImages === 'with'} onClick={() => setHasImagesFilter('with')}>With images</FilterPill>
+                <FilterPill active={filters.hasImages === 'without'} onClick={() => setHasImagesFilter('without')}>No images</FilterPill>
+              </FilterGroup>
+            </div>
           ) : null}
         </aside>
 
@@ -1012,16 +1111,33 @@ export function ProductLibrary() {
   );
 }
 
-function FilterGroup({ label, canClear, onClear, children }) {
+function FilterGroup({ label, open = true, onToggle, canClear, onClear, children }) {
   return (
     <div className="filter-group">
       <div className="filter-group__head">
-        <span className="filter-group__label">{label}</span>
+        {/* v0.1.67: the whole label is the collapse toggle (a bigger hit
+            target than a bare chevron), with aria-expanded carrying the
+            state for screen readers and the static wiring test. */}
+        <button
+          type="button"
+          className="filter-group__toggle"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-label={`${open ? 'Collapse' : 'Expand'} ${label} filters`}
+        >
+          <span className="filter-group__label">{label}</span>
+          <svg
+            className={`filter-group__chevron${open ? '' : ' is-closed'}`}
+            width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true"
+          >
+            <path d="m2 3 3 3 3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
         {canClear ? (
           <button type="button" className="filter-group__clear" onClick={onClear}>Clear</button>
         ) : null}
       </div>
-      <div className="filter-group__items">{children}</div>
+      {open ? <div className="filter-group__items">{children}</div> : null}
     </div>
   );
 }
