@@ -1190,6 +1190,267 @@ async function deepLabelDesignerFlow(crawl) {
   crawl.step('deep: the designer survives the whole flow', !finalCrash, finalCrash || '');
 }
 
+/**
+ * The bulk edit table (v0.1.66) — the newest screen, and the one with the most
+ * ways to fail silently: a paste that half-lands, an image that goes to the
+ * wrong product, a Save that writes before the dry run.
+ *
+ * It ticks two real products in the Library, opens Image operations ▾ →
+ * Edit in table, then drives the grid the way a person would: type in a cell,
+ * paste a block too wide to fit (and read the refusal), paste one that fits,
+ * paste a real clipboard image in both modes (checking position 0 moves only
+ * for Make main), and save through the dry-run summary.
+ */
+async function deepBulkTableFlow(crawl, photoPath) {
+  crawl.phase = 'deep: bulk table';
+
+  /* Two products are needed and the isolated profile may only have one, so top
+   * the catalog up over IPC before touching the UI. */
+  const ensured = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    let ps = await window.api.products.list(cid, {});
+    const stamp = String(Date.now()).slice(-6);
+    let made = 0;
+    while (ps.length < 2) {
+      await window.api.products.create({ companyId: cid, sku: 'UI-BULK-' + stamp + '-' + made, name: 'Bulk table widget ' + made, status: 'active' });
+      made += 1;
+      ps = await window.api.products.list(cid, {});
+    }
+    return { total: ps.length, made };
+  })()`, true).catch((err) => ({ error: err.message }));
+  if (!ensured || ensured.error) { crawl.step('deep bulk table: two products exist', false, JSON.stringify(ensured)); return; }
+  crawl.step('deep bulk table: two products exist', ensured.total >= 2, JSON.stringify(ensured));
+
+  await crawl.goto('Product Library');
+
+  /* Give the product that will be row 0 a main image first, so "Add keeps the
+   * main" is a real assertion rather than a first-image special case. The
+   * import bumps updated_at, which floats it to the top of the newest-first
+   * list. */
+  const seeded = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    const ps = await window.api.products.list(cid, {});
+    const p = ps[0];
+    let imgs = await window.api.images.listByProduct(p.id);
+    let list = imgs.images || imgs;
+    if (list.length === 0) {
+      await window.api.images.importForProduct(p.id, ${JSON.stringify(photoPath)});
+      imgs = await window.api.images.listByProduct(p.id);
+      list = imgs.images || imgs;
+    }
+    return { sku: p.sku, id: p.id, count: list.length, first: list[0] ? list[0].filepath : null };
+  })()`, true).catch((err) => ({ error: err.message }));
+  if (!seeded || seeded.error) { crawl.step('deep bulk table: row 0 has a main image', false, JSON.stringify(seeded)); return; }
+
+  await crawl.goto('Product Library');
+  const picked = await crawl.eval(`(() => {
+    const boxes = Array.from(document.querySelectorAll('tbody input[type="checkbox"], .lib-grid input[type="checkbox"], .product-tile input[type="checkbox"]')).filter((b) => !b.closest('thead'));
+    boxes.slice(0, 2).forEach((b) => { if (!b.checked) b.click(); });
+    return boxes.length;
+  })()`);
+  await crawl.settle(600);
+  const menu = await crawl.eval(`window.__ui.click('button', 'Image operations')`);
+  await crawl.settle(350);
+  const item = await crawl.eval(`window.__ui.click('.lib-bulk-menu__item', 'Edit in table')`);
+  if (menu !== 'ok' || item !== 'ok') {
+    crawl.step('deep bulk table: open the table from the bulk menu', false, `menu ${menu} · item ${item} · ${picked} row checkbox(es)`);
+    return;
+  }
+  await crawl.waitFor(`!!document.querySelector('.bulk-table__grid')`, 10_000, 'the bulk table grid');
+  await crawl.settle(500);
+  const crash = await crawl.eval('window.__ui.crash()');
+  if (crash) { crawl.step('deep bulk table: the table opens', false, `CRASHED: ${crash}`); return; }
+
+  const chrome = await crawl.eval(`({
+    rows: document.querySelectorAll('.bulk-table__grid tbody tr[data-row]').length,
+    headers: Array.from(document.querySelectorAll('.bulk-table__grid thead th')).map((th) => th.innerText),
+    inputs: document.querySelectorAll('.bulk-table__grid tbody input, .bulk-table__grid tbody select').length,
+    imageCells: document.querySelectorAll('.bulk-table__grid [data-col="image"]').length,
+    scopes: Array.from(document.querySelectorAll('input[name="bulk-table-scope"]')).map((r) => r.checked),
+    modes: Array.from(document.querySelectorAll('.bulk-table__imagectl button')).map((b) => b.innerText),
+    hint: (document.querySelector('.bulk-table__hint') || {}).innerText || '',
+  })`);
+  await crawl.shot('bulk-table');
+  const wantedCols = ['Name', 'SKU', 'Brand', 'Category', 'Retail price', 'Image'];
+  const hasCols = wantedCols.every((c) => chrome.headers.some((h) => h === c));
+  crawl.step('deep bulk table: rows and columns render',
+    chrome.rows === 2 && hasCols && chrome.imageCells === 2 && chrome.scopes[0] === true,
+    JSON.stringify({ rows: chrome.rows, headers: chrome.headers.length, inputs: chrome.inputs, scopes: chrome.scopes }));
+  crawl.step('deep bulk table: both image modes and the hint are offered',
+    chrome.modes.join('|') === 'Add|Make main' && /⌘V/.test(chrome.hint) && /⇧⌘V/.test(chrome.hint),
+    `modes ${JSON.stringify(chrome.modes)} · hint “${chrome.hint.slice(0, 80)}…”`);
+
+  const sku0 = await crawl.eval(`(document.querySelector('input[data-row="0"][data-col="sku"]') || {}).value || null`);
+  const sku1 = await crawl.eval(`(document.querySelector('input[data-row="1"][data-col="sku"]') || {}).value || null`);
+  if (!sku0 || !sku1) { crawl.step('deep bulk table: rows carry SKUs', false, JSON.stringify({ sku0, sku1 })); return; }
+
+  /* 1 ── a typed cell holds */
+  await crawl.eval(`window.__ui.set('input[data-row="0"][data-col="subcategory"]', 'Crawl A')`);
+  await crawl.settle(300);
+  const typed = await crawl.eval(`document.querySelector('input[data-row="0"][data-col="subcategory"]').value`);
+  crawl.step('deep bulk table: a typed cell holds', typed === 'Crawl A', JSON.stringify({ typed }));
+
+  /* 2 ── a paste WIDER than the room left is refused, and the toast names the
+   *      columns that did not fit. Start from the LAST text column, where two
+   *      cells cannot fit into one. */
+  const wide = await crawl.eval(`(() => {
+    const cells = Array.from(document.querySelectorAll('.bulk-table__grid tbody tr[data-row="0"] [data-col]'))
+      .filter((el) => el.dataset.col !== 'image' && el.dataset.col !== 'image-count');
+    const last = cells[cells.length - 1];
+    if (!last) return { error: 'no cells' };
+    last.focus();
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'x\\ty');
+    last.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    return { col: last.dataset.col };
+  })()`);
+  await crawl.settle(300);
+  const wideToast = await crawl.eval('window.__ui.toastText()');
+  await crawl.shot('bulk-table-wide-refused');
+  crawl.step('deep bulk table: a too-wide paste is refused and names the columns',
+    !wide.error && /2 columns wide/.test(wideToast || '') && String(wideToast).includes(wide.col),
+    `last column ${wide.col} · toast: ${wideToast || '(none)'}`);
+
+  /* 3 ── a paste that fits fills the cells from the focused one */
+  const filledPaste = await crawl.eval(`(() => {
+    const a = document.querySelector('input[data-row="1"][data-col="subcategory"]');
+    if (!a) return 'MISS';
+    a.focus();
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'Paste A\\tPaste B');
+    a.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    return 'ok';
+  })()`);
+  await crawl.settle(350);
+  const filled = await crawl.eval(`({
+    a: document.querySelector('input[data-row="1"][data-col="subcategory"]').value,
+    b: document.querySelector('input[data-row="1"][data-col="colorFinish"]').value,
+  })`);
+  crawl.step('deep bulk table: a fitting paste fills the cells',
+    filledPaste === 'ok' && filled.a === 'Paste A' && filled.b === 'Paste B',
+    JSON.stringify(filled));
+
+  /* 4 ── never edit product images here: paste text into the image cell and it
+   *      says so instead of writing anything. */
+  const textOnImage = await crawl.eval(`(() => {
+    const cell = document.querySelector('[data-col="image"][data-row="0"]');
+    if (!cell) return 'MISS;';
+    cell.focus();
+    const dt = new DataTransfer();
+    dt.setData('text/plain', 'zzz');
+    cell.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    return 'ok';
+  })()`);
+  await crawl.settle(300);
+  const textOnImageToast = await crawl.eval('window.__ui.toastText()');
+  crawl.step('deep bulk table: the image cell refuses text',
+    textOnImage === 'ok' && /Image cell/i.test(textOnImageToast || ''),
+    `toast: ${textOnImageToast || '(none)'}`);
+
+  /* 5 ── a real clipboard image, Add mode: the count rises, the main stays. */
+  const addResult = await crawl.eval(`(async () => {
+    const cell = document.querySelector('[data-col="image"][data-row="0"]');
+    if (!cell) return { error: 'no image cell' };
+    cell.focus();
+    await new Promise((r) => setTimeout(r, 80));
+    const canvas = document.createElement('canvas');
+    canvas.width = 48; canvas.height = 48;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#c0392b'; ctx.fillRect(0, 0, 48, 48);
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], 'crawl-add.png', { type: 'image/png' }));
+    cell.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    return { ok: true };
+  })()`, true);
+  await crawl.settle(2500);
+  const afterAddDom = await crawl.eval(`(document.querySelector('.bulk-table__image-count') || {}).textContent || ''`);
+  const afterAddToast = await crawl.eval('window.__ui.toastText()');
+  await crawl.shot('bulk-table-image-add');
+  const countOf = (txt) => { const m = String(txt).match(/(\d+)\s*\/\s*50/); return m ? Number(m[1]) : -1; };
+  const countBefore = Number(String(seeded.count));
+  const addOk = addResult && !addResult.error && countOf(afterAddDom) === countBefore + 1 && /added/i.test(afterAddToast || '');
+  crawl.step('deep bulk table: a pasted photo raises the image count (Add)',
+    addOk, `count ${countBefore} → ${afterAddDom} · toast: ${afterAddToast || '(none)'}`);
+
+  /* 6 ── Make main: a second, different photo goes to position 0. */
+  const beforeMain = await crawl.eval(`(async () => {
+    const ps = await window.api.products.list(await window.api.companies.getActiveId(), {});
+    const p = ps.find((x) => x.sku === ${JSON.stringify(sku0)});
+    const imgs = await window.api.images.listByProduct(p.id);
+    const list = imgs.images || imgs;
+    return { count: list.length, first: list[0] ? list[0].filepath : null };
+  })()`, true);
+  await crawl.eval(`window.__ui.click('.bulk-table__imagectl button', 'Make main')`);
+  await crawl.settle(250);
+  const modeOn = await crawl.eval(`(() => { const b = Array.from(document.querySelectorAll('.bulk-table__imagectl button')).find((x) => x.innerText === 'Make main'); return b ? b.getAttribute('aria-pressed') : null; })()`);
+  const mainResult = await crawl.eval(`(async () => {
+    const cell = document.querySelector('[data-col="image"][data-row="0"]');
+    if (!cell) return { error: 'no image cell' };
+    cell.focus();
+    await new Promise((r) => setTimeout(r, 80));
+    const canvas = document.createElement('canvas');
+    canvas.width = 48; canvas.height = 48;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#1e8449'; ctx.fillRect(0, 0, 48, 48);
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], 'crawl-main.png', { type: 'image/png' }));
+    cell.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    return { ok: true };
+  })()`, true);
+  await crawl.settle(2500);
+  const afterMain = await crawl.eval(`(async () => {
+    const ps = await window.api.products.list(await window.api.companies.getActiveId(), {});
+    const p = ps.find((x) => x.sku === ${JSON.stringify(sku0)});
+    const imgs = await window.api.images.listByProduct(p.id);
+    const list = imgs.images || imgs;
+    return { count: list.length, first: list[0] ? list[0].filepath : null };
+  })()`, true);
+  const afterMainDom = await crawl.eval(`(document.querySelector('.bulk-table__image-count') || {}).textContent || ''`);
+  await crawl.shot('bulk-table-image-main');
+  const mainOk = mainResult && !mainResult.error && modeOn === 'true'
+    && afterMain.count === beforeMain.count + 1
+    && afterMain.first && afterMain.first !== beforeMain.first
+    && countOf(afterMainDom) === afterMain.count;
+  crawl.step('deep bulk table: Make main moves the pasted photo to position 0', mainOk,
+    `mode ${modeOn} · ${beforeMain.count}→${afterMain.count} · first ${String(beforeMain.first).split('/').pop()} → ${String(afterMain.first).split('/').pop()}`);
+
+  /* 7 ── Save all: dry run first, then the summary, then the commit. */
+  const saveAll = await crawl.eval(`window.__ui.clickExact('Save all')`);
+  if (saveAll !== 'ok') { crawl.step('deep bulk table: Save all runs a dry run', false, saveAll); return; }
+  await crawl.waitFor(`!!document.querySelector('.bulk-table__confirm')`, 15_000, 'the dry-run summary');
+  await crawl.settle(300);
+  const summary = await crawl.eval(`window.__ui.textOf(document.querySelector('.bulk-table__confirm'))`);
+  const summaryToast = await crawl.eval('window.__ui.toastText()');
+  await crawl.shot('bulk-table-dry-run');
+  crawl.step('deep bulk table: the dry run reports the summary before writing',
+    /\d+ updated/.test(summary || '') && /Confirm save/.test(summary || '') && /updated/.test(summaryToast || ''),
+    `summary: ${summary || '(none)'} · toast: ${summaryToast || '(none)'}`);
+
+  /* And nothing is written yet. */
+  const beforeCommit = await crawl.eval(`(async () => {
+    const ps = await window.api.products.list(await window.api.companies.getActiveId(), {});
+    const p = ps.find((x) => x.sku === ${JSON.stringify(sku0)});
+    return { subcategory: p ? p.subcategory : null };
+  })()`, true);
+  crawl.step('deep bulk table: the dry run wrote nothing', beforeCommit.subcategory !== 'Crawl A', JSON.stringify(beforeCommit));
+
+  await crawl.eval(`window.__ui.clickExact('Confirm save')`);
+  await crawl.waitFor(`!document.querySelector('.bulk-table__grid')`, 15_000, 'the table to close after saving');
+  await crawl.settle(900);
+  const savedToast = await crawl.eval('window.__ui.toastText()');
+  const afterSave = await crawl.eval(`(async () => {
+    const ps = await window.api.products.list(await window.api.companies.getActiveId(), {});
+    const a = ps.find((x) => x.sku === ${JSON.stringify(sku0)});
+    const b = ps.find((x) => x.sku === ${JSON.stringify(sku1)});
+    return { a: a ? a.subcategory : null, b: b ? b.subcategory : null, c: b ? b.colorFinish : null };
+  })()`, true);
+  await crawl.shot('bulk-table-saved');
+  crawl.step('deep bulk table: Confirm save writes the cells', /Saved \d+ product/.test(savedToast || '') && afterSave.a === 'Crawl A' && afterSave.b === 'Paste A' && afterSave.c === 'Paste B',
+    `toast: ${savedToast || '(none)'} · rows: ${JSON.stringify(afterSave)}`);
+}
+
 const PAGE_LABELS = [
   ['company', 'Company'],
   ['dashboard', 'Dashboard'],
@@ -1434,6 +1695,13 @@ async function main() {
     await deepLabelDesignerFlow(crawl);
   } catch (err) {
     crawl.step('deep label designer flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 13 ── the bulk edit table (v0.1.66) */
+  try {
+    await deepBulkTableFlow(crawl, photoPath);
+  } catch (err) {
+    crawl.step('deep bulk table flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */
