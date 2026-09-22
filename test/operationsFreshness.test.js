@@ -266,7 +266,7 @@ test('Suppliers keeps B search rows and spend after A resolves following a save 
     await hook.settle(Component); await delay(210);
     setStore(store, { activeCompanyId: 'company-b', addToast: (...args) => toasts.push(args) });
     await hook.settle(Component); await delay(210);
-    const search = findAll(hook.getOutput(), (node) => node.type === 'input' && node.props.placeholder === 'Search supplier name or country…')[0];
+    const search = findAll(hook.getOutput(), (node) => node.type === 'input' && node.props.placeholder === 'Search supplier name, contact or country…')[0];
     search.props.onChange({ target: { value: 'B' } });
     await hook.settle(Component); await delay(210);
     listCalls.find((call) => call.companyId === 'company-b' && call.query.search === '').gate.reject(new Error('obsolete search failed'));

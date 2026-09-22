@@ -30,7 +30,10 @@ const CRAWL = read('scripts/probe-ui-crawl.js');
 const PKG = JSON.parse(read('package.json'));
 const LOCK = JSON.parse(read('package-lock.json'));
 
-const VERSION = '0.1.66';
+// v0.1.67: the bulk table shipped in 0.1.66. Its changelog entry is no longer
+// the TOP one, so this test checks the entry by its own version rather than
+// pinning a literal that every later release would have to edit.
+const BULK_TABLE_VERSION = '0.1.66';
 
 test('the Library offers Edit in table from the bulk Image operations menu', () => {
   assert.match(LIBRARY, /import \{ BulkTableModal \} from '\.\/BulkTableModal\.jsx'/,
@@ -139,16 +142,15 @@ test('the UI crawl exercises the bulk table and stays non-fatal', () => {
 });
 
 test('the version and the top What’s new entry agree', () => {
-  assert.equal(PKG.version, VERSION, `package.json is ${PKG.version}, expected ${VERSION}`);
-  assert.equal(LOCK.version, VERSION, `package-lock.json is ${LOCK.version}, expected ${VERSION}`);
-  assert.equal(LOCK.packages?.['']?.version, VERSION, 'package-lock.json packages[""] disagrees');
-  assert.match(WHATS_NEW, new RegExp(`const CHANGELOG = \\[\\s*\\{\\s*version: '${VERSION.replace(/\./g, '\\.')}'`),
-    `the top What's new entry is not ${VERSION}`);
+  assert.equal(LOCK.version, PKG.version, `package-lock.json is ${LOCK.version}, expected ${PKG.version}`);
+  assert.equal(LOCK.packages?.['']?.version, PKG.version, 'package-lock.json packages[""] disagrees');
+  const topVersion = WHATS_NEW.match(/const CHANGELOG = \[\s*\{\s*version: '([^']+)'/)?.[1];
+  assert.equal(topVersion, PKG.version, `the top What's new entry is ${topVersion}, expected ${PKG.version}`);
 
-  // The top entry's bullets are plain text, and it describes the table.
-  const start = WHATS_NEW.indexOf(`version: '${VERSION}'`);
+  // The 0.1.66 entry's bullets are plain text, and it describes the table.
+  const start = WHATS_NEW.indexOf(`version: '${BULK_TABLE_VERSION}'`);
   const rest = WHATS_NEW.slice(start + 1);
   const entry = WHATS_NEW.slice(start, start + 1 + rest.indexOf("version: '"));
-  assert.match(entry, /bulk (edit )?table|Edit in table/i, 'the changelog entry does not mention the feature');
+  assert.match(entry, /bulk (edit )?table|Edit in table/i, 'the 0.1.66 changelog entry does not mention the feature');
   assert.doesNotMatch(entry, /\*\*|\[[^\]]+\]\(/, 'changelog bullets render as plain text — no markdown');
 });

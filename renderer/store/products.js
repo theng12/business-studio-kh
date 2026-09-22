@@ -108,6 +108,15 @@ export function createProductsSlice(set, get) {
       set((s) => ({ productFilters: { ...s.productFilters, brandIds: [] }, page: 0 }));
       get().refreshProducts();
     },
+    // v0.1.67: deterministic "show only unassigned" for the Brands screen's
+    // All · Unassigned chip. `toggleBrandFilter(null)` cannot express this —
+    // it toggles null against a filter that may already hold brand ids — so
+    // the setter resets the other filters and pins brandIds to exactly
+    // [null], which is the store's own "unassigned" encoding.
+    setBrandFilterUnassigned() {
+      set({ productFilters: { ...DEFAULT_FILTERS, brandIds: [null] }, page: 0 });
+      get().refreshProducts();
+    },
     toggleCategoryFilter(value) {
       set((s) => {
         const cur = s.productFilters.categoryIds ?? [];
@@ -119,6 +128,11 @@ export function createProductsSlice(set, get) {
     },
     clearCategoryFilter() {
       set((s) => ({ productFilters: { ...s.productFilters, categoryIds: [] }, page: 0 }));
+      get().refreshProducts();
+    },
+    // v0.1.67: the Categories screen's All · Uncategorized counterpart.
+    setCategoryFilterUnassigned() {
+      set({ productFilters: { ...DEFAULT_FILTERS, categoryIds: [null] }, page: 0 });
       get().refreshProducts();
     },
     setStatusFilter(status) {

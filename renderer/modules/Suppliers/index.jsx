@@ -8,6 +8,16 @@
  * with escaped LIKE meta-chars server-side). Active / archived
  * filter via a small chip toggle in the header — archived suppliers
  * keep their PO history but stop showing in the create-PO picker.
+ *
+ * v0.1.67: sort / multi-select, matching Brands and Categories, through
+ * the shared renderer/lib/listTools.js (the shared range-selection and
+ * name-order code — not a second implementation). Search stays
+ * server-side, now also matching contact name and email, so the
+ * client-mode out-of-order-response guard the existing test pins is
+ * untouched. Bulk delete pre-checks the PO rollup and refuses
+ * suppliers that purchase orders reference — the DB's
+ * purchase_orders.supplier_id is ON DELETE RESTRICT, so those would
+ * throw anyway; naming them up front keeps the UI honest.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -15,6 +25,7 @@ import { useAppStore } from '../../store/index.js';
 import { Button, Input, Modal, Field, Select, EmptyState, Pagination, paginate, Textarea } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
+import { allIds, nextSelection, sortRows } from '../../lib/listTools.js';
 
 const COMMON_CURRENCIES = ['USD', 'CNY', 'THB', 'VND', 'KHR', 'EUR', 'JPY', 'KRW', 'INR', 'IDR', 'MYR', 'SGD'];
 const INCOTERMS = [
@@ -23,6 +34,12 @@ const INCOTERMS = [
   { value: 'FOB', label: 'FOB — free on board (buyer pays from origin port)' },
   { value: 'CFR', label: 'CFR / CNF — cost & freight (supplier covers freight, buyer covers insurance + duty)' },
   { value: 'CIF', label: 'CIF — cost, insurance, freight (supplier covers freight + insurance; buyer covers duty)' },
+];
+
+const SORT_OPTIONS = [
+  { value: 'name', label: 'Name A–Z' },
+  { value: 'nameDesc', label: 'Name Z–A' },
+  { value: 'usage', label: 'Most purchase orders first' },
 ];
 
 const EMPTY_FORM = {
@@ -48,11 +65,17 @@ export function Suppliers() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState('name');
   const [statusFilter, setStatusFilter] = useState('active'); // 'active' | 'archived' | 'all'
   const [editing, setEditing] = useState(null); // null = closed, 'new' = create, object = edit
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [refreshTick, setRefreshTick] = useState(0);
+  // Selection + shift-anchor in one state object, updated functionally so
+  // clicks landing in the same React batch compose.
+  const [selection, setSelection] = useState({ ids: [], lastIndex: null });
+  const selected = selection.ids;
+  const [deleting, setDeleting] = useState(false);
   const listRequestRef = useRef(0);
   const spendRequestRef = useRef(0);
   // v0.49.48: per-supplier PO spend rollup, keyed by supplierId →
@@ -79,9 +102,9 @@ export function Suppliers() {
   }, [activeCompanyId]);
 
   // Fetch whenever the company / status filter / search changes. The
-  // search runs server-side (LIKE on name + country), so debounce by
-  // 200ms — same pattern v0.49.38 added to Library search to dodge
-  // the keystroke-storm + out-of-order-response race on client mode.
+  // search runs server-side (LIKE on name + country + contact, so the
+  // client-mode race guard in test/operationsFreshness.test.js still
+  // covers it), debounced 200ms so typing is one query, not four.
   useEffect(() => {
     if (!activeCompanyId) {
       setRows([]);
@@ -108,11 +131,68 @@ export function Suppliers() {
     return () => clearTimeout(t);
   }, [activeCompanyId, search, statusFilter, refreshTick, addToast]);
 
-  const { currentPage, maxPage, pageStart, pageEnd, total } = useMemo(
-    () => paginate(rows.length, page, pageSize),
-    [rows.length, page, pageSize],
+  const sorted = useMemo(
+    () => sortRows(rows, sortKey, {
+      usage: (a, b) => (spend[b.id]?.poCount || 0) - (spend[a.id]?.poCount || 0),
+    }),
+    [rows, sortKey, spend],
   );
-  const visibleRows = useMemo(() => rows.slice(pageStart, pageEnd), [rows, pageStart, pageEnd]);
+
+  const { currentPage, maxPage, pageStart, pageEnd } = useMemo(
+    () => paginate(sorted.length, page, pageSize),
+    [sorted.length, page, pageSize],
+  );
+  const visibleRows = useMemo(() => sorted.slice(pageStart, pageEnd), [sorted, pageStart, pageEnd]);
+  const visibleIds = useMemo(() => allIds(visibleRows), [visibleRows]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.includes(id));
+
+  useEffect(() => {
+    setSelection({ ids: [], lastIndex: null });
+  }, [search, sortKey, page, pageSize, statusFilter, activeCompanyId]);
+
+  const selectedRows = useMemo(
+    () => sorted.filter((s) => selected.includes(s.id)),
+    [sorted, selected],
+  );
+
+  function onRowSelect(index, e) {
+    const shiftKey = !!(e.shiftKey ?? e.nativeEvent?.shiftKey);
+    const metaKey = !!(e.metaKey || e.ctrlKey || e.nativeEvent?.metaKey || e.nativeEvent?.ctrlKey);
+    setSelection((prev) => {
+      const next = nextSelection({
+        selected: prev.ids,
+        ids: visibleIds,
+        index,
+        lastIndex: prev.lastIndex,
+        shiftKey,
+        metaKey,
+      });
+      return { ids: next.selected, lastIndex: next.lastIndex };
+    });
+  }
+
+  function toggleAllVisible() {
+    setSelection((prev) => {
+      const all = visibleIds.length > 0 && visibleIds.every((id) => prev.ids.includes(id));
+      const ids = all
+        ? prev.ids.filter((id) => !visibleIds.includes(id))
+        : Array.from(new Set([...prev.ids, ...visibleIds]));
+      return { ids, lastIndex: prev.lastIndex };
+    });
+  }
+
+  useEffect(() => {
+    function onKey(e) {
+      const typing = e.target?.matches?.('input, textarea, select, [contenteditable="true"]');
+      if (e.key === 'Escape' && !typing) { setSelection({ ids: [], lastIndex: null }); return; }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && (e.key === 'a' || e.key === 'A') && !typing) {
+        e.preventDefault();
+        setSelection((prev) => ({ ids: visibleIds, lastIndex: prev.lastIndex }));
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [visibleIds]);
 
   async function refresh() {
     if (!activeCompanyId) return;
@@ -195,6 +275,82 @@ export function Suppliers() {
     }
   }
 
+  /**
+   * v0.1.67: bulk delete. purchase_orders.supplier_id is ON DELETE RESTRICT,
+   * so a supplier with PO history cannot be deleted at all. We PRE-CHECK the
+   * PO rollup, name every blocked supplier and its PO count in the confirm,
+   * skip them, delete the rest through the same suppliers:remove IPC the
+   * single-row delete uses, then report one summary. Nothing is attempted
+   * silently and nothing half-applies.
+   */
+  function poCountOf(supplier) {
+    return spend[supplier.id]?.poCount || 0;
+  }
+
+  async function handleBulkDelete() {
+    if (selectedRows.length === 0) return;
+    const blocked = selectedRows.filter((s) => poCountOf(s) > 0);
+    const deletable = selectedRows.filter((s) => poCountOf(s) === 0);
+    const label = (s) => `“${s.name}” (${poCountOf(s)} PO${poCountOf(s) === 1 ? '' : 's'})`;
+    const blockedNote = blocked.map(label).join(', ');
+
+    // Every ticked supplier has PO history: refuse outright, name them, and
+    // point at archive — the same advice the DB error carries.
+    if (deletable.length === 0) {
+      addToast(
+        `Nothing deleted — ${blockedNote} still ha${blocked.length === 1 ? 's' : 've'} purchase orders. Archive instead.`,
+        'info',
+      );
+      return;
+    }
+
+    const count = deletable.length;
+    const noun = count === 1 ? 'supplier' : 'suppliers';
+    const ok = await confirm({
+      title: `Delete ${count} ${noun}?`,
+      message: `Deleting removes the supplier completely.`
+        + (blocked.length
+          ? ` ${blockedNote} still ha${blocked.length === 1 ? 's' : 've'} purchase orders and will be kept — archive ${blocked.length === 1 ? 'it' : 'them'} instead.`
+          : ''),
+      detail: 'This cannot be undone.',
+      danger: true,
+      confirmLabel: `Delete ${count}`,
+    });
+    if (!ok) return;
+
+    setDeleting(true);
+    let deleted = 0;
+    const failed = [];
+    for (const s of deletable) {
+      try {
+        await window.api.suppliers.remove(s.id);
+        deleted += 1;
+      } catch (err) {
+        // A PO could have been created since the rollup was read; the DB
+        // refuses and its message names the PO count.
+        failed.push({ name: s.name, error: err.message });
+      }
+    }
+    await refresh();
+    setSelection({ ids: [], lastIndex: null });
+    setDeleting(false);
+
+    const notes = [];
+    if (failed.length) {
+      const names = failed.map((f) => `“${f.name}”`).join(', ');
+      notes.push(`${names} could not be deleted (${failed[0].error})`);
+    }
+    if (blocked.length) {
+      notes.push(`kept ${blockedNote} — still in use`);
+    }
+
+    if (notes.length === 0) {
+      addToast(`Deleted ${deleted} ${deleted === 1 ? 'supplier' : 'suppliers'}`, 'success');
+    } else {
+      addToast(`Deleted ${deleted} of ${selectedRows.length} — ${notes.join('; ')}`, 'info');
+    }
+  }
+
   if (!activeCompanyId) {
     return (
       <div className="page">
@@ -223,11 +379,25 @@ export function Suppliers() {
           <input
             type="search"
             className="search-input"
-            placeholder="Search supplier name or country…"
+            placeholder="Search supplier name, contact or country…"
+            aria-label="Search suppliers"
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(0); }}
           />
         </div>
+        <Select
+          className="list-tools__sort"
+          aria-label="Sort suppliers"
+          value={sortKey}
+          onChange={(e) => { setSortKey(e.target.value); setPage(0); }}
+        >
+          {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </Select>
+        <label className="list-tools__all">
+          <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
+          <span>Select all visible</span>
+        </label>
+        <div className="list-tools__spacer" />
         <div className="ws-toolbar__group" role="tablist" aria-label="Filter by status">
           {['active', 'archived', 'all'].map((s) => (
             <button
@@ -242,9 +412,20 @@ export function Suppliers() {
         </div>
       </div>
 
+      {selected.length > 0 ? (
+        <div className="list-bulk-bar">
+          <span className="list-bulk-bar__count">{selected.length} selected</span>
+          <div className="list-bulk-bar__spacer" />
+          <Button variant="danger" onClick={handleBulkDelete} disabled={deleting}>
+            {deleting ? 'Deleting…' : `Delete ${selected.length}`}
+          </Button>
+          <Button onClick={() => setSelection({ ids: [], lastIndex: null })} disabled={deleting}>Clear</Button>
+        </div>
+      ) : null}
+
       {loading ? (
         <div className="muted" style={{ padding: 'var(--s-5)' }}>Loading…</div>
-      ) : total === 0 ? (
+      ) : sorted.length === 0 ? (
         <EmptyState
           title={search ? 'No matches' : statusFilter === 'archived' ? 'No archived suppliers' : 'No suppliers yet'}
           body={search
@@ -259,6 +440,15 @@ export function Suppliers() {
             <table className="suppliers-table">
               <thead>
                 <tr>
+                  <th className="suppliers-check">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleAllVisible}
+                      aria-label="Select all visible"
+                      title="Select all visible"
+                    />
+                  </th>
                   <th>Name</th>
                   <th>Country</th>
                   <th>Currency</th>
@@ -269,12 +459,22 @@ export function Suppliers() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((s) => (
+                {visibleRows.map((s, index) => {
+                  const isSelected = selected.includes(s.id);
+                  return (
                   <tr
                     key={s.id}
                     onClick={() => setEditing(s)}
-                    className={`suppliers-row${s.status === 'archived' ? ' is-archived' : ''}`}
+                    className={`suppliers-row${s.status === 'archived' ? ' is-archived' : ''}${isSelected ? ' is-selected' : ''}`}
                   >
+                    <td className="suppliers-check" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => onRowSelect(index, e)}
+                        aria-label={`Select ${s.name}`}
+                      />
+                    </td>
                     <td><strong>{s.name}</strong></td>
                     <td>{s.country || <span className="muted">—</span>}</td>
                     <td><code>{s.defaultCurrency}</code></td>
@@ -310,12 +510,13 @@ export function Suppliers() {
                         : <span className="badge badge--emerald">active</span>}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
           <Pagination
-            total={total}
+            total={sorted.length}
             pageStart={pageStart}
             pageEnd={pageEnd}
             currentPage={currentPage}

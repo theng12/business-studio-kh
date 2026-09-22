@@ -1526,6 +1526,270 @@ async function deepBulkTableFlow(crawl, photoPath) {
     `brandId after save: ${JSON.stringify(afterSave.brand)} (was ${seeded.brandId})`);
 }
 
+/**
+ * v0.1.67: the two features this release ships — the Library filter column's
+ * retract / collapse controls, and the shared list tools on Brands,
+ * Categories and Suppliers.
+ *
+ * The Feature A assertions read the real DOM AND the real localStorage keys,
+ * because the point of the fix is that the toolbar button and the panel
+ * chevron agree about ONE state (`ProductLibrary.panelVisible`) and one map
+ * (`ProductLibrary.filterGroups`). Brands is exercised through to its delete
+ * confirm (cancelled — the seeded starters are never deleted). Suppliers is
+ * exercised through the refusal path, which needs a real supplier with a real
+ * purchase order, so one is created over IPC first.
+ */
+async function deepListToolsFlow(crawl) {
+  /* ── A: the Library filter column ─────────────────────────────────── */
+  crawl.phase = 'deep: list tools library';
+  await crawl.goto('Product Library');
+  await crawl.waitFor(`!!document.querySelector('.lib-filters')`, 10_000, 'the filter column');
+
+  // An active filter makes "Reset all filters" render; a search term is the
+  // cheapest one to set, and clear again afterwards.
+  await crawl.eval(`window.__ui.set('.page__header input.search-input', 'a')`);
+  await crawl.settle(500);
+  await crawl.waitFor(`!!document.querySelector('.lib-filters__reset')`, 6000, 'the reset button');
+  const order = await crawl.eval(`(() => {
+    const reset = document.querySelector('.lib-filters__reset');
+    const first = document.querySelector('.filter-group');
+    return {
+      reset: !!reset, first: !!first,
+      before: !!(reset && first && (reset.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING)),
+    };
+  })()`);
+  await crawl.shot('listtools-filters-top');
+  crawl.step('list tools: Reset all filters sits above the first filter group',
+    order.reset && order.first && order.before, JSON.stringify(order));
+
+  // Collapse the Brand group: children hide, aria-expanded flips, the choice
+  // is written to ProductLibrary.filterGroups.
+  const beforeCollapse = await crawl.eval(`(() => {
+    const group = [...document.querySelectorAll('.filter-group')]
+      .find((g) => (g.querySelector('.filter-group__label') || {}).textContent === 'Brand');
+    if (!group) return { error: 'no Brand group' };
+    const before = group.querySelectorAll('.filter-pill').length;
+    group.querySelector('.filter-group__toggle').click();
+    return { before };
+  })()`);
+  await crawl.settle(250);
+  const afterCollapse = await crawl.eval(`(() => {
+    const group = [...document.querySelectorAll('.filter-group')]
+      .find((g) => (g.querySelector('.filter-group__label') || {}).textContent === 'Brand');
+    let stored = null;
+    try { stored = JSON.parse(localStorage.getItem('ProductLibrary.filterGroups') || '{}'); } catch {}
+    return {
+      items: group ? !!group.querySelector('.filter-group__items') : null,
+      expanded: group ? group.querySelector('.filter-group__toggle').getAttribute('aria-expanded') : null,
+      stored: stored ? stored.Brand : null,
+    };
+  })()`);
+  await crawl.shot('listtools-group-collapsed');
+  crawl.step('list tools: a filter group collapses and remembers it',
+    !beforeCollapse.error && beforeCollapse.before > 0
+      && afterCollapse.items === false && afterCollapse.expanded === 'false' && afterCollapse.stored === false,
+    JSON.stringify({ ...beforeCollapse, ...afterCollapse }));
+  // Re-open, so the column is left as we found it.
+  await crawl.eval(`(() => {
+    const group = [...document.querySelectorAll('.filter-group')]
+      .find((g) => (g.querySelector('.filter-group__label') || {}).textContent === 'Brand');
+    group.querySelector('.filter-group__toggle').click();
+  })()`);
+  await crawl.settle(200);
+
+  const mainWidth = () => crawl.eval(`Math.round(document.querySelector('.lib-main').getBoundingClientRect().width)`);
+
+  /* Table view: retract, check the rail + the shared state, then expand. */
+  const tableExpanded = await mainWidth();
+  await crawl.eval(`document.querySelector('.lib-filters__collapse').click()`);
+  await crawl.settle(400);
+  const rail = await crawl.eval(`(() => ({
+    aside: document.querySelector('.lib-filters').classList.contains('is-collapsed'),
+    layout: document.querySelector('.lib-layout').classList.contains('lib-layout--filters-collapsed'),
+    groups: document.querySelectorAll('.filter-group').length,
+    chevron: !!document.querySelector('.lib-filters__collapse'),
+    toolbar: (document.querySelector('.lib-panel-toggle') || {}).textContent,
+    toolbarPressed: document.querySelector('.lib-panel-toggle') ? document.querySelector('.lib-panel-toggle').getAttribute('aria-pressed') : null,
+    stored: localStorage.getItem('ProductLibrary.panelVisible'),
+  }))()`);
+  const tableCollapsed = await mainWidth();
+  await crawl.shot('listtools-filters-rail');
+  crawl.step('list tools: the filter column retracts to a rail with a way back',
+    rail.aside && rail.layout && rail.groups === 0 && rail.chevron && rail.stored === 'off'
+      && /Filters off/.test(rail.toolbar || '') && rail.toolbarPressed === 'false',
+    JSON.stringify({ ...rail, tableExpanded, tableCollapsed }));
+  crawl.step('list tools: the grid gets the width back in Table view',
+    tableCollapsed - tableExpanded > 100, `expanded ${tableExpanded}px → rail ${tableCollapsed}px`);
+
+  await crawl.eval(`document.querySelector('.lib-filters__collapse').click()`);
+  await crawl.settle(400);
+  const reExpanded = await crawl.eval(`(() => ({
+    aside: document.querySelector('.lib-filters').classList.contains('is-collapsed'),
+    layout: document.querySelector('.lib-layout').classList.contains('lib-layout--filters-collapsed'),
+    groups: document.querySelectorAll('.filter-group').length,
+    stored: localStorage.getItem('ProductLibrary.panelVisible'),
+  }))()`);
+  crawl.step('list tools: the column expands again',
+    !reExpanded.aside && !reExpanded.layout && reExpanded.groups === 5 && reExpanded.stored === 'on',
+    JSON.stringify(reExpanded));
+
+  /* Grid view: same retract must return the width to the grid. */
+  await crawl.eval(`window.__ui.click('.ws-toolbar__group .segment', 'Grid')`);
+  await crawl.settle(600);
+  const gridExpanded = await mainWidth();
+  await crawl.eval(`document.querySelector('.lib-filters__collapse').click()`);
+  await crawl.settle(400);
+  const gridCollapsed = await mainWidth();
+  await crawl.eval(`document.querySelector('.lib-filters__collapse').click()`);
+  await crawl.settle(400);
+  crawl.step('list tools: the grid gets the width back in Grid view',
+    gridCollapsed - gridExpanded > 100, `expanded ${gridExpanded}px → rail ${gridCollapsed}px`);
+
+  // Leave the Library on Table with no search filter.
+  await crawl.eval(`window.__ui.click('.ws-toolbar__group .segment', 'Table')`);
+  await crawl.settle(300);
+  await crawl.eval(`window.__ui.set('.page__header input.search-input', '')`);
+  await crawl.settle(500);
+
+  /* ── B: Brands ────────────────────────────────────────────────────── */
+  crawl.phase = 'deep: list tools brands';
+  const stamp = String(Date.now()).slice(-6);
+  const brandNames = [`Crawl Tool A ${stamp}`, `Crawl Tool B ${stamp}`];
+  const made = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    const names = ${JSON.stringify(brandNames)};
+    const created = [];
+    for (const name of names) created.push(await window.api.brands.create({ companyId: cid, name }));
+    // Put a real product on the first brand so the bulk delete's confirm has
+    // an honest "N products will lose their brand" sentence to show.
+    const ps = await window.api.products.list(cid, {});
+    if (ps.length) await window.api.products.update(ps[0].id, { brandId: created[0].id });
+    return { names, attached: ps.length > 0 };
+  })()`, true).catch((err) => ({ error: err.message }));
+  if (!made || made.error) { crawl.step('list tools: seed two brands', false, JSON.stringify(made)); return; }
+  crawl.step('list tools: seed two brands', true, `${made.names.join(', ')} · product attached: ${made.attached}`);
+  await crawl.settle(700);
+
+  await crawl.goto('Brands');
+  await crawl.waitFor(`!!document.querySelector('.list-tools input.search-input')`, 8000, 'the Brands search box');
+  await crawl.eval(`window.__ui.set('.list-tools input.search-input', ${JSON.stringify(stamp)})`);
+  await crawl.waitFor(`document.querySelectorAll('.entity-card').length === 2`, 8000, 'the two seeded brands');
+  const brandCount = await crawl.eval(`document.querySelectorAll('.entity-card').length`);
+  crawl.step('list tools: the Brands search filters the list', brandCount === 2, `${brandCount} card(s) for "${stamp}"`);
+  await crawl.shot('listtools-brands-search');
+
+  // Name Z–A must float "Crawl Tool B" to the top.
+  await crawl.eval(`window.__ui.set('.list-tools select', 'nameDesc')`);
+  await crawl.settle(400);
+  const firstTitle = await crawl.eval(`(document.querySelector('.entity-card__title') || {}).textContent || null`);
+  crawl.step('list tools: the Brands sort select reorders', /Crawl Tool B/.test(firstTitle || ''), `first card: ${firstTitle}`);
+
+  // Plain-click the first row, ⌘-click the second: the two documented
+  // selection gestures, and it leaves the count at 2.
+  await crawl.eval(`(() => {
+    const boxes = [...document.querySelectorAll('.entity-card__check')];
+    if (boxes[0] && !boxes[0].checked) boxes[0].click();
+    if (boxes[1] && !boxes[1].checked) {
+      boxes[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
+    }
+    return boxes.length;
+  })()`);
+  await crawl.settle(300);
+  const bulkCount = await crawl.eval(`(document.querySelector('.list-bulk-bar__count') || {}).textContent || null`);
+  const chip = await crawl.eval(`(() => {
+    const el = document.querySelector('.list-tools__unassigned');
+    return el ? el.textContent : null;
+  })()`);
+  await crawl.shot('listtools-brands-selected');
+  crawl.step('list tools: ticking rows shows the bulk count', /2 selected/.test(bulkCount || ''), `bulk bar: ${bulkCount}`);
+  crawl.step('list tools: Brands offers the All · Unassigned chip', /Unassigned \(\d+\)/.test(chip || ''), `chip: ${chip}`);
+
+  // Open the delete confirm and CANCEL — the seeded starters are never deleted.
+  await crawl.eval(`window.__ui.click('.list-bulk-bar button', 'Delete 2')`);
+  await crawl.waitFor(`window.__ui.modalCount() > 0`, 5000, 'the bulk delete confirm');
+  const confirmBody = await crawl.eval(`window.__ui.textOf(document.querySelector('.modal'))`);
+  crawl.step('list tools: the bulk delete confirm explains the unassign',
+    /will lose their brand/.test(confirmBody || ''), `confirm: ${(confirmBody || '').slice(0, 140)}…`);
+  await crawl.eval(`window.__ui.click('.modal__footer button', 'Keep')`);
+  await crawl.settle(400);
+  const stillThere = await crawl.eval(`document.querySelectorAll('.entity-card').length`);
+  crawl.step('list tools: cancelling the delete keeps the brands', stillThere === 2, `${stillThere} card(s) still listed`);
+  await crawl.eval(`window.__ui.click('.list-bulk-bar button', 'Clear')`);
+  await crawl.settle(200);
+
+  /* ── B: Categories reachable from Settings, with the chip ─────────── */
+  crawl.phase = 'deep: list tools categories';
+  // The Categories toolbar only renders once the list is non-empty, so seed
+  // one category before opening the Settings tab.
+  const catName = `Crawl Category ${stamp}`;
+  const catSeed = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    const c = await window.api.categories.create({ companyId: cid, name: ${JSON.stringify(catName)} });
+    return c.name;
+  })()`, true).catch((err) => ({ error: err.message }));
+  if (!catSeed || catSeed.error) { crawl.step('list tools: seed a category', false, JSON.stringify(catSeed)); return; }
+  crawl.step('list tools: seed a category', true, catSeed);
+  await crawl.settle(500);
+  await crawl.goto('Settings');
+  await crawl.eval(`window.__ui.click('.settings-tabs button', 'Categories')`);
+  await crawl.waitFor(`!!document.querySelector('.list-tools input.search-input')`, 8000, 'the Categories toolbar');
+  const catTools = await crawl.eval(`(() => {
+    const chipEl = document.querySelector('.list-tools__unassigned');
+    return {
+      search: !!document.querySelector('.list-tools input.search-input'),
+      sort: !!document.querySelector('.list-tools select'),
+      check: !!document.querySelector('.categories-list__check, .list-tools input[type="checkbox"]'),
+      chip: chipEl ? chipEl.textContent : null,
+      crash: window.__ui.crash(),
+    };
+  })()`);
+  await crawl.shot('listtools-categories');
+  crawl.step('list tools: Categories (Settings tab) carries the same toolbar',
+    catTools.search && catTools.sort && catTools.check && /Uncategorized \(\d+\)/.test(catTools.chip || '') && !catTools.crash,
+    JSON.stringify(catTools));
+
+  /* ── B: Suppliers refuse a delete while POs exist ─────────────────── */
+  crawl.phase = 'deep: list tools suppliers';
+  const supName = `Crawl Refusal ${stamp}`;
+  const poSeed = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    const sup = await window.api.suppliers.create({ companyId: cid, name: ${JSON.stringify(supName)} });
+    const po = await window.api.purchaseOrders.create({ companyId: cid, supplierId: sup.id, poNumber: 'CRAWL-1' });
+    return { supId: sup.id, poId: po.id };
+  })()`, true).catch((err) => ({ error: err.message }));
+  if (!poSeed || poSeed.error) { crawl.step('list tools: a supplier with a PO exists', false, JSON.stringify(poSeed)); return; }
+  crawl.step('list tools: a supplier with a PO exists', true, `supplier ${poSeed.supId} · PO ${poSeed.poId}`);
+
+  await crawl.goto('Suppliers');
+  await crawl.waitFor(`!!document.querySelector('.suppliers-toolbar input.search-input')`, 8000, 'the Suppliers search box');
+  const supSort = await crawl.eval(`!!document.querySelector('.suppliers-toolbar select')`);
+  crawl.step('list tools: Suppliers has a sort select', supSort, `sort select present: ${supSort}`);
+  await crawl.eval(`window.__ui.set('.suppliers-toolbar input.search-input', ${JSON.stringify(supName)})`);
+  await crawl.waitFor(`window.__ui.textOf(document.body).includes(${JSON.stringify(supName)})`, 8000, 'the supplier row');
+  // The Orders chip only renders once the PO rollup has loaded — which is the
+  // data the pre-check reads, so waiting for it makes the refusal deterministic.
+  await crawl.waitFor(`!!document.querySelector('.supplier-orders-btn')`, 8000, 'the PO rollup chip');
+  await crawl.settle(300);
+  const ticked = await crawl.eval(`(() => {
+    const tr = [...document.querySelectorAll('tbody tr')].find((r) => r.textContent.includes(${JSON.stringify(supName)}));
+    const b = tr && tr.querySelector('input[type="checkbox"]');
+    if (b && !b.checked) b.click();
+    return !!b;
+  })()`);
+  await crawl.settle(300);
+  const supBulk = await crawl.eval(`(document.querySelector('.list-bulk-bar__count') || {}).textContent || null`);
+  crawl.step('list tools: ticking a supplier shows the bulk count', ticked && /1 selected/.test(supBulk || ''), `bulk bar: ${supBulk}`);
+  await crawl.eval(`window.__ui.click('.list-bulk-bar button', 'Delete 1')`);
+  await crawl.settle(500);
+  const refusalToast = await crawl.eval('window.__ui.toastText()');
+  const refusalModals = await crawl.eval('window.__ui.modalCount()');
+  await crawl.shot('listtools-suppliers-refusal');
+  crawl.step('list tools: a supplier with POs is refused by name and PO count',
+    /purchase order/i.test(refusalToast || '') && /Archive instead/i.test(refusalToast || '') && refusalModals === 0,
+    `toast: ${refusalToast || '(none)'} · modals: ${refusalModals}`);
+  await crawl.eval(`window.__ui.click('.list-bulk-bar button', 'Clear')`).catch(() => {});
+}
+
 const PAGE_LABELS = [
   ['company', 'Company'],
   ['dashboard', 'Dashboard'],
@@ -1777,6 +2041,13 @@ async function main() {
     await deepBulkTableFlow(crawl, photoPath);
   } catch (err) {
     crawl.step('deep bulk table flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 14 ── the Library filter column + the simple-list tools (v0.1.67) */
+  try {
+    await deepListToolsFlow(crawl);
+  } catch (err) {
+    crawl.step('deep list tools flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */
