@@ -279,7 +279,23 @@ export function Settings() {
 
         {config.mode === 'client' ? (
           <ClientModePanel config={config} patch={patch} />
-        ) : null}
+        ) : (
+          /* v0.1.51: the client connection fields MUST be reachable before
+           * switching to client mode. They used to render only when the mode
+           * was already 'client', while the Mode guard refuses to switch
+           * without them — a deadlock with no way to enter the address or
+           * token. They are always shown now; this heading appears only
+           * outside client mode so the two cases don't look duplicated. */
+          <div id="client-connection">
+            <h3 className="settings-subsection-heading">Client connection</h3>
+            <p className="settings-note" role="note">
+              Fill in the server address and user token here <strong>before</strong> switching
+              Mode to Client — client mode cannot start without them. These fields are
+              ignored while this Mac is in Standalone or Server mode.
+            </p>
+            <ClientModePanel config={config} patch={patch} />
+          </div>
+        )}
 
         {/* v0.26.32: migration section — applies in all three modes.
             Standalone Macs may want to move to a new machine; Server

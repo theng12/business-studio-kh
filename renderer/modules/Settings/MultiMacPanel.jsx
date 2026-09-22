@@ -48,12 +48,20 @@ export function ModeSegment({ config, addToast }) {
      * it — you could switch to client mode with both fields empty, the app
      * restarted, and then EVERY screen showed a red error ("Server URL not
      * set") with no obvious way out. Requiring them here means the mode that
-     * cannot work is never entered. They are set in this same panel. */
+     * cannot work is never entered.
+     *
+     * v0.1.51: the fields live in the "Client connection" section of this same
+     * tab, which is now rendered in ALL modes — previously it only rendered
+     * once you were already in client mode, so this guard could never be
+     * satisfied. When it blocks, scroll the user to those fields. */
     if (next === 'client' && (!config?.clientServerUrl?.trim() || !config?.clientToken?.trim())) {
       addToast?.(
-        'Set the server address and user token below first — client mode cannot reach anything without them.',
+        'Set the server address and user token in the “Client connection” section below first — client mode cannot reach anything without them.',
         'error',
       );
+      try {
+        document.getElementById('client-connection')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch { /* non-DOM test env — the toast is the important part */ }
       return;
     }
     const ok = await confirm({
@@ -653,16 +661,22 @@ export function ClientModePanel({ config, patch }) {
  *
  * Hidden when nothing has drifted. Three render states:
  *  - All-equal → renders null (no DOM weight)
- *  - clientServerUrl or clientToken changed → "Connection settings
- *    changed. Restart to apply." (the most common case)
+ *  - clientServerUrl or clientToken changed WHILE RUNNING AS A CLIENT →
+ *    "Connection settings changed. Restart to apply." (the most common case;
+ *    in Standalone/Server mode these are only staged for a later switch, which
+ *    restarts on its own, so they are deliberately not counted)
  *  - mode changed via setMode WITHOUT the auto-relaunch firing
  *    (shouldn't happen — setMode self-restarts — but defensive)
  */
 export function RestartBanner({ config, snapshot, addToast }) {
   if (!config || !snapshot) return null;
-  const urlDrifted   = (config.clientServerUrl ?? '') !== (snapshot.clientServerUrl ?? '');
-  const tokenDrifted = (config.clientToken     ?? '') !== (snapshot.clientToken     ?? '');
   const modeDrifted  = (config.mode            ?? 'standalone') !== (snapshot.mode  ?? 'standalone');
+  /* v0.1.51: the server URL / token only affect a running CLIENT runtime. In
+   * Standalone or Server mode they are just being staged for a later switch
+   * (which restarts on its own), so drifting them must not nag for a restart. */
+  const runningAsClient = (config.mode ?? 'standalone') === 'client';
+  const urlDrifted   = runningAsClient && (config.clientServerUrl ?? '') !== (snapshot.clientServerUrl ?? '');
+  const tokenDrifted = runningAsClient && (config.clientToken     ?? '') !== (snapshot.clientToken     ?? '');
   const dirty = urlDrifted || tokenDrifted || modeDrifted;
   if (!dirty) return null;
 
