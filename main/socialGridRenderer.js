@@ -11,7 +11,7 @@
  */
 
 const { embeddedFontCss, esc } = require('./studioRenderer');
-const { resolvePrice, formatPrice, describeStock, normalizeConfig } = require('./util/socialGridModel');
+const { resolvePrice, resolvePriceEntry, formatPrice, formatPriceWithEntry, describeStock, normalizeConfig } = require('./util/socialGridModel');
 
 /* The render window loads this document from a file:// URL, so anything the
  * page needs — fonts and every product photo — has to be inlined. An
@@ -44,7 +44,9 @@ function tileHtml(product, config, resolveImage, brandMap, scale) {
   if (config.showName) lines.push(`<div class="name">${esc(product.name || product.sku || '')}</div>`);
   if (config.showSku && product.sku) lines.push(`<div class="sku">${esc(product.sku)}</div>`);
   if (config.showPrice) {
-    const price = formatPrice(resolvePrice(product, config), config);
+    // v0.1.55: format with the product's own currency (retail/wholesale/group);
+    // `config.currencySymbol` is the fallback for rows without one.
+    const price = formatPriceWithEntry(resolvePriceEntry(product, config), config);
     if (price) lines.push(`<div class="price">${esc(price)}</div>`);
   }
   if (config.showStock) {

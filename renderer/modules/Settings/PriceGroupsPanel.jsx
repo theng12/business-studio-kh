@@ -29,7 +29,7 @@ function slugKey(label, taken) {
 
 export function PriceGroupsPanel() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
-  const companies = useAppStore((s) => s.companies);
+  const companies = useAppStore((s) => s.companies) ?? [];
   const updateCompany = useAppStore((s) => s.updateCompany);
   const addToast = useAppStore((s) => s.addToast);
 
