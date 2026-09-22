@@ -28,6 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const sharp = require('sharp');
 const presets = require('../db/socialGridPresets');
+const templates = require('../db/socialGridTemplates');
 const productsDb = require('../db/products');
 const brandsDb = require('../db/brands');
 const companies = require('../db/companies');
@@ -130,6 +131,68 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     const row = presets.duplicate(id);
     emitCatalogChange('socialGrid', 'create', row.id);
     return row;
+  });
+
+  /* ── reusable templates (v0.1.62) ─────────────────────────────────
+   *
+   * Templates are the design half of a post, with no products in them. The
+   * Product Library applies one to whatever the user has selected; the editor
+   * saves one so the next post can start from it. */
+
+  expose('socialGrid:listTemplates', ({ companyId } = {}) => {
+    const activeId = companies.getActiveId();
+    if (companyId && companyId !== activeId) return [];
+    return templates.list(companyId || activeId);
+  });
+  expose('socialGrid:getTemplate', ({ id } = {}) => assertEntityInActiveCompany(templates.get(id), 'Social template'));
+  expose('socialGrid:saveTemplate', (input = {}) => {
+    if (input.companyId !== companies.getActiveId()) throw new Error('Cross-company create blocked');
+    const row = templates.create(input);
+    emitCatalogChange('socialGrid', 'template:create', row.id);
+    return row;
+  });
+  expose('socialGrid:updateTemplate', ({ id, patch } = {}) => {
+    assertEntityInActiveCompany(templates.get(id), 'Social template');
+    const row = templates.update(id, patch);
+    emitCatalogChange('socialGrid', 'template:update', id);
+    return row;
+  });
+  expose('socialGrid:deleteTemplate', ({ id } = {}) => {
+    assertEntityInActiveCompany(templates.get(id), 'Social template');
+    const ok = templates.remove(id);
+    emitCatalogChange('socialGrid', 'template:delete', id);
+    return ok;
+  });
+  expose('socialGrid:duplicateTemplate', ({ id } = {}) => {
+    assertEntityInActiveCompany(templates.get(id), 'Social template');
+    const row = templates.duplicate(id);
+    emitCatalogChange('socialGrid', 'template:create', row.id);
+    return row;
+  });
+
+  /**
+   * Count what a config would produce WITHOUT rendering anything.
+   *
+   * The Product Library's apply modal has to say "9 products → 1 image" before
+   * the user commits, and it must not pay for a real render to do it. Same
+   * selection code as the export, so the number it promises is the number the
+   * export delivers.
+   */
+  expose('socialGrid:plan', ({ config } = {}) => {
+    const ctx = contextFor(config);
+    const pages = paginate(ctx.selected, ctx.config);
+    const summary = summarize(ctx.products, ctx.config, ctx.brandNames);
+    return {
+      productCount: ctx.selected.length,
+      pageCount: ctx.selected.length ? pages.length : 0,
+      perPage: summary.perPage,
+      columns: ctx.config.columns,
+      rows: ctx.config.rows,
+      width: ctx.config.width,
+      height: ctx.config.height,
+      format: ctx.config.format,
+      sample: ctx.selected.slice(0, 5).map((p) => p.name || p.sku),
+    };
   });
 
   /** A real, scaled-down render of page 1 as a data URL — what the user

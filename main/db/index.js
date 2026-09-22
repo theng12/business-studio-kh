@@ -940,6 +940,29 @@ function runMigrations(database) {
     );
     CREATE INDEX IF NOT EXISTS idx_social_grid_presets_company_updated
       ON social_grid_presets(company_id, updated_at DESC);
+
+    /* v0.1.62: Social Grid TEMPLATES — the reusable half of a post.
+     *
+     * A saved post (social_grid_presets) is a recipe for products PLUS a look.
+     * A template stores only the look, so the same design can be applied to
+     * whatever the user has selected in the Product Library. Written by
+     * main/db/socialGridTemplates.js, which strips the selection keys through
+     * designOnly() before storing — a template that quietly carried "all
+     * products of brand X" would be the bug this table exists to prevent.
+     *
+     * Additive on purpose: CREATE TABLE IF NOT EXISTS on the normal boot path,
+     * no SCHEMA_VERSION bump, so an existing install picks it up without
+     * wiping anything (see the migration note in AGENTS.md section 14). */
+    CREATE TABLE IF NOT EXISTS social_grid_templates (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      config TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_social_grid_templates_company_updated
+      ON social_grid_templates(company_id, updated_at DESC);
   `);
 
   database
