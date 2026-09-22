@@ -100,9 +100,16 @@ function resolveBox(el, imgW, imgH) {
     case 'tl':
     default:   left = ax;           top = ay;            break;
   }
+  // v0.1.54: clamp the BOX to the canvas on BOTH ends. This used to clamp only
+  // the minimum, so an element could hang off the right/bottom edge in the
+  // export while the editor still drew it off the left/top — the preview and
+  // the rendered file disagreed near the edges, asymmetrically. The editor's
+  // drag already keeps the box on-canvas; this makes the renderer agree.
+  const maxLeft = Math.max(0, imgW - w);
+  const maxTop  = Math.max(0, imgH - h);
   return {
-    left: Math.max(0, Math.round(left)),
-    top:  Math.max(0, Math.round(top)),
+    left: Math.min(Math.max(0, Math.round(left)), maxLeft),
+    top:  Math.min(Math.max(0, Math.round(top)),  maxTop),
     width:  w,
     height: h,
   };
@@ -549,4 +556,7 @@ function outputPathFor(template, productSku, originalFilename) {
 }
 
 module.exports = {
-  defaultResolveAsset, compose, fillTokens, outputPathFor };
+  defaultResolveAsset, compose, fillTokens, outputPathFor,
+  // Exported for tests: the editor's elementBox mirrors this, and a parity
+  // test is the only thing that keeps the two from drifting apart.
+  resolveBox };
