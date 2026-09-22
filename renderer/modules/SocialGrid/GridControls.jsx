@@ -108,7 +108,7 @@ function ProductPicker({ products, selectedIds, onChange }) {
   );
 }
 
-export function GridControls({ config, onChange, brands, categories, products }) {
+export function GridControls({ config, onChange, brands, categories, products, priceGroups = [] }) {
   const c = config;
   const set = (patch) => onChange(patch);
   const canvasId = CANVAS_PRESETS.find((p) => p.width === c.width && p.height === c.height)?.id
@@ -283,12 +283,14 @@ export function GridControls({ config, onChange, brands, categories, products })
               <Select value={c.priceSource} onChange={(e) => set({ priceSource: e.target.value })}>
                 <option value="retail">Retail</option>
                 <option value="wholesale">Wholesale</option>
+                {priceGroups.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}
               </Select>
-              <span className="field__hint">Make one post with retail prices and another with wholesale from the same products — nothing is overwritten.</span>
+              <span className="field__hint">Make one post with retail prices and another with wholesale from the same products — nothing is overwritten. Custom groups come from Settings → General → Price groups.</span>
             </label>
             <label className="field">
-              <span className="field__label">Currency symbol</span>
+              <span className="field__label">Currency fallback</span>
               <Input value={c.currencySymbol} onChange={(e) => set({ currencySymbol: e.target.value })} placeholder="$" />
+              <span className="field__hint">Used only when a product has no currency of its own.</span>
             </label>
           </>
         ) : null}

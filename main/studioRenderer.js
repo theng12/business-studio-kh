@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const bwipjs = require('bwip-js');
+const { priceEntry, formatPriceEntry } = require('./util/prices');
 
 /* v0.1.25: resolved lazily rather than at module load.
  *
@@ -68,7 +69,11 @@ function assetDataUri(rel) {
 function productValue(product, field) {
   if (!field) return '';
   if (field.startsWith('custom.')) return product.customFields?.[field.slice(7)] ?? '';
-  if (field.startsWith('price.')) return product.prices?.[field.slice(6)] ?? '';
+  // v0.1.55: a group value is { amount, currency } (or a legacy bare number);
+  // format it with its own symbol rather than stringifying the object.
+  if (field.startsWith('price.')) {
+    return formatPriceEntry(priceEntry(product, field.slice(6)), '$');
+  }
   return product[field] ?? '';
 }
 
@@ -153,8 +158,18 @@ async function labelsDocument({ template, products, brands = [], layout = {} }) 
 
 function catalogValue(product, key, config) {
   if (key === 'price') {
-    const value = product.prices?.[config.priceGroup] ?? product.priceRetail ?? '';
-    return value === '' ? '' : `${config.currencySymbol || '$'}${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+    // `config.priceGroup` selects the source: retail / wholesale / a named
+    // group. Each product's own currency wins; `config.currencySymbol` is only
+    // the fallback for rows written before per-field currencies existed.
+    const source = config.priceGroup || 'retail';
+    const entry = priceEntry(product, source);
+    // Match the old behaviour for the real columns: group/wholesale fall back
+    // to retail when empty (a blank cell used to print an empty string, and
+    // retail was the documented fallback for the wholesale template).
+    if (entry.amount == null && source !== 'retail') {
+      return formatPriceEntry(priceEntry(product, 'retail'), config.currencySymbol || '$');
+    }
+    return formatPriceEntry(entry, config.currencySymbol || '$');
   }
   return productValue(product, key);
 }

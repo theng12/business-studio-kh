@@ -14,6 +14,8 @@
 
 /** What a fresh grid starts as. 1080x1080 is the square Instagram/Facebook
  *  post size, which is what the feature exists to produce. */
+const { priceEntry, formatPriceEntry } = require('./prices');
+
 const DEFAULTS = {
   // ── which products ──────────────────────────────────────────────
   source: 'all',          // all | brand | category | subcategory | picked
@@ -178,11 +180,12 @@ function normalizeConfig(raw) {
  * sees it before posting rather than after.
  */
 function resolvePrice(product, config) {
-  const source = config?.priceSource || 'retail';
-  if (source === 'retail') return num(product?.priceRetail);
-  if (source === 'wholesale') return num(product?.priceWholesale);
-  const groups = product?.prices;
-  return groups && typeof groups === 'object' ? num(groups[source]) : null;
+  return priceEntry(product, config?.priceSource || 'retail').amount;
+}
+
+/** The full entry (amount + the product's own currency) for formatting. */
+function resolvePriceEntry(product, config) {
+  return priceEntry(product, config?.priceSource || 'retail');
 }
 
 function formatPrice(value, config) {
@@ -190,6 +193,12 @@ function formatPrice(value, config) {
   if (n == null) return '';
   const symbol = config?.currencySymbol ?? DEFAULTS.currencySymbol;
   return `${symbol}${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+/** v0.1.55: format using the product's own currency, falling back to the
+ *  catalog's `currencySymbol` setting for rows that predate currencies. */
+function formatPriceWithEntry(entry, config) {
+  return formatPriceEntry(entry, config?.currencySymbol ?? DEFAULTS.currencySymbol);
 }
 
 /** The small line under a product name, e.g. "3 left" / "Sold out".
@@ -352,7 +361,7 @@ function summarize(products, rawConfig, brandNames) {
 
 module.exports = {
   DEFAULTS, SORT_KEYS, STOCK_SCOPES, SOURCES,
-  normalizeConfig, resolvePrice, formatPrice, describeStock,
-  matchesStock, matchesSource, selectProducts, paginate, itemsPerPage, summarize,
+  normalizeConfig, resolvePrice, resolvePriceEntry, formatPrice, formatPriceWithEntry,
+  describeStock, matchesStock, matchesSource, selectProducts, paginate, itemsPerPage, summarize,
   num,
 };

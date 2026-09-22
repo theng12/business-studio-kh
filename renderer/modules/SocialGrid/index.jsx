@@ -131,6 +131,11 @@ export function PresetEditor({ presetId, onBack }) {
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
   const products = useAppStore((s) => s.products);
+  // v0.1.55: this company's named price groups — "which price" can pick one.
+  // `?? []` because the component tests stub the store with only what a case
+  // needs; a missing list must read as "no groups", not crash.
+  const companies = useAppStore((s) => s.companies) ?? [];
+  const priceGroups = (companies.find((c) => c.id === companyId)?.priceGroups) ?? [];
   const refreshBrands = useAppStore((s) => s.refreshBrands);
   const refreshCategories = useAppStore((s) => s.refreshCategories);
 
@@ -410,6 +415,7 @@ export function PresetEditor({ presetId, onBack }) {
             brands={brands}
             categories={categories}
             products={products}
+            priceGroups={priceGroups}
           />
         </div>
         <PreviewPane
