@@ -2,6 +2,27 @@ const crypto = require('node:crypto');
 const { getDb, getAppState, setAppState } = require('./index');
 const { parseJson, getCallerUserId } = require('./_util');
 
+/**
+ * v0.1.55: named price groups, e.g. `[{ key: 'retail', label: 'Retail' }]`.
+ * `key` is the stable id used as the product `prices` map key and as
+ * `config.priceGroup` when a catalog/social preset renders a currency.
+ * Blank rows and duplicate keys are dropped rather than rejected so a
+ * half-typed editor row can never corrupt the company row.
+ */
+function normalizePriceGroups(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const g of value) {
+    const key = String(g?.key ?? '').trim();
+    const label = String(g?.label ?? '').trim();
+    if (!key || !label || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, label });
+  }
+  return out;
+}
+
 function rowToCompany(row) {
   if (!row) return null;
   return {
@@ -9,6 +30,7 @@ function rowToCompany(row) {
     name: row.name,
     color: row.color,
     sectors: parseJson(row.sectors, []),
+    priceGroups: normalizePriceGroups(parseJson(row.price_groups, [])),
     isActive: !!row.is_active,
     productCount: row.product_count ?? 0,
     brandCount: row.brand_count ?? 0,
@@ -111,6 +133,10 @@ function update(id, patch) {
   }
   if ('color' in patch)   { sets.push('color = @color');   params.color = patch.color ?? null; }
   if ('sectors' in patch) { sets.push('sectors = @sectors'); params.sectors = JSON.stringify(patch.sectors ?? []); }
+  if ('priceGroups' in patch) {
+    sets.push('price_groups = @priceGroups');
+    params.priceGroups = JSON.stringify(normalizePriceGroups(patch.priceGroups));
+  }
   if ('isActive' in patch) { sets.push('is_active = @isActive'); params.isActive = patch.isActive ? 1 : 0; }
   sets.push('updated_at = @updatedAt');
   sets.push('updated_by_user_id = @updatedByUserId');
