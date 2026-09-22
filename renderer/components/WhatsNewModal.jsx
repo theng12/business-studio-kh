@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.56',
+    date: '2026-09-22',
+    items: [
+      'NEW — Catalog Studio and Social Grid can now print a custom price group: pick it under “Price group” (catalog) or “Which price” (social). The group list comes from Settings → General → Price groups.',
+      'NEW — prices render with the product’s own currency symbol ($ ¥ ៛ …). The old free-text “Currency symbol” is now a fallback used only for products that have no currency of their own.',
+      'FIX — a custom price group stored by 0.1.55 would have printed as “$NaN” in a catalog or social post; the renderers now read the amount + currency correctly (and still read older bare-number groups).',
+      'Internal — shared main/util/prices.js (priceEntry / formatPriceEntry) so the catalog and social renderers cannot disagree about the stored shape again.',
+    ],
+  },
+  {
     version: '0.1.55',
     date: '2026-09-22',
     items: [

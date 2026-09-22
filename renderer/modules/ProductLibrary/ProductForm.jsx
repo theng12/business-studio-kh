@@ -167,7 +167,7 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
   // v0.49.48: active company drives the supplier dropdown in the
   // Logistics & sourcing section.
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
-  const companies = useAppStore((s) => s.companies);
+  const companies = useAppStore((s) => s.companies) ?? [];
   // v0.1.55: this company's named price groups (Settings → General → Price
   // groups). Each becomes an extra amount + currency row below.
   const priceGroups = (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [];
