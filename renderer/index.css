@@ -10389,6 +10389,10 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 }
 .price-groups__add { display: flex; align-items: center; gap: 6px; }
 .price-groups__add > .input:first-child { flex: 1 1 auto; min-width: 0; }
+/* v0.1.60: the Add group button was shrinking and wrapping its label onto two
+ * lines ("Add" / "group") because the flexible input next to it ate the row.
+ * Same fix the font-family field already had. */
+.price-groups__add > .btn { flex: 0 0 auto; white-space: nowrap; }
 
 /* ─── v0.1.57: system font family picker ─────────────────────── */
 .font-family-field { display: flex; align-items: center; gap: 6px; }
