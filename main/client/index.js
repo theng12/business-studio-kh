@@ -797,6 +797,11 @@ const PROXIED_CHANNELS = [
   'socialGrid:list','socialGrid:get','socialGrid:create','socialGrid:update',
   'socialGrid:delete','socialGrid:duplicate','socialGrid:preview',
   'socialGrid:markExported',
+  // v0.1.62: the templates and the pre-flight count live with the data, so a
+  // client Mac asks the server for them like any other social-grid call.
+  'socialGrid:listTemplates','socialGrid:getTemplate','socialGrid:saveTemplate',
+  'socialGrid:updateTemplate','socialGrid:deleteTemplate','socialGrid:duplicateTemplate',
+  'socialGrid:plan',
   // v0.26.15: apply-template handlers (single + bulk + by-filter).
   'images:setMainImage','images:reorderImages','images:removeFromProduct','images:flipSource',
   'images:importFromBytes','watermarks:uploadFromBytes',

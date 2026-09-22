@@ -8,9 +8,9 @@ import { Modal } from './ui.jsx';
  * AI Studio (image-to-image), Overlay Studio (template-based composite).
  *
  * Keyboard shortcuts: `W` → Workspace, `A` → AI Studio, `O` → Overlay
- * Studio, Esc cancels (via the shared Modal).
+ * Studio, `S` → Social Grid, Esc cancels (via the shared Modal).
  */
-export function ProcessDestinationModal({ open, product, onClose, onPickWorkspace, onPickAiStudio, onPickOverlay }) {
+export function ProcessDestinationModal({ open, product, onClose, onPickWorkspace, onPickAiStudio, onPickOverlay, onPickSocial }) {
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
@@ -26,11 +26,14 @@ export function ProcessDestinationModal({ open, product, onClose, onPickWorkspac
       } else if (e.key === 'o' || e.key === 'O') {
         e.preventDefault();
         onPickOverlay?.();
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault();
+        onPickSocial?.();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onPickWorkspace, onPickAiStudio, onPickOverlay]);
+  }, [open, onPickWorkspace, onPickAiStudio, onPickOverlay, onPickSocial]);
 
   if (!open) return null;
 
@@ -99,6 +102,31 @@ export function ProcessDestinationModal({ open, product, onClose, onPickWorkspac
               Composite a template (text, barcode, frame) onto this product&apos;s main image.
             </div>
             <kbd className="process-dest__kbd">O</kbd>
+          </button>
+        ) : null}
+
+        {/* v0.1.62: fourth destination — Social Grid. Only wired by the
+            Library. A grid holds several products, so this is the entry point
+            for "make a post from this product" (and the user can widen it to
+            the current filter inside). */}
+        {onPickSocial ? (
+          <button
+            type="button"
+            className="process-dest__card"
+            onClick={onPickSocial}
+          >
+            <svg className="process-dest__icon" width="32" height="32" viewBox="0 0 24 24" fill="none" aria-hidden>
+              {/* 2x2 grid icon */}
+              <rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+              <rect x="13" y="3.5" width="7.5" height="7.5" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+              <rect x="3.5" y="13" width="7.5" height="7.5" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+              <rect x="13" y="13" width="7.5" height="7.5" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+            </svg>
+            <div className="process-dest__label">Social Grid</div>
+            <div className="process-dest__sub">
+              Make a ready-to-post grid image from this product (or the whole filter) with a saved template.
+            </div>
+            <kbd className="process-dest__kbd">S</kbd>
           </button>
         ) : null}
       </div>

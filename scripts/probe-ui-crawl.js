@@ -615,6 +615,163 @@ async function deepOverlayFlow(crawl) {
   else crawl.step('deep: overlay editor survives the flow', true, '');
 }
 
+/**
+ * Social Grid templates — the whole point of the v0.1.62 change, exercised the
+ * way the customer described it: design a look, save it as a template, then
+ * pick it in the Product Library and render it from a hand-picked selection.
+ *
+ * The one thing this cannot click is the native folder picker, so it drives the
+ * modal up to that point and then calls the SAME export IPC the modal calls,
+ * writing into a scratch folder. Everything either side of the folder dialog is
+ * covered, including the pre-flight count the modal shows before you commit.
+ */
+async function deepSocialTemplateFlow(crawl, outDir) {
+  crawl.phase = 'deep: social template';
+  await crawl.goto('Social Grid');
+
+  /* A post to save the look from. The price-group leg already made one, but do
+   * not depend on that: create one if the list is empty. */
+  const hasPost = await crawl.eval(`window.__ui.all('button').some((b) => b.outerHTML.includes('social-card') || b.closest('.social-card'))`);
+  if (!hasPost) {
+    await crawl.eval(`window.__ui.clickExact('+ New post')`);
+    await crawl.waitFor(`window.__ui.fieldInput('Post name') !== null`, 6000, 'the new-post modal');
+    await crawl.eval(`window.__ui.fieldSet('Post name', 'UI Crawl post')`);
+    await crawl.eval(`window.__ui.clickExact('Create post')`);
+    await crawl.waitFor(`!!document.querySelector('.social-editor')`, 12_000, 'the Social Grid editor');
+    await crawl.settle(700);
+  } else {
+    await crawl.eval(`window.__ui.click('.social-card__actions button', 'Open')`);
+    await crawl.waitFor(`!!document.querySelector('.social-editor')`, 12_000, 'the Social Grid editor');
+    await crawl.settle(700);
+  }
+
+  /* 1 ── save the look as a template */
+  const tplName = `UI Crawl Look ${String(Date.now()).slice(-5)}`;
+  const opened = await crawl.eval(`window.__ui.clickExact('Save as template')`);
+  if (opened !== 'ok') { crawl.step('deep: save a Social Grid template', false, opened); return; }
+  await crawl.waitFor(`window.__ui.fieldInput('Template name') !== null`, 6000, 'the save-as-template modal');
+  await crawl.eval(`window.__ui.fieldSet('Template name', ${JSON.stringify(tplName)})`);
+  await crawl.eval(`window.__ui.clickExact('Save template')`);
+  await crawl.settle(1200);
+  const savedToast = await crawl.eval('window.__ui.toastText()');
+  const modalGone = await crawl.eval(`window.__ui.fieldInput('Template name') === null`);
+  await crawl.shot('social-save-template');
+  crawl.step('deep: save a Social Grid template', modalGone && /saved/i.test(savedToast || ''),
+    modalGone ? `toast: ${savedToast || '(none)'}` : 'the modal stayed open');
+
+  /* 2 ── it is listed on the Social Grid page, with no products attached */
+  await crawl.eval(`window.__ui.click('.social-editor-back button', 'Social Grid')`);
+  await crawl.settle(1200);
+  const listed = await crawl.eval(`(() => {
+    const card = Array.from(document.querySelectorAll('.social-card--template')).find((c) => c.innerText.includes(${JSON.stringify(tplName)}));
+    return card ? card.innerText.replace(/\\n+/g, ' | ') : null;
+  })()`);
+  await crawl.shot('social-templates-list');
+  crawl.step('deep: the template is listed on Social Grid', !!listed, listed || 'not found in the templates section');
+
+  /* 3 ── pick products in the Library and apply it */
+  crawl.phase = 'deep: library apply';
+  await crawl.goto('Product Library');
+  const picked = await crawl.eval(`(() => {
+    const boxes = Array.from(document.querySelectorAll('tbody input[type="checkbox"], .lib-grid input[type="checkbox"], .product-tile input[type="checkbox"]'));
+    const rows = boxes.filter((b) => !b.closest('thead'));
+    rows.slice(0, 2).forEach((b) => { if (!b.checked) b.click(); });
+    return rows.length;
+  })()`);
+  await crawl.settle(600);
+  const selectedCount = await crawl.eval(`(() => {
+    const btn = Array.from(document.querySelectorAll('button')).find((b) => String(b.innerText).startsWith('Image operations ('));
+    return btn ? btn.innerText : null;
+  })()`);
+  if (!selectedCount) {
+    crawl.step('deep: select products + open the bulk menu', false, `found ${picked} row checkbox(es), no toolbar`);
+    return;
+  }
+  await crawl.eval(`window.__ui.click('button', 'Image operations')`);
+  await crawl.settle(400);
+  const menuItem = await crawl.eval(`window.__ui.click('.lib-bulk-menu__item', 'Social post')`);
+  if (menuItem !== 'ok') {
+    crawl.step('deep: select products + open the bulk menu', false, `no "Social post" item (${menuItem})`);
+    return;
+  }
+  await crawl.waitFor(`window.__ui.fieldInput('Template') !== null`, 8000, 'the apply-social-template modal');
+  await crawl.settle(1200);
+  await crawl.shot('library-social-modal');
+
+  const modalState = await crawl.eval(`(() => {
+    const field = window.__ui.field('Template');
+    const sel = field ? field.querySelector('select') : null;
+    const plan = document.querySelector('.bulk-overlay-run__plan');
+    const radios = Array.from(document.querySelectorAll('input[name="social-scope"]')).map((r) => ({ checked: r.checked, label: r.closest('label').innerText.replace(/\\n+/g, ' ').slice(0, 40) }));
+    const button = Array.from(document.querySelectorAll('.modal button')).find((b) => /Render .* image/.test(b.innerText));
+    return {
+      templates: sel ? Array.from(sel.options).map((o) => o.textContent) : null,
+      chosen: sel ? sel.value : null,
+      plan: plan ? plan.innerText.replace(/\\n+/g, ' ') : null,
+      radios,
+      submit: button ? button.innerText : null,
+      submitDisabled: button ? button.disabled : null,
+    };
+  })()`);
+  const hasTemplate = (modalState.templates || []).some((t) => t.includes(tplName));
+  const planMentionsImages = /→\s*\d+\s*image/.test(modalState.plan || '');
+  crawl.step('deep: the Library apply modal offers the template', hasTemplate, JSON.stringify(modalState.templates || []).slice(0, 180));
+  crawl.step('deep: it pre-counts products and images', planMentionsImages, `plan: ${modalState.plan || '(none)'} · button: ${modalState.submit}`);
+  crawl.step('deep: it targets the selection by default', modalState.radios?.[0]?.checked === true && /Selected \(\d+\)/.test(modalState.radios?.[0]?.label || ''),
+    JSON.stringify(modalState.radios));
+
+  /* 4 ── the export the modal runs, minus the native folder dialog */
+  crawl.phase = 'deep: library render';
+  const rendered = await crawl.eval(`(async () => {
+    const sel = window.__ui.field('Template').querySelector('select');
+    const tplId = sel.value;
+    const tpl = (await window.api.socialGrid.listTemplates(await window.api.companies.getActiveId())).find((t) => t.id === tplId);
+    const boxes = Array.from(document.querySelectorAll('tbody input[type="checkbox"], .lib-grid input[type="checkbox"], .product-tile input[type="checkbox"]')).filter((b) => !b.closest('thead') && b.checked);
+    const ids = boxes.map((b) => b.dataset ? null : null);
+    // Read the ids from the store's product list instead of the DOM: the
+    // checkboxes carry no id attribute.
+    const products = await window.api.products.list(await window.api.companies.getActiveId(), {});
+    const productIds = products.slice(0, 2).map((p) => p.id);
+    const config = { ...tpl.config, source: 'picked', productIds, sortBy: 'asSelected' };
+    const plan = await window.api.socialGrid.plan(config);
+    const res = await window.api.socialGrid.exportImages(config, ${JSON.stringify(outDir)}, null);
+    return { planned: plan.pageCount, plannedProducts: plan.productCount, pageCount: res.pageCount, productCount: res.productCount, paths: res.outputPaths };
+  })()`, true).catch((err) => ({ error: err.message }));
+  await crawl.eval(`window.__ui.pressEscape()`);
+  await crawl.settle(200);
+  const renderedOk = rendered && !rendered.error && rendered.pageCount >= 1 && (rendered.paths || []).length === rendered.pageCount;
+  crawl.step('deep: rendering from a Library selection works', renderedOk,
+    JSON.stringify(rendered).slice(0, 260));
+  if (renderedOk) {
+    crawl.step('deep: the plan matched the render', rendered.planned === rendered.pageCount && rendered.plannedProducts === rendered.productCount,
+      `plan ${rendered.planned}/${rendered.plannedProducts} · render ${rendered.pageCount}/${rendered.productCount}`);
+  }
+
+  /* 5 ── a single product can be routed to Social Grid from its Process menu */
+  crawl.phase = 'deep: process router';
+  await crawl.goto('Product Library');
+  await crawl.eval(`window.__ui.clickExact('Clear')`);
+  await crawl.settle(300);
+  const sku = await crawl.eval(`(async () => {
+    const ps = await window.api.products.list(await window.api.companies.getActiveId(), {});
+    return ps.length ? ps[0].sku : null;
+  })()`, true);
+  const routed = sku ? await crawl.eval(`window.__ui.clickProcessFor(${JSON.stringify(sku)})`) : 'no products';
+  if (routed !== 'ok') {
+    crawl.step('deep: Process → Social Grid', false, routed);
+  } else {
+    await crawl.waitFor(`!!document.querySelector('.process-dest__grid')`, 6000, 'the Process destination modal');
+    const cards = await crawl.eval(`window.__ui.all('.process-dest__label').map((e) => e.innerText)`);
+    const openedSocial = await crawl.eval(`window.__ui.click('.process-dest__label', 'Social Grid')`);
+    await crawl.settle(1000);
+    const socialModal = await crawl.eval(`window.__ui.fieldInput('Template') !== null`);
+    const scope = await crawl.eval(`(() => { const r = document.querySelector('input[name="social-scope"]'); return r ? r.closest('label').innerText.replace(/\\n+/g, ' ') : null; })()`);
+    await crawl.shot('library-process-social');
+    await crawl.eval(`window.__ui.pressEscape()`);
+    crawl.step('deep: Process → Social Grid', openedSocial === 'ok' && socialModal, `destinations: ${JSON.stringify(cards)} · opened: ${socialModal} · scope: ${scope}`);
+  }
+}
+
 const PAGE_LABELS = [
   ['company', 'Company'],
   ['dashboard', 'Dashboard'],
@@ -838,6 +995,13 @@ async function main() {
     await deepOverlayFlow(crawl);
   } catch (err) {
     crawl.step('deep overlay flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 10 ── social templates: save one, then apply it from the Library */
+  try {
+    await deepSocialTemplateFlow(crawl, path.join(args.out, 'social-out'));
+  } catch (err) {
+    crawl.step('deep social template flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */
