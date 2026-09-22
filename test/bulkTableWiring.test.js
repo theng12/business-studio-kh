@@ -73,6 +73,18 @@ test('both image modes are non-destructive — importFromBytes, then setMainImag
     'a destructive replace-image mode crept back in — the owner ruled it out');
 });
 
+test('brand and category cells offer an explicit Unassigned that clears the field', () => {
+  // Both selects need it: "fix the unassigned ones in bulk" is a reason the
+  // owner asked for this table, and an unassigned product is a real state.
+  const unassigned = MODAL.match(/label: '— Unassigned —'/g) || [];
+  assert.ok(unassigned.length >= 2,
+    `both the Brand and Category selects need the clearing option (found ${unassigned.length})`);
+  // An emptied select must send null, not '', or overwrite would store a blank
+  // string instead of clearing the column.
+  assert.match(MODAL, /case 'brandId':\s*\n\s*case 'categoryId':\s*\n\s*out\[key\] = value \|\| null;/,
+    'an emptied brand/category cell must send null so overwrite clears the field');
+});
+
 test('Save all dry-runs through bulkUpsert before the live write', () => {
   const dry = MODAL.indexOf('dryRun: true');
   const live = MODAL.indexOf('dryRun: false');
@@ -85,6 +97,11 @@ test('Save all dry-runs through bulkUpsert before the live write', () => {
   assert.equal(overwrite.length, 2, 'both the dry run and the commit must use conflictPolicy overwrite');
   assert.match(MODAL, /Save all/, 'there is no explicit Save all button');
   assert.match(MODAL, /Confirm save/, 'the dry-run summary has no confirmation step');
+  // A changed SKU is a rename, and bulkUpsert is SKU-keyed (match or insert
+  // only), so the rename must go through products:update — with the preload
+  // shape products.update(id, patch), not a single object.
+  assert.match(MODAL, /products\.update\(m\.id, \{ sku: m\.sku \}\)/,
+    'SKU renames must call window.api.products.update(id, patch)');
 });
 
 test('a duplicate SKU refuses the whole save and names the row', () => {
