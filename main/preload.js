@@ -459,6 +459,15 @@ contextBridge.exposeInMainWorld('api', {
     update: (id, patch) => invoke('socialGrid:update', { id, patch }),
     remove: (id) => invoke('socialGrid:delete', { id }),
     duplicate: (id) => invoke('socialGrid:duplicate', { id }),
+    // v0.1.62: design-only templates — reusable across posts, and applicable
+    // to a hand-picked selection from the Product Library.
+    listTemplates: (companyId) => invoke('socialGrid:listTemplates', { companyId }),
+    getTemplate: (id) => invoke('socialGrid:getTemplate', { id }),
+    saveTemplate: (input) => invoke('socialGrid:saveTemplate', input),
+    updateTemplate: (id, patch) => invoke('socialGrid:updateTemplate', { id, patch }),
+    removeTemplate: (id) => invoke('socialGrid:deleteTemplate', { id }),
+    duplicateTemplate: (id) => invoke('socialGrid:duplicateTemplate', { id }),
+    plan: (config) => invoke('socialGrid:plan', { config }),
     preview: (config, pageIndex) => invoke('socialGrid:preview', { config, pageIndex }),
     exportImages: (config, outputFolder, presetId) => invoke('socialGrid:export', { config, outputFolder, presetId }),
   },

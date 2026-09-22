@@ -534,6 +534,25 @@ const VALIDATORS = {
   'socialGrid:delete':       requireNonEmptyStringFields('id'),
   'socialGrid:duplicate':    requireNonEmptyStringFields('id'),
   'socialGrid:markExported': requireNonEmptyStringFields('id'),
+  // v0.1.62 templates + pre-flight count. Same shape rule as above: the config
+  // blob is normalized server-side, so only its TYPE is checked here.
+  'socialGrid:listTemplates': (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
+  'socialGrid:getTemplate':   requireNonEmptyStringFields('id'),
+  'socialGrid:saveTemplate':  (a) => {
+    if (!isObject(a)) return 'create payload must be an object';
+    if (!isString(a.companyId) || !a.companyId.trim()) return 'companyId is required';
+    if (!isString(a.name) || !a.name.trim()) return 'name is required';
+    if (a.config != null && !isObject(a.config)) return 'config must be an object';
+    return true;
+  },
+  'socialGrid:updateTemplate': requireVersionedPatch,
+  'socialGrid:deleteTemplate': requireNonEmptyStringFields('id'),
+  'socialGrid:duplicateTemplate': requireNonEmptyStringFields('id'),
+  'socialGrid:plan':          (a) => {
+    if (!isObject(a)) return 'expected an object with config';
+    if (a.config != null && !isObject(a.config)) return 'config must be an object';
+    return true;
+  },
   'socialGrid:preview':      (a) => {
     if (!isObject(a)) return 'expected an object with config';
     if (a.config != null && !isObject(a.config)) return 'config must be an object';

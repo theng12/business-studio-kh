@@ -81,9 +81,39 @@ const DEFAULTS = {
   quality: 92,
 };
 
-const SORT_KEYS = ['name', 'sku', 'brand', 'stockHigh', 'stockLow', 'priceHigh', 'priceLow', 'newest'];
+/* 'asSelected' keeps the order the products arrived in. In the editor that is
+ * the catalogue order; when a template is applied to a hand-picked selection in
+ * the Product Library it is the order the user ticked them, which is the whole
+ * point of picking by hand. */
+const SORT_KEYS = ['name', 'sku', 'brand', 'stockHigh', 'stockLow', 'priceHigh', 'priceLow', 'newest', 'asSelected'];
 const STOCK_SCOPES = ['any', 'counted', 'uncounted', 'in', 'low', 'out', 'range'];
 const SOURCES = ['all', 'brand', 'category', 'subcategory', 'picked'];
+
+/**
+ * v0.1.62: every config key is either part of the LOOK or part of WHICH
+ * PRODUCTS. The two lists below are the definition, and main/db/socialGridTemplates.js
+ * stores only the look — that is what lets a template be applied to whatever
+ * the user has selected in the Product Library instead of to the products it
+ * happened to be designed on.
+ *
+ * `sortBy` is deliberately a DESIGN key: "newest first" or "cheapest first" is
+ * part of how a post reads, not of which products qualify. `excludeInactive`
+ * and the stock filters are selection keys, because they decide membership.
+ */
+const UI_DESIGN_KEYS = [
+  'width', 'height', 'background', 'padding', 'gap', 'radius', 'tileBackground', 'photoFit',
+  'columns', 'rows',
+  'showPhoto', 'showName', 'showPrice', 'showBrand', 'showStock', 'showSku',
+  'priceSource', 'currencySymbol',
+  'nameSize', 'priceSize', 'metaSize',
+  'title', 'subtitle', 'footer', 'titleSize', 'subtitleSize', 'footerSize',
+  'format', 'quality',
+  'sortBy',
+];
+const SELECTION_KEYS = [
+  'source', 'brandId', 'categoryId', 'subcategory', 'productIds',
+  'excludeInactive', 'stockScope', 'lowStockAt', 'stockMin', 'stockMax', 'limit',
+];
 
 /** Numbers arrive from HTML inputs as strings, and NULL means "not counted"
  *  which must stay distinct from 0 ("counted, none left"). */
@@ -179,6 +209,26 @@ function normalizeConfig(raw) {
  * nothing, and `summarize()` counts how many tiles that affects so the user
  * sees it before posting rather than after.
  */
+/**
+ * The look, without the product recipe — what a template stores.
+ *
+ * Returns a FULL normalized config (selection keys at their defaults) so the
+ * stored JSON is self-describing and can be handed straight back to
+ * `socialGrid:create` / `socialGrid:preview` later.
+ */
+function designOnly(rawConfig) {
+  const normalized = normalizeConfig(rawConfig);
+  const out = { ...normalized };
+  for (const key of SELECTION_KEYS) out[key] = DEFAULTS[key];
+  return out;
+}
+
+/** A template's look over a fresh (or supplied) selection. */
+function applyDesign(design, selection = {}) {
+  const base = normalizeConfig({ ...design, ...selection });
+  return base;
+}
+
 function resolvePrice(product, config) {
   return priceEntry(product, config?.priceSource || 'retail').amount;
 }
@@ -281,6 +331,8 @@ function comparatorFor(sortBy, config, brandNames) {
   const priceOf = (p) => resolvePrice(p, config);
   const stockOf = (p) => num(p.stockQty);
   switch (sortBy) {
+    // Stable sort + "everything is equal" = keep the incoming order.
+    case 'asSelected': return () => 0;
     case 'sku': return (a, b) => byText(a.sku, b.sku);
     case 'brand': return (a, b) => byText(brandNames?.get(a.brandId) || '\uffff', brandNames?.get(b.brandId) || '\uffff') || byText(a.name || a.sku, b.name || b.sku);
     case 'stockHigh': return (a, b) => nullsLast(stockOf(a), stockOf(b), (x, y) => y - x);
@@ -306,7 +358,15 @@ function selectProducts(products, rawConfig, brandNames) {
   if (config.excludeInactive) list = list.filter((p) => p.status !== 'inactive');
   list = list.filter((p) => matchesSource(p, config));
   list = list.filter((p) => matchesStock(p, config));
-  list.sort(comparatorFor(config.sortBy, config, brandNames));
+  if (config.sortBy === 'asSelected' && config.source === 'picked') {
+    /* matchesSource filters the CATALOGUE list, so the hand-picked order is
+     * lost by the time we get here. Restore it from productIds. */
+    const rank = new Map((config.productIds || []).map((id, i) => [String(id), i]));
+    list.sort((a, b) => (rank.get(String(a.id)) ?? Number.MAX_SAFE_INTEGER)
+      - (rank.get(String(b.id)) ?? Number.MAX_SAFE_INTEGER));
+  } else {
+    list.sort(comparatorFor(config.sortBy, config, brandNames));
+  }
   if (config.limit > 0) list = list.slice(0, config.limit);
   return list;
 }
@@ -360,8 +420,8 @@ function summarize(products, rawConfig, brandNames) {
 }
 
 module.exports = {
-  DEFAULTS, SORT_KEYS, STOCK_SCOPES, SOURCES,
-  normalizeConfig, resolvePrice, resolvePriceEntry, formatPrice, formatPriceWithEntry,
+  DEFAULTS, SORT_KEYS, STOCK_SCOPES, SOURCES, UI_DESIGN_KEYS, SELECTION_KEYS,
+  normalizeConfig, designOnly, applyDesign, resolvePrice, resolvePriceEntry, formatPrice, formatPriceWithEntry,
   describeStock, matchesStock, matchesSource, selectProducts, paginate, itemsPerPage, summarize,
   num,
 };

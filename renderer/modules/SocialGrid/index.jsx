@@ -81,6 +81,46 @@ function PresetCard({ preset, brands, categories, onOpen, onDuplicate, onDelete 
   );
 }
 
+/**
+ * v0.1.62: a reusable look. Deliberately NOT a post card — a template has no
+ * products of its own, so the card shows the layout and the text it will draw,
+ * and its main action is "use this in a new post". The other way to use one is
+ * from the Product Library, where it is applied to whatever is selected.
+ */
+function TemplateCard({ template, onUse, onDuplicate, onDelete }) {
+  const c = template.config;
+  return (
+    <article className="social-card social-card--template">
+      <button type="button" className="social-card__visual" onClick={onUse} aria-label={`Start a post from ${template.name}`}>
+        <span className="social-card__badge social-card__badge--template">Template</span>
+        <span className="social-card__frame" data-square={c.width === c.height ? 'yes' : 'no'}>
+          {Array.from({ length: Math.min(c.columns * c.rows, 25) }, (_, i) => <i key={i} />)}
+        </span>
+      </button>
+      <div className="social-card__meta">
+        <div>
+          <strong>{template.name}</strong>
+          <span>{describeSize(c)} · {c.columns} × {c.rows} grid</span>
+          <span className="muted social-card__traits">
+            {[
+              c.showPhoto ? 'photos' : 'no photos',
+              c.showName ? 'names' : null,
+              c.showPrice ? 'prices' : null,
+              c.showBrand ? 'brands' : null,
+              c.title ? `title “${c.title}”` : null,
+            ].filter(Boolean).join(' · ')}
+          </span>
+        </div>
+        <div className="social-card__actions">
+          <Button variant="ghost" onClick={onDuplicate}>Duplicate</Button>
+          <Button variant="ghost" onClick={onDelete}>Delete</Button>
+          <Button onClick={onUse}>Use in a new post</Button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function PreviewPane({ preview, loading, error, config, onPage, onExport, exporting }) {
   const summary = preview?.summary;
   const pageCount = preview?.pageCount ?? 0;
@@ -148,6 +188,10 @@ export function PresetEditor({ presetId, onBack }) {
   const [savedAt, setSavedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
+  // v0.1.62: save the look as a reusable template.
+  const [templating, setTemplating] = useState(false);
+  const [templateName, setTemplateName] = useState('');
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const saveTimer = useRef(null);
   const previewTimer = useRef(null);
   const latest = useRef(null);
@@ -343,6 +387,26 @@ export function PresetEditor({ presetId, onBack }) {
     catch (saveError) { if (parseConflictError(saveError)) addToast('This post changed elsewhere. Use Save to review it before leaving.', 'error'); }
   }
 
+  /* The design comes from what is on screen, not from the last saved row: if
+   * the user has been dragging sliders and immediately saves a template, the
+   * template must capture what they are looking at. The server strips the
+   * product selection either way (see main/db/socialGridTemplates.js). */
+  async function saveAsTemplate() {
+    const name = templateName.trim();
+    if (!name) { addToast('Give the template a name', 'error'); return; }
+    setSavingTemplate(true);
+    try {
+      await window.api.socialGrid.saveTemplate({ companyId, name, config: preset.config });
+      setTemplating(false);
+      setTemplateName('');
+      addToast(`Template “${name}” saved`, 'success');
+    } catch (e) {
+      addToast(e.message, 'error');
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
   async function exportImages() {
     let folder;
     try { folder = await window.api.files.pickFolder(); } catch (e) { addToast(e.message, 'error'); return; }
@@ -398,6 +462,12 @@ export function PresetEditor({ presetId, onBack }) {
         actions={(
           <>
             <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
+            <Button
+              onClick={() => { setTemplateName(`${preset.name} template`); setTemplating(true); }}
+              title="Save this look as a reusable template — the products it happens to be showing are not saved with it."
+            >
+              Save as template
+            </Button>
             <Button onClick={exportImages} disabled={exporting}>{exporting ? 'Exporting…' : 'Export images'}</Button>
           </>
         )}
@@ -435,6 +505,36 @@ export function PresetEditor({ presetId, onBack }) {
         phase={Math.min(3, Math.floor(progress / 28))}
         detail={preset.name}
       />
+
+      <Modal
+        open={templating}
+        onClose={() => setTemplating(false)}
+        title="Save as template"
+        footer={(
+          <>
+            <Button variant="ghost" onClick={() => setTemplating(false)}>Cancel</Button>
+            <Button variant="primary" onClick={saveAsTemplate} disabled={savingTemplate || !templateName.trim()}>
+              {savingTemplate ? 'Saving…' : 'Save template'}
+            </Button>
+          </>
+        )}
+      >
+        <p className="muted" style={{ marginTop: 0 }}>
+          A template keeps the look — size, grid, text, what each tile shows — and
+          nothing about which products are in it. Apply it to any selection from the
+          Product Library, or start a new post from it here.
+        </p>
+        <label className="field">
+          <span className="field__label">Template name</span>
+          <Input
+            autoFocus
+            value={templateName}
+            onChange={(e) => setTemplateName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void saveAsTemplate(); }}
+            placeholder="e.g. Square 3 × 3 with prices"
+          />
+        </label>
+      </Modal>
     </section>
   );
 }
@@ -446,10 +546,14 @@ export function SocialGrid() {
   const categories = useAppStore((s) => s.categories);
 
   const [presets, setPresets] = useState([]);
+  // v0.1.62: reusable looks, listed above the posts.
+  const [templates, setTemplates] = useState([]);
   const [editing, setEditing] = useState(null);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [startSize, setStartSize] = useState('square');
+  // '' = blank post, otherwise the template id to seed it from.
+  const [startFrom, setStartFrom] = useState('');
   const [busy, setBusy] = useState(false);
 
   const requestSeq = useRef(0);
@@ -457,8 +561,11 @@ export function SocialGrid() {
     const seq = ++requestSeq.current;
     if (!companyId) { setPresets([]); setEditing(null); return; }
     try {
-      const rows = await window.api.socialGrid.list(companyId);
-      if (seq === requestSeq.current) setPresets(rows);
+      const [rows, tpls] = await Promise.all([
+        window.api.socialGrid.list(companyId),
+        window.api.socialGrid.listTemplates(companyId),
+      ]);
+      if (seq === requestSeq.current) { setPresets(rows); setTemplates(tpls); }
     } catch (e) { if (seq === requestSeq.current) addToast(e.message, 'error'); }
   }, [companyId, addToast]);
 
@@ -477,16 +584,27 @@ export function SocialGrid() {
     if (!companyId) return;
     setBusy(true);
     try {
+      const template = templates.find((t) => t.id === startFrom) || null;
       const row = await window.api.socialGrid.create({
         companyId,
-        name: name.trim() || 'Untitled post',
+        name: name.trim() || (template ? `${template.name} post` : 'Untitled post'),
         // Square is the default the customer asked for; the size is chosen up
         // front because it changes what fits, same reasoning as the Overlay
         // Studio's canvas-size prompt.
-        config: { width: canvas.width, height: canvas.height },
+        //
+        // v0.1.62: starting from a template takes the template's own size and
+        // every other setting — the size picker is hidden in that case rather
+        // than silently overriding the look the user just chose. The stored
+        // template config already carries the default selection (the server
+        // strips products out of it), so the new post starts on "all products"
+        // and the user narrows it in the editor.
+        config: template
+          ? { ...template.config }
+          : { width: canvas.width, height: canvas.height },
       });
       setCreating(false);
       setName('');
+      setStartFrom('');
       setPresets((list) => [row, ...list]);
       setEditing(row.id);
     } catch (e) {
@@ -494,6 +612,13 @@ export function SocialGrid() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /** "Use in a new post" from a template card: same modal, pre-seeded. */
+  function startPostFromTemplate(template) {
+    setStartFrom(template.id);
+    setName(`${template.name} post`);
+    setCreating(true);
   }
 
   if (editing) {
@@ -518,6 +643,40 @@ export function SocialGrid() {
         </div>
         <span className="studio-intro__badge">{presets.length} saved post{presets.length === 1 ? '' : 's'}</span>
       </div>
+
+      <section className="social-templates">
+        <div className="social-templates__head">
+          <h2 className="social-templates__title">Templates</h2>
+          <span className="muted">
+            A reusable look — size, grid, text, what each tile shows. Nothing about which products.
+            Apply one from the Product Library to whatever you have selected, or start a post from it here.
+          </span>
+        </div>
+        {templates.length ? (
+          <div className="social-card-grid">
+            {templates.map((t) => (
+              <TemplateCard
+                key={t.id}
+                template={t}
+                onUse={() => startPostFromTemplate(t)}
+                onDuplicate={async () => {
+                  try { await window.api.socialGrid.duplicateTemplate(t.id); await load(); }
+                  catch (e) { addToast(e.message, 'error'); }
+                }}
+                onDelete={async () => {
+                  if (!confirm(`Delete the template “${t.name}”? Posts made from it and images you already exported are not affected.`)) return;
+                  try { await window.api.socialGrid.removeTemplate(t.id); await load(); }
+                  catch (e) { addToast(e.message, 'error'); }
+                }}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="social-templates__empty">
+            No templates yet. Open a post and choose <strong>Save as template</strong> to reuse its look.
+          </p>
+        )}
+      </section>
 
       <div className="social-card-grid">
         {presets.length ? presets.map((p) => (
@@ -562,12 +721,28 @@ export function SocialGrid() {
           <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Nike — retail prices" onKeyDown={(e) => { if (e.key === 'Enter') void create(); }} />
         </label>
         <label className="field">
-          <span className="field__label">Image size</span>
-          <Select value={startSize} onChange={(e) => setStartSize(e.target.value)}>
-            {CANVAS_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.width} × {p.height}</option>)}
+          <span className="field__label">Start from</span>
+          <Select value={startFrom} onChange={(e) => setStartFrom(e.target.value)}>
+            <option value="">Blank — the default square grid</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>{t.name} — {describeSize(t.config)}</option>
+            ))}
           </Select>
-          <span className="field__hint">{canvas.hint}. You can change this later.</span>
+          <span className="field__hint">
+            {startFrom
+              ? 'The template supplies the size and every other setting. Change anything in the editor.'
+              : 'A template can be applied later from the Product Library too.'}
+          </span>
         </label>
+        {startFrom ? null : (
+          <label className="field">
+            <span className="field__label">Image size</span>
+            <Select value={startSize} onChange={(e) => setStartSize(e.target.value)}>
+              {CANVAS_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name} — {p.width} × {p.height}</option>)}
+            </Select>
+            <span className="field__hint">{canvas.hint}. You can change this later.</span>
+          </label>
+        )}
       </Modal>
     </section>
   );
