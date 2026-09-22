@@ -293,6 +293,9 @@ test('Multi-Mac — the client connection fields render outside client mode', as
   assert.ok(html.includes('Server address'), 'Server address field is missing');
   assert.ok(html.includes('User token'), 'User token field is missing');
   assert.ok(html.includes('http://100.64.0.5:13180'), 'server address placeholder is missing');
+  // The fields auto-save, but there must also be an explicit Save affordance.
+  assert.ok(html.includes('save-status'), 'Save status / Save button is missing');
+  assert.ok(html.includes('>Save<'), 'explicit Save button is missing');
 });
 
 test('Multi-Mac — Settings offers the client connection in every mode', () => {
