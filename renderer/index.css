@@ -6103,6 +6103,35 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   color: var(--c-text-muted);
 }
 
+/* v0.1.53: the readout became an editable number box so an exact value can be
+   typed instead of dragged. The old static `.slider-field__value` span is kept
+   for any other caller. */
+.slider-field__entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.slider-field__input {
+  width: 58px;
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+  color: var(--c-text);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+}
+.slider-field__input:focus {
+  outline: none;
+  border-color: var(--c-text-muted);
+}
+.slider-field__suffix {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-text-muted);
+}
+
 .slider-field input[type="range"] {
   width: 100%;
   accent-color: var(--c-text);
