@@ -2,6 +2,19 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.63',
+    date: '2026-09-22',
+    items: [
+      'NEW — Catalog Studio has a template builder. Build a layout — page size, columns, margins, grouping, style, colours, cover, and exactly which fields appear on each product card — with a live preview of a real page, then save it and reuse it for any catalog. Before this the five layouts were built into the app and a layout could not be kept at all.',
+      'NEW — “My templates” on the Catalog Templates page: edit, duplicate, delete, or use one in a new catalog. The five original layouts are still there as “Proven layouts”, and each one has “Open in builder” so you can start from it and save your own version.',
+      'NEW — “Save as template” in a catalog’s design tab opens the builder pre-filled with that catalog’s layout, so a design you have already tuned becomes reusable. The products and the cover title stay with the catalog, never with the template.',
+      'POLISH — the card-field list is now the full set the renderer can print (SKU, name, barcode, colour/finish, subcategory, variant, unit, price, description, origin, tags, tax rate, stock, supplier SKU) instead of only the four that were hard-coded, and you can reorder by adding them in the order you want.',
+      'Internal — new catalog_templates table (additive; no schema bump), main/util/catalogModel.js for the design-vs-products split, and catalogStudio:listTemplates / saveTemplate / updateTemplate / deleteTemplate / duplicateTemplate / previewTemplate. A template never stores which products it was designed against, and never the cover title: main/db/catalogTemplates.js strips both through catalogDesignOnly().',
+      'Internal — the layout controls are now ONE shared component (DesignControls.jsx) used by both the catalog editor and the builder, so a builder setting can never drift from what the project editor does. Found by the UI crawl: the first builder opened on a blank draft with no card fields at all, which silently produced catalogs whose cards printed nothing.',
+      'Internal — test/catalogTemplates.test.js (native), test/catalogModel.test.js (split + main/renderer parity) and test/catalogTemplateWiring.test.js (the chain screen → preload → IPC → validator → client proxy) pin it down; the UI crawl now builds a template, saves it, creates a catalog from it, and checks the design arrived.',
+    ],
+  },
+  {
     version: '0.1.62',
     date: '2026-09-22',
     items: [

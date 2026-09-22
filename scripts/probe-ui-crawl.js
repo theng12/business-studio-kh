@@ -175,12 +175,29 @@ window.__ui = (() => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       return 'ok';
     },
-    /* Field-based lookups: Field renders .field > .field__label + control.
-     * The label text may carry a trailing " *" for required fields. */
+    /* Field-based lookups, covering BOTH form styles in this app:
+     *   - the shared <Field> component: .field > .field__label + control
+     *   - a plain <label>Text<input/></label> wrapper (the catalog controls)
+     * The visible text of a bare label includes its options' text, so only the
+     * label's OWN text nodes are compared — otherwise "Page" would match
+     * "Page margin (mm)" and every <option> underneath it. */
+    ownText: (el) => Array.from(el.childNodes)
+      .filter((n) => n.nodeType === 3)
+      .map((n) => n.textContent)
+      .join(' ')
+      .trim(),
     field: (label) => all('.field').find((f) => textOf(f.querySelector('.field__label')).replace(/\\s*\\*$/, '') === label) || null,
+    labelFor: (label) => all('label').find((l) => {
+      if (l.classList.contains('switch-row')) return false;
+      const own = api.ownText(l).replace(/\\s*\\*$/, '');
+      if (!own) return false;
+      return own === label || own.startsWith(label);
+    }) || null,
     fieldInput: (label) => {
       const f = api.field(label);
-      return f ? f.querySelector('input, textarea, select') : null;
+      if (f) return f.querySelector('input, textarea, select');
+      const l = api.labelFor(label);
+      return l ? l.querySelector('input, textarea, select') : null;
     },
     fieldSet: (label, value) => {
       const el = api.fieldInput(label);
@@ -772,6 +789,165 @@ async function deepSocialTemplateFlow(crawl, outDir) {
   }
 }
 
+/**
+ * Catalog templates — the builder, end to end.
+ *
+ * The complaint was that Catalog Studio had five hard-coded layouts and no way
+ * to build or keep one. So this leg does exactly what a person would: open the
+ * builder from the Templates page, change the layout, save a template, find it
+ * under "My templates", then create a catalog from it and confirm the project
+ * came out with that design (and its own products).
+ *
+ * It also checks the preview is a REAL page render (the iframe contains the
+ * catalog markup, not an empty shell), because a builder whose preview lies is
+ * worse than no preview.
+ */
+async function deepCatalogTemplateFlow(crawl) {
+  crawl.phase = 'deep: catalog template';
+  await crawl.goto('Catalog Templates');
+
+  const opened = await crawl.eval(`window.__ui.clickExact('+ New template')`);
+  if (opened !== 'ok') { crawl.step('deep: open the catalog template builder', false, opened); return; }
+  await crawl.waitFor(`window.__ui.fieldInput('Name') !== null && !!document.querySelector('.catalog-editor')`, 10_000, 'the template builder');
+  await crawl.settle(1200);
+  const builderCrash = await crawl.eval('window.__ui.crash()');
+  if (builderCrash) { crawl.step('deep: the builder opens', false, `CRASHED: ${builderCrash}`); return; }
+  const sections = await crawl.eval(`window.__ui.all('.catalog-controls section h3').map((h) => h.innerText)`);
+  await crawl.shot('catalog-builder');
+  crawl.step('deep: the builder opens with the design controls', sections.length >= 4, `sections: ${JSON.stringify(sections)}`);
+
+  /* The preview must be a real render of the company's own catalog. */
+  const previewInfo = await crawl.eval(`(async () => {
+    for (let i = 0; i < 40; i += 1) {
+      const frame = document.querySelector('.catalog-preview iframe');
+      const doc = frame && (frame.contentDocument || frame.contentWindow?.document);
+      if (doc && doc.body && doc.body.innerHTML.length > 500) {
+        return {
+          bytes: doc.body.innerHTML.length,
+          hasGrid: !!doc.querySelector('.grid'),
+          hasCover: !!doc.querySelector('.cover'),
+          title: (doc.querySelector('.cover h1') || {}).textContent || null,
+        };
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    return { bytes: 0 };
+  })()`, true);
+  crawl.step('deep: the preview is a real page render', previewInfo.bytes > 500 && previewInfo.hasGrid,
+    JSON.stringify(previewInfo));
+
+  /* Change the design: 2 columns, minimal style, cover off, extra field. */
+  const name = `UI Crawl Catalog ${String(Date.now()).slice(-5)}`;
+  await crawl.eval(`window.__ui.fieldSet('Name', ${JSON.stringify(name)})`);
+  await crawl.eval(`window.__ui.fieldSet('Description', 'Built by the UI crawl')`);
+  await crawl.eval(`window.__ui.fieldSet('Columns', '2')`);
+  await crawl.eval(`window.__ui.fieldSet('Page margin (mm)', '14')`);
+  await crawl.eval(`window.__ui.click('.theme-choices button', 'Minimal')`);
+  await crawl.settle(200);
+  const coverOff = await crawl.eval(`(() => {
+    const label = Array.from(document.querySelectorAll('.catalog-controls .switch-row')).find((l) => /cover page/i.test(l.innerText));
+    if (!label) return 'MISS';
+    const box = label.querySelector('input[type=checkbox]');
+    if (box && box.checked) box.click();
+    return box ? (box.checked ? 'still on' : 'off') : 'no checkbox';
+  })()`);
+  // Add a card field (Description) that was not in the default four.
+  const addedField = await crawl.eval(`(() => {
+    const row = Array.from(document.querySelectorAll('.catalog-field-row')).find((r) => /Description/.test(r.innerText));
+    if (!row) return 'MISS';
+    const box = row.querySelector('input[type=checkbox]');
+    if (box && !box.checked) box.click();
+    return box ? (box.checked ? 'on' : 'still off') : 'no checkbox';
+  })()`);
+  await crawl.settle(1500);
+  await crawl.shot('catalog-builder-changed');
+
+  const afterEdits = await crawl.eval(`(() => {
+    const frame = document.querySelector('.catalog-preview iframe');
+    const doc = frame && (frame.contentDocument || frame.contentWindow?.document);
+    if (!doc) return null;
+    const grid = doc.querySelector('.grid');
+    return {
+      columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(' ').length : 0,
+      hasCover: !!doc.querySelector('.cover'),
+    };
+  })()`);
+  // Rendered text is the wrong probe for the FIELD list: a product with no
+  // description value prints no row (by design), so the field list is asserted
+  // on the saved config below instead.
+  crawl.step('deep: the preview follows the edits',
+    afterEdits && afterEdits.columns === 2 && afterEdits.hasCover === false,
+    `cover switch: ${coverOff} · description field: ${addedField} · ${JSON.stringify(afterEdits)}`);
+
+  /* Save it. */
+  await crawl.eval(`window.__ui.clickExact('Create template')`);
+  await crawl.waitFor(`window.__ui.fieldInput('Name') === null`, 10_000, 'the builder to close after saving');
+  await crawl.settle(1200);
+  const savedToast = await crawl.eval('window.__ui.toastText()');
+  const listed = await crawl.eval(`(() => {
+    const card = Array.from(document.querySelectorAll('.catalog-template-card--mine')).find((c) => c.innerText.includes(${JSON.stringify(name)}));
+    return card ? card.innerText.replace(/\\n+/g, ' | ') : null;
+  })()`);
+  await crawl.shot('catalog-templates-saved');
+  crawl.step('deep: the template is saved and listed', !!listed, listed || `not found under My templates · toast: ${savedToast || '(none)'}`);
+
+  /* Create a catalog from it and verify the project picked up the design. */
+  crawl.phase = 'deep: catalog from template';
+  const usedIt = await crawl.eval(`(() => {
+    const card = Array.from(document.querySelectorAll('.catalog-template-card--mine')).find((c) => c.innerText.includes(${JSON.stringify(name)}));
+    if (!card) return 'MISS';
+    const btn = Array.from(card.querySelectorAll('button')).find((b) => b.innerText.includes('Use in a new catalog'));
+    if (!btn) return 'no button';
+    btn.click();
+    return 'ok';
+  })()`);
+  if (usedIt !== 'ok') {
+    crawl.step('deep: a catalog can be created from the template', false, usedIt);
+    return;
+  }
+  await crawl.waitFor(`window.__ui.fieldInput('Project name') !== null`, 6000, 'the create-project dialog');
+  await crawl.settle(300);
+  await crawl.eval(`window.__ui.fieldSet('Project name', ${JSON.stringify(`${name} catalog`)})`);
+  await crawl.eval(`window.__ui.clickExact('Create and add products')`);
+  await crawl.waitFor(`!!document.querySelector('.catalog-editor-tabs')`, 15_000, 'the catalog editor');
+  await crawl.settle(1200);
+  const project = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    const rows = await window.api.catalogStudio.list(cid);
+    const row = rows.find((r) => r.name === ${JSON.stringify(`${name} catalog`)});
+    if (!row) return { error: 'project not in the list' };
+    return { columns: row.config.columns, theme: row.config.theme, marginMm: row.config.marginMm,
+      coverEnabled: row.config.coverEnabled, coverTitle: row.config.cover?.title,
+      fields: (row.config.fields || []).map((f) => f.key), productIds: row.config.productIds };
+  })()`, true);
+  await crawl.shot('catalog-from-template');
+  // The four standard fields AND the one the builder added: a template that
+  // forgot the defaults produced a catalog whose cards printed nothing, which
+  // is exactly the bug the first version of this builder had.
+  const expectedFields = ['sku', 'name', 'colorFinish', 'price', 'description'];
+  const ok = project && !project.error && project.columns === 2 && project.theme === 'minimal'
+    && project.coverEnabled === false && project.coverTitle === `${name} catalog`
+    && expectedFields.every((k) => project.fields.includes(k));
+  crawl.step('deep: the catalog came out with the template\'s design', ok, JSON.stringify(project).slice(0, 260));
+  crawl.step('deep: the new catalog starts with no products of its own', project && Array.isArray(project.productIds) && project.productIds.length === 0,
+    JSON.stringify(project?.productIds));
+
+  /* And "Save as template" from a project opens the same builder. */
+  crawl.phase = 'deep: save project as template';
+  const fromProject = await crawl.eval(`window.__ui.clickExact('Save as template')`);
+  if (fromProject !== 'ok') { crawl.step('deep: Save as template opens the builder pre-filled', false, fromProject); return; }
+  await crawl.waitFor(`!!document.querySelector('.catalog-editor-back')`, 6000, 'the builder from a project');
+  await crawl.settle(800);
+  const draftName = await crawl.eval(`window.__ui.fieldValue('Name')`);
+  const draftCrash = await crawl.eval('window.__ui.crash()');
+  await crawl.shot('catalog-save-as-template');
+  const draftColumns = await crawl.eval(`window.__ui.fieldValue('Columns')`);
+  crawl.step('deep: Save as template opens the builder pre-filled', !draftCrash && !!draftName && String(draftName).includes('template') && draftColumns === '2',
+    `name: ${draftName} · columns: ${draftColumns}${draftCrash ? ` · CRASHED: ${draftCrash}` : ''}`);
+  await crawl.eval(`window.__ui.clickExact('Cancel')`);
+  await crawl.settle(400);
+}
+
 const PAGE_LABELS = [
   ['company', 'Company'],
   ['dashboard', 'Dashboard'],
@@ -1002,6 +1178,13 @@ async function main() {
     await deepSocialTemplateFlow(crawl, path.join(args.out, 'social-out'));
   } catch (err) {
     crawl.step('deep social template flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 11 ── catalog templates: build one, save it, use it */
+  try {
+    await deepCatalogTemplateFlow(crawl);
+  } catch (err) {
+    crawl.step('deep catalog template flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */

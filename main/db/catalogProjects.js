@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
 const { parseJson, prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
+const { normalizeCatalogConfig } = require('../util/catalogModel');
 
 function rowToProject(row) {
   if (!row) return null;
@@ -12,9 +13,19 @@ function list(companyId) { return getDb().prepare('SELECT * FROM catalog_project
 function get(id) { return rowToProject(getDb().prepare('SELECT * FROM catalog_projects WHERE id = ?').get(id)); }
 function create(input) {
   const id = crypto.randomUUID(); const ts = Date.now();
-  const config = input.config || { pageSize: 'A4', orientation: 'portrait', columns: 3,
-    theme: 'modern', primaryColor: '#4f46e5', showSku: true, showPrice: true,
-    showDescription: false, cover: { enabled: true, title: input.name || 'Product Catalog' }, sections: [] };
+  /* v0.1.63: run every new project through the shared model, so a project
+   * created from a template carries a complete, clamped config rather than
+   * whatever subset the template happened to define. Existing rows are NOT
+   * re-normalized on read — that would silently change how old catalogs print. */
+  const incoming = input.config || {};
+  const config = normalizeCatalogConfig({
+    ...incoming,
+    // The cover title is the project's own name unless the caller supplied one
+    // explicitly. Merging (rather than spreading the incoming config over a
+    // default cover) is what keeps a template's `cover.enabled` WITHOUT losing
+    // the title — the whole cover object used to be replaced.
+    cover: { title: input.name || 'Product Catalog', ...(incoming.cover || {}) },
+  });
   getDb().prepare('INSERT INTO catalog_projects (id, company_id, name, description, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(id, input.companyId, String(input.name || 'Untitled catalog').trim(), input.description ?? null, JSON.stringify(config), ts, ts);
   return get(id);

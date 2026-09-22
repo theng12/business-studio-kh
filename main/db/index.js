@@ -729,6 +729,29 @@ function runMigrations(database) {
     CREATE INDEX IF NOT EXISTS idx_catalog_projects_company_updated
       ON catalog_projects(company_id, updated_at DESC);
 
+    /* v0.1.63: reusable CATALOG templates — the layout half of a catalog.
+     *
+     * Catalog Studio shipped with five layouts hard-coded in the renderer and
+     * no way to build or keep one: "it doesn't have a builder at all". A
+     * template stores the look (page, grid, style, cover, card fields, price
+     * source) and never which products, so one design can be reused across
+     * catalogs. Written by main/db/catalogTemplates.js, which strips the
+     * selection keys through catalogDesignOnly() before storing.
+     *
+     * Additive on purpose: CREATE TABLE IF NOT EXISTS on the normal boot path,
+     * no SCHEMA_VERSION bump (AGENTS.md section 14). */
+    CREATE TABLE IF NOT EXISTS catalog_templates (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT,
+      config TEXT NOT NULL DEFAULT '{}',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_catalog_templates_company_updated
+      ON catalog_templates(company_id, updated_at DESC);
+
     /* --- v0.49.46: OPERATIONS - supplier + PO + cost tables ------
      *
      * Phase 1 of the costing system. Tables exist on every install but
