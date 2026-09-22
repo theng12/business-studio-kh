@@ -70,10 +70,15 @@ function list(companyId, filters = {}) {
   if (search) {
     // Escape LIKE meta-chars (`%` and `_`) so literal user input doesn't
     // wildcard the query. Same defensive pattern the product search uses.
+    // v0.1.67: contact name + email join name/country, so the one search
+    // box finds "Mr. Chen" or sales@example.com as well as the company.
     const escaped = search.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
     const term = `%${escaped}%`;
-    sql += ` AND (name LIKE ? ESCAPE '\\' COLLATE NOCASE OR country LIKE ? ESCAPE '\\' COLLATE NOCASE)`;
-    params.push(term, term);
+    sql += ` AND (name LIKE ? ESCAPE '\\' COLLATE NOCASE`
+      + ` OR country LIKE ? ESCAPE '\\' COLLATE NOCASE`
+      + ` OR contact_name LIKE ? ESCAPE '\\' COLLATE NOCASE`
+      + ` OR contact_email LIKE ? ESCAPE '\\' COLLATE NOCASE)`;
+    params.push(term, term, term, term);
   }
   sql += ` ORDER BY name COLLATE NOCASE ASC`;
   return getDb().prepare(sql).all(...params).map(rowToSupplier);
