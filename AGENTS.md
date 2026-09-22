@@ -24,6 +24,11 @@ drifted badly before this check.
   file is a Git branch or remote ref — record its name and SHA in a note under
   `_trash/` before deleting it, and never rewrite published history.
 
+- **Commit-and-push, plus a `dist/` DMG.** Finished work is committed and pushed —
+  never left sitting uncommitted in a worktree. When this project ships a Mac app,
+  every release has its DMGs built into `dist/` and ready (both arches — see §20).
+  Work that exists only on a branch, or has no packaged DMG, is not "done".
+
 ---
 
 ## 1. Navigation — left sidebar, never top tabs
