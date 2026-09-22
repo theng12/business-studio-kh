@@ -372,9 +372,18 @@ async function renderImageElement(el, ctx, imgW, imgH, resolveAsset, strictImage
 
   let pipeline = sharp(abs).resize(targetW, targetH, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } });
   if (opacity < 1) {
+    /* v0.1.53: the mask MUST be `opacity`, not `1 - opacity`.
+     *
+     * `dest-in` keeps the destination in proportion to the source's ALPHA, so
+     * a black rect at `fill-opacity: X` multiplies the image's alpha by X.
+     * Using `1 - opacity` inverted the control: 0% rendered fully opaque
+     * (the mask was solid), 80% rendered at 20% alpha, and 100% skipped this
+     * branch entirely and rendered fully opaque — so the slider felt backwards
+     * and only 100% looked right. The text and barcode paths already mask with
+     * the opacity value directly; this brings the image element in line. */
     pipeline = pipeline.composite([{
       input: Buffer.from(
-        `<svg width="${targetW}" height="${targetH}"><rect width="100%" height="100%" fill="black" fill-opacity="${1 - opacity}"/></svg>`,
+        `<svg width="${targetW}" height="${targetH}"><rect width="100%" height="100%" fill="black" fill-opacity="${opacity}"/></svg>`,
       ),
       blend: 'dest-in',
     }]);
