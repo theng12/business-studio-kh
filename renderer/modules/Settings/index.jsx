@@ -12,6 +12,7 @@ import { ModeSegment, ServerModePanel, ClientModePanel, RestartBanner, Migration
 // CrashLogPanel is used INSIDE AboutCard — no need to re-import it here.
 import { AboutCard } from './AboutPanel.jsx';
 import { BackupsPanel } from './BackupsPanel.jsx';
+import { PriceGroupsPanel } from './PriceGroupsPanel.jsx';
 import { RolesPanel } from './RolesPanel.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
 
@@ -359,6 +360,11 @@ export function Settings() {
             ))}
           </Select>
         </SettingRow>
+
+        {/* v0.1.55: custom price groups. This is where a "custom price" is
+            defined — it becomes an extra amount + currency on every product. */}
+        <h3 className="settings-subsection-heading">Price groups</h3>
+        <PriceGroupsPanel />
 
         <SettingRow
           label="Data folder"
