@@ -270,3 +270,57 @@ for (const { type, element } of ELEMENT_CASES) {
     assert.ok(!html.includes('<img'), `placeholder for a ${type} element must not render an image`);
   });
 }
+
+/* ── Multi-Mac: the client connection fields must always be reachable ────
+ *
+ * v0.1.51 regression. The Mode picker refuses to switch to Client without a
+ * server URL + token, but the fields that set them used to render ONLY when
+ * the mode was already 'client'. That deadlocked the feature: the guard could
+ * never be satisfied and there was no way to type the address or token. */
+
+test('Multi-Mac — the client connection fields render outside client mode', async () => {
+  const mod = await loadScreen('renderer/modules/Settings/MultiMacPanel.jsx');
+  assert.equal(typeof mod.ClientModePanel, 'function');
+
+  const React = require('react');
+  const { renderToString } = require('react-dom/server');
+
+  const html = renderToString(React.createElement(mod.ClientModePanel, {
+    config: { mode: 'standalone', clientServerUrl: '', clientToken: '' },
+    patch: () => {},
+  }));
+
+  assert.ok(html.includes('Server address'), 'Server address field is missing');
+  assert.ok(html.includes('User token'), 'User token field is missing');
+  assert.ok(html.includes('http://100.64.0.5:13180'), 'server address placeholder is missing');
+});
+
+test('Multi-Mac — Settings offers the client connection in every mode', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(ROOT, 'renderer/modules/Settings/index.jsx'), 'utf8');
+  assert.ok(
+    src.includes('id="client-connection"'),
+    'Settings must render the client connection section outside the client-only branch, '
+    + 'or switching to Client mode is impossible',
+  );
+});
+
+test('Multi-Mac — staged URL/token do not nag for a restart outside client mode', async () => {
+  const mod = await loadScreen('renderer/modules/Settings/MultiMacPanel.jsx');
+  const React = require('react');
+  const { renderToString } = require('react-dom/server');
+
+  const staged = renderToString(React.createElement(mod.RestartBanner, {
+    config: { mode: 'standalone', clientServerUrl: 'http://10.0.0.5:13180', clientToken: 'abc' },
+    snapshot: { mode: 'standalone', clientServerUrl: '', clientToken: '' },
+    addToast: () => {},
+  }));
+  assert.equal(staged, '', 'staging the client URL/token in standalone mode must not show a restart banner');
+
+  const asClient = renderToString(React.createElement(mod.RestartBanner, {
+    config: { mode: 'client', clientServerUrl: 'http://10.0.0.5:13180', clientToken: 'abc' },
+    snapshot: { mode: 'client', clientServerUrl: '', clientToken: '' },
+    addToast: () => {},
+  }));
+  assert.ok(asClient.includes('Restart needed'), 'a running client must still be told to restart after edits');
+});
