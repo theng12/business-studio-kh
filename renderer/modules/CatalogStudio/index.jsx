@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, EmptyState, Input, Modal, Select } from '../../components/ui.jsx';
+import { Button, EmptyState, Input, Modal } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
@@ -8,13 +8,14 @@ import { useAppStore } from '../../store/index.js';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
+import { DesignControls } from './DesignControls.jsx';
+import { CatalogTemplateBuilder } from './TemplateBuilder.jsx';
 
-const THEMES = [
-  { id: 'modern', name: 'Modern', description: 'Soft cards, generous spacing, bold cover.' },
-  { id: 'minimal', name: 'Minimal', description: 'Editorial grid with sharp, quiet typography.' },
-  { id: 'retail', name: 'Retail', description: 'Price-forward cards for sales catalogs.' },
-];
-
+/* v0.1.63: the design controls, the theme list and the card-field defaults all
+ * moved out of this file so the template builder can share them. The five
+ * BUILT-IN layouts below stay here: they are the "proven layouts" the Templates
+ * page offers as starting points, and they are copied into the builder rather
+ * than stored, so a new install has something to click without any seeding. */
 const DEFAULT_FIELDS = [
   { key: 'sku', label: 'SKU', visible: true },
   { key: 'name', label: 'Name', visible: true, bold: true },
@@ -111,10 +112,6 @@ function TemplateVisual({ template, large = false }) {
   </div>;
 }
 
-function FieldRow({ field, onChange }) {
-  return <div className="catalog-field-row"><input type="checkbox" checked={field.visible !== false} onChange={(e) => onChange({ visible: e.target.checked })} /><span>{field.label}</span><label><input type="checkbox" checked={!!field.bold} onChange={(e) => onChange({ bold: e.target.checked })} /> Bold</label><label><input type="checkbox" checked={field.showLabel !== false} onChange={(e) => onChange({ showLabel: e.target.checked })} /> Label</label></div>;
-}
-
 function ProjectCard({ project, onOpen, onDuplicate, onDelete }) {
   const c = project.config || {};
   const productLabel = c.selectionMode === 'explicit' ? `${(c.productIds || []).length} products` : 'All active products';
@@ -177,6 +174,8 @@ export function CatalogEditor({ projectId, onBack }) {
   const catalogPriceGroups = (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [];
   const [project, setProject] = useState(null); const [preview, setPreview] = useState(''); const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null);
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [tab, setTab] = useState('products'); const timer = useRef(null);
+  // v0.1.63: the template builder, opened from this project's design.
+  const [templateDraft, setTemplateDraft] = useState(null);
   /* v0.1.27: the pending edit is FLUSHED on unmount, not thrown away. The
    * autosave waits 550 ms, so "tweak a setting, click ← Catalog projects"
    * discarded the change silently — the debounce timer was merely cleared. */
@@ -316,32 +315,196 @@ export function CatalogEditor({ projectId, onBack }) {
     catch (e) { addToast(parseConflictError(e) ? 'This catalog changed elsewhere. Use Save to review it before exporting.' : e.message, 'error'); } finally { if (pulse) clearInterval(pulse); setWorking(false); }
   }
   if (!project) return <div className="page-loading">Loading catalog…</div>;
-  const c = project.config || {}; const fields = c.fields || DEFAULT_FIELDS;
+  if (templateDraft) {
+    return (
+      <CatalogTemplateBuilder
+        draft={templateDraft}
+        onClose={() => setTemplateDraft(null)}
+        onSaved={() => setTemplateDraft(null)}
+      />
+    );
+  }
+  const c = project.config || {};
   return <section className="page catalog-editor-page">
     <div className="catalog-editor-back"><Button variant="ghost" onClick={leaveEditor}>← Catalog projects</Button><span>Editing project</span></div>
-    <PageHeader title={project.name} subtitle="Catalog Studio" actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} /><Button onClick={exportPdf}>Export PDF</Button></>} />
+    <PageHeader title={project.name} subtitle="Catalog Studio" actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} /><Button
+        onClick={() => setTemplateDraft({
+          name: `${project.name} template`,
+          description: `Layout from “${project.name}”.`,
+          // The design only: the products belong to this catalog, and the cover
+          // title is its name. Save as template is a starting point the user
+          // reviews in the builder, not a silent copy.
+          config: { ...project.config, selectionMode: 'explicit', productIds: [], brandIds: [], categoryIds: [] },
+        })}
+        title="Open this catalog's layout in the template builder — the products stay with the catalog."
+      >
+        Save as template
+      </Button><Button onClick={exportPdf}>Export PDF</Button></>} />
     <div className="catalog-editor-tabs"><button type="button" className={tab === 'products' ? 'is-active' : ''} onClick={() => setTab('products')}><span>1</span><div><strong>Products</strong><small>Choose and arrange catalog items</small></div></button><button type="button" className={tab === 'design' ? 'is-active' : ''} onClick={() => setTab('design')}><span>2</span><div><strong>Layout & design</strong><small>Style pages and product cards</small></div></button></div>
     {tab === 'products' ? <div className="catalog-product-workspace"><ProductManager products={products} config={c} onChange={updateConfig} /><LivePreview preview={preview} onRefresh={refreshPreview} /></div> :
       <div className="catalog-editor"><aside className="catalog-controls"><section><h3>Project</h3><label>Name<Input value={project.name} onChange={(e) => change({ name: e.target.value })} /></label><label>Description<Input value={project.description || ''} onChange={(e) => change({ description: e.target.value })} /></label></section>
-        <section><h3>Cover</h3><label className="switch-row"><input type="checkbox" checked={c.cover?.enabled !== false} onChange={(e) => updateConfig({ cover: { ...c.cover, enabled: e.target.checked } })} /><span>Include cover page</span></label><label>Title<Input value={c.cover?.title || project.name} onChange={(e) => updateConfig({ cover: { ...c.cover, title: e.target.value } })} /></label><label>Subtitle<Input value={c.cover?.subtitle || ''} onChange={(e) => updateConfig({ cover: { ...c.cover, subtitle: e.target.value } })} /></label></section>
-        <section><h3>Layout</h3><div className="control-grid"><label>Page<Select value={c.pageSize || 'A4'} onChange={(e) => updateConfig({ pageSize: e.target.value })}><option>A4</option><option>Letter</option></Select></label><label>Orientation<Select value={c.orientation || 'portrait'} onChange={(e) => updateConfig({ orientation: e.target.value })}><option>portrait</option><option>landscape</option></Select></label><label>Columns<Select value={c.columns || 3} onChange={(e) => updateConfig({ columns: Number(e.target.value) })}>{[1, 2, 3, 4, 5].map((n) => <option key={n}>{n}</option>)}</Select></label><label>Gap (mm)<Input type="number" value={c.gapMm || 5} onChange={(e) => updateConfig({ gapMm: Number(e.target.value) })} /></label><label>Group products<Select value={c.groupBy || 'none'} onChange={(e) => updateConfig({ groupBy: e.target.value })}><option value="none">No grouping</option><option value="category">By category</option><option value="brand">By brand</option></Select></label><label>Sort by<Select value={c.sortBy || 'manual'} onChange={(e) => updateConfig({ sortBy: e.target.value })}><option value="manual">Catalog order</option><option value="sku">SKU</option><option value="name">Product name</option></Select></label><label>Price group<Select value={c.priceGroup || 'retail'} onChange={(e) => updateConfig({ priceGroup: e.target.value })}><option value="retail">Retail</option><option value="wholesale">Wholesale</option>{catalogPriceGroups.map((g) => <option key={g.key} value={g.key}>{g.label}</option>)}</Select></label><label>Currency fallback<Input value={c.currencySymbol || '$'} onChange={(e) => updateConfig({ currencySymbol: e.target.value })} placeholder="$" /></label></div></section>
-        <section><h3>Style</h3><div className="theme-choices">{THEMES.map((t) => <button type="button" key={t.id} className={(c.theme || 'modern') === t.id ? 'is-active' : ''} onClick={() => updateConfig({ theme: t.id })}><strong>{t.name}</strong><span>{t.description}</span></button>)}</div><div className="control-grid"><label>Primary<Input type="color" value={c.primaryColor || '#111827'} onChange={(e) => updateConfig({ primaryColor: e.target.value })} /></label><label>Accent<Input type="color" value={c.accentColor || '#6366f1'} onChange={(e) => updateConfig({ accentColor: e.target.value })} /></label></div></section>
-        <section><h3>Card fields</h3>{fields.map((f, i) => <FieldRow key={f.key} field={f} onChange={(patch) => updateConfig({ fields: fields.map((x, n) => n === i ? { ...x, ...patch } : x) })} />)}</section>
+        <DesignControls
+          config={c}
+          onChange={updateConfig}
+          priceGroups={catalogPriceGroups}
+          coverTitle={{ value: c.cover?.title || project.name, onChange: (title) => updateConfig({ cover: { ...c.cover, title } }) }}
+          coverSubtitle={{ value: c.cover?.subtitle || '', onChange: (subtitle) => updateConfig({ cover: { ...c.cover, subtitle } }) }}
+        />
       </aside><LivePreview preview={preview} onRefresh={refreshPreview} /></div>}
     <GenerationExperience open={working} title="Building your catalog" progress={progress} phase={Math.min(3, Math.floor(progress / 28))} detail={project.name} />
   </section>;
 }
 
 export function CatalogTemplates() {
-  const companyId = useAppStore((s) => s.activeCompanyId); const addToast = useAppStore((s) => s.addToast); const openCatalogProject = useAppStore((s) => s.openCatalogProject); const setActiveModule = useAppStore((s) => s.setActiveModule);
-  const [previewTemplate, setPreviewTemplate] = useState(null); const [createTemplate, setCreateTemplate] = useState(null); const [name, setName] = useState(''); const [creating, setCreating] = useState(false);
-  function begin(template) { setCreateTemplate(template); setName(template.name); }
-  async function create() { if (!createTemplate || !companyId) return; setCreating(true); try { const title = name.trim() || createTemplate.name; const project = await window.api.catalogStudio.create({ companyId, name: title, description: createTemplate.description, config: projectConfig(createTemplate, title) }); setCreateTemplate(null); setName(''); openCatalogProject(project.id); } catch (e) { addToast(e.message, 'error'); } finally { setCreating(false); } }
-  return <section className="page"><PageHeader title="Catalog Templates" subtitle="Start with a proven layout, then choose exactly which products belong in the catalog." actions={<Button variant="ghost" onClick={() => setActiveModule('catalogprojects')}>View projects</Button>} />
-    <div className="studio-intro studio-intro--catalog"><div><span className="studio-intro__icon">T</span><div><strong>Choose the structure before adding products</strong><p>Every template remains editable after you create a project.</p></div></div><span className="studio-intro__badge">{CATALOG_TEMPLATES.length} templates</span></div>
-    <div className="catalog-template-grid">{CATALOG_TEMPLATES.map((template) => <article className="catalog-template-card" key={template.id}><TemplateVisual template={template} /><div className="catalog-template-card__body"><span>{template.eyebrow}</span><strong>{template.name}</strong><p>{template.description}</p><small>Best for: {template.bestFor}</small><div><Button variant="ghost" onClick={() => setPreviewTemplate(template)}>Preview</Button><Button onClick={() => begin(template)}>Use template</Button></div></div></article>)}</div>
+  const companyId = useAppStore((s) => s.activeCompanyId);
+  const addToast = useAppStore((s) => s.addToast);
+  const openCatalogProject = useAppStore((s) => s.openCatalogProject);
+  const setActiveModule = useAppStore((s) => s.setActiveModule);
+  const [previewTemplate, setPreviewTemplate] = useState(null);
+  const [createTemplate, setCreateTemplate] = useState(null);
+  const [name, setName] = useState('');
+  const [creating, setCreating] = useState(false);
+  // v0.1.63: my templates + the builder.
+  const [templates, setTemplates] = useState([]);
+  const [builderDraft, setBuilderDraft] = useState(null);
+  const requestSeq = useRef(0);
+
+  const loadTemplates = useCallback(async () => {
+    const seq = ++requestSeq.current;
+    if (!companyId) { setTemplates([]); return; }
+    try {
+      const rows = await window.api.catalogStudio.listTemplates(companyId);
+      if (seq === requestSeq.current) setTemplates(rows);
+    } catch (e) { if (seq === requestSeq.current) addToast(e.message, 'error'); }
+  }, [companyId, addToast]);
+
+  useEffect(() => { void loadTemplates(); }, [loadTemplates]);
+  useEffect(() => {
+    const offs = [];
+    const refresh = (event) => { if (!event || event.kind === 'catalogStudio') void loadTemplates(); };
+    if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
+    if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => { void loadTemplates(); }));
+    return () => offs.forEach((off) => off?.());
+  }, [loadTemplates]);
+
+  function begin(template) {
+    setCreateTemplate(template);
+    setName(template.name);
+  }
+
+  /** Create a project from a saved template, or from a proven layout. */
+  async function create() {
+    if (!createTemplate || !companyId) return;
+    setCreating(true);
+    try {
+      const title = name.trim() || createTemplate.name;
+      const builtIn = !!createTemplate.builtIn;
+      const project = await window.api.catalogStudio.create({
+        companyId,
+        name: title,
+        description: createTemplate.description,
+        config: builtIn
+          ? projectConfig(createTemplate, title)
+          // A saved template already carries a complete design; only the cover
+          // title is the project's own.
+          : { ...createTemplate.config, cover: { ...(createTemplate.config.cover || {}), title } },
+      });
+      setCreateTemplate(null);
+      setName('');
+      openCatalogProject(project.id);
+    } catch (e) {
+      addToast(e.message, 'error');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  if (builderDraft) {
+    return (
+      <CatalogTemplateBuilder
+        draft={builderDraft}
+        onClose={() => setBuilderDraft(null)}
+        onSaved={() => { setBuilderDraft(null); void loadTemplates(); }}
+      />
+    );
+  }
+
+  return <section className="page">
+    <PageHeader
+      title="Catalog Templates"
+      subtitle="Build your own layouts, or start from a proven one — then choose exactly which products belong in each catalog."
+      actions={(
+        <>
+          <Button variant="ghost" onClick={() => setActiveModule('catalogprojects')}>View projects</Button>
+          <Button variant="primary" onClick={() => setBuilderDraft({ name: '', description: '', config: {} })} disabled={!companyId}>
+            + New template
+          </Button>
+        </>
+      )}
+    />
+
+    <div className="studio-intro studio-intro--catalog">
+      <div>
+        <span className="studio-intro__icon">T</span>
+        <div>
+          <strong>Build the look once, use it for every catalog</strong>
+          <p>A template holds the page size, grid, style, cover and product-card fields — never the products. Open one in the builder and the preview is a real page render of your own catalogue.</p>
+        </div>
+      </div>
+      <span className="studio-intro__badge">{templates.length} saved · {CATALOG_TEMPLATES.length} proven</span>
+    </div>
+
+    {/* ── my templates ─────────────────────────────────────────────── */}
+    <section className="catalog-section">
+      <div className="catalog-section__head">
+        <h2>My templates</h2>
+        <span className="muted">Yours to edit, duplicate and reuse in any catalog.</span>
+      </div>
+      {templates.length ? (
+        <div className="catalog-template-grid">
+          {templates.map((t) => (
+            <article className="catalog-template-card catalog-template-card--mine" key={t.id}>
+              <TemplateVisual template={{ id: t.config.theme || 'modern', name: t.name, config: t.config }} />
+              <div className="catalog-template-card__body">
+                <span>{(t.config.columns || 3)} columns · {t.config.pageSize || 'A4'} {t.config.orientation || 'portrait'}</span>
+                <strong>{t.name}</strong>
+                <p>{t.description || 'No description.'}</p>
+                <small>
+                  {(t.config.fields || []).filter((f) => f.visible !== false).length} card fields
+                  {' · '}{(t.config.theme || 'modern')} style
+                  {t.config.coverEnabled === false ? ' · no cover' : ' · cover page'}
+                </small>
+                <div>
+                  <Button variant="ghost" onClick={() => setBuilderDraft({ id: t.id, name: t.name, description: t.description || '', config: { ...t.config } })}>Edit</Button>
+                  <Button variant="ghost" onClick={async () => { try { await window.api.catalogStudio.duplicateTemplate(t.id); void loadTemplates(); } catch (e) { addToast(e.message, 'error'); } }}>Duplicate</Button>
+                  <Button variant="ghost" onClick={async () => {
+                    if (!(await confirm({ title: `Delete “${t.name}”?`, message: 'Catalogs already created from it are not affected.', danger: true }))) return;
+                    try { await window.api.catalogStudio.removeTemplate(t.id); void loadTemplates(); } catch (e) { addToast(e.message, 'error'); }
+                  }}>Delete</Button>
+                  <Button onClick={() => begin({ ...t, builtIn: false })}>Use in a new catalog</Button>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="catalog-section__empty">
+          No templates of your own yet. Press <strong>+ New template</strong> to build one, or open a proven layout below and save your version of it.
+        </p>
+      )}
+    </section>
+
+    {/* ── proven layouts ───────────────────────────────────────────── */}
+    <section className="catalog-section">
+      <div className="catalog-section__head">
+        <h2>Proven layouts</h2>
+        <span className="muted">Ready-made structures. Use one as-is, or open it in the builder and save your own version.</span>
+      </div>
+      <div className="catalog-template-grid">{CATALOG_TEMPLATES.map((template) => <article className="catalog-template-card" key={template.id}><TemplateVisual template={template} /><div className="catalog-template-card__body"><span>{template.eyebrow}</span><strong>{template.name}</strong><p>{template.description}</p><small>Best for: {template.bestFor}</small><div><Button variant="ghost" onClick={() => setPreviewTemplate(template)}>Preview</Button><Button variant="ghost" onClick={() => setBuilderDraft({ name: `${template.name} (mine)`, description: template.description, config: clone(template.config) })}>Open in builder</Button><Button onClick={() => begin(template)}>Use template</Button></div></div></article>)}</div>
+    </section>
+
     <Modal open={!!previewTemplate} onClose={() => setPreviewTemplate(null)} title={previewTemplate?.name || 'Catalog template'} footer={<><Button variant="ghost" onClick={() => setPreviewTemplate(null)}>Close</Button><Button onClick={() => { const selected = previewTemplate; setPreviewTemplate(null); begin(selected); }}>Use this template</Button></>}>{previewTemplate ? <div className="catalog-template-detail"><TemplateVisual template={previewTemplate} large /><p>{previewTemplate.description}</p><strong>Best for</strong><span>{previewTemplate.bestFor}</span><div className="catalog-template-facts"><span>{previewTemplate.config.columns} columns</span><span>{previewTemplate.config.theme} style</span><span>{previewTemplate.config.fields.length} product fields</span></div></div> : null}</Modal>
-    <Modal open={!!createTemplate} onClose={() => setCreateTemplate(null)} title="Create catalog project" footer={<><Button variant="ghost" onClick={() => setCreateTemplate(null)}>Cancel</Button><Button disabled={creating} onClick={create}>{creating ? 'Creating…' : 'Create and add products'}</Button></>}><label className="field"><span className="field__label">Project name</span><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. 2026 Wholesale Collection" /><span className="field__hint">Using the {createTemplate?.name} template. You can change every layout setting later.</span></label></Modal>
+    <Modal open={!!createTemplate} onClose={() => setCreateTemplate(null)} title="Create catalog project" footer={<><Button variant="ghost" onClick={() => setCreateTemplate(null)}>Cancel</Button><Button disabled={creating} onClick={create}>{creating ? 'Creating…' : 'Create and add products'}</Button></>}><label className="field"><span className="field__label">Project name</span><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. 2026 Wholesale Collection" /><span className="field__hint">Using {createTemplate?.builtIn ? 'the' : 'your'} {createTemplate?.name} template. You can change every layout setting later.</span></label></Modal>
   </section>;
 }
 
