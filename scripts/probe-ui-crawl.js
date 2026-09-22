@@ -1460,6 +1460,29 @@ async function deepBulkTableFlow(crawl, photoPath) {
   const brandCleared = await crawl.eval(`document.querySelector('select[data-row="0"][data-col="brandId"]').value`);
   crawl.step('deep bulk table: choosing Unassigned clears the cell', brandCleared === '', JSON.stringify({ brandCleared }));
 
+  /* 6b ── two rows renamed to the SAME new SKU must refuse the WHOLE save and
+   *       name the row. bulkUpsert is keyed by SKU, so without this check both
+   *       rows would silently write the same product. */
+  await crawl.eval(`window.__ui.set('input[data-row="0"][data-col="sku"]', ${JSON.stringify(renamedSku)})`);
+  await crawl.settle(250);
+  await crawl.eval(`window.__ui.clickExact('Save all')`);
+  await crawl.waitFor(`!!document.querySelector('.bulk-table__confirm.is-error')`, 15_000, 'the refusal summary');
+  await crawl.settle(250);
+  const refused = await crawl.eval(`window.__ui.textOf(document.querySelector('.bulk-table__confirm'))`);
+  const refusedToast = await crawl.eval('window.__ui.toastText()');
+  const originalStillThere = await crawl.eval(`(async () => {
+    const ps = await window.api.products.list(await window.api.companies.getActiveId(), {});
+    return ps.some((x) => x.sku === ${JSON.stringify(sku0)});
+  })()`, true);
+  await crawl.shot('bulk-table-duplicate-refused');
+  crawl.step('deep bulk table: a duplicate SKU refuses the whole save and names the row',
+    /Save refused/.test(refused || '') && /already used by another product/.test(refused || '')
+      && /row \d/.test(refused || '') && originalStillThere === true,
+    `summary: ${refused || '(none)'} · original SKU still present: ${originalStillThere} · toast: ${refusedToast || '(none)'}`);
+  // Put row 0's SKU back so the real save below can proceed.
+  await crawl.eval(`window.__ui.set('input[data-row="0"][data-col="sku"]', ${JSON.stringify(sku0)})`);
+  await crawl.settle(250);
+
   const saveAll = await crawl.eval(`window.__ui.clickExact('Save all')`);
   if (saveAll !== 'ok') { crawl.step('deep bulk table: Save all runs a dry run', false, saveAll); return; }
   await crawl.waitFor(`!!document.querySelector('.bulk-table__confirm')`, 15_000, 'the dry-run summary');
