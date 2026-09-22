@@ -447,6 +447,15 @@ contextBridge.exposeInMainWorld('api', {
     remove: (id) => invoke('catalogStudio:delete', { id }),
     duplicate: (id) => invoke('catalogStudio:duplicate', { id }),
     preview: (id) => invoke('catalogStudio:preview', { id }),
+    // v0.1.63: the catalog template builder — layout-only templates, reusable
+    // across projects, plus a preview for a config that has not been saved yet.
+    listTemplates: (companyId) => invoke('catalogStudio:listTemplates', { companyId }),
+    getTemplate: (id) => invoke('catalogStudio:getTemplate', { id }),
+    saveTemplate: (input) => invoke('catalogStudio:saveTemplate', input),
+    updateTemplate: (id, patch) => invoke('catalogStudio:updateTemplate', { id, patch }),
+    removeTemplate: (id) => invoke('catalogStudio:deleteTemplate', { id }),
+    duplicateTemplate: (id) => invoke('catalogStudio:duplicateTemplate', { id }),
+    previewTemplate: (config, name, sampleLimit) => invoke('catalogStudio:previewTemplate', { config, name, sampleLimit }),
     exportPdf: (id, outputFolder) => invoke('catalogStudio:export', { id, outputFolder }),
   },
   /* v0.1.25: Social Grid — square product-grid images for social posts.

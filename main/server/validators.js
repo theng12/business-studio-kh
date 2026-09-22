@@ -515,6 +515,26 @@ const VALIDATORS = {
   'catalogStudio:duplicate': requireFields('id'),
   'catalogStudio:preview':   requireFields('id'),
   'catalogStudio:export':    requireFields('id', 'outputFolder'),
+  // v0.1.63 catalog templates. The config blob is normalized server-side by
+  // main/util/catalogModel.js, so only its TYPE is checked here.
+  'catalogStudio:listTemplates': (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
+  'catalogStudio:getTemplate':   requireNonEmptyStringFields('id'),
+  'catalogStudio:saveTemplate':  (a) => {
+    if (!isObject(a)) return 'create payload must be an object';
+    if (!isString(a.companyId) || !a.companyId.trim()) return 'companyId is required';
+    if (!isString(a.name) || !a.name.trim()) return 'name is required';
+    if (a.config != null && !isObject(a.config)) return 'config must be an object';
+    return true;
+  },
+  'catalogStudio:updateTemplate': requireVersionedPatch,
+  'catalogStudio:deleteTemplate': requireNonEmptyStringFields('id'),
+  'catalogStudio:duplicateTemplate': requireNonEmptyStringFields('id'),
+  'catalogStudio:previewTemplate': (a) => {
+    if (a == null) return true;
+    if (!isObject(a)) return 'expected an object with config';
+    if (a.config != null && !isObject(a.config)) return 'config must be an object';
+    return true;
+  },
 
   // Social Grid (v0.1.25) --------------------------------------------
   // `config` is a free-form recipe blob normalized by

@@ -799,6 +799,10 @@ const PROXIED_CHANNELS = [
   'socialGrid:markExported',
   // v0.1.62: the templates and the pre-flight count live with the data, so a
   // client Mac asks the server for them like any other social-grid call.
+  // v0.1.63: catalog templates live with the data too.
+  'catalogStudio:listTemplates','catalogStudio:getTemplate','catalogStudio:saveTemplate',
+  'catalogStudio:updateTemplate','catalogStudio:deleteTemplate','catalogStudio:duplicateTemplate',
+  'catalogStudio:previewTemplate',
   'socialGrid:listTemplates','socialGrid:getTemplate','socialGrid:saveTemplate',
   'socialGrid:updateTemplate','socialGrid:deleteTemplate','socialGrid:duplicateTemplate',
   'socialGrid:plan',
