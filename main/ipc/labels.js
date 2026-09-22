@@ -7,6 +7,7 @@ const templates = require('../db/labelTemplates');
 const runs = require('../db/labelRuns');
 const productsDb = require('../db/products');
 const brandsDb = require('../db/brands');
+const companies = require('../db/companies');
 const { labelsDocument, barcodeUri } = require('../studioRenderer');
 const renderer = require('../renderWindow');
 const events = require('../events');
@@ -36,6 +37,28 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     const brands = product.brandId ? [brandsDb.get(product.brandId)].filter(Boolean) : [];
     return { html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single', ...(layout || {}) } }) };
   });
+  /**
+   * v0.1.64: the same document, for a template that is still being edited.
+   *
+   * `labels:preview` takes a saved template id, which is useless to a designer
+   * that has unsaved changes — and the whole point of this channel is to let
+   * the canvas show the REAL print render instead of a DOM approximation that
+   * drifts from it (font sizes in pt, bwip-js barcodes, inlined art, embedded
+   * fallback fonts). Same builder as print, so what is on screen is what comes
+   * out of the printer.
+   */
+  expose('labels:previewDraft', async ({ template, productId, layout } = {}) => {
+    if (!template || typeof template !== 'object') throw new Error('template is required');
+    const product = (productId ? productsDb.get(productId) : null)
+      || productsDb.list(companies.getActiveId())[0]
+      || { sku: 'SAMPLE-001', name: 'Sample product', barcode: '123456789012', priceRetail: 9.99 };
+    const brands = product.brandId ? [brandsDb.get(product.brandId)].filter(Boolean) : [];
+    return {
+      html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single', ...(layout || {}) } }),
+      sample: { id: product.id ?? null, sku: product.sku ?? null, name: product.name ?? null },
+    };
+  });
+
   expose('labels:barcodePreview', async ({ value, format } = {}) => ({ dataUrl: await barcodeUri(value, format, true) }));
   exposeLocal('labels:saveBarcode', async ({ value, format, outputFolder } = {}) => {
     if (!outputFolder) throw new Error('Pick an output folder');

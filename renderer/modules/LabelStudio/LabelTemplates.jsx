@@ -6,6 +6,10 @@ import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
+import { DesignerCanvas } from './DesignerCanvas.jsx';
+import { DesignerLayers } from './DesignerLayers.jsx';
+import { useDesignerHistory } from './useDesignerHistory.js';
+import { alignPatches, distributePatches, normalizeElements } from './designerGeometry.js';
 
 const TYPES = [
   ['text', 'Text'], ['sku', 'SKU'], ['price', 'Price'], ['barcode', 'Barcode'], ['qr', 'QR code'],
@@ -56,42 +60,40 @@ function TemplateCard({ item, onOpen, onDuplicate, onDelete }) {
   );
 }
 
-function LabelCanvas({ template, selectedId, onSelect, onMove, sample }) {
-  const canvasRef = useRef(null);
-  const scale = Math.min(10, 680 / Math.max(template.widthMm, template.heightMm));
-  function pointerDown(e, el) {
-    e.preventDefault(); onSelect(el.id);
-    const startX = e.clientX; const startY = e.clientY; const ox = el.x; const oy = el.y;
-    const move = (ev) => onMove(el.id, { x: Math.max(0, ox + (ev.clientX - startX) / scale), y: Math.max(0, oy + (ev.clientY - startY) / scale) });
-    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
-    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
-  }
-  function text(el) {
-    const v = el.manualValue ?? sample?.[el.field] ?? (el.field === 'priceRetail' ? '9.99' : el.field === 'barcode' ? '123456789012' : el.field === 'sku' ? 'SAMPLE-001' : el.type === 'date' ? '2027-12-31' : el.type === 'country' ? 'Cambodia' : 'Sample product');
-    return `${el.prefix || ''}${v}${el.suffix || ''}`;
-  }
-  return (
-    <div className="label-stage"><div ref={canvasRef} className="label-canvas" style={{ width: template.widthMm * scale, height: template.heightMm * scale, background: template.backgroundColor }} onPointerDown={() => onSelect(null)}>
-      {(template.elements || []).map((el) => {
-        const style = { left: el.x * scale, top: el.y * scale, width: el.width * scale, height: el.height * scale,
-          transform: `rotate(${el.rotation || 0}deg)`, fontSize: `${Math.max(7, el.fontSize || 10)}px`, fontWeight: el.fontWeight || 400,
-          color: el.color || '#111827', justifyContent: el.align === 'center' ? 'center' : el.align === 'right' ? 'flex-end' : 'flex-start' };
-        return <button type="button" key={el.id} className={`label-element label-element--${el.type}${selectedId === el.id ? ' is-selected' : ''}`} style={style} onPointerDown={(e) => pointerDown(e, el)}>
-          {['rect', 'colorbar'].includes(el.type) ? <span style={{ position: 'absolute', inset: 0, background: el.fill || '#eef2ff', border: `${el.borderWidth || 1}px solid ${el.borderColor || '#c7d2fe'}`, borderRadius: el.radius || 0 }} /> :
-           el.type === 'divider' ? <span style={{ width: '100%', borderTop: `${el.thickness || 1}px solid ${el.color || '#111827'}` }} /> :
-           el.type === 'barcode' ? <span className="designer-barcode">|||| ||| || ||||<small>{text(el)}</small></span> :
-           el.type === 'qr' ? <span className="designer-qr">▦</span> :
-           el.type === 'productImage' ? <span className="designer-placeholder">Product image</span> :
-           el.type === 'logo' ? <span className="designer-placeholder">Brand logo</span> :
-           ['image', 'cert'].includes(el.type) ? <span className="designer-placeholder">{el.src ? 'Artwork' : 'Choose image'}</span> : text(el)}
-        </button>;
-      })}
-    </div></div>
-  );
-}
+/* v0.1.64: the old LabelCanvas lived here. It was replaced by
+ * DesignerCanvas.jsx, which has the interaction model the original Label Studio
+ * KH designer had (fit/zoom, marquee, multi-select, guides, handles, history).
+ * The palette items below are draggable, so a type can be dropped exactly where
+ * the user wants it instead of always landing at 4mm/4mm. */
 
-function Inspector({ element, onChange, onRemove, onPickImage, onDuplicate, onLayer }) {
-  if (!element) return <aside className="studio-inspector studio-inspector--empty"><div className="inspector-empty-icon">◇</div><strong>Select an element</strong><p>Click any object on the label to adjust its content and layout.</p></aside>;
+const ALIGN_MODES = [
+  ['left', 'Left'], ['center', 'Centre'], ['right', 'Right'],
+  ['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom'],
+];
+
+function Inspector({ element, selectionCount = 0, onChange, onRemove, onPickImage, onDuplicate, onLayer }) {
+  if (!element && selectionCount > 1) {
+    // v0.1.64: with several elements selected the single-element form would be a
+    // lie. Say what is selected and point at the tools that act on a group.
+    return (
+      <aside className="studio-inspector">
+        <div className="inspector-title">
+          <div><span>Selection</span><strong>{selectionCount} elements</strong></div>
+          <Button variant="ghost" onClick={onRemove}>Remove</Button>
+        </div>
+        <p className="ld-inspector-note">
+          Drag any of them to move the whole selection. The dashed box around them resizes all of
+          them together. Use the align and spread buttons above, or the Layers list, to pick one.
+        </p>
+        <div className="inspector-actions">
+          <Button variant="ghost" onClick={onDuplicate}>Duplicate</Button>
+          <Button variant="ghost" onClick={() => onLayer(1)}>Bring front</Button>
+          <Button variant="ghost" onClick={() => onLayer(-1)}>Send back</Button>
+        </div>
+      </aside>
+    );
+  }
+  if (!element) return <aside className="studio-inspector studio-inspector--empty"><div className="inspector-empty-icon">◇</div><strong>Select an element</strong><p>Click any object on the label, or a row in the Layers list, to adjust its content and layout.</p></aside>;
   const set = (key, value) => onChange({ [key]: value });
   return <aside className="studio-inspector"><div className="inspector-title"><div><span>{element.type}</span><strong>{TYPES.find(([id]) => id === element.type)?.[1] || element.type}</strong></div><Button variant="ghost" onClick={onRemove}>Remove</Button></div>
     {!['rect', 'colorbar', 'divider', 'productImage', 'logo', 'image', 'cert'].includes(element.type) ? <>
@@ -111,9 +113,14 @@ function Inspector({ element, onChange, onRemove, onPickImage, onDuplicate, onLa
 export function LabelTemplates() {
   const companyId = useAppStore((s) => s.activeCompanyId); const products = useAppStore((s) => s.products); const addToast = useAppStore((s) => s.addToast);
   const companySwitching = useAppStore((s) => s.companySwitching);
-  const [items, setItems] = useState([]); const [editing, setEditing] = useState(null); const [draft, setDraft] = useState(null); const [selectedId, setSelectedId] = useState(null);
+  const [items, setItems] = useState([]); const [editing, setEditing] = useState(null); const [draft, setDraft] = useState(null); const [selectedIds, setSelectedIds] = useState([]);
   const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null); const [newOpen, setNewOpen] = useState(false); const [newName, setNewName] = useState('');
-  const timer = useRef(null); const selected = draft?.elements?.find((x) => x.id === selectedId) || null;
+  const timer = useRef(null);
+  // v0.1.64: designer state — zoom, snapping, and undo/redo history.
+  const [zoom, setZoom] = useState('fit');
+  const [snap, setSnap] = useState(true);
+  const history = useDesignerHistory();
+  const selected = selectedIds.length === 1 ? (draft?.elements?.find((x) => x.id === selectedIds[0]) || null) : null;
   const requestSeq = useRef(0); const remoteSeq = useRef(0); const editorGeneration = useRef(0); const latest = useRef(null); const dirty = useRef(false); const saveQueue = useRef(null); const saveRef = useRef(null); const acknowledgedRevision = useRef(null);
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
@@ -131,7 +138,7 @@ export function LabelTemplates() {
     latest.current = null;
     acknowledgedRevision.current = null;
     dirty.current = false;
-    setEditing(null); setDraft(null); setSelectedId(null); setSaveState('saved');
+    setEditing(null); setDraft(null); setSelectedIds([]); setSaveState('saved');
     void load();
   }, [companyId, load]);
   useEffect(() => () => {
@@ -145,7 +152,7 @@ export function LabelTemplates() {
       if (event?.kind !== 'labels') return;
       void load();
       if (!editing || event.id !== editing || dirty.current) return;
-      if (event.op === 'delete') { setEditing(null); setDraft(null); setSelectedId(null); return; }
+      if (event.op === 'delete') { setEditing(null); setDraft(null); setSelectedIds([]); return; }
       const generation = editorGeneration.current;
       const seq = ++remoteSeq.current;
       window.api.labels.getTemplate(editing).then((row) => {
@@ -227,10 +234,108 @@ export function LabelTemplates() {
   useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
   const change = useCallback((patch) => { if (companySwitching) return; remoteSeq.current += 1; const next = { ...draft, ...patch }; setDraft(next); latest.current = next; dirty.current = true; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }, [companySwitching, draft, save]);
   const changeElement = useCallback((id, patch) => { change({ elements: draft.elements.map((x) => x.id === id ? { ...x, ...patch } : x) }); }, [draft, change]);
-  function duplicateElement() { if (!selected) return; const copy = { ...selected, id: `${selected.type}-${Date.now()}`, x: selected.x + 2, y: selected.y + 2 }; change({ elements: [...draft.elements, copy] }); setSelectedId(copy.id); }
-  function layerElement(direction) { if (!selected) return; const index = draft.elements.findIndex((x) => x.id === selected.id); const target = Math.max(0, Math.min(draft.elements.length - 1, index + direction)); if (target === index) return; const next = [...draft.elements]; const [item] = next.splice(index, 1); next.splice(target, 0, item); change({ elements: next }); }
+  /* v0.1.64: every structural edit goes through these, so each one pushes a
+   * single history entry and the selection follows the change. */
+  function setElements(updater) {
+    const next = typeof updater === 'function' ? updater(draft.elements) : updater;
+    change({ elements: next });
+  }
+  function commit() { history.push(draft.elements); }
+
+  function addElementAt(type, x, y) {
+    history.push(draft.elements);
+    const el = makeElement(type, draft.elements.length);
+    const placed = { ...el, x: Math.max(0, Math.round(x ?? el.x)), y: Math.max(0, Math.round(y ?? el.y)) };
+    setElements([...draft.elements, placed]);
+    setSelectedIds([placed.id]);
+  }
+  function duplicateElement(id = selectedIds[0]) {
+    const source = draft.elements.find((x) => x.id === id);
+    if (!source) return;
+    history.push(draft.elements);
+    const copy = { ...source, id: `${source.type}-${Date.now()}`, x: source.x + 2, y: source.y + 2 };
+    setElements([...draft.elements, copy]);
+    setSelectedIds([copy.id]);
+  }
+  function removeElements(ids = selectedIds) {
+    if (!ids.length) return;
+    history.push(draft.elements);
+    setElements(draft.elements.filter((x) => !ids.includes(x.id)));
+    setSelectedIds([]);
+  }
+  function reorderElement(id, direction) {
+    const index = draft.elements.findIndex((x) => x.id === id);
+    if (index < 0) return;
+    history.push(draft.elements);
+    // Swap z-index rather than array position: the array is the user's own
+    // order and the renderer sorts by z, so this is the honest operation.
+    const el = draft.elements[index];
+    const zs = draft.elements.map((x) => Number(x.zIndex) || 1);
+    const nextZ = direction > 0 ? Math.max(...zs) + 1 : Math.min(...zs) - 1;
+    setElements(draft.elements.map((x) => (x.id === id ? { ...x, zIndex: nextZ } : x)));
+    void el;
+  }
+  function toggleLock(id, locked) {
+    history.push(draft.elements);
+    setElements(draft.elements.map((x) => (x.id === id ? { ...x, locked } : x)));
+  }
+  function toggleVisible(id, visible) {
+    history.push(draft.elements);
+    setElements(draft.elements.map((x) => (x.id === id ? { ...x, visible } : x)));
+  }
+  function renameElement(id) {
+    const el = draft.elements.find((x) => x.id === id);
+    if (!el) return;
+    const next = window.prompt('Layer name', el.name || '');
+    if (next == null) return;
+    history.push(draft.elements);
+    setElements(draft.elements.map((x) => (x.id === id ? { ...x, name: next.trim() || undefined } : x)));
+  }
+  function nudge(dx, dy) {
+    if (!selectedIds.length) return;
+    history.push(draft.elements);
+    setElements(draft.elements.map((el) => (selectedIds.includes(el.id)
+      ? { ...el, x: Math.max(0, el.x + dx), y: Math.max(0, el.y + dy) }
+      : el)));
+  }
+  function alignSelection(mode, inLabel = false) {
+    if (!selectedIds.length) return;
+    history.push(draft.elements);
+    const patches = alignPatches(draft.elements.filter((el) => selectedIds.includes(el.id)), mode,
+      inLabel ? { widthMm: draft.widthMm, heightMm: draft.heightMm } : null);
+    const byId = new Map(patches.map((p) => [p.id, p.patch]));
+    setElements(draft.elements.map((el) => (byId.has(el.id) ? { ...el, ...byId.get(el.id) } : el)));
+  }
+  function distributeSelection(axis) {
+    if (selectedIds.length < 3) return;
+    history.push(draft.elements);
+    const patches = distributePatches(draft.elements.filter((el) => selectedIds.includes(el.id)), axis);
+    const byId = new Map(patches.map((p) => [p.id, p.patch]));
+    setElements(draft.elements.map((el) => (byId.has(el.id) ? { ...el, ...byId.get(el.id) } : el)));
+  }
+  function undo() {
+    const previous = history.undo(draft.elements);
+    if (previous) { change({ elements: previous }); setSelectedIds([]); }
+  }
+  function redo() {
+    const next = history.redo(draft.elements);
+    if (next) { change({ elements: next }); setSelectedIds([]); }
+  }
+  /** Everything the canvas asks for that is not a drag. */
+  function handleCanvasAction(action) {
+    if (!action) return;
+    if (action.kind === 'drop') return addElementAt(action.type, action.x, action.y);
+    if (action.kind === 'duplicate') return duplicateElement(action.id);
+    if (action.kind === 'remove') return removeElements([action.id]);
+    if (action.kind === 'reorder') return reorderElement(action.id, action.dir);
+    if (action.kind === 'lock') return toggleLock(action.id, action.locked);
+    if (action.kind === 'hide') return toggleVisible(action.id, action.visible);
+    if (action.kind === 'rename') return renameElement(action.id);
+    return undefined;
+  }
+
   async function pickElementImage() { try { const source = await window.api.files.pickImageFile(); if (!source) return; const imported = await window.api.labels.importAsset(source, draft.name); changeElement(selected.id, { src: imported.relativePath }); } catch (e) { addToast(e.message, 'error'); } }
-  async function createTemplate() { try { const row = await window.api.labels.createTemplate({ companyId, name: newName || 'Untitled label', widthMm: 60, heightMm: 40, backgroundColor: '#ffffff', elements: [] }); editorGeneration.current += 1; saveQueue.current = null; latest.current = row; acknowledgedRevision.current = row.updatedAt; dirty.current = false; setItems((x) => [row, ...x]); setDraft(row); setEditing(row.id); setNewOpen(false); setNewName(''); } catch (e) { addToast(e.message, 'error'); } }
+  async function createTemplate() { try { const row = await window.api.labels.createTemplate({ companyId, name: newName || 'Untitled label', widthMm: 60, heightMm: 40, backgroundColor: '#ffffff', elements: [] }); editorGeneration.current += 1; saveQueue.current = null; latest.current = row; acknowledgedRevision.current = row.updatedAt; dirty.current = false; setItems((x) => [row, ...x]); setDraft(row); setEditing(row.id); setSelectedIds([]); history.reset(); setNewOpen(false); setNewName(''); } catch (e) { addToast(e.message, 'error'); } }
   /* v0.1.27: fetch BEFORE switching which template the editor shows.
    * `setEditing(item.id)` used to run first, so if the fetch failed the editor
    * stayed open on the PREVIOUS template's content while its header said the
@@ -248,44 +353,162 @@ export function LabelTemplates() {
       acknowledgedRevision.current = full.updatedAt;
       dirty.current = false;
       setEditing(item.id);
-      setDraft(full);
-      setSelectedId(null);
+      // Repair any element the web of edits left without an id/type before the
+      // designer can select it (see normalizeElements).
+      setDraft({ ...full, elements: normalizeElements(full.elements) });
+      setSelectedIds([]);
+      history.reset();
       setSaveState('saved');
       setSavedAt(item.updatedAt);
     } catch (e) {
       addToast(`Couldn't open "${item.name}": ${e.message}`, 'error');
     }
   }
+  /* v0.1.64: the keyboard set the original designer had. Skipped while a form
+   * control has focus, so typing "10" in the X box is not an arrow nudge. */
   useEffect(() => {
-    if (!editing || !selectedId) return undefined;
+    if (!editing) return undefined;
     const key = (e) => {
-      if (/INPUT|TEXTAREA|SELECT/.test(e.target?.tagName)) return;
-      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); change({ elements: draft.elements.filter((x) => x.id !== selectedId) }); setSelectedId(null); return; }
-      const delta = e.shiftKey ? 1 : 0.25;
-      if (e.key === 'ArrowLeft') changeElement(selectedId, { x: Math.max(0, selected.x - delta) });
-      else if (e.key === 'ArrowRight') changeElement(selectedId, { x: selected.x + delta });
-      else if (e.key === 'ArrowUp') changeElement(selectedId, { y: Math.max(0, selected.y - delta) });
-      else if (e.key === 'ArrowDown') changeElement(selectedId, { y: selected.y + delta });
-      else return;
-      e.preventDefault();
+      if (/INPUT|TEXTAREA|SELECT/.test(e.target?.tagName) || e.target?.isContentEditable) return;
+      const meta = e.metaKey || e.ctrlKey;
+      const el = draft;
+      if (!el) return;
+      if (meta && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); return undo(); }
+      if ((meta && e.key.toLowerCase() === 'y') || (meta && e.shiftKey && e.key.toLowerCase() === 'z')) { e.preventDefault(); return redo(); }
+      if (meta && e.key.toLowerCase() === 'd') { e.preventDefault(); return duplicateElement(); }
+      if (meta && e.key.toLowerCase() === 'a') { e.preventDefault(); return setSelectedIds(el.elements.map((x) => x.id)); }
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); return removeElements(); }
+      if (e.key === 'Escape') { setSelectedIds([]); return undefined; }
+      const step = e.shiftKey ? 0.1 : 1;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); return nudge(-step, 0); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); return nudge(step, 0); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); return nudge(0, -step); }
+      if (e.key === 'ArrowDown') { e.preventDefault(); return nudge(0, step); }
+      return undefined;
     };
-    window.addEventListener('keydown', key); return () => window.removeEventListener('keydown', key);
-  }, [editing, selectedId, selected, draft, change, changeElement]);
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [editing, draft, selectedIds, history]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function leaveEditor() {
     try {
       await flushPending();
       editorGeneration.current += 1;
       saveQueue.current = null;
       dirty.current = false;
-      setEditing(null); setDraft(null); await load();
+      setEditing(null); setDraft(null); setSelectedIds([]); await load();
     } catch (error) {
       if (parseConflictError(error)) addToast('This label changed elsewhere. Use Save to review it before leaving.', 'error');
     }
   }
-  if (editing && draft) return <section className="page label-designer-page"><PageHeader title={draft.name} subtitle={`${draft.widthMm} × ${draft.heightMm} mm · Label Designer`} actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} /><Button variant="ghost" onClick={leaveEditor}>Back to templates</Button></>} />
-    <div className="designer-toolbar"><div className="designer-toolbar__brand"><Input value={draft.name} onChange={(e) => change({ name: e.target.value })} /></div><div className="designer-toolbar__tools">{TYPES.map(([type, label]) => <button type="button" key={type} onClick={() => { const el = makeElement(type, draft.elements.length); change({ elements: [...draft.elements, el] }); setSelectedId(el.id); }}><span>+</span>{label}</button>)}</div><div className="designer-toolbar__size"><Input type="number" value={draft.widthMm} onChange={(e) => change({ widthMm: Number(e.target.value) })} /><span>×</span><Input type="number" value={draft.heightMm} onChange={(e) => change({ heightMm: Number(e.target.value) })} /><span>mm</span><Input type="color" value={draft.backgroundColor} onChange={(e) => change({ backgroundColor: e.target.value })} /></div></div>
-    <div className="designer-shell"><LabelCanvas template={draft} selectedId={selectedId} onSelect={setSelectedId} onMove={changeElement} sample={products[0]} /><Inspector element={selected} onChange={(patch) => changeElement(selected.id, patch)} onRemove={() => { change({ elements: draft.elements.filter((x) => x.id !== selected.id) }); setSelectedId(null); }} onPickImage={pickElementImage} onDuplicate={duplicateElement} onLayer={layerElement} /></div>
-  </section>;
+  if (editing && draft) {
+    return (
+      <section className="page label-designer-page">
+        <PageHeader
+          title={draft.name}
+          subtitle={`${draft.widthMm} × ${draft.heightMm} mm · Label Designer`}
+          actions={(
+            <>
+              <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
+              <Button variant="ghost" onClick={undo} disabled={!history.canUndo} title="Undo (⌘Z)">Undo</Button>
+              <Button variant="ghost" onClick={redo} disabled={!history.canRedo} title="Redo (⇧⌘Z)">Redo</Button>
+              <Button variant="ghost" onClick={leaveEditor}>Back to templates</Button>
+            </>
+          )}
+        />
+
+        <div className="designer-toolbar">
+          <div className="designer-toolbar__brand">
+            <Input value={draft.name} onChange={(e) => change({ name: e.target.value })} />
+          </div>
+          <div className="designer-toolbar__tools">
+            {TYPES.map(([type, label]) => (
+              <button
+                type="button"
+                key={type}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('application/x-mskh-label-element', type);
+                  e.dataTransfer.effectAllowed = 'copy';
+                }}
+                onClick={() => addElementAt(type)}
+                title={`Click to add, or drag onto the label to place it — ${label}`}
+              >
+                <span>+</span>{label}
+              </button>
+            ))}
+          </div>
+          <div className="designer-toolbar__size">
+            <Input type="number" value={draft.widthMm} onChange={(e) => change({ widthMm: Number(e.target.value) })} />
+            <span>×</span>
+            <Input type="number" value={draft.heightMm} onChange={(e) => change({ heightMm: Number(e.target.value) })} />
+            <span>mm</span>
+            <Input type="color" value={draft.backgroundColor} onChange={(e) => change({ backgroundColor: e.target.value })} />
+          </div>
+        </div>
+
+        {/* v0.1.64: align/distribute — the original designer's AlignmentToolbar.
+            Align works inside the selection; shift-click "in label" aligns to
+            the label edges instead. */}
+        <div className="ld-align">
+          <span className="ld-align__label">
+            {selectedIds.length ? `${selectedIds.length} selected` : 'Align'}
+          </span>
+          {ALIGN_MODES.map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              disabled={!selectedIds.length}
+              onClick={(e) => alignSelection(mode, e.shiftKey)}
+              title={`Align ${label.toLowerCase()} — hold Shift to align to the label edges`}
+            >
+              {label}
+            </button>
+          ))}
+          <span className="ld-align__sep" />
+          <button type="button" disabled={selectedIds.length < 3} onClick={() => distributeSelection('x')}>Spread ↔</button>
+          <button type="button" disabled={selectedIds.length < 3} onClick={() => distributeSelection('y')}>Spread ↕</button>
+          <span className="ld-align__sep" />
+          <button type="button" disabled={!selectedIds.length} onClick={() => duplicateElement()}>Duplicate</button>
+          <button type="button" disabled={!selectedIds.length} onClick={() => removeElements()}>Delete</button>
+        </div>
+
+        <div className="designer-shell designer-shell--v2">
+          <div className="ld-main">
+            <DesignerCanvas
+              template={draft}
+              elements={draft.elements}
+              selectedIds={selectedIds}
+              setElements={setElements}
+              commit={commit}
+              onSelect={setSelectedIds}
+              zoom={zoom}
+              onZoomChange={setZoom}
+              snap={snap}
+              onSnapChange={setSnap}
+              sample={products[0]}
+              onAction={handleCanvasAction}
+            />
+            <DesignerLayers
+              elements={draft.elements}
+              selectedIds={selectedIds}
+              onSelect={setSelectedIds}
+              onAction={handleCanvasAction}
+            />
+          </div>
+          <Inspector
+            element={selected}
+            selectionCount={selectedIds.length}
+            onChange={(patch) => changeElement(selectedIds[0], patch)}
+            onRemove={() => removeElements()}
+            onPickImage={pickElementImage}
+            onDuplicate={() => duplicateElement()}
+            onLayer={(direction) => reorderElement(selectedIds[0], direction)}
+          />
+        </div>
+      </section>
+    );
+  }
   return <section className="page"><PageHeader title="Label Templates" subtitle="Design once, generate and print from the shared Product Library." actions={<Button onClick={() => setNewOpen(true)}>+ New label template</Button>} />
     <div className="studio-intro"><div><span className="studio-intro__icon">L</span><div><strong>Print-ready labels, connected to every product</strong><p>Templates use live product fields and support retail labels, shelf cards, QR codes, barcodes and multilingual text.</p></div></div><span className="studio-intro__badge">Autosave on</span></div>
     <div className="template-grid">{items.length ? items.map((item) => <TemplateCard key={item.id} item={item} onOpen={() => open(item)} onDuplicate={async () => { try { const row = await window.api.labels.duplicateTemplate(item.id); setItems((x) => [row, ...x]); } catch (e) { addToast(e.message, 'error'); } }} onDelete={async () => { if (!(await confirm({ title: `Delete “${item.name}”?`, message: 'This cannot be undone.', danger: true }))) return; try { await window.api.labels.deleteTemplate(item.id); load(); } catch (e) { addToast(e.message, 'error'); } }} />) : <EmptyState title="No label templates" body="Create your first template to begin." action={<Button onClick={() => setNewOpen(true)}>Create template</Button>} />}</div>
