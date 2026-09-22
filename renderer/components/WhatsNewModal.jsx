@@ -2,6 +2,22 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.64',
+    date: '2026-09-22',
+    items: [
+      'FIX — the label designer was nearly unusable: clicking an element selected it and deselected it in the same instant, so the panel on the right never appeared and nothing could be adjusted. Elements select properly now, and stay selected.',
+      'NEW — the label canvas behaves like a real design tool. Fit-to-view and zoom (⌘/Ctrl + scroll, or the buttons), drag to move with pink alignment guides snapping to the other elements, eight resize handles (hold Shift to swap the aspect lock), a marquee to select several, a dashed box to resize them together, and arrow keys to nudge — 1mm, or 0.1mm with Shift.',
+      'NEW — a Layers list under the canvas. Click a row to select, double-click to rename, and toggle visibility or lock per element; up/down change the stacking order. Elements you cannot see, or that sit behind something, are now reachable.',
+      'NEW — align and spread: Left/Centre/Right/Top/Middle/Bottom inside the selection (hold Shift to align to the label edges), plus Spread ↔ / ↕ to even out a row of elements.',
+      'NEW — undo and redo (⌘Z / ⇧⌘Z), copy-style duplicate (⌘D), select all (⌘A), Delete, and a right-click menu with lock, hide, front, back, duplicate and delete.',
+      'NEW — drag a type from the toolbar and drop it exactly where you want it, instead of every new element landing in the same corner.',
+      'POLISH — the preview is much closer to the print. Text now uses the point sizes the printer uses instead of smaller pixel guesses, barcodes and QR codes are real bwip-js images rather than a row of pipe characters, and product photos and logos appear through the app-image protocol. There is also an “Exact preview” button that swaps the canvas for the real print document — the same HTML the printer gets — so you can always check the preview is not lying.',
+      'Internal — ported from the original Label Studio KH designer (its Canvas.tsx plus the fit/zoom, marquee, guide, handle and history logic), which is the editor this one should feel like. New renderer/modules/LabelStudio/designerGeometry.js holds the arithmetic (pure, 18 unit cases), useDesignerHistory.js the snapshot undo stack, and DesignerCanvas.jsx / DesignerLayers.jsx the UI.',
+      'Internal — new labels:previewDraft channel so the designer can render an UNSAVED template through the print path; labels:preview needed a saved id and could not. Also repairs stored elements on open: an element with a missing or duplicated id is given a fresh one, because selection is by id.',
+      'Internal — found by the UI crawl: the first version of the canvas replaced each element with its clamped geometry on every drag, which stripped the type, bound field and colour of anything that had been moved. The crawl drives real mouse gestures, which is the only way that class of bug shows up.',
+    ],
+  },
+  {
     version: '0.1.63',
     date: '2026-09-22',
     items: [
