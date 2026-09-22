@@ -85,6 +85,9 @@ export default [
     ignores: [
       'node_modules/**', 'dist/**', 'dist-electron/**', 'dist-renderer/**',
       'graphify-out/**', 'webclient/**', 'build/**', 'assets/**', 'data/**',
+      // `_trash/` is the owner's recoverable-delete folder — nothing in it is
+      // read by the app, tests or build, so lint must not scan it either.
+      '_trash/**',
     ],
   },
   js.configs.recommended,
