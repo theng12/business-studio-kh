@@ -6,6 +6,7 @@ import { Attribution } from '../../components/Attribution.jsx';
 import { HistoryModal } from '../../components/HistoryModal.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { appImageSrc } from '../../lib/imageUrl.js';
+import { CURRENCIES } from '../../lib/currencies.js';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { parseConflictError, showConflict } from '../../components/ConflictModal.jsx';
 import { ReframeModal } from './ReframeModal.jsx';
@@ -45,6 +46,12 @@ function emptyForm() {
     description: '',
     priceRetail: '',
     priceWholesale: '',
+    // v0.1.55: each price field carries its own currency, and the company can
+    // define extra named price groups stored per product in `prices` as
+    // { [groupKey]: { amount, currency } }.
+    priceRetailCurrency: 'USD',
+    priceWholesaleCurrency: 'USD',
+    prices: {},
     expiryDate: '',
     taxRate: '',
     reorderPoint: '',
@@ -82,6 +89,18 @@ function productToForm(p) {
     description: p.description ?? '',
     priceRetail: p.priceRetail == null ? '' : String(p.priceRetail),
     priceWholesale: p.priceWholesale == null ? '' : String(p.priceWholesale),
+    priceRetailCurrency: p.priceRetailCurrency ?? 'USD',
+    priceWholesaleCurrency: p.priceWholesaleCurrency ?? 'USD',
+    // Accepts both the current `{ amount, currency }` shape and a legacy bare
+    // number for a group value.
+    prices: Object.fromEntries(
+      Object.entries(p.prices ?? {}).map(([key, v]) => [
+        key,
+        (v && typeof v === 'object')
+          ? { amount: v.amount == null ? '' : String(v.amount), currency: v.currency ?? 'USD' }
+          : { amount: v == null ? '' : String(v), currency: 'USD' },
+      ]),
+    ),
     expiryDate: p.expiryDate ?? '',
     taxRate: p.taxRate ?? '',
     reorderPoint: p.reorderPoint ?? '',
@@ -109,6 +128,22 @@ function toNumberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * v0.1.55: form `prices` → the stored shape.
+ * `{ [groupKey]: { amount, currency } }`, dropping groups left blank. Accepts a
+ * bare number too so an older form value can't crash the save.
+ */
+function buildPrices(map) {
+  const out = {};
+  for (const [key, v] of Object.entries(map ?? {})) {
+    const obj = (v && typeof v === 'object') ? v : { amount: v, currency: 'USD' };
+    const amount = toNumberOrNull(obj.amount);
+    if (amount == null) continue;
+    out[key] = { amount, currency: obj.currency || 'USD' };
+  }
+  return out;
+}
+
 export function ProductForm({ product, isCreating = false, createKey = 0, onClose, onStartCreate, onProcess, onPreview }) {
   // The panel is persistently mounted (per the user's request to keep the
   // detail view always visible). There are three modes:
@@ -132,6 +167,10 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
   // v0.49.48: active company drives the supplier dropdown in the
   // Logistics & sourcing section.
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
+  const companies = useAppStore((s) => s.companies);
+  // v0.1.55: this company's named price groups (Settings → General → Price
+  // groups). Each becomes an extra amount + currency row below.
+  const priceGroups = (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [];
   const [suppliers, setSuppliers] = useState([]);
   // v0.49.39: drag-out is hidden in client mode (the multi-file
   // drag-out IPC is a no-op there pending Phase 2 — see
@@ -345,6 +384,9 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
       description: form.description.trim() || null,
       priceRetail: toNumberOrNull(form.priceRetail),
       priceWholesale: toNumberOrNull(form.priceWholesale),
+      priceRetailCurrency: form.priceRetailCurrency || 'USD',
+      priceWholesaleCurrency: form.priceWholesaleCurrency || 'USD',
+      prices: buildPrices(form.prices),
       expiryDate: form.expiryDate.trim() || null,
       taxRate: form.taxRate.trim() || null,
       reorderPoint: form.reorderPoint.trim() || null,
@@ -982,12 +1024,74 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
         </Field>
 
         <Field label="Retail price">
-          {({ id }) => <Input id={id} type="number" step="any" value={form.priceRetail} onChange={setField('priceRetail')} />}
+          {({ id }) => (
+            <div className="price-row">
+              <Input id={id} type="number" step="any" value={form.priceRetail} onChange={setField('priceRetail')} placeholder="0.00" />
+              <Select
+                value={form.priceRetailCurrency || 'USD'}
+                onChange={(e) => setForm((f) => ({ ...f, priceRetailCurrency: e.target.value }))}
+                aria-label="Retail price currency"
+                style={{ width: 118 }}
+              >
+                {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{`${c.symbol} ${c.code}`}</option>)}
+              </Select>
+            </div>
+          )}
         </Field>
 
         <Field label="Wholesale price">
-          {({ id }) => <Input id={id} type="number" step="any" value={form.priceWholesale} onChange={setField('priceWholesale')} />}
+          {({ id }) => (
+            <div className="price-row">
+              <Input id={id} type="number" step="any" value={form.priceWholesale} onChange={setField('priceWholesale')} placeholder="0.00" />
+              <Select
+                value={form.priceWholesaleCurrency || 'USD'}
+                onChange={(e) => setForm((f) => ({ ...f, priceWholesaleCurrency: e.target.value }))}
+                aria-label="Wholesale price currency"
+                style={{ width: 118 }}
+              >
+                {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{`${c.symbol} ${c.code}`}</option>)}
+              </Select>
+            </div>
+          )}
         </Field>
+
+        {/* v0.1.55: custom price groups. Defined once per company in
+            Settings → General → Price groups; each product fills in its own
+            amount + currency here. Stored in the product's `prices` map, which
+            Catalog Studio and Social Grid can render via config.priceGroup. */}
+        {priceGroups.map((g) => {
+          const cur = form.prices?.[g.key] ?? { amount: '', currency: 'USD' };
+          return (
+            <Field key={g.key} label={g.label}>
+              {({ id }) => (
+                <div className="price-row">
+                  <Input
+                    id={id}
+                    type="number"
+                    step="any"
+                    value={cur.amount ?? ''}
+                    placeholder="0.00"
+                    onChange={(e) => setForm((f) => ({
+                      ...f,
+                      prices: { ...(f.prices ?? {}), [g.key]: { ...(f.prices?.[g.key] ?? {}), amount: e.target.value } },
+                    }))}
+                  />
+                  <Select
+                    value={cur.currency || 'USD'}
+                    onChange={(e) => setForm((f) => ({
+                      ...f,
+                      prices: { ...(f.prices ?? {}), [g.key]: { ...(f.prices?.[g.key] ?? {}), currency: e.target.value } },
+                    }))}
+                    aria-label={`${g.label} currency`}
+                    style={{ width: 118 }}
+                  >
+                    {CURRENCIES.map((c) => <option key={c.code} value={c.code}>{`${c.symbol} ${c.code}`}</option>)}
+                  </Select>
+                </div>
+              )}
+            </Field>
+          );
+        })}
 
         <Field label="Tags" hint="Comma-separated" span="full">
           {({ id }) => <Input id={id} value={form.tags} onChange={setField('tags')} />}
