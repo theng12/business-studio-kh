@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.55',
+    date: '2026-09-22',
+    items: [
+      'NEW — custom prices exist now. Settings → General → Price groups lets you name extra prices (Wholesale, Export, …); every product then gets an amount row for each one. Before this, the app could read a custom price but nothing could create one, which is why it could not be found anywhere.',
+      'NEW — every price field now has a currency picker with real symbols: $ USD, ¥ RMB/CNY, ៛ KHR, ฿ THB, ₫ VND, € EUR, ₹ INR, Rp IDR, RM MYR, S$ SGD.',
+      'Internal — new main/util/currencies.js plus a renderer mirror (parity-tested). Additive columns products.price_retail_currency, products.price_wholesale_currency and companies.price_groups; no schema bump.',
+    ],
+  },
+  {
     version: '0.1.54',
     date: '2026-09-22',
     items: [

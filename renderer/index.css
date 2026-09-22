@@ -10366,3 +10366,26 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   line-height: 1.5;
   color: var(--c-text-muted);
 }
+
+/* ─── v0.1.55: price amount + currency picker ───────────────── */
+.price-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.price-row > .input:first-child { flex: 1 1 auto; min-width: 0; }
+.price-row > .input--select { flex: 0 0 auto; }
+
+/* ─── v0.1.55: price groups editor (Settings → General) ─────── */
+.price-groups { display: flex; flex-direction: column; gap: var(--s-2); }
+.price-groups__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.price-groups__row { display: flex; align-items: center; gap: 8px; }
+.price-groups__row > .input:first-child { flex: 1 1 auto; min-width: 0; }
+.price-groups__key {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-text-subtle);
+  white-space: nowrap;
+}
+.price-groups__add { display: flex; align-items: center; gap: 6px; }
+.price-groups__add > .input:first-child { flex: 1 1 auto; min-width: 0; }

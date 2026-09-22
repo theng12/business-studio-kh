@@ -4,6 +4,7 @@ const path = require('node:path');
 const { getDb, getDataDir } = require('./index');
 const { parseJson, getCallerUserId } = require('./_util');
 const { productAssetDir } = require('../util/assetPath');
+const { normalizeCurrency } = require('../util/currencies');
 
 // Late-required to break circular dependencies.
 let _companies;
@@ -37,6 +38,8 @@ function rowToProduct(row) {
     description: row.description,
     priceRetail: row.price_retail,
     priceWholesale: row.price_wholesale,
+    priceRetailCurrency: row.price_retail_currency ?? 'USD',
+    priceWholesaleCurrency: row.price_wholesale_currency ?? 'USD',
     prices: parseJson(row.prices, {}),
     customFields: parseJson(row.custom_fields, {}),
     expiryDate: row.expiry_date ?? null,
@@ -276,6 +279,7 @@ function create(input) {
         id, company_id, sku, name, brand_id, barcode, secondary_code,
         category_id, subcategory, color_finish, variant, unit,
         status, tags, description, price_retail, price_wholesale, prices,
+        price_retail_currency, price_wholesale_currency,
         custom_fields, expiry_date, tax_rate, reorder_point, reorder_quantity,
         track_inventory, variant_attributes, country_of_origin,
         supplier_id, supplier_sku, hs_code, carton_qty,
@@ -285,6 +289,7 @@ function create(input) {
         @id, @companyId, @sku, @name, @brandId, @barcode, @secondaryCode,
         @categoryId, @subcategory, @colorFinish, @variant, @unit,
         @status, @tags, @description, @priceRetail, @priceWholesale, @prices,
+        @priceRetailCurrency, @priceWholesaleCurrency,
         @customFields, @expiryDate, @taxRate, @reorderPoint, @reorderQuantity,
         @trackInventory, @variantAttributes, @countryOfOrigin,
         @supplierId, @supplierSku, @hsCode, @cartonQty,
@@ -310,6 +315,8 @@ function create(input) {
       description: input.description ?? null,
       priceRetail: input.priceRetail ?? null,
       priceWholesale: input.priceWholesale ?? null,
+      priceRetailCurrency: normalizeCurrency(input.priceRetailCurrency),
+      priceWholesaleCurrency: normalizeCurrency(input.priceWholesaleCurrency),
       prices: JSON.stringify(input.prices ?? {}),
       customFields: JSON.stringify(input.customFields ?? {}),
       expiryDate: input.expiryDate ?? null,
@@ -370,6 +377,8 @@ const UPDATABLE = {
   description: { col: 'description' },
   priceRetail: { col: 'price_retail' },
   priceWholesale: { col: 'price_wholesale' },
+  priceRetailCurrency: { col: 'price_retail_currency', transform: normalizeCurrency },
+  priceWholesaleCurrency: { col: 'price_wholesale_currency', transform: normalizeCurrency },
   prices: { col: 'prices', transform: (v) => JSON.stringify(v ?? {}) },
   customFields: { col: 'custom_fields', transform: (v) => JSON.stringify(v ?? {}) },
   expiryDate: { col: 'expiry_date' },

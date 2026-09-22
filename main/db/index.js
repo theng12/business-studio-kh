@@ -242,6 +242,12 @@ function initDb(dataDir) {
   /* Media Studio shared product fields. These stay on the canonical product
      row so Label and Catalog Studio read the same values as the Library. */
   addColumnIfMissing(db, 'products', 'prices', "TEXT NOT NULL DEFAULT '{}'");
+  /* v0.1.55: each price field carries its own currency, and a company can
+     define named price groups (stored per product in `prices`). Additive, so
+     no schema-version bump — existing rows read back as USD. */
+  addColumnIfMissing(db, 'products', 'price_retail_currency', 'TEXT');
+  addColumnIfMissing(db, 'products', 'price_wholesale_currency', 'TEXT');
+  addColumnIfMissing(db, 'companies', 'price_groups', "TEXT NOT NULL DEFAULT '[]'");
   addColumnIfMissing(db, 'products', 'custom_fields', "TEXT NOT NULL DEFAULT '{}'");
   addColumnIfMissing(db, 'products', 'expiry_date', 'TEXT');
   addColumnIfMissing(db, 'products', 'tax_rate', 'TEXT');
