@@ -304,4 +304,4 @@ async function processImage({ sku, originalFilename, foregroundBuffer, settings 
   return { relativePath, absolutePath: outAbs, filename: outFilename };
 }
 
-module.exports = { processImage, parseHexColor };
+module.exports = { processImage, parseHexColor, cornerPosition };

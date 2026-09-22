@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, Modal } from '../../components/ui.jsx';
+import { Button, Modal, SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 
 /**
@@ -50,7 +50,12 @@ export function ReframeModal({ open, productId, image, onClose, onSaved }) {
     setBusy(true);
     try {
       const res = await window.api.images.reframePreview({
-        productId, filepath, scale, offsetX, offsetY, fillMode, fillColor,
+        // v0.1.54: the sliders are percent (-100..100); reframeImage takes a
+        // -1..1 fraction and clamps it. Sending the raw percent made every
+        // value past 1 collapse to the same extreme nudge.
+        productId, filepath, scale,
+        offsetX: offsetX / 100, offsetY: offsetY / 100,
+        fillMode, fillColor,
       });
       const bytes = res?.bytes;
       if (!bytes) return;
@@ -88,7 +93,11 @@ export function ReframeModal({ open, productId, image, onClose, onSaved }) {
   async function handleSave() {
     setSaving(true);
     try {
-      await window.api.images.reframeImage({ productId, filepath, scale, offsetX, offsetY, fillMode, fillColor });
+      await window.api.images.reframeImage({
+        productId, filepath, scale,
+        offsetX: offsetX / 100, offsetY: offsetY / 100,
+        fillMode, fillColor,
+      });
       addToast('Image reframed', 'success');
       onSaved?.();
       onClose();
@@ -122,23 +131,31 @@ export function ReframeModal({ open, productId, image, onClose, onSaved }) {
             Commits in place — the image is overwritten with the reframed version.
           </p>
 
-          <label className="reframe__row">
-            <span>Size <span className="muted">{Math.round(scale * 100)}%</span></span>
-            <input type="range" min="40" max="100" step="1"
-              value={Math.round(scale * 100)}
-              onChange={(e) => setScale(Number(e.target.value) / 100)} />
-          </label>
+          <SliderField
+            label="Size"
+            value={Math.round(scale * 100)}
+            min={40}
+            max={100}
+            suffix="%"
+            onChange={(v) => setScale(v / 100)}
+          />
 
-          <label className="reframe__row">
-            <span>Nudge ↔ <span className="muted">{offsetX}</span></span>
-            <input type="range" min="-100" max="100" step="1" value={offsetX}
-              onChange={(e) => setOffsetX(Number(e.target.value))} />
-          </label>
-          <label className="reframe__row">
-            <span>Nudge ↕ <span className="muted">{offsetY}</span></span>
-            <input type="range" min="-100" max="100" step="1" value={offsetY}
-              onChange={(e) => setOffsetY(Number(e.target.value))} />
-          </label>
+          <SliderField
+            label="Nudge ↔"
+            value={offsetX}
+            min={-100}
+            max={100}
+            suffix="%"
+            onChange={setOffsetX}
+          />
+          <SliderField
+            label="Nudge ↕"
+            value={offsetY}
+            min={-100}
+            max={100}
+            suffix="%"
+            onChange={setOffsetY}
+          />
 
           <div className="reframe__row">
             <span>Margin fill</span>
