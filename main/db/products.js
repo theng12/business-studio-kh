@@ -771,6 +771,30 @@ function recomputeProcessStatus(id) {
 }
 
 /**
+ * The custom-field keys a company's products already use, as `custom.<key>`.
+ *
+ * v0.1.65: the import sample sheet offers a column per custom field the company
+ * is actually using, so a shop that tracks "material" or "voltage" is not
+ * expected to invent the column name from memory. Bounded and sorted so two
+ * downloads of the same data produce the same sheet.
+ */
+function customFieldKeys(companyId, limit = 24) {
+  const rows = getDb()
+    .prepare("SELECT custom_fields FROM products WHERE company_id = ? AND custom_fields IS NOT NULL AND custom_fields != '{}'")
+    .all(companyId);
+  const keys = new Set();
+  for (const row of rows) {
+    let parsed;
+    try { parsed = JSON.parse(row.custom_fields); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object') continue;
+    for (const key of Object.keys(parsed)) {
+      if (key && String(key).trim()) keys.add(`custom.${String(key).trim()}`);
+    }
+  }
+  return Array.from(keys).sort().slice(0, limit);
+}
+
+/**
  * Bulk insert/update from import. Each row must have a `sku`.
  *
  * @param {string}  companyId
@@ -853,6 +877,10 @@ function bulkUpsert(companyId, rows, opts = {}) {
     'name', 'brandId', 'barcode', 'secondaryCode', 'categoryId',
     'subcategory', 'colorFinish', 'variant', 'unit', 'status',
     'description', 'priceRetail', 'priceWholesale',
+    // v0.1.65: per-field currencies. A price list from a supplier is in ONE
+    // currency, and a sheet that can only carry the number forced everyone into
+    // whatever the app defaulted to.
+    'priceRetailCurrency', 'priceWholesaleCurrency',
     // v0.49.49: logistics & sourcing — importable from a packing list.
     'supplierSku', 'hsCode', 'cartonQty', 'cartonWCm', 'cartonHCm',
     'cartonDCm', 'weightPerUnitKg',
@@ -938,6 +966,63 @@ function bulkUpsert(companyId, rows, opts = {}) {
             }
           }
 
+          /* Custom price groups (v0.1.65).
+           *
+           * products.prices is a JSON map, so — like every other JSON field in
+           * an import — it merges per key rather than replacing the object.
+           * Replacing it would wipe the groups the sheet did not mention, and a
+           * sheet only ever mentions the groups it has columns for.
+           *
+           * A blank amount is meaningful: under Overwrite it clears that group
+           * (the user asked for the sheet to be the source of truth), under
+           * Merge it leaves the stored amount alone. */
+          if (row.prices && typeof row.prices === 'object' && policy !== 'skip') {
+            const before = existing.prices && typeof existing.prices === 'object' ? existing.prices : {};
+            const after = { ...before };
+            let touched = false;
+            for (const [groupKey, incoming] of Object.entries(row.prices)) {
+              if (!incoming || typeof incoming !== 'object') continue;
+              const current = after[groupKey] && typeof after[groupKey] === 'object' ? { ...after[groupKey] } : {};
+              const amountBlank = incoming.amount == null;
+              const currencyBlank = !incoming.currency;
+              if (amountBlank && currencyBlank) {
+                if (policy === 'overwrite' && groupKey in after) { delete after[groupKey]; touched = true; }
+                continue;
+              }
+              const next = { ...current };
+              if (!amountBlank) next.amount = incoming.amount;
+              if (!currencyBlank) next.currency = incoming.currency;
+              if (next.amount == null && next.currency == null) continue;
+              if (JSON.stringify(next) !== JSON.stringify(current)) { after[groupKey] = next; touched = true; }
+            }
+            if (touched) {
+              patch.prices = after;
+              diffs.push({ field: 'prices', oldValue: before, newValue: after });
+            }
+          }
+
+          /* Custom fields (v0.1.65): the same JSON-merge rule as prices.
+           * products.custom_fields is a map, so a row that sets "material" must
+           * not wipe "voltage" — the old behaviour passed the incoming object
+           * straight through and the column replaced the whole blob. A blank
+           * value clears the key under Overwrite and is ignored under Merge. */
+          if (row.customFields && typeof row.customFields === 'object' && policy !== 'skip') {
+            const before = existing.customFields && typeof existing.customFields === 'object' ? existing.customFields : {};
+            const after = { ...before };
+            let touched = false;
+            for (const [fieldKey, value] of Object.entries(row.customFields)) {
+              if (value == null || value === '') {
+                if (policy === 'overwrite' && fieldKey in after) { delete after[fieldKey]; touched = true; }
+                continue;
+              }
+              if (after[fieldKey] !== value) { after[fieldKey] = value; touched = true; }
+            }
+            if (touched) {
+              patch.customFields = after;
+              diffs.push({ field: 'customFields', oldValue: before, newValue: after });
+            }
+          }
+
           if (diffs.length === 0) {
             // Existing row already matches — nothing to do. Reported as a
             // "no-op" change so the user can see we considered it, and NOT
@@ -987,6 +1072,12 @@ function bulkUpsert(companyId, rows, opts = {}) {
             weightPerUnitKg: row.weightPerUnitKg ?? null,
             // v0.1.25: units on hand.
             stockQty:        row.stockQty        ?? null,
+            // v0.1.65: per-field currencies, the custom price-group map and any
+            // custom fields the sheet carried.
+            priceRetailCurrency:    row.priceRetailCurrency    || undefined,
+            priceWholesaleCurrency: row.priceWholesaleCurrency || undefined,
+            prices:       row.prices && typeof row.prices === 'object' ? row.prices : undefined,
+            customFields: row.customFields && typeof row.customFields === 'object' ? row.customFields : undefined,
           };
           if (dryRun) {
             // For previews, surface the non-default fields so the user
@@ -1154,7 +1245,7 @@ function touchUpdated(id) {
   return get(id);
 }
 
-module.exports = {
+module.exports = { customFieldKeys,
   list,
   get,
   getBySku,
