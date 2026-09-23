@@ -35,6 +35,25 @@ function register({ expose, assertEntityInActiveCompany }) {
     assertEntityInActiveCompany(sets.get(id), 'Column set');
     return sets.remove(id);
   });
+
+  expose('bulkColumns:duplicate', ({ id } = {}) => {
+    assertEntityInActiveCompany(sets.get(id), 'Column set');
+    return sets.duplicate(id);
+  });
+
+  /* v0.1.72: the remembered column WIDTHS. Same company guard shape as the
+   * sets above — a read for another company returns nothing, and a write that
+   * names another company is refused. */
+  expose('bulkColumns:getWidths', ({ companyId } = {}) => {
+    const activeId = companies.getActiveId();
+    if (companyId && companyId !== activeId) return null;
+    return sets.getWidths(companyId || activeId);
+  });
+
+  expose('bulkColumns:setWidths', (input = {}) => {
+    if (input.companyId !== companies.getActiveId()) throw new Error('Cross-company update blocked');
+    return sets.setWidths(input.companyId, input.widths);
+  });
 }
 
 module.exports = { register };

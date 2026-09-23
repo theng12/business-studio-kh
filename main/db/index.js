@@ -1011,6 +1011,27 @@ function runMigrations(database) {
     );
     CREATE INDEX IF NOT EXISTS idx_bulk_column_sets_company_updated
       ON bulk_column_sets(company_id, updated_at DESC);
+
+    /* v0.1.72: remembered column WIDTHS for the bulk edit table.
+     *
+     * Dragged column widths used to live only in the renderer's localStorage,
+     * so a table laid out on one Mac came back narrow on the next. This stores
+     * one JSON map per company (columnKey to px) so the layout travels
+     * with the data — the owner runs two Macs and a client Mac. localStorage
+     * stays as the instant offline cache (read on open, written on every
+     * change); this row is written debounced (~500ms) and is the value the
+     * table ADOPTS once it finishes loading. Company-scoped for the same
+     * reason the saved sets are. Written by main/db/bulkColumnSets.js.
+     *
+     * Additive on purpose: CREATE TABLE IF NOT EXISTS on the normal boot path,
+     * no SCHEMA_VERSION bump, so an existing install picks it up without
+     * wiping anything (see the migration note in AGENTS.md section 14). The
+     * company_id primary key is the lookup index (one row per company). */
+    CREATE TABLE IF NOT EXISTS bulk_column_widths (
+      company_id TEXT PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+      widths TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   database
