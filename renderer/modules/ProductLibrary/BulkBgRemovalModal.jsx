@@ -150,6 +150,9 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
           // default scope). For "all" / other positions the new cutouts are
           // appended and the original main is left alone — a position the
           // user did not ask to change stays put.
+          // ponytail: promotion is all-or-nothing per product, tied to the
+          // main image being among the targets; per-position promotion would
+          // need a destination control this modal does not have.
           if (added?.filepath && mainRow && img.filepath === mainRow.filepath) {
             await window.api.images.setMainImage(productId, added.filepath);
           }

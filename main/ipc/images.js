@@ -76,7 +76,13 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
    * "main / all / specific positions + why skipped" rule the server-side bulk
    * handlers use. Routing the selection through this already-existing channel
    * keeps main/util/imageScope.js the single source of truth — no duplicated
-   * rule in the renderer, no new channel. The bare-id form is untouched. */
+   * rule in the renderer, no new channel. The bare-id form is untouched.
+   *
+   * ponytail: the ceiling of reusing this channel is that it returns TWO
+   * shapes — a bare array for the string id it has always taken, and an
+   * envelope for the scoped object. Every existing caller still gets exactly
+   * the array it did before; a dedicated scoped channel was the alternative
+   * and was rejected as unnecessary surface. */
   expose('images:listByProduct', (arg) => {
     if (arg != null && typeof arg === 'object' && !Array.isArray(arg)) {
       const { productId, scope, positions } = arg;
