@@ -26,7 +26,9 @@ Updated: 2026-09-23 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 **Review type.** Still **self-review**: every review to date is by the same agent, or by a separate agent from the same model family. No independent third party has reviewed the tree. A further adversarial audit of the seven v0.1.71 customer issues was run on 2026-09-23 and is likewise self-review.
 
-**Open.** Hardware and provider validation (the runbook's results table is still empty); the x64 DMG has never been launched; signing/notarization is not configured; the `@imgly/background-removal` AGPL-3.0 licensing question raised by the 2026-09-20 distribution audit has no recorded resolution; label-designer resize is deliberately not rotation-aware.
+**Audience.** Home use: this Mac plus the owner's brother's Mac. There is no public release, so the 2026-09-20 audit's public-distribution prerequisites are not work items; the background-removal AGPL-3.0 licensing question is a **closed decision** (AGENTS.md §25.3). Unsigned DMGs installed with `xattr -cr` are the intended workflow.
+
+**Open.** Hardware and provider validation (the runbook's results table is still empty); the x64 DMG has never been launched; signing/notarization is not configured (not required for the home/family install flow); label-designer resize is deliberately not rotation-aware.
 
 ## Historical records
 
