@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.68',
+    date: '2026-09-23',
+    items: [
+      'FIX — the bulk edit table no longer crams every column into a sliver you cannot read or change. Drag the right edge of any column header to make that column wider or narrower, and double-click the same edge to fit the column to its widest value. Each column has a floor, so it can never be dragged away to nothing, and the header stays put while the grid scrolls sideways.',
+      'NEW — the bulk table remembers the column widths you set, so they are still there the next time you open it. A "Reset columns" button in the toolbar puts every column back to its default width and forgets the saved map.',
+      'FIX — long text in the bulk table now wraps instead of disappearing. Name, Description, Tags and every custom-field cell grow to as many lines as the value needs and the row grows with them, so the whole value is visible; short, number, dropdown and image cells are unchanged. Pasting a block, ⌘Z undo and the touched-cell save all behave exactly as before — a wrapped cell is still one cell.',
+      'FIX — one action in the bulk table can no longer ask you twice. Closing while the Save all summary was on screen used to stack the "unsaved cell edits" warning underneath the summary; now the summary is replaced by the single close prompt. Saving still previews first — Save all runs a dry run and shows the summary — and the confirm button now names what it will do and how many products, for example "Save 9 products".',
+      'Internal — column widths live in one localStorage key (BulkTable.columnWidths) using the same load-on-init / save-on-change pattern as ProductLibrary.panelVisible. Resizing is a mouse drag on a per-header strip; auto-fit measures the rendered values on a canvas; the per-type floor and ceiling keep a column readable. Long-text cells are a rows=1 textarea whose height is synced to scrollHeight on value change, focus and paste. No new dependency, no new IPC, no data-table framework.',
+      'Internal — tests: test/bulkTableWiring.test.js gained static wiring assertions (a resize affordance exists, widths persist and can be reset, the long-text columns render a textarea, .bulk-table__cell no longer forces nowrap, and no path can stack two confirmations), and the deepBulkTableFlow crawl leg now drags a header edge and checks the width persists across a close/reopen, types a long Name/Description and checks the row grows with nothing clipped, and asserts Save all shows exactly one count-named confirmation before the toast.',
+    ],
+  },
+  {
     version: '0.1.67',
     date: '2026-09-22',
     items: [

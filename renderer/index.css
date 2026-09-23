@@ -10732,10 +10732,21 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   position: sticky; top: 0; z-index: 2;
   background: var(--c-sidebar); color: var(--c-text-muted);
   font-size: 11px; font-weight: 600; text-align: left; white-space: nowrap;
-  padding: 6px 8px; border-bottom: 1px solid var(--c-border);
+  padding: 6px 14px 6px 8px; border-bottom: 1px solid var(--c-border);
+}
+/* The header label truncates rather than pushing the column wider; the
+ * resize strip sits on top of the right edge. */
+.bulk-table__th-label { display: block; overflow: hidden; text-overflow: ellipsis; }
+.bulk-table__resizer {
+  position: absolute; top: 0; right: 0; width: 7px; height: 100%;
+  cursor: col-resize; user-select: none; touch-action: none; z-index: 4;
+  background: transparent;
+}
+.bulk-table__resizer:hover, .bulk-table__grid th.is-resizing .bulk-table__resizer {
+  background: rgba(37, 99, 235, 0.35);
 }
 .bulk-table__grid td {
-  padding: 2px 4px; border-bottom: 1px solid var(--c-border); vertical-align: middle;
+  padding: 2px 4px; border-bottom: 1px solid var(--c-border); vertical-align: top;
 }
 .bulk-table__row:hover td { background: var(--c-hover-bg); }
 .bulk-table__rownum {
@@ -10744,13 +10755,30 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   padding: 2px 8px !important; min-width: 34px;
 }
 .bulk-table__grid thead .bulk-table__rownum { z-index: 3; background: var(--c-sidebar); }
-.bulk-table__cell { white-space: nowrap; }
+/* v0.1.68: cells no longer force nowrap — long values wrap and the row grows
+ * instead of the text being clipped away. */
+.bulk-table__cell { white-space: normal; }
+.bulk-table__cell--wrap { vertical-align: top; }
 .bulk-table__input, .bulk-table__cell select {
-  width: 100%; min-width: 96px; max-width: 220px;
+  width: 100%; min-width: 0; max-width: none;
   padding: 4px 6px; border: 1px solid transparent; border-radius: 5px;
   background: transparent; font-size: 12px; color: var(--c-text);
 }
-.bulk-table__input--num { min-width: 72px; text-align: right; font-variant-numeric: tabular-nums; }
+/* A self-growing multi-line cell: rows=1, height synced to scrollHeight in
+ * JS, no resize handle, no scrollbar of its own. */
+.bulk-table__textarea {
+  display: block; width: 100%; min-width: 0; resize: none; overflow: hidden;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
+  padding: 4px 6px; border: 1px solid transparent; border-radius: 5px;
+  background: transparent; font-family: inherit; font-size: 12px; line-height: 1.4;
+  color: var(--c-text);
+}
+.bulk-table__textarea:hover { border-color: var(--c-border-strong); }
+.bulk-table__textarea:focus {
+  outline: none; border-color: var(--c-blue); background: var(--c-surface);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+.bulk-table__input--num { text-align: right; font-variant-numeric: tabular-nums; }
 .bulk-table__input:hover, .bulk-table__cell select:hover { border-color: var(--c-border-strong); }
 .bulk-table__input:focus, .bulk-table__cell select:focus {
   outline: none; border-color: var(--c-blue); background: var(--c-surface);
