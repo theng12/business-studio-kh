@@ -113,6 +113,10 @@ export function formatBulkImageResult(res, { verb = 'Processed', savedLabel, ext
   const prods = Number(res?.products ?? 0);
   const images = Number(res?.images ?? 0);
   const failed = Number(res?.failed ?? 0);
+  // ponytail: the "(N images each)" clause only shows when every product got
+  // the same count; a mixed run falls back to the product + image totals.
+  // Naming each product's count would need a richer payload for a wording
+  // nicety the totals already cover.
   const counts = Object.values(res?.imagesByProduct || {});
   const uniform = counts.length > 0 && counts.every((c) => c === counts[0]) ? counts[0] : 0;
   const each = uniform > 1 ? ` (${uniform} images each)` : '';
