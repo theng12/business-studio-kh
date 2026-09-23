@@ -23,6 +23,10 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const LIBRARY = read('renderer/modules/ProductLibrary/index.jsx');
 const MODAL = read('renderer/modules/ProductLibrary/BulkTableModal.jsx');
+// v0.1.71: the save-row builder (SKU/Unassigned/numeric rules) moved to a pure
+// module so the "hidden SKU still saves" rule could be unit-tested. The static
+// assertions below follow it there rather than weakening.
+const ROWS = read('renderer/modules/ProductLibrary/bulkTableRows.js');
 const UI = read('renderer/components/ui.jsx');
 const PLANNER = read('renderer/modules/ProductLibrary/bulkGridPaste.js');
 const CSS = read('renderer/index.css');
@@ -86,7 +90,7 @@ test('brand and category cells offer an explicit Unassigned that clears the fiel
     `both the Brand and Category selects need the clearing option (found ${unassigned.length})`);
   // An emptied select must send null, not '', or overwrite would store a blank
   // string instead of clearing the column.
-  assert.match(MODAL, /case 'brandId':\s*\n\s*case 'categoryId':\s*\n\s*out\[key\] = value \|\| null;/,
+  assert.match(ROWS, /case 'brandId':\s*\n\s*case 'categoryId':\s*\n\s*out\[key\] = value \|\| null;/,
     'an emptied brand/category cell must send null so overwrite clears the field');
 });
 
@@ -127,6 +131,12 @@ test('the table invents no new IPC channel', () => {
   const used = [...MODAL.matchAll(/window\.api\.(\w+)\.(\w+)\(/g)].map((m) => `${m[1]}.${m[2]}`);
   const unique = [...new Set(used)].sort();
   assert.deepEqual(unique, [
+    // v0.1.71: the saved column sets. Four channels, all registered/validated/
+    // proxied per test/bulkColumnsWiring.test.js.
+    'bulkColumns.create',
+    'bulkColumns.list',
+    'bulkColumns.remove',
+    'bulkColumns.update',
     'images.importFromBytes',
     'images.setMainImage',
     'products.bulkUpsert',

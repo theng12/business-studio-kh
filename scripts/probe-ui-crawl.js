@@ -1350,6 +1350,123 @@ async function deepBulkTableFlow(crawl, photoPath) {
     afterReset.col === 190 && afterReset.stored === null,
     `name ${afterReset.col}px · stored ${afterReset.stored}`);
 
+  /* ── v0.1.71: column selection, saved sets, and widths surviving a set ──
+   * The picker is the shared ColumnsControl. Hide a column, prove it goes,
+   * close + reopen the table and prove the choice stuck (localStorage), save a
+   * named company-scoped set, switch between the built-in sets, then confirm a
+   * resize still works. Reset back to Everything at the end so the rest of the
+   * flow sees every column. */
+  await crawl.eval(`(() => { try { localStorage.removeItem('BulkTable.columns'); } catch {} return 'ok'; })()`);
+  const pickerOpen = await crawl.eval(`window.__ui.click('button', 'Columns ▾')`);
+  await crawl.waitFor(`!!document.querySelector('.lib-columns__pop')`, 5000, 'the bulk Columns popover');
+  const picker = await crawl.eval(`({
+    rows: document.querySelectorAll('.lib-columns__pop .lib-columns__item').length,
+    sets: Array.from(document.querySelectorAll('select[aria-label="Column set"] option')).map((o) => o.textContent),
+    moveButtons: document.querySelectorAll('.lib-columns__move-btn').length,
+    trigger: (Array.from(document.querySelectorAll('button')).find((b) => (b.innerText || '').includes('Columns ▾')) || {}).innerText || null,
+  })`);
+  const hideVariant = await crawl.eval(`(() => {
+    const box = document.querySelector('.lib-columns__item[data-col-key="variant"] input[type="checkbox"]');
+    if (!box) return 'MISS variant checkbox';
+    box.click();
+    return 'ok';
+  })()`);
+  await crawl.settle(350);
+  const hidden = await crawl.eval(`({
+    header: !!document.querySelector('.bulk-table__grid thead th[title="Variant"]'),
+    stored: localStorage.getItem('BulkTable.columns'),
+  })`);
+  await crawl.shot('bulk-table-columns-hidden');
+  crawl.step('deep bulk table: Columns ▾ hides a column and remembers it',
+    pickerOpen === 'ok' && hideVariant === 'ok'
+      && picker.rows > 20 && picker.moveButtons > 0
+      && ['Everything', 'Basics', 'Prices', 'Logistics'].every((s) => picker.sets.includes(s))
+      && hidden.header === false
+      && Array.isArray(JSON.parse(hidden.stored)) && !JSON.parse(hidden.stored).includes('variant'),
+    `trigger “${picker.trigger}” · ${picker.rows} rows · ${picker.moveButtons} move arrows · sets ${JSON.stringify(picker.sets)} · stored ${hidden.stored}`);
+
+  /* The choice must survive closing and reopening the table. */
+  await crawl.eval(`window.__ui.pressEscape()`);
+  await crawl.settle(200);
+  await crawl.eval(`window.__ui.clickExact('Close')`);
+  await crawl.waitFor(`!document.querySelector('.bulk-table__grid')`, 10_000, 'the table to close');
+  await crawl.settle(350);
+  await crawl.eval(`window.__ui.click('button', 'Image operations')`);
+  await crawl.settle(300);
+  const reopenedCols = await crawl.eval(`window.__ui.bulkMenuItem('Edit in table')`, true);
+  await crawl.waitFor(`!!document.querySelector('.bulk-table__grid')`, 10_000, 'the table to reopen');
+  await crawl.settle(450);
+  const afterReopenCols = await crawl.eval(`({
+    variant: !!document.querySelector('.bulk-table__grid thead th[title="Variant"]'),
+    sku: !!document.querySelector('.bulk-table__grid thead th[title="SKU"]'),
+  })`);
+  crawl.step('deep bulk table: a hidden column stays hidden after close and reopen',
+    reopenedCols === 'ok' && afterReopenCols.variant === false && afterReopenCols.sku === true,
+    JSON.stringify(afterReopenCols));
+
+  /* Save the current selection as a named, company-scoped set. */
+  const setName = 'Crawl set ' + String(Date.now()).slice(-6);
+  await crawl.eval(`window.__ui.click('button', 'Columns ▾')`);
+  await crawl.waitFor(`!!document.querySelector('.lib-columns__pop')`, 5000, 'the popover for saving a set');
+  const saveAs = await crawl.eval(`window.__ui.click('.bulk-columns__set-actions button', 'Save as set')`);
+  await crawl.waitFor(`!!document.querySelector('input[aria-label="Set name"]')`, 4000, 'the set-name input');
+  await crawl.eval(`window.__ui.set('input[aria-label="Set name"]', ${JSON.stringify(setName)})`);
+  await crawl.eval(`window.__ui.click('.bulk-columns__set-form button', 'Save set')`);
+  await crawl.waitFor(`window.__ui.toastText().includes(${JSON.stringify(setName)})`, 8000, 'the saved-set toast').catch(() => {});
+  await crawl.settle(400);
+  const savedSet = await crawl.eval(`(() => {
+    const sel = document.querySelector('select[aria-label="Column set"]');
+    return { options: sel ? Array.from(sel.options).map((o) => o.textContent) : [], value: sel ? sel.value : null };
+  })()`);
+  crawl.step('deep bulk table: a named set saves and becomes the active set',
+    saveAs === 'ok' && savedSet.options.includes(setName) && savedSet.value && savedSet.value !== '__custom',
+    `${setName} · active ${savedSet.value} · options ${JSON.stringify(savedSet.options)}`);
+
+  /* Switch between sets: Basics narrows, Prices brings the money columns. */
+  const readHeaders = () => crawl.eval(`Array.from(document.querySelectorAll('.bulk-table__grid thead th')).map((t) => t.getAttribute('title'))`);
+  await crawl.eval(`window.__ui.set('select[aria-label="Column set"]', 'basics')`);
+  await crawl.settle(400);
+  const basicsHeaders = await readHeaders();
+  await crawl.eval(`window.__ui.set('select[aria-label="Column set"]', 'prices')`);
+  await crawl.settle(400);
+  const pricesHeaders = await readHeaders();
+  crawl.step('deep bulk table: switching built-in sets swaps the visible columns',
+    basicsHeaders.includes('SKU') && basicsHeaders.includes('Name') && !basicsHeaders.includes('Description')
+      && pricesHeaders.includes('Retail price') && pricesHeaders.includes('Wholesale price')
+      && !pricesHeaders.includes('Description') && basicsHeaders.length !== pricesHeaders.length,
+    `Basics ${JSON.stringify(basicsHeaders)} · Prices ${JSON.stringify(pricesHeaders)}`);
+
+  /* Reset returns to Everything (and clears the localStorage selection). */
+  await crawl.eval(`window.__ui.click('.lib-columns__head .lib-columns__reset', 'Reset')`);
+  await crawl.settle(400);
+  const afterColsReset = await crawl.eval(`({
+    headers: Array.from(document.querySelectorAll('.bulk-table__grid thead th')).map((t) => t.getAttribute('title')),
+    stored: localStorage.getItem('BulkTable.columns'),
+    pop: !!document.querySelector('.lib-columns__pop'),
+  })`);
+  crawl.step('deep bulk table: the picker Reset restores Every column and drops the stored selection',
+    afterColsReset.headers.includes('Variant') && afterColsReset.headers.includes('Image')
+      && afterColsReset.headers.length > 20 && afterColsReset.stored === null && afterColsReset.pop === false,
+    `${afterColsReset.headers.length} columns · stored ${afterColsReset.stored}`);
+
+  /* Resize must still work after all that set switching. */
+  await crawl.settle(200);
+  const colsWidthBefore = await crawl.eval(`(() => { const c = document.querySelector('col[data-col="name"]'); return c ? parseFloat(c.style.width) : null; })()`);
+  await crawl.eval(`window.__ui.mouseDrag('[data-col-resize="name"]', 90, 0)`, true);
+  await crawl.settle(300);
+  const colsWidthAfter = await crawl.eval(`(() => {
+    const c = document.querySelector('col[data-col="name"]');
+    let stored = null;
+    try { stored = JSON.parse(localStorage.getItem('BulkTable.columnWidths') || '{}').name ?? null; } catch {}
+    return { col: c ? parseFloat(c.style.width) : null, stored };
+  })()`);
+  crawl.step('deep bulk table: resizing still works after switching sets',
+    colsWidthBefore != null && colsWidthAfter.col >= colsWidthBefore + 70 && colsWidthAfter.stored === colsWidthAfter.col,
+    `${colsWidthBefore} → ${colsWidthAfter.col}px · stored ${colsWidthAfter.stored}`);
+  // Leave the widths at their defaults for the rest of the flow.
+  await crawl.eval(`window.__ui.clickExact('Reset columns')`);
+  await crawl.settle(250);
+
   /* The brand/category selects must offer an explicit "— Unassigned —" that
    * CLEARS the field. Row 0 was given a brand above, so both the option and the
    * current value are checkable. */
@@ -2205,6 +2322,123 @@ async function deepOverlayPositionsFlow(crawl, photoPath) {
 }
 
 /**
+ * v0.1.71 — the Overlay Studio editor must not warp the artwork.
+ *
+ * The customer had to switch the real preview off to place elements because a
+ * photo whose aspect differed from its box looked stretched. The positions were
+ * never the problem; the ARTWORK FITTING was. The renderer resizes a photo into
+ * its box with sharp `fit: 'contain'`. This leg builds the deliberately
+ * mismatched case — the crawl's 900×900 photo in a 3:1 image-element box —
+ * renders it through the real renderer, opens it in the editor with
+ * placeholders OFF (the real preview), and asserts the plain `<img>`s the
+ * editor draws use the SAME rule (`object-fit: contain`), so the visible
+ * artwork keeps the photo's aspect ratio in both. Screenshot for the eyeball.
+ *
+ * Non-fatal like its siblings: the caller wraps it in try/catch.
+ */
+async function deepOverlayFitFlow(crawl, photoPath) {
+  crawl.phase = 'deep: overlay artwork fit';
+
+  const seeded = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    const stamp = String(Date.now()).slice(-6);
+    const p = await window.api.products.create({ companyId: cid, sku: 'UI-FIT-' + stamp, name: 'Fit widget', status: 'active' });
+    let imgs = await window.api.images.listByProduct(p.id);
+    let list = imgs.images || imgs;
+    if (list.length === 0) {
+      await window.api.images.importForProduct(p.id, ${JSON.stringify(photoPath)});
+      imgs = await window.api.images.listByProduct(p.id);
+      list = imgs.images || imgs;
+    }
+    // 0.75 × 0.25 of a 1200×1200 canvas = a 3:1 box holding a square photo.
+    const tpl = await window.api.templates.create({
+      name: 'UI Fit 3to1 ' + stamp,
+      canvasWidth: 1200, canvasHeight: 1200,
+      elements: [{
+        id: 'fit-img', type: 'image', source: 'product-image:0',
+        x: 0.5, y: 0.5, anchor: 'c', width: 0.75, height: 0.25, opacity: 1,
+      }],
+    });
+    return { id: p.id, sku: p.sku, images: list.length, templateId: tpl.id, templateName: tpl.name };
+  })()`, true).catch((err) => ({ error: err.message }));
+  if (!seeded || seeded.error || !seeded.templateId) {
+    crawl.step('deep overlay fit: a 3:1 template over the square photo exists', false, JSON.stringify(seeded));
+    return;
+  }
+  crawl.step('deep overlay fit: a 3:1 template over the square photo exists', true,
+    `${seeded.sku} · ${seeded.templateName} · ${seeded.images} image`);
+
+  /* The renderer half: the real compose produces bytes for this pair. */
+  const rendered = await crawl.eval(`(async () => {
+    const res = await window.api.templates.renderPreview({ templateId: ${JSON.stringify(seeded.templateId)}, productId: ${JSON.stringify(seeded.id)}, maxPx: 400 });
+    const bytes = res && res.bytes;
+    let dims = null;
+    if (bytes) {
+      const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+      dims = { w: bmp.width, h: bmp.height };
+      bmp.close();
+    }
+    return { hasBytes: !!bytes, dims };
+  })()`, true).catch((err) => ({ error: err.message }));
+  crawl.step('deep overlay fit: the real renderer composes the pair without throwing',
+    !!rendered && !rendered.error && rendered.hasBytes && !!rendered.dims,
+    JSON.stringify(rendered));
+
+  await crawl.goto('Overlay Studio');
+  await crawl.waitFor(`window.__ui.textOf(document.body).includes(${JSON.stringify(seeded.templateName)})`, 10_000, 'the fit template card');
+  await crawl.settle(400);
+  const openedTemplate = await crawl.eval(`(() => {
+    const card = Array.from(document.querySelectorAll('.ovl-card')).find((c) => c.innerText.includes(${JSON.stringify(seeded.templateName)}));
+    const edit = card && Array.from(card.querySelectorAll('button')).find((b) => b.innerText === 'Edit');
+    if (!edit) return 'MISS';
+    edit.click();
+    return 'ok';
+  })()`);
+  await crawl.waitFor(`!!document.querySelector('.ovl-canvas')`, 15_000, 'the overlay editor');
+  await crawl.settle(600);
+
+  /* Pick the square-ish product as the backdrop; placeholders stay OFF (the
+   * real preview is the default) so the editor draws its plain <img>s. */
+  const picked = await crawl.eval(`(() => {
+    const sel = document.querySelector('.ovl-editor__backdrop-picker select');
+    if (!sel) return 'MISS backdrop select';
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    sel.focus();
+    setter.call(sel, ${JSON.stringify(seeded.id)});
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    return 'ok';
+  })()`);
+  await crawl.settle(1600);
+  const fit = await crawl.eval(`(() => {
+    const read = (el) => el ? {
+      fit: getComputedStyle(el).objectFit,
+      dataFit: el.getAttribute('data-fit'),
+      natural: el.naturalWidth + 'x' + el.naturalHeight,
+      box: Math.round(el.getBoundingClientRect().width) + 'x' + Math.round(el.getBoundingClientRect().height),
+    } : null;
+    return {
+      backdrop: read(document.querySelector('.ovl-canvas__backdrop')),
+      element: read(document.querySelector('.ovl-element__image img')),
+      placeholders: !!document.querySelector('.ovl-canvas--placeholders'),
+    };
+  })()`);
+  await crawl.shot('overlay-fit-mismatch');
+  const boxParts = fit.element ? fit.element.box.split('x').map(Number) : [0, 0];
+  const boxAspect = boxParts[1] ? boxParts[0] / boxParts[1] : 0;
+  crawl.step('deep overlay fit: a square photo in a 3:1 box stays contained in the editor',
+    openedTemplate === 'ok' && picked === 'ok'
+      && fit.placeholders === false
+      && !!fit.backdrop && fit.backdrop.fit === 'contain' && fit.backdrop.dataFit === 'contain'
+      && !!fit.element && fit.element.fit === 'contain' && fit.element.dataFit === 'contain'
+      && fit.element.natural === '900x900' && boxAspect > 2.5,
+    `backdrop ${JSON.stringify(fit.backdrop)} · element ${JSON.stringify(fit.element)} · box aspect ${boxAspect.toFixed(2)}`);
+
+  /* Leave Overlay Studio. */
+  await crawl.eval(`window.__ui.pressEscape()`).catch(() => {});
+  await crawl.settle(250);
+}
+
+/**
  * v0.1.70 — the "which images" control on a DESTRUCTIVE image operation.
  *
  * v0.1.69 proved Specific positions on Apply overlay (non-destructive, adds a
@@ -2650,6 +2884,13 @@ async function main() {
     await deepImageScopeFlow(crawl, photoPath);
   } catch (err) {
     crawl.step('deep image scope flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 18 ── the editor's artwork fit — a square photo in a 3:1 box (v0.1.71) */
+  try {
+    await deepOverlayFitFlow(crawl, photoPath);
+  } catch (err) {
+    crawl.step('deep overlay fit flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */

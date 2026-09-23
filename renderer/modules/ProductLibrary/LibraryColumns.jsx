@@ -94,12 +94,30 @@ export function saveVisibleColumns(set) {
  * visible-count so the user can tell at a glance which mode they're
  * in (e.g. "Columns · 5/8").
  *
- * Kept inside this module rather than promoted to a shared component
- * because it's pretty tightly coupled to COLUMN_DEFS at the top of
- * the file. If a second list ever wants the same pattern, it's an
- * easy lift to extract.
+ * v0.1.71: GENERALIZED, not forked. The bulk edit table needed the same
+ * picker over its own (larger, dynamic) catalogue, plus reorder arrows and a
+ * sets menu. Rather than copy the popover, every part that differed became an
+ * optional prop — the Library call site passes none of them, so its markup and
+ * behaviour are unchanged:
+ *
+ *   defs           the catalogue (defaults to COLUMN_DEFS)
+ *   label          trigger text override
+ *   lockedItems    the pinned "Always shown" rows (default: SKU + Thumbnail)
+ *   header         extra node above the list (the bulk table's sets menu)
+ *   onMove         when given, each row gets up/down arrows (no drag reorder)
  */
-export function ColumnsControl({ visibleCols, onToggle, onReset }) {
+export function ColumnsControl({
+  visibleCols,
+  onToggle,
+  onReset,
+  defs = COLUMN_DEFS,
+  label,
+  lockedItems = [{ label: 'SKU + Thumbnail', note: 'Always shown' }],
+  header = null,
+  onMove = null,
+  resetTitle = 'Show all default columns',
+  title = 'Choose which columns appear in the table',
+}) {
   const [open, setOpen] = useState(false);
   const popRef = useRef(null);
   const btnRef = useRef(null);
@@ -126,7 +144,11 @@ export function ColumnsControl({ visibleCols, onToggle, onReset }) {
   }, [open]);
 
   const visibleCount = visibleCols.size;
-  const totalOptional = COLUMN_DEFS.length;
+  const totalOptional = defs.length;
+  // Reorder arrows belong to the SELECTED rows only, and the bulk table
+  // renders selected rows first (see bulkColumns.orderedCatalogue), so the
+  // last selected row is at display index selectedCount - 1.
+  const selectedCount = defs.filter((c) => visibleCols.has(c.key)).length;
 
   return (
     <div className="ws-toolbar__group lib-columns">
@@ -137,31 +159,34 @@ export function ColumnsControl({ visibleCols, onToggle, onReset }) {
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="true"
         aria-expanded={open}
-        title="Choose which columns appear in the table"
+        title={title}
       >
-        Columns · {visibleCount}/{totalOptional}
+        {label ?? `Columns · ${visibleCount}/${totalOptional}`}
       </button>
       {open ? (
         <div ref={popRef} className="lib-columns__pop" role="menu">
+          {header}
           <div className="lib-columns__head">
             <span>Show columns</span>
             <button
               type="button"
               className="lib-columns__reset"
               onClick={() => { onReset(); setOpen(false); }}
-              title="Show all default columns"
+              title={resetTitle}
             >Reset</button>
           </div>
           <ul className="lib-columns__list">
-            <li className="lib-columns__item lib-columns__item--locked">
-              <label>
-                <input type="checkbox" checked disabled />
-                <span>SKU + Thumbnail</span>
-              </label>
-              <span className="lib-columns__lock-note">Always shown</span>
-            </li>
-            {COLUMN_DEFS.map((c) => (
-              <li key={c.key} className="lib-columns__item">
+            {lockedItems.map((item) => (
+              <li key={item.label} className="lib-columns__item lib-columns__item--locked">
+                <label>
+                  <input type="checkbox" checked disabled />
+                  <span>{item.label}</span>
+                </label>
+                <span className="lib-columns__lock-note">{item.note}</span>
+              </li>
+            ))}
+            {defs.map((c, index) => (
+              <li key={c.key} className="lib-columns__item" data-col-key={c.key}>
                 <label>
                   <input
                     type="checkbox"
@@ -170,6 +195,26 @@ export function ColumnsControl({ visibleCols, onToggle, onReset }) {
                   />
                   <span>{c.label}</span>
                 </label>
+                {onMove && visibleCols.has(c.key) ? (
+                  <span className="lib-columns__move">
+                    <button
+                      type="button"
+                      className="lib-columns__move-btn"
+                      disabled={index === 0}
+                      aria-label={`Move ${c.label} up`}
+                      title="Move up"
+                      onClick={() => onMove(c.key, -1)}
+                    >↑</button>
+                    <button
+                      type="button"
+                      className="lib-columns__move-btn"
+                      disabled={index === selectedCount - 1}
+                      aria-label={`Move ${c.label} down`}
+                      title="Move down"
+                      onClick={() => onMove(c.key, 1)}
+                    >↓</button>
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>

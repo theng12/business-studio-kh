@@ -45,6 +45,7 @@ const purchaseOrdersDomain = require('./ipc/purchaseOrders'); // v0.49.47: OPERA
 const labelsDomain     = require('./ipc/labels');
 const catalogStudioDomain = require('./ipc/catalogStudio');
 const socialGridDomain  = require('./ipc/socialGrid');  // v0.1.25: square product-grid posts
+const bulkColumnsDomain = require('./ipc/bulkColumns'); // v0.1.71: saved bulk-table column sets
 
 function registerIpc(_ctx) {
   const helpers = {
@@ -79,6 +80,7 @@ function registerIpc(_ctx) {
   labelsDomain.register(helpers);
   catalogStudioDomain.register(helpers);
   socialGridDomain.register(helpers);       // v0.1.25
+  bulkColumnsDomain.register(helpers);      // v0.1.71
 }
 
 module.exports = { registerIpc };
