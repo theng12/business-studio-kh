@@ -229,6 +229,20 @@ window.__ui = (() => {
       el.click();
       return 'ok';
     },
+    /* v0.1.69: the operations menu is two-level now. Find an item wherever it
+     * lives — flat (search active) or inside whichever section submenu holds
+     * it — and click it, so callers do not have to know the section. */
+    bulkMenuItem: async (label) => {
+      const inPanel = all('.lib-bulk-menu__panel .lib-bulk-menu__item').find((i) => textOf(i).includes(label));
+      if (inPanel) { inPanel.click(); return 'ok'; }
+      for (const trigger of all('.lib-bulk-menu__section-trigger')) {
+        trigger.click();
+        await new Promise((r) => setTimeout(r, 140));
+        const item = all('.lib-bulk-menu__submenu .lib-bulk-menu__item').find((i) => textOf(i).includes(label));
+        if (item) { item.click(); return 'ok'; }
+      }
+      return 'MISS ' + label;
+    },
     toastText: () => all('.toast').map(textOf).join(' | '),
     /* The Process -> button that belongs to the row/tile carrying that SKU.
      * Needed because the Library lists many rows and the first Process button
@@ -772,7 +786,7 @@ async function deepSocialTemplateFlow(crawl, outDir) {
   }
   await crawl.eval(`window.__ui.click('button', 'Image operations')`);
   await crawl.settle(400);
-  const menuItem = await crawl.eval(`window.__ui.click('.lib-bulk-menu__item', 'Social post')`);
+  const menuItem = await crawl.eval(`window.__ui.bulkMenuItem('Social post')`, true);
   if (menuItem !== 'ok') {
     crawl.step('deep: select products + open the bulk menu', false, `no "Social post" item (${menuItem})`);
     return;
@@ -1264,7 +1278,7 @@ async function deepBulkTableFlow(crawl, photoPath) {
   await crawl.settle(600);
   const menu = await crawl.eval(`window.__ui.click('button', 'Image operations')`);
   await crawl.settle(350);
-  const item = await crawl.eval(`window.__ui.click('.lib-bulk-menu__item', 'Edit in table')`);
+  const item = await crawl.eval(`window.__ui.bulkMenuItem('Edit in table')`, true);
   if (menu !== 'ok' || item !== 'ok') {
     crawl.step('deep bulk table: open the table from the bulk menu', false, `menu ${menu} · item ${item} · ${picked} row checkbox(es)`);
     return;
@@ -1317,7 +1331,7 @@ async function deepBulkTableFlow(crawl, photoPath) {
   await crawl.settle(400);
   await crawl.eval(`window.__ui.click('button', 'Image operations')`);
   await crawl.settle(350);
-  const reopenedItem = await crawl.eval(`window.__ui.click('.lib-bulk-menu__item', 'Edit in table')`);
+  const reopenedItem = await crawl.eval(`window.__ui.bulkMenuItem('Edit in table')`, true);
   await crawl.waitFor(`!!document.querySelector('.bulk-table__grid')`, 10_000, 'the bulk table grid after reopen');
   await crawl.settle(450);
   const nameAfterReopen = await nameColWidth();
@@ -1362,6 +1376,78 @@ async function deepBulkTableFlow(crawl, photoPath) {
   await crawl.settle(300);
   const typed = await crawl.eval(`document.querySelector('input[data-row="0"][data-col="subcategory"]').value`);
   crawl.step('deep bulk table: a typed cell holds', typed === 'Crawl A', JSON.stringify({ typed }));
+
+  /* v0.1.69 fix: typing must survive keystroke by keystroke. The step above
+   * sets the whole value in ONE synthetic event, which is exactly why the
+   * "one character then focus lost" regression slipped through. Focus the
+   * cell, then dispatch REAL char key events and check focus after each. */
+  const perKey = await (async () => {
+    const selector = 'input[data-row="0"][data-col="unit"]';
+    await crawl.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      el.focus(); setter.call(el, ''); el.dispatchEvent(new Event('input', { bubbles: true }));
+      return 'ok';
+    })()`);
+    const steps = [];
+    const text = 'Typed';
+    for (const ch of text) {
+      await crawl.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch, unmodifiedText: ch, key: ch });
+      await crawl.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+      await crawl.settle(80);
+      const state = await crawl.eval(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        return { focused: document.activeElement === el, value: el ? el.value : null };
+      })()`);
+      steps.push(state);
+    }
+    return { text, steps };
+  })();
+  crawl.step('deep bulk table: every keystroke keeps focus and accumulates in the cell',
+    perKey.steps.length === perKey.text.length
+      && perKey.steps.every((s, i) => s.focused && s.value === perKey.text.slice(0, i + 1)),
+    JSON.stringify({ text: perKey.text, got: perKey.steps.map((s) => (s.focused ? s.value : `LOST@${s.value}`)) }));
+
+  /* The same, for a long-text cell that wraps: focus must survive AND the
+   * row must grow as the value wraps onto more lines. */
+  const wrapFocus = await (async () => {
+    const selector = 'textarea[data-row="0"][data-col="tags"]';
+    const shape = () => crawl.eval(`(() => {
+      const ta = document.querySelector(${JSON.stringify(selector)});
+      return {
+        row: document.querySelector('tr[data-row="0"]').getBoundingClientRect().height,
+        ta: ta ? ta.getBoundingClientRect().height : 0,
+      };
+    })()`);
+    await crawl.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+      el.focus(); setter.call(el, ''); el.dispatchEvent(new Event('input', { bubbles: true }));
+      return 'ok';
+    })()`);
+    const before = await shape();
+    // Long enough that the 190px tags column must wrap onto several lines.
+    const text = 'wrap this tag list onto several lines so the cell grows tall and the row grows with it';
+    const steps = [];
+    for (const ch of text) {
+      await crawl.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch, unmodifiedText: ch, key: ch });
+      await crawl.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+      await crawl.settle(35);
+      const state = await crawl.eval(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        return { focused: document.activeElement === el, value: el ? el.value : null };
+      })()`);
+      steps.push(state);
+    }
+    const after = await shape();
+    return { before, after, text, steps };
+  })();
+  crawl.step('deep bulk table: a wrapping cell keeps focus while the row grows',
+    wrapFocus.steps.every((s) => s.focused)
+      && wrapFocus.steps[wrapFocus.steps.length - 1]?.value === wrapFocus.text
+      && wrapFocus.after.row > wrapFocus.before.row
+      && wrapFocus.after.ta > wrapFocus.before.ta,
+    JSON.stringify({ before: wrapFocus.before, after: wrapFocus.after, last: wrapFocus.steps[wrapFocus.steps.length - 1] }));
 
   /* ── v0.1.68 Fix 2: long values wrap and the row grows instead of being
    * clipped. Name/Description are the columns the customer could not read. */
@@ -1910,6 +1996,271 @@ async function deepListToolsFlow(crawl) {
   await crawl.eval(`window.__ui.click('.list-bulk-bar button', 'Clear')`).catch(() => {});
 }
 
+/**
+ * v0.1.69 — the two customer-reported fixes.
+ *
+ * A. The "Image operations ▾" panel could not scroll and ran off the bottom of
+ *    the window, so the last section was unreachable. We open it, scroll it to
+ *    the bottom and assert the last item is actually inside the panel AND the
+ *    panel inside the viewport.
+ *
+ * B. "Apply to which images" gained Specific positions. We apply position 2 to
+ *    a product that has exactly one image and assert the toast reports the
+ *    skip ("no 2nd image") instead of silently doing nothing.
+ *
+ * Non-fatal like its siblings: the caller wraps it in try/catch.
+ */
+async function deepOverlayPositionsFlow(crawl, photoPath) {
+  crawl.phase = 'deep: overlay positions';
+
+  /* A fresh product with exactly one image — the case the customer cares
+   * about (ask for the 2nd photo; there is no 2nd photo). */
+  const seeded = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    const stamp = String(Date.now()).slice(-6);
+    const p = await window.api.products.create({ companyId: cid, sku: 'UI-POS-' + stamp, name: 'Position widget', status: 'active' });
+    let imgs = await window.api.images.listByProduct(p.id);
+    let list = imgs.images || imgs;
+    if (list.length === 0) {
+      await window.api.images.importForProduct(p.id, ${JSON.stringify(photoPath)});
+      imgs = await window.api.images.listByProduct(p.id);
+      list = imgs.images || imgs;
+    }
+    return { id: p.id, sku: p.sku, count: list.length };
+  })()`, true).catch((err) => ({ error: err.message }));
+  if (!seeded || seeded.error || seeded.count !== 1) {
+    crawl.step('deep positions: one-image product exists', false, JSON.stringify(seeded));
+    return;
+  }
+  crawl.step('deep positions: one-image product exists', true, `${seeded.sku} · ${seeded.count} image`);
+
+  await crawl.goto('Product Library');
+  await crawl.eval(`window.__ui.set('.page__header input.search-input', ${JSON.stringify(seeded.sku)})`);
+  await crawl.waitFor(`window.__ui.textOf(document.body).includes(${JSON.stringify(seeded.sku)})`, 10_000, 'the one-image product row');
+  await crawl.settle(400);
+  const picked = await crawl.eval(`(() => {
+    const boxes = Array.from(document.querySelectorAll('tbody input[type="checkbox"], .lib-grid input[type="checkbox"], .product-tile input[type="checkbox"]')).filter((b) => !b.closest('thead'));
+    boxes.slice(0, 1).forEach((b) => { if (!b.checked) b.click(); });
+    return boxes.length;
+  })()`);
+  await crawl.settle(400);
+
+  /* ── A: submenus, bounds, scroll and the flattening search ───────────── */
+  const menuOpened = await crawl.eval(`window.__ui.click('button', 'Image operations')`);
+  await crawl.waitFor(`!!document.querySelector('.lib-bulk-menu__panel')`, 5_000, 'the image operations menu');
+  await crawl.settle(300);
+  const topLevel = await crawl.eval(`(() => {
+    const panel = document.querySelector('.lib-bulk-menu__panel');
+    if (!panel) return { error: 'no panel' };
+    const triggers = Array.from(panel.querySelectorAll('.lib-bulk-menu__section-trigger'));
+    const pr = panel.getBoundingClientRect();
+    return {
+      triggers: triggers.map((t) => t.innerText.replace(/\\s+/g, ' ').trim()),
+      allHaspopup: triggers.every((t) => t.getAttribute('aria-haspopup') === 'menu'),
+      itemCount: panel.querySelectorAll('.lib-bulk-menu__item').length,
+      overflowY: getComputedStyle(panel).overflowY,
+      panelInsideViewport: pr.top >= -1 && pr.bottom <= window.innerHeight + 1,
+      searchShown: !!panel.querySelector('.lib-bulk-menu__search-input'),
+    };
+  })()`);
+  // Open the last section's submenu, after scrolling the main panel to the
+  // bottom so that trigger is the worst case for bounds.
+  const submenu = await crawl.eval(`(async () => {
+    const panel = document.querySelector('.lib-bulk-menu__panel');
+    const triggers = Array.from(panel.querySelectorAll('.lib-bulk-menu__section-trigger'));
+    const last = triggers[triggers.length - 1];
+    last.scrollIntoView({ block: 'nearest' });
+    await new Promise((r) => setTimeout(r, 60));
+    last.click();
+    await new Promise((r) => setTimeout(r, 300));
+    const sub = document.querySelector('.lib-bulk-menu__submenu');
+    if (!sub) return { error: 'no submenu' };
+    const items = Array.from(sub.querySelectorAll('.lib-bulk-menu__item'));
+    const lastItem = items[items.length - 1];
+    if (!lastItem) return { error: 'no submenu items' };
+    // Force the submenu to its bottom, then prove the last item is on screen
+    // inside both the submenu and the window.
+    const before = sub.scrollTop;
+    sub.scrollTop = sub.scrollHeight;
+    await new Promise((r) => setTimeout(r, 60));
+    const sr = sub.getBoundingClientRect();
+    const ir = lastItem.getBoundingClientRect();
+    const scrollable = sub.scrollHeight > sub.clientHeight + 1;
+    return {
+      count: items.length,
+      labels: items.map((i) => i.innerText.split('\\n')[0]),
+      lastInside: ir.top >= sr.top - 1 && ir.bottom <= sr.bottom + 1,
+      subInsideViewport: sr.top >= -1 && sr.bottom <= window.innerHeight + 1 && sr.left >= -1 && sr.right <= window.innerWidth + 1,
+      subScrollable: scrollable,
+      subScrolled: !scrollable || sub.scrollTop !== before,
+    };
+  })()`, true);
+  await crawl.shot('overlay-menu-submenu');
+  const menuOk = menuOpened === 'ok' && !topLevel.error && !submenu.error
+    && topLevel.triggers.length >= 3 && topLevel.allHaspopup && topLevel.itemCount === 0
+    && topLevel.overflowY === 'auto' && topLevel.panelInsideViewport && topLevel.searchShown
+    && submenu.count > 0 && submenu.lastInside && submenu.subInsideViewport
+    && (!submenu.subScrollable || submenu.subScrolled);
+  crawl.step('deep positions: section submenus open and every item is reachable on screen',
+    menuOk,
+    menuOk ? `${topLevel.triggers.length} triggers · last submenu “${(submenu.labels || []).join(', ')}”`
+      : JSON.stringify({ topLevel, submenu }));
+
+  /* Search flattens the tree into one filtered list. */
+  const flat = await crawl.eval(`(async () => {
+    const panel = document.querySelector('.lib-bulk-menu__panel');
+    const input = panel.querySelector('.lib-bulk-menu__search-input');
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const type = async (v) => {
+      input.focus();
+      setter.call(input, v);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 220));
+    };
+    const read = () => ({
+      triggers: panel.querySelectorAll('.lib-bulk-menu__section-trigger').length,
+      items: Array.from(panel.querySelectorAll('.lib-bulk-menu__item')).map((i) => i.innerText.replace(/\\s+/g, ' ').trim()),
+      metas: Array.from(panel.querySelectorAll('.lib-bulk-menu__flat-meta')).map((m) => m.innerText.trim()),
+      submenus: document.querySelectorAll('.lib-bulk-menu__submenu').length,
+    });
+    await type('overlay');
+    const first = read();
+    await type('resize');
+    const second = read();
+    await type('');
+    const cleared = read();
+    return { first, second, cleared };
+  })()`, true);
+  const flatOk = flat.first.triggers === 0 && flat.first.items.length === 1 && /Apply overlay/i.test(flat.first.items[0])
+    && flat.first.metas.length === 1 && flat.first.submenus === 0
+    && flat.second.items.length === 1 && /Resize/i.test(flat.second.items[0])
+    && flat.cleared.triggers >= 3 && flat.cleared.items.length === 0;
+  crawl.step('deep positions: the menu search flattens the tree and narrows it', flatOk, JSON.stringify(flat));
+
+  /* Esc closes the whole menu. */
+  await crawl.eval(`window.__ui.pressEscape()`);
+  await crawl.settle(250);
+  const closedAfterEsc = await crawl.eval(`({ panel: !!document.querySelector('.lib-bulk-menu__panel'), submenu: !!document.querySelector('.lib-bulk-menu__submenu') })`);
+  crawl.step('deep positions: Esc closes the whole menu',
+    closedAfterEsc.panel === false && closedAfterEsc.submenu === false, JSON.stringify(closedAfterEsc));
+
+  /* ── B: Specific positions 2 on a one-image product is a reported skip ── */
+  const overlayOpened = await crawl.eval(`window.__ui.click('button', 'Image operations')`);
+  await crawl.settle(300);
+  const overlayItem = await crawl.eval(`(async () => {
+    const trigger = Array.from(document.querySelectorAll('.lib-bulk-menu__section-trigger'))
+      .find((t) => /Non-destructive/.test(t.innerText));
+    if (!trigger) return 'MISS trigger';
+    trigger.click();
+    await new Promise((r) => setTimeout(r, 250));
+    const item = Array.from(document.querySelectorAll('.lib-bulk-menu__submenu .lib-bulk-menu__item'))
+      .find((i) => /Apply overlay/.test(i.innerText));
+    if (!item) return 'MISS item';
+    item.click();
+    return 'ok';
+  })()`, true);
+  if (overlayOpened !== 'ok' || overlayItem !== 'ok' || picked === 0) {
+    crawl.step('deep positions: open the apply-overlay dialog', false, `menu ${overlayOpened} · item ${overlayItem} · ${picked} row checkbox(es)`);
+    return;
+  }
+  await crawl.waitFor(`window.__ui.fieldInput('Template') !== null`, 8_000, 'the apply-overlay dialog');
+  await crawl.settle(300);
+  const positioned = await crawl.eval(`(() => {
+    const label = Array.from(document.querySelectorAll('.bulk-overlay-run__radio')).find((x) => /Specific positions/.test(x.innerText));
+    if (!label) return 'MISS';
+    const radio = label.querySelector('input[type="radio"]');
+    if (!radio) return 'MISS radio';
+    radio.click();
+    return 'ok';
+  })()`);
+  await crawl.settle(200);
+  const setPos = await crawl.eval(`window.__ui.set('input[aria-label="Specific positions"]', '2')`);
+  await crawl.settle(200);
+  const state = await crawl.eval(`(() => {
+    const checked = document.querySelector('input[name="overlay-image-scope"]:checked');
+    const input = document.querySelector('input[aria-label="Specific positions"]');
+    const applyBtn = Array.from(document.querySelectorAll('.bulk-overlay-run__footer button')).find((b) => /Apply to/.test(b.innerText));
+    return {
+      radioOn: !!(checked && checked.closest('label') && /Specific positions/.test(checked.closest('label').innerText)),
+      ticks: document.querySelectorAll('.image-scope__tick input').length,
+      positionsText: input ? input.value : null,
+      applyEnabled: !!(applyBtn && !applyBtn.disabled),
+    };
+  })()`);
+  const applied = await crawl.eval(`window.__ui.click('.bulk-overlay-run__footer button', 'Apply to')`);
+  await crawl.waitFor(`/skipped/i.test(window.__ui.toastText())`, 15_000, 'the skip-reporting toast').catch(() => {});
+  const toast = await crawl.eval('window.__ui.toastText()');
+  await crawl.shot('overlay-positions-skip');
+  crawl.step('deep positions: position 2 on a one-image product reports the skip',
+    positioned === 'ok' && setPos === 'ok' && applied === 'ok'
+      && state.radioOn && state.positionsText === '2' && state.applyEnabled
+      && /skipped/i.test(toast) && /no 2nd image/i.test(toast),
+    `radio ${positioned} · set ${setPos} · apply ${applied} · ${JSON.stringify(state)} · toast: ${toast || '(none)'}`);
+
+  /* Leave the Library as we found it. */
+  await crawl.eval(`window.__ui.pressEscape()`).catch(() => {});
+  await crawl.eval(`window.__ui.set('.page__header input.search-input', '')`).catch(() => {});
+  await crawl.settle(250);
+}
+
+/**
+ * v0.1.69 — cross-modal proof for the shared Modal focus fix.
+ *
+ * The bulk-table leg proves the SYMPTOM. This one proves the shared CAUSE is
+ * gone: open a DIFFERENT modal with an inline onClose and type a multi-char
+ * string with real per-key events, asserting focus survives every key. It
+ * fails if anyone re-introduces an `[open, onClose]`-keyed focus effect in
+ * renderer/components/ui.jsx, because the New-company form lives inside that
+ * same shared Modal.
+ */
+async function deepModalFocusFlow(crawl) {
+  crawl.phase = 'deep: modal focus';
+  await crawl.goto('Company');
+  await crawl.settle(400);
+  const opened = await crawl.eval(`window.__ui.click('button', '+ New company')`);
+  if (opened !== 'ok') { crawl.step('deep modal focus: open a second dialog', false, opened); return; }
+  await crawl.waitFor(`window.__ui.modalCount() > 0`, 5_000, 'the New company modal');
+  await crawl.settle(250);
+
+  const selector = 'input[placeholder="e.g. ABC Imports"]';
+  await crawl.eval(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return 'MISS';
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    el.focus(); setter.call(el, ''); el.dispatchEvent(new Event('input', { bubbles: true }));
+    return 'ok';
+  })()`);
+  const text = 'Focused';
+  const steps = [];
+  for (const ch of text) {
+    await crawl.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', text: ch, unmodifiedText: ch, key: ch });
+    await crawl.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
+    await crawl.settle(70);
+    const state = await crawl.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      return { focused: document.activeElement === el, value: el ? el.value : null };
+    })()`);
+    steps.push(state);
+  }
+  const focusedAfter = await crawl.eval(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    return { focused: document.activeElement === el, value: el ? el.value : null };
+  })()`);
+  await crawl.shot('modal-focus-company');
+  // Close without creating a second company.
+  await crawl.eval(`window.__ui.pressEscape()`).catch(() => {});
+  await crawl.settle(200);
+  const closed = await crawl.eval(`window.__ui.modalCount() === 0`);
+
+  crawl.step('deep modal focus: a different dialog keeps the caret on every keystroke',
+    steps.length === text.length
+      && steps.every((s) => s.focused)
+      && focusedAfter.value === text
+      && closed === true,
+    JSON.stringify({ focusedAfter, steps: steps.map((s) => (s.focused ? s.value : `LOST@${s.value}`)) }));
+}
+
 const PAGE_LABELS = [
   ['company', 'Company'],
   ['dashboard', 'Dashboard'],
@@ -2168,6 +2519,20 @@ async function main() {
     await deepListToolsFlow(crawl);
   } catch (err) {
     crawl.step('deep list tools flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 15 ── the scrollable Image operations menu + Specific positions (v0.1.69) */
+  try {
+    await deepOverlayPositionsFlow(crawl, photoPath);
+  } catch (err) {
+    crawl.step('deep overlay positions flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 16 ── the shared Modal focus fix, in a second dialog (v0.1.69) */
+  try {
+    await deepModalFocusFlow(crawl);
+  } catch (err) {
+    crawl.step('deep modal focus flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */

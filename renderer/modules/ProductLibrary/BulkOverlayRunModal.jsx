@@ -18,18 +18,41 @@
  *   - Save to folder       — writes the render to a folder on disk,
  *                            doesn't touch the product
  *
+ * v0.1.69: "Apply to which images" gained a third mode — Specific
+ * positions. Tick 1 2 3 4 5 … (or type "2, 4", "2 4", "2-4"). The list
+ * is 1-based with position 1 = the main image; products that lack a
+ * requested position are skipped (not failed) and the toast reports the
+ * reason ("no 4th image").
+ *
  * Calls `window.api.templates.applyBulk` or `applyByFilter`
  * depending on scope. Sync — blocks the modal until done (sharp
  * compose is fast, ~100-300ms/render, so 50 products = ~10s).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal, Button, Field, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
+// v0.1.69: the "which images" control is shared — every image operation in
+// the Library should offer main / all / specific positions with the same
+// skip-and-report behaviour. See ImageScopeField.jsx for the value shape.
+import { ImageScopeField, imageScopeIsMulti, useImageScope } from './ImageScopeField.jsx';
+
+/** Human summary of the skipped products, grouped by reason. */
+function skipSummary(skipped) {
+  const counts = new Map();
+  for (const s of skipped || []) {
+    const reason = s?.reason || 'skipped';
+    counts.set(reason, (counts.get(reason) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([reason, n]) => `${n} product${n === 1 ? '' : 's'} skipped: ${reason}`)
+    .join('; ');
+}
 
 export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
   const refreshProducts = useAppStore((s) => s.refreshProducts);
+  const allProducts = useAppStore((s) => s.allProducts);
 
   const [templates, setTemplates] = useState([]);
   const [templateId, setTemplateId] = useState('');
@@ -43,12 +66,14 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
   const [submitting, setSubmitting] = useState(false);
   // v0.49.52: which images of each product to overlay. 'main' = just the
   // main image (original behaviour); 'all' = every image of each product.
-  const [imageScope, setImageScope] = useState('main'); // 'main' | 'all'
+  // v0.1.69: the shared control adds 'positions' (1-based) and owns the
+  // state; `imageChoice.value` is the { scope, positions } payload shape.
+  const imageChoice = useImageScope();
 
   // When the user picks "Current filter", we ask the backend for
   // the match count via dryRun so the confirm button shows
   // "Apply to 47 products" rather than a vague "Apply".
-  const [filterMatch, setFilterMatch] = useState(null); // { matchedCount, sampleSkus } | null
+  const [filterMatch, setFilterMatch] = useState(null); // { matchedCount, sampleSkus, maxImages } | null
 
   // v0.26.41 (audit pass): the dep array is intentionally `[open]`
   // only. Effect references `templateId` and `addToast` too, but:
@@ -68,7 +93,7 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
       if (rows.length > 0 && !templateId) setTemplateId(rows[0].id);
     }).catch((err) => addToast(err.message, 'error'));
     setScope('selection');
-    setImageScope('main');
+    imageChoice.reset();
     setFilterMatch(null);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -93,6 +118,27 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
   const filterCount    = filterMatch?.matchedCount ?? 0;
   const finalCount     = scope === 'selection' ? selectionCount : filterCount;
 
+  /** Deepest gallery among the products this run will touch, so the ticks
+   *  are sized to the real data. Selection uses the store's filter-agnostic
+   *  `allProducts` (the Library's filtered page may be empty); filter mode
+   *  uses the dry-run's maxImages. */
+  const deepestGallery = useMemo(() => {
+    if (scope === 'filter') return Number(filterMatch?.maxImages ?? 0);
+    const wanted = new Set(productIds ?? []);
+    let max = 0;
+    for (const p of allProducts || []) {
+      if (!wanted.has(p.id)) continue;
+      max = Math.max(max, Number(p.imageCount ?? 0));
+    }
+    return max;
+  }, [scope, filterMatch, allProducts, productIds]);
+
+  // v0.1.69: the image-selection part of the IPC payload, straight from the
+  // shared control's value shape ({ scope, positions }).
+  const imageSelection = imageChoice.value;
+  const multiImage = imageScopeIsMulti(imageSelection);
+  const positionsMissing = imageSelection.scope === 'positions' && imageSelection.positions.length === 0;
+
   async function handlePickFolder() {
     try {
       const f = await window.api.files.pickFolder();
@@ -104,6 +150,10 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
     if (!templateId) { addToast('Pick a template first', 'error'); return; }
     if (destination === 'saveToFolder' && !folder) {
       addToast('Pick a folder to save into', 'error');
+      return;
+    }
+    if (positionsMissing) {
+      addToast('Pick at least one image position', 'info');
       return;
     }
     if (finalCount === 0) {
@@ -118,11 +168,11 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
       let res;
       if (scope === 'selection') {
         res = await window.api.templates.applyBulk({
-          templateId, productIds, destination: dest, scope: imageScope,
+          templateId, productIds, destination: dest, ...imageSelection,
         });
       } else {
         res = await window.api.templates.applyByFilter({
-          templateId, filters: filters ?? {}, destination: dest, scope: imageScope,
+          templateId, filters: filters ?? {}, destination: dest, ...imageSelection,
         });
       }
       if (res?.reconciled) {
@@ -140,10 +190,26 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
         const failed = res?.failed?.length ?? 0;
         const skipped = res?.skipped?.length ?? 0;
         const total = res?.total ?? finalCount;
+        // Group done image results per product so the toast can say
+        // "3 products (2 images each)" when every product got the same count.
+        const perProduct = new Map();
+        for (const d of res?.done ?? []) perProduct.set(d.productId, (perProduct.get(d.productId) || 0) + 1);
+        const doneProducts = perProduct.size || done;
+        const counts = [...new Set(perProduct.values())];
+        const each = counts.length === 1 && counts[0] > 1 ? ` (${counts[0]} images each)` : '';
+        const head = doneProducts === 0
+          ? 'No products overlaid'
+          : `Applied template to ${doneProducts} product${doneProducts === 1 ? '' : 's'}${each}`;
         if (failed + skipped === 0) {
-          addToast(`Applied template to ${done} product${done === 1 ? '' : 's'}`, 'success');
+          addToast(head, 'success');
         } else {
-          addToast(`Applied ${done} of ${total} — ${skipped} skipped, ${failed} failed`, failed > 0 ? 'error' : 'info');
+          const parts = [];
+          if (skipped > 0) parts.push(skipSummary(res?.skipped) || `${skipped} skipped`);
+          if (failed > 0) parts.push(`${failed} failed`);
+          // Only spell out the attempted total when some product is neither
+          // done, skipped nor failed (a shape the caller did not expect).
+          const unaccounted = Math.max(0, total - doneProducts - skipped - failed);
+          addToast(`${head}${unaccounted > 0 ? ` of ${total}` : ''} — ${parts.join('; ')}`, failed > 0 ? 'error' : 'info');
         }
       }
       // Refresh Library so new images are reflected in thumbs / counts.
@@ -209,34 +275,16 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
           </label>
         </fieldset>
 
-        {/* v0.49.52: which images of each product to overlay. */}
-        <fieldset className="bulk-overlay-run__group">
-          <legend>Apply to which images</legend>
-          <label className="bulk-overlay-run__radio">
-            <input
-              type="radio"
-              name="overlay-image-scope"
-              checked={imageScope === 'main'}
-              onChange={() => setImageScope('main')}
-            />
-            <span>
-              <strong>Main image only</strong>
-              <span className="muted"> — overlay just the product&rsquo;s main image</span>
-            </span>
-          </label>
-          <label className="bulk-overlay-run__radio">
-            <input
-              type="radio"
-              name="overlay-image-scope"
-              checked={imageScope === 'all'}
-              onChange={() => setImageScope('all')}
-            />
-            <span>
-              <strong>All images of each product</strong>
-              <span className="muted"> — overlay every image, not just the main one</span>
-            </span>
-          </label>
-        </fieldset>
+        {/* v0.49.52: which images of each product to overlay.
+            v0.1.69: the shared ImageScopeField adds the positions mode; the
+            same control is the wiring point for the other image operations. */}
+        <ImageScopeField
+          name="overlay-image-scope"
+          value={imageSelection}
+          onChange={imageChoice.set}
+          galleryDepth={deepestGallery}
+          disabled={submitting}
+        />
 
         <fieldset className="bulk-overlay-run__group">
           <legend>Destination</legend>
@@ -248,8 +296,8 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
               onChange={() => setDestination('append')}
             />
             <span>
-              <strong>Append as new image{imageScope === 'all' ? '(s)' : ''}</strong>
-              <span className="muted"> — original images untouched, {imageScope === 'all' ? 'an overlaid copy added per image' : 'render added to end'}</span>
+              <strong>Append as new image{multiImage ? '(s)' : ''}</strong>
+              <span className="muted"> — original images untouched, {multiImage ? 'an overlaid copy added per image' : 'render added to end'}</span>
             </span>
           </label>
           {/* v0.49.44: renamed from "Replace main" because that label
@@ -282,7 +330,7 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
             />
             <span>
               <strong>Overwrite each image in place</strong>
-              <span className="muted"> — stamp the overlay onto the image file{imageScope === 'all' ? 's' : ''}. Destructive: replaces the original, no undo.</span>
+              <span className="muted"> — stamp the overlay onto the image file{multiImage ? 's' : ''}. Destructive: replaces the original, no undo.</span>
             </span>
           </label>
           <label className="bulk-overlay-run__radio">
@@ -310,7 +358,7 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
           <div style={{ flex: 1 }} />
           <Button
             variant="primary"
-            disabled={submitting || !templateId || finalCount === 0 || (destination === 'saveToFolder' && !folder)}
+            disabled={submitting || !templateId || finalCount === 0 || positionsMissing || (destination === 'saveToFolder' && !folder)}
             onClick={handleSubmit}
           >
             {submitting
@@ -322,3 +370,4 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
     </Modal>
   );
 }
+

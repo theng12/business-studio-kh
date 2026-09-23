@@ -116,6 +116,24 @@ function requireVersionedPatch(args) {
   return true;
 }
 
+/**
+ * v0.1.69: optional 1-based image positions for the overlay apply.
+ *
+ * Absent is legal — that is every caller before this version, and any saved
+ * preset that only knows `scope`. Present must be an array of positive whole
+ * numbers: 0, negatives, fractions, strings and NaN are rejected HERE, before
+ * the handler runs, so a nonsense list can never reach the database. Values
+ * above the product image cap are not an error — the handler caps them.
+ */
+function validateOptionalPositions(positions) {
+  if (positions == null) return true;
+  if (!isArray(positions)) return 'positions must be an array';
+  for (const p of positions) {
+    if (!isNumber(p) || !Number.isInteger(p) || p < 1) return 'positions must be positive integers';
+  }
+  return true;
+}
+
 /* ─── Per-channel validators ────────────────────────────────────
  *
  * Listed in the same domain order as the IPC handlers in
@@ -382,6 +400,8 @@ const VALIDATORS = {
     if (!isString(a.templateId)) return 'templateId required';
     if (!isString(a.productId))  return 'productId required';
     if (!isObject(a.destination) || !isString(a.destination.kind)) return 'destination.kind required';
+    const positions = validateOptionalPositions(a.positions);
+    if (positions !== true) return positions;
     return true;
   },
   'templates:applyBulk': (a) => {
@@ -391,6 +411,8 @@ const VALIDATORS = {
     if (!isArray(a.productIds) || a.productIds.length === 0) return 'productIds must be a non-empty array';
     if (a.productIds.length > 1000) return 'productIds too large (max 1000 per batch)';
     if (!isObject(a.destination) || !isString(a.destination.kind)) return 'destination.kind required';
+    const positions = validateOptionalPositions(a.positions);
+    if (positions !== true) return positions;
     return true;
   },
   'templates:applyByFilter': (a) => {
@@ -398,6 +420,8 @@ const VALIDATORS = {
     if (a.operationId != null && !isUuid(a.operationId)) return 'operationId must be a UUID';
     if (!isString(a.templateId)) return 'templateId required';
     if (!isObject(a.destination) || !isString(a.destination.kind)) return 'destination.kind required';
+    const positions = validateOptionalPositions(a.positions);
+    if (positions !== true) return positions;
     return true;
   },
   'templates:getApplyOutcome': (a) => {
