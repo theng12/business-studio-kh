@@ -1,15 +1,16 @@
 # Business Studio KH — Product Briefing
 
-**Last full fact-check: 2026-09-19** (against the code, not against the previous
+**Last full fact-check: 2026-09-23** (against the code, not against the previous
 version of this document). Same convention as `AGENTS.md` §22: a claim that names
-a file, a package or a number carries `(verified 2026-09-19)` where it is worth
+a file, a package or a number carries `(verified 2026-09-23)` where it is worth
 singling out, and anything else falls back to that date.
 
 > **This file was rewritten, not edited.** The previous version described
 > Business Studio KH — a four-module batch image processor — and had been stale for
 > a long time. It described a `remove.bg` fallback that was deleted, a 20-image
-> cap that is now 50, and a four-module app that now has nineteen pages. See
-> **Corrections** at the end for the specific claims that were wrong.
+> cap that is now 50, and a four-module app that now has twenty-one
+> sidebar-reachable pages. See **Corrections** at the end for the specific
+> claims that were wrong.
 
 **What this document is:** the product overview — what the app is, what it does,
 how it is laid out, what it stores, and how it is built.
@@ -35,8 +36,11 @@ studio, an overlay/watermark studio, and a purchasing area.
   exception is AI Studio, which calls a provider you configure and pay for
   yourself; everything else — including background removal — runs on the Mac.
 - **One Mac or several.** See **Modes** below.
-- **Apple Silicon only.** Every build is a single arm64 DMG
-  (verified 2026-09-19).
+- **Both architectures ship; only arm64 has been launched.** Every release
+  builds two unsigned DMGs — `Business Studio KH-<v>-arm64.dmg` and `-x64.dmg`
+  (`build.mac.target[].arch: ["arm64","x64"]` in `package.json`, verified
+  2026-09-23). Only the arm64 build has ever been run, on one Mac; the x64 DMG
+  has never been launched.
 
 ---
 
@@ -80,11 +84,12 @@ In client mode the renderer is unchanged — the same screens, the same calls �
 and the main process forwards each request to the server over HTTP, with the
 data folder and its assets served over the same connection.
 
-**Client mode is not fully at parity.** 27 channels — the `NOT_YET_PORTABLE`
-list in `main/client/index.js` (verified 2026-09-21) — are stubbed with a clear
-"not yet available in client mode" message rather than implemented: user and
-role administration, server controls and migration bundles, the data-folder
-mover, backup browse/reveal, and AI provider key/credit checks. This is a
+**Client mode is not fully at parity.** 15 channels — the `NOT_YET_PORTABLE`
+list in `main/client/index.js` (verified 2026-09-23) — are stubbed with a clear
+"not yet available in client mode" message rather than implemented: server
+controls and migration bundles, the data-folder mover, backup browse/reveal, and
+the AI provider key check. User and role administration are **not** on that
+list — they sit in `PROXIED_CHANNELS` and do work from a client. This is a
 known, tracked list, not a surprise — `test/clientReachability.test.js` guards
 that no renderer-called channel is missing.
 
@@ -108,9 +113,10 @@ Support page reached from the sidebar footer (`verified 2026-09-21` in
 
 Pages in the Image Studio, Label Studio, Catalog Studio, Social and Operations
 sections are gated by **capability**, not by role rank — a page is hidden when
-the signed-in user's role lacks its capability (e.g. `images.manage`,
-`labels.use`, `catalog.design`, `costing.view`). Workspace and System pages are
-ungated, so Company and Settings are always reachable (`verified 2026-09-21`).
+the signed-in user's role lacks its capability (e.g. `images.manage`, `ai.run`,
+`labels.use`, `catalog.design`, `costing.view`). The Workspace pages and
+Settings are ungated, so Company and Settings are always reachable; `History`
+is gated on `history.view` (`verified 2026-09-23`).
 
 Window: 1400 × 900 by default, minimum 1100 × 700 (`verified 2026-09-19`).
 
@@ -161,17 +167,18 @@ data-folder location, About).
 
 ## Data model
 
-SQLite, 29 tables (`verified 2026-09-21` from the schema in `main/db/index.js`):
+SQLite, 33 tables (`verified 2026-09-23` from the schema in `main/db/index.js`):
 
 ```
 companies  users  roles  brands  categories  suppliers
 products  product_images  product_landed_costs
 purchase_orders  po_lines  po_cost_components  po_payments
 label_templates  label_runs  label_generation_items
-catalog_projects  social_grid_presets
+catalog_projects  catalog_templates  social_grid_presets  social_grid_templates
 image_templates  image_template_runs  image_merge_ops
 export_profiles  export_runs
 ai_tasks  ai_gallery  ai_prompt_templates
+bulk_column_sets  bulk_column_widths
 audit_log  app_state  settings
 ```
 
@@ -217,14 +224,22 @@ paths and rejects anything that resolves outside the allowed roots.
 
 ## Verification status
 
-- `npm run lint` — 0 errors, 13 warnings. All 13 are
-  `react-hooks/exhaustive-deps` and are deliberately left visible; see the
-  comment in `eslint.config.mjs`.
-- `npm test` — 258 checks, all passing (2 skipped unless run under Electron's
-  Node, which `npm run test:native` does).
+The bullets below are the snapshot taken at the 2026-09-23 fact-check, not a
+live status. `docs/tasks/HANDOFF.md` is the current source for the exact counts
+and the order to run the checks in.
+
+- `npm run lint` — 0 errors, **5 warnings** (snapshot 2026-09-23). Lint is
+  **not** warning-free: two unused vars in `main/socialGridRenderer.js` and
+  three unused `eslint-disable` directives in `test/*.test.js`.
+- `npm run check` (`lint` + `npm test`) — **928 tests pass** across **118 test
+  files** (snapshot 2026-09-23).
+- `npm run test:native` — **143 pass** under Electron's Node for the
+  better-sqlite3 suites (snapshot 2026-09-23).
 - `vite build` — clean.
-- All nineteen pages were opened and drawn without error in both standalone and
-  client mode (last checked 2026-09-19).
+- The CDP crawl (`scripts/probe-ui-crawl.js`) runs **144 steps** and was green
+  on both the dev-built app and the installed 0.1.72 package (snapshot
+  2026-09-23); it opens all **21 sidebar-reachable pages** and draws each
+  without error.
 
 ---
 

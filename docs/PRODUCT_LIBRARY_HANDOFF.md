@@ -1,5 +1,7 @@
 # Product Library — Handoff Spec
 
+> **Reference spec for a NEW project — it does not describe this repository.** The stack, file layout, schemas and limits below are a portable blueprint written to be re-implemented in another codebase; where they differ from this app, the code and `AGENTS.md` (§14–§17) win. In particular this repo has no Tailwind, its DB/IPC live in `main/db/` and `main/ipc/` rather than `main/db.js`/`main/ipc.js`, asset filenames carry no hash, and the image cap is 50 (`MAX_IMAGES_PER_PRODUCT` in `main/imageManager.js`). Live status: [`docs/tasks/HANDOFF.md`](tasks/HANDOFF.md).
+
 A self-contained spec for building a desktop Product Library module. Hand this file to a fresh Claude Code session in a new project and it will have everything needed to reproduce the feature at ~1:1 parity.
 
 The receiving Claude does **not** need access to the original codebase. All schemas, IPC contracts, matching rules, and the genuinely hard code are inlined.

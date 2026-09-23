@@ -1,5 +1,9 @@
 # Remaining work plan — after 0.1.37
 
+> **Historical plan — written after 0.1.37 (2026-09-21).** Its unchecked boxes are not a current backlog.
+> Per `docs/Business Studio KH Project Status.md`, R3.1, R3.2 (a separate same-model agent, not an independent third party), R4.1 and R4.2 are completed; R5 (hardware/provider validation) and an independent review remain open.
+> Live status: [`docs/tasks/HANDOFF.md`](../../tasks/HANDOFF.md).
+
 Status: proposed 2026-09-21. Owner: DeepSeek (autonomous). This plan picks up
 after the 0.1.37 batch was implemented, self-reviewed, verified and packaged.
 It is deliberately short and evidence-backed; it does not reopen closed

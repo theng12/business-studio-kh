@@ -1,10 +1,38 @@
 # Business Studio KH — Development Status
 
-Updated: 2026-09-21 (Asia/Bangkok). Purpose: the single authoritative record of current development status, verified evidence, stable findings and remaining limits. This is a project status document, not a handoff to another person or computer.
+Updated: 2026-09-23 (Asia/Bangkok). Purpose: the single authoritative record of current development status, verified evidence, stable findings and remaining limits. The operating loop, paths and traps live in [the session handoff](tasks/HANDOFF.md) — read that first in a new session.
 
-**Scope:** personal/internal macOS (Apple Silicon) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, local release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
+**Scope:** personal/internal macOS (Apple Silicon, with an Intel DMG built but never launched) standalone and Mac server/client use. **Current owner:** DeepSeek, acting as the autonomous development agent (planning, architecture, investigation, implementation, self-review, testing, status, release preparation). Historical records below may name Astra/Codex/Sol/Terra/Luna worker roles; those describe past execution and are not current assignments.
 
-## Current software pass — 0.1.50 (OpenAI pricing + ratios)
+## Current status — 0.1.72 (2026-09-23)
+
+**Release.** 0.1.72 is merged to `main` (`fb8f4f4`, [PR #55](https://github.com/theng12/media-studio-kh/pull/55), merge `557dc6c`), and the docs pass that added the session handoff is `f13ddbe` ([PR #56](https://github.com/theng12/media-studio-kh/pull/56)). 0.1.72 is installed at `/Applications/Business Studio KH.app` on this Mac. The merged run since 0.1.37 is 0.1.38–0.1.72: import hardening, the bulk edit table, the Library filter column and list tools, the which-images control on every image operation, the rebuilt label designer, the column picker with saved company-scoped sets, and the v0.1.72 polish pass (pointer/pan/rotation in the designer, company-scoped column widths, reachable Duplicate set, Modal autoFocus, always-available menu search with directional hover, non-cropping overlay preview).
+
+**Verified evidence (fresh self-run, 2026-09-23, on the 0.1.72 tree):**
+
+| Check | Result |
+| --- | --- |
+| `npm run check` | exit 0; lint **0 errors / 5 warnings**; **928 passed**, 0 failed/skipped. The 5 warnings are 2 `no-unused-vars` in `main/socialGridRenderer.js:14` and 3 unused `eslint-disable` directives in `test/currencies.test.js`, `test/overlayPositioning.test.js`, `test/systemFonts.test.js`. |
+| `npm run test:native` | exit 0; **143 passed**, 0 failed/skipped. |
+| UI crawl, dev-built app | **144/144** steps, no console errors. |
+| UI crawl, installed 0.1.72 package | **144/144** steps, no console errors. |
+| `npm run dist` | exit 0; both unsigned DMGs built; the installed app reports 0.1.72. |
+
+**Artifacts.** `dist/Business Studio KH-0.1.72-arm64.dmg` (253,946,118 bytes) and `dist/Business Studio KH-0.1.72-x64.dmg` (257,931,646 bytes). Both unsigned (`identity: null`); minimum macOS 12.0.0.
+
+**Authorization.** Per AGENTS.md §26 the standing default is commit / push / PR / merge for every change. Tagging, GitHub Releases, signing/notarization and installer publication remain separate, un-granted decisions. Hosted GitHub Actions stays disabled — `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` returns `false`.
+
+**Environment.** The host shell runs Node v26.8.2 / npm 11.19.1 and `npm run check` passes there; `README.md` pins Node 24 (verified with 24.15.0) as the supported version, and `test:native` runs under Electron's bundled Node. The shell exports `ELECTRON_RUN_AS_NODE=1` globally, so GUI probes and the packaged probe need `env -u ELECTRON_RUN_AS_NODE`.
+
+**Review type.** Still **self-review**: every review to date is by the same agent, or by a separate agent from the same model family. No independent third party has reviewed the tree. A further adversarial audit of the seven v0.1.71 customer issues was run on 2026-09-23 and is likewise self-review.
+
+**Open.** Hardware and provider validation (the runbook's results table is still empty); the x64 DMG has never been launched; signing/notarization is not configured; the `@imgly/background-removal` AGPL-3.0 licensing question raised by the 2026-09-20 distribution audit has no recorded resolution; label-designer resize is deliberately not rotation-aware.
+
+## Historical records
+
+The sections below are dated evidence from the version named in each heading. Their wording is kept verbatim. Where one states a policy or a "current release" that later changed, the **Current status** section above wins.
+
+## Historical record — 0.1.50 (OpenAI pricing + ratios)
 
 **Pricing + ratios (0.1.50).** The AI cost estimate is now token-based
 (`main/ai/pricing.js`): text input + image input + image output, priced with
@@ -73,7 +101,7 @@ to the token model in 0.1.50 (`main/ai/pricing.js`). Tests:
 - [x] **Review 3** (`f2a8776..8cdca5f`): P2 **Skip existing replaced Tags** (the tags block ignored the policy); P3 `create()` stored a blank status; P3 title-row hint gating.
 - [x] **Review 4** (`8cdca5f..8d0c583`): P3 status normalized once at the `bulkUpsert` boundary (blank/whitespace = not supplied; insert defaults `active`, existing rows untouched, dry-run and live agree); P3 no-op rows are no longer counted as `updated`, so the post-Apply review matches the preview and the Skip label.
 - [x] **W1–W5 statuses above are "verified" only in the sense of fresh self-run checks on that tree; there has been no independent review since the F1–F5 corrections. 0.1.37 is nevertheless merged at the owner's direction.**
-- Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer).
+- Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer). *(Superseded 2026-09-22 for Intel only: AGENTS.md §20 now requires both `arm64` and `x64` DMGs per release, and `test/releaseScripts.test.js` pins it. Universal binaries remain rejected. See the Current status section.)*
 
 **Artifacts:**
 
@@ -119,7 +147,7 @@ Environment note: this shell exports `ELECTRON_RUN_AS_NODE=1` globally. `check:r
 
 **Review type and scope:** all conclusions in this pass are **self-review** by DeepSeek. The last independent review (Astra/reviewer) examined the frozen pre-correction source and returned FAIL on F1–F4 (plus F5); that report is historical evidence about that revision only. No independent review exists for the corrected tree.
 
-**External-authorization ledger:** local commits, tests, documentation and unsigned build preparation are authorized. Pushing, PR creation/merge, tags, releases, deployment, signing purchases and installer publication are **not** authorized in this session; before any push, `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` must return `false`. No push or PR occurred. The DMG is a local file handed to the owner; nothing was uploaded.
+**External-authorization ledger:** local commits, tests, documentation and unsigned build preparation are authorized. Pushing, PR creation/merge, tags, releases, deployment, signing purchases and installer publication are **not** authorized in this session; before any push, `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` must return `false`. No push or PR occurred. The DMG is a local file handed to the owner; nothing was uploaded. *(Superseded 2026-09-23: AGENTS.md §26 now makes commit / push / PR / merge the standing default; only tags, releases, signing and publication remain separate decisions — see the Current status section.)*
 
 **Hardware/provider checks not performed:** physical two-Mac LAN, Wi-Fi loss/sleep-wake, changed server address, bidirectional edits, macOS 12 hardware, iPad Safari, real printer dimensions/cancellation, paid AI provider calls, and downloading the local background-removal model. Loopback process checks are not two-Mac evidence.
 
@@ -222,15 +250,15 @@ Local installer: `dist/Business Studio KH-0.1.35-arm64.dmg` in `$HOME/.codex/wor
 
 - Private repository: https://github.com/theng12/media-studio-kh
 - Base branch: `main`. Authenticate with a GitHub account that can access this repository.
-- Current merged application release: **0.1.36** ([PR #5](https://github.com/theng12/media-studio-kh/pull/5)); the current candidate is 0.1.37. Historical passes produced **0.1.33** (merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [PR #1](https://github.com/theng12/media-studio-kh/pull/1)), **0.1.34** ([PR #3](https://github.com/theng12/media-studio-kh/pull/3)) and **0.1.35** ([PR #4](https://github.com/theng12/media-studio-kh/pull/4)). Use latest main; do not reset to a historical SHA.
-- At the start of the current pass, fresh fetch confirmed local and remote `main` at `0d0f93b2bf6d870ef50133f4b78b2ca08c816886` (0.1.36); GitHub Actions was disabled. Keep hosted compute disabled; run checks locally.
+- Current merged application release: **0.1.72** ([PR #55](https://github.com/theng12/media-studio-kh/pull/55), merge `557dc6c`); the session handoff and its rule merged as [PR #56](https://github.com/theng12/media-studio-kh/pull/56) at `f13ddbe`. Historical passes produced **0.1.33** (merge commit **`1e82376e7a31500f6e9788fd1dfc078a5477ba6d`**, [PR #1](https://github.com/theng12/media-studio-kh/pull/1)), **0.1.34** ([PR #3](https://github.com/theng12/media-studio-kh/pull/3)) and **0.1.35** ([PR #4](https://github.com/theng12/media-studio-kh/pull/4)). Use latest main; do not reset to a historical SHA.
+- `main` was at `f13ddbe` when this section was updated (2026-09-23). GitHub Actions is disabled; keep hosted compute disabled and run checks locally.
 - Scope: personal/internal standalone and Mac server/client use. No Apple Developer subscription, public distribution, deployment, signing, or paid AI calls are required for this work.
 
 Read [AGENTS.md](../AGENTS.md), then this status record and [the completed validation record](INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md). The [previous implementation plan](superpowers/plans/2026-09-20-internal-server-client.md) and [original improvement note](superpowers/plans/server-client-improvement-note.md) explain history; their completed items are not a new backlog. Older distribution audits contain superseded public-release framing.
 
 ## Historical environment and migration notes — not assigned
 
-The setup and data-transfer material in this section is retained from earlier migration planning for provenance. It is not a current assignment or a handoff procedure. The supported packaging target is Apple Silicon (`arm64`), macOS 12 or newer. Intel/Windows are not validated targets. Use Node 24; the current checkout was verified with Node **24.15.0**, npm **11.12.1**. Node 20 is insufficient for the current Electron/better-sqlite3 dependencies. Install Git and Xcode Command Line Tools first (`xcode-select -p` verifies the tools; `xcode-select --install` installs them if missing).
+The setup and data-transfer material in this section is retained from earlier migration planning for provenance. It is not a current assignment or a handoff procedure. Both `arm64` and `x64` DMGs ship (AGENTS.md §20), macOS 12 or newer; only `arm64` has actually been launched and validated, so treat the Intel build as runtime-untested. Windows is not a target. Use Node 24; the current checkout was verified with Node **24.15.0**, npm **11.12.1** (the host shell now runs Node v26.8.2 / npm 11.19.1, where `npm run check` also passes). Node 20 is insufficient for the current Electron/better-sqlite3 dependencies. Install Git and Xcode Command Line Tools first (`xcode-select -p` verifies the tools; `xcode-select --install` installs them if missing).
 
 ```bash
 git clone https://github.com/theng12/media-studio-kh.git

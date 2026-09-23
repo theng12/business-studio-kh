@@ -1,6 +1,6 @@
 # Hardware and provider validation runbook
 
-Status: **not performed** as of 2026-09-21. Nothing in this document has been
+Status: **not performed** as of 2026-09-23. Nothing in this document has been
 executed. It exists because these checks cannot be closed from the development
 Mac and must not be claimed from loopback/synthetic evidence. Run each row,
 record the result in the table at the bottom, then update the project status.

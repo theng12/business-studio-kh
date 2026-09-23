@@ -1,5 +1,8 @@
 # Business Studio KH — internal server/client improvement note
 
+> **Completed historical record — the internal server/client improvement note, 2026-09-20.** Its planning instructions were executed and locally verified; it is not a current work queue.
+> Live status: [`docs/tasks/HANDOFF.md`](../../tasks/HANDOFF.md).
+
 **Status: implementation and local verification complete.** The owner lifted the read-only hold on 2026-09-20 after the other session finished. See [the execution plan](2026-09-20-internal-server-client.md) and [validation record](../../INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md) for implemented dispositions and verification. The original planning instructions below are retained as historical context; their hold no longer applies.
 
 **Owner direction:** Personal/internal use across the owner's Macs. Make the server/client combination reliable, faster, and smoother. No Apple Developer subscription, signing/notarization project, public-distribution work, or paid infrastructure. Another session is actively working in the repository: do not edit it, run builds/tests/benchmarks, restart applications, change settings or data, commit, or integrate this plan now. This note lives outside the repository to avoid interfering with that work. Later execution requires the owner to lift this hold.
