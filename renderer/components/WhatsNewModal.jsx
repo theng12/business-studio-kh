@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.70',
+    date: '2026-09-23',
+    items: [
+      'NEW — every image operation in the Product Library can now target the photos you want. Remove background, Auto crop, Enhance, Convert format, Compress and Resize all have the same "Apply to which images" control that Apply overlay gained: Main image only, All images of each product, or Specific positions — tick 1 2 3 4 5 … or type a list such as "2, 4" (spaces, commas, semicolons and ranges like "2-4" all work). Position 1 is the main image. Nothing changes unless you pick a new mode: Auto crop still starts on all images, and the other five still start on the main image.',
+      'NEW — products that do not have the positions you asked for are skipped and reported, never failed and never silently ignored. Compress a batch for position 4 and the toast ends "… — 2 products skipped: no 4th image"; a product that has any of the requested photos still gets those photos processed. The run summary names each skip reason, so a mixed run is never a mystery.',
+      'NEW — Remove background can now clean more than the main photo. Main image only stays the default; choose All images or specific positions and it adds a clean cutout for each one it processes. When the main image is among them the cutout still becomes the new main (the original is kept); when you pick only other positions the main is left alone.',
+      'Internal — the rule that decides which images an operation acts on lives once in main/util/imageScope.js (selectImages). Remove background, Auto crop, Enhance and re-encode now all call it, so the main / all / positions meaning and the "no Nth image" wording cannot drift between operations; the old main-only `all.slice(0,1)` paths are gone. `positions` is additive on images:autoCropProducts / images:autoEnhanceProducts / images:reencodeProducts, and images:listByProduct gained an optional { productId, scope, positions } form so the renderer-orchestrated Remove background flow gets the same selection from the main process instead of duplicating the rule. Old callers that send only `scope` keep working, and main/server/validators.js rejects a non-array / non-integer / below-1 positions list before any handler runs.',
+      'Internal — the reusable control moved its pure value builders and parser into renderer/modules/ProductLibrary/imageScopeValue.mjs, which now carries the parser unit test v0.1.69 was missing (test/imageScopeParse.test.js: "2, 4", "2 4", "2;4", "2-4", reversed ranges, en dashes, junk and the 50 cap). test/imageScopeAllWiring.test.js statically pins all six modals, the shared selectImages call in every handler, validator coverage, the per-op default scopes and the deliberate exclusion of Bulk AI. scripts/probe-ui-crawl.js gained a deepImageScopeFlow leg that runs Compress with specific position 2 against a one-image product and asserts the skip is reported.',
+    ],
+  },
+  {
     version: '0.1.69',
     date: '2026-09-23',
     items: [

@@ -35,7 +35,12 @@ import { useCallback } from 'react';
 import { Field, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { BulkOpModal } from './BulkOpModal.jsx';
-import { SCOPE_OPTIONS } from './libraryConstants.js';
+import {
+  ImageScopeField,
+  formatBulkImageResult,
+  imageScopeNeedsPositions,
+  useDeepestGallery,
+} from './ImageScopeField.jsx';
 
 const RESIZE_MODES = [
   { value: 'longEdge', label: 'Max long edge (preserve aspect, never upscale)' },
@@ -61,11 +66,15 @@ const DEFAULTS = {
   fit: 'cover',
   background: '#FFFFFF',
   stripMetadata: true,
+  // v0.1.70: `scope` keeps its stored main/all meaning; `positions` is the
+  // new additive part of the shared image-selection contract.
   scope: 'main',
+  positions: [],
 };
 
 export function BulkResizeModal({ open, productIds, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
+  const galleryDepth = useDeepestGallery(productIds);
 
   const run = useCallback(async (state, ids) => {
     const resize = state.resizeMode === 'longEdge'
@@ -79,25 +88,18 @@ export function BulkResizeModal({ open, productIds, onClose, onDone }) {
       quality: 92,
       stripMetadata: state.stripMetadata,
       scope: state.scope,
+      positions: state.positions,
       resize,
     });
     const mb = res?.bytesSaved ? (res.bytesSaved / (1024 * 1024)).toFixed(1) : '0.0';
-    const failed = res?.failed || 0;
-    const images = res?.images || 0;
     const label = state.resizeMode === 'longEdge'
       ? `≤ ${state.longEdge}px long edge`
       : `${state.width}×${state.height} (${state.fit})`;
-    if (failed > 0) {
-      addToast(
-        `Resized ${images}, ${failed} failed · ${label}`,
-        failed === images ? 'error' : 'info',
-      );
-    } else {
-      addToast(
-        `Resized ${images} image${images === 1 ? '' : 's'} to ${label} · ${mb} MB saved`,
-        'success',
-      );
-    }
+    const { text, tone } = formatBulkImageResult(res, {
+      verb: `Resized to ${label}`,
+      savedLabel: `${mb} MB saved`,
+    });
+    addToast(text, tone);
   }, [addToast]);
 
   return (
@@ -119,8 +121,9 @@ export function BulkResizeModal({ open, productIds, onClose, onDone }) {
         </>
       }
       run={run}
+      runDisabled={(state) => imageScopeNeedsPositions(state)}
     >
-      {({ state, set, running }) => {
+      {({ state, set, patch, running }) => {
         const showBackground = state.resizeMode === 'exact' && state.fit === 'contain';
         return (
           <>
@@ -239,13 +242,13 @@ export function BulkResizeModal({ open, productIds, onClose, onDone }) {
               </>
             ) : null}
 
-            <Field label="Scope">
-              {({ id }) => (
-                <Select id={id} value={state.scope} onChange={(e) => set('scope', e.target.value)} disabled={running}>
-                  {SCOPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </Select>
-              )}
-            </Field>
+            <ImageScopeField
+              name="resize-image-scope"
+              value={{ scope: state.scope, positions: state.positions }}
+              onChange={(v) => patch({ scope: v.scope, positions: v.positions })}
+              galleryDepth={galleryDepth}
+              disabled={running}
+            />
 
             <label className="toggle" style={{ marginTop: 10 }}>
               <input

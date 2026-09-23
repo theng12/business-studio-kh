@@ -28,16 +28,27 @@ import { useCallback, useEffect, useState } from 'react';
 import { Modal, Button, Field, Select, SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { useBulkPreview } from './useBulkPreview.js';
+import {
+  ImageScopeField,
+  formatBulkImageResult,
+  imageScopeNeedsPositions,
+  useDeepestGallery,
+  useImageScope,
+} from './ImageScopeField.jsx';
 
 export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
   const refreshProducts = useAppStore((s) => s.refreshProducts);
+  const galleryDepth = useDeepestGallery(productIds);
 
   const [fillPct, setFillPct] = useState(88);      // product fill % → scale
   const [tolerance, setTolerance] = useState(12);  // background match → trimThreshold
   const [fillMode, setFillMode] = useState('color');
   const [fillColor, setFillColor] = useState('#FFFFFF');
   const [submitting, setSubmitting] = useState(false);
+  // v0.1.70: "which images" choice. Auto crop has always processed every
+  // image of each product, so `all` stays its default.
+  const imageChoice = useImageScope({ scope: 'all', positions: [] });
 
   // In-session only: always starts OFF (preview shown) on open, not remembered.
   const [skipPreview, setSkipPreview] = useState(false);
@@ -54,7 +65,8 @@ export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
     setFillColor('#FFFFFF');
     setSubmitting(false);
     setSkipPreview(false);
-  }, [open]);
+    imageChoice.reset({ scope: 'all', positions: [] });
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // v0.1.16: the preview request, the debounce and the blob-URL lifecycle all
   // live in useBulkPreview now (shared with AutoEnhanceRunModal). This is just
@@ -85,23 +97,19 @@ export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
     try {
       const res = await window.api.images.autoCropProducts({
         productIds,
+        scope: imageChoice.value.scope,
+        positions: imageChoice.value.positions,
         scale: fillPct / 100,
         fillMode,
         fillColor,
         trimThreshold: tolerance,
       });
-      const imgs = res?.images ?? 0;
-      const prods = res?.products ?? 0;
-      const failed = res?.failed ?? 0;
       const missing = res?.missing ?? 0;
-      if (failed === 0 && missing === 0) {
-        addToast(`Auto-cropped ${imgs} image${imgs === 1 ? '' : 's'} across ${prods} product${prods === 1 ? '' : 's'}`, 'success');
-      } else {
-        const bits = [`${imgs} image${imgs === 1 ? '' : 's'}`];
-        if (failed) bits.push(`${failed} failed`);
-        if (missing) bits.push(`${missing} missing on disk`);
-        addToast(`Auto-crop done — ${bits.join(', ')}`, failed > 0 ? 'error' : 'info');
-      }
+      const { text, tone } = formatBulkImageResult(res, {
+        verb: 'Auto-cropped',
+        extras: [missing ? `${missing} missing on disk` : ''],
+      });
+      addToast(text, tone);
       refreshProducts();
       onDone?.(res);
       onClose?.();
@@ -191,6 +199,14 @@ export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
           )}
         </Field>
 
+        <ImageScopeField
+          name="autocrop-image-scope"
+          value={imageChoice.value}
+          onChange={imageChoice.set}
+          galleryDepth={galleryDepth}
+          disabled={submitting}
+        />
+
         <label className="autocrop-run__skip">
           <input
             type="checkbox"
@@ -204,7 +220,7 @@ export function AutoCropRunModal({ open, productIds, onClose, onDone }) {
         <footer className="autocrop-run__footer">
           <Button onClick={onClose} disabled={submitting}>Cancel</Button>
           <div style={{ flex: 1 }} />
-          <Button variant="primary" disabled={submitting || count === 0} onClick={handleSubmit}>
+          <Button variant="primary" disabled={submitting || count === 0 || imageScopeNeedsPositions(imageChoice.value)} onClick={handleSubmit}>
             {submitting ? 'Auto-cropping…' : `Auto-crop ${count} product${count === 1 ? '' : 's'}`}
           </Button>
         </footer>

@@ -115,3 +115,30 @@ test('the IPC validator rejects nonsense positions before the handler runs', () 
     assert.match(filtered(bad), /positions must be positive integers|positions must be an array/);
   }
 });
+
+test('v0.1.70: every image-op channel validates the additive positions list', () => {
+  for (const channel of ['images:autoCropProducts', 'images:autoEnhanceProducts', 'images:reencodeProducts']) {
+    const validate = getValidator(channel);
+    // The pre-v0.1.70 contract (productIds only) must still pass.
+    assert.equal(validate({ productIds: ['p'] }), true, `${channel} rejects an old-style call`);
+    assert.equal(validate({ productIds: ['p'], scope: 'all' }), true, `${channel} rejects a scope-only call`);
+    assert.equal(validate({ productIds: ['p'], positions: [2, 4] }), true, `${channel} rejects valid positions`);
+    for (const bad of [[0], [-1], [1.5], ['2'], [NaN], '2,4', {}]) {
+      assert.match(validate({ productIds: ['p'], positions: bad }),
+        /positions must be positive integers|positions must be an array/,
+        `${channel} let a nonsense positions value through: ${JSON.stringify(bad)}`);
+    }
+    // productIds is still required.
+    assert.match(validate({ positions: [2] }), /productIds/);
+  }
+});
+
+test('v0.1.70: images:listByProduct accepts the scoped shape and still the bare id', () => {
+  const validate = getValidator('images:listByProduct');
+  assert.equal(validate('product-id'), true, 'the legacy bare-id read was broken');
+  assert.equal(validate({ productId: 'product-id' }), true);
+  assert.equal(validate({ productId: 'product-id', scope: 'positions', positions: [2] }), true);
+  assert.match(validate({ positions: [2] }), /productId/);
+  assert.match(validate(42), /product id or/);
+  assert.match(validate({ productId: 'p', positions: [0] }), /positions must be positive integers/);
+});

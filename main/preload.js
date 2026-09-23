@@ -196,7 +196,9 @@ contextBridge.exposeInMainWorld('api', {
     bulkRemove: (ids)                       => invoke('products:bulkRemove', { ids }),
   },
   images: {
-    listByProduct:     (productId)                          => invoke('images:listByProduct', productId),
+    // v0.1.70: the argument passes through unchanged so the channel accepts
+    // both the legacy bare product id and { productId, scope, positions }.
+    listByProduct:     (arg)                                => invoke('images:listByProduct', arg),
     importForProduct:  (productId, sourcePath)              => invoke('images:importForProduct', { productId, sourcePath }),
     autoMatchBySku:    (companyId, folderPath)              => invoke('images:autoMatchBySku', { companyId, folderPath }),
     importFromBytes:   (productId, bytes, ext)              => invoke('images:importFromBytes', { productId, bytes, ext }),

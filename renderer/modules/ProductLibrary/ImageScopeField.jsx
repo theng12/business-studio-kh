@@ -2,11 +2,12 @@
  * v0.1.69: ImageScopeField — the reusable "which images does this operation
  * act on?" control (Main image only · All images · Specific positions).
  *
- * It was built for the Overlay Studio bulk apply, but every image-affecting
- * operation in the Library's Image operations menu (Remove background, Auto
- * crop, Enhance, Convert format, Compress, Resize) should offer the same
- * choice with the same skip-and-report behaviour. Keeping the UI here — and
- * the value shape explicit — makes that a wiring job in each modal:
+ * v0.1.70: every image-affecting operation in the Library's Image operations
+ * menu uses it — Remove background, Auto crop, Enhance, Convert format,
+ * Compress and Resize — so the ask is the same everywhere and the answer
+ * travels the same contract. The pure value builders / parser moved to
+ * imageScopeValue.mjs so they can be unit-tested without React; they are
+ * re-exported here so existing imports keep working.
  *
  *     const imageScope = useImageScope();
  *     ...
@@ -25,64 +26,50 @@
  * `positions` is only meaningful when scope === 'positions'; it is 1-based
  * with position 1 = the main image.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useAppStore } from '../../store/index.js';
+import {
+  IMAGE_SCOPE_DEFAULT,
+  MAX_IMAGE_POSITION,
+  MIN_TICK_COUNT,
+  buildImageScope,
+  formatBulkImageResult,
+  imageScopeIsMulti,
+  imageScopeNeedsPositions,
+  normalizePositionList,
+  parsePositionsInput,
+  summarizeSkippedReasons,
+} from './imageScopeValue.mjs';
 
-/** The default the existing behaviour must keep: main image only. */
-export const IMAGE_SCOPE_DEFAULT = { scope: 'main', positions: [] };
-
-/** Upper bound mirrors main/util/imageScope.js (the product image cap). */
-const MAX_IMAGE_POSITION = 50;
-/** Always offer a few ticks so a "2nd photo" is pickable even when the
- *  loaded product rows have not reported an image count yet. */
-const MIN_TICK_COUNT = 5;
+export {
+  IMAGE_SCOPE_DEFAULT,
+  MAX_IMAGE_POSITION,
+  buildImageScope,
+  formatBulkImageResult,
+  imageScopeIsMulti,
+  imageScopeNeedsPositions,
+  normalizePositionList,
+  parsePositionsInput,
+  summarizeSkippedReasons,
+};
 
 /**
- * Parse a free-text position list: "2, 4", "2 4", "2;4", "2-4".
- * Out-of-range / nonsense tokens are ignored; the result is deduped and
- * sorted, matching normalizePositions() on the main side.
+ * Deepest gallery among the products a run will touch, so the tick-boxes are
+ * sized to the real data. Reads the store's filter-agnostic `allProducts` —
+ * the Library's filtered page may hold none of the selected rows. Every
+ * image-operation modal uses this so they agree on the number.
  */
-export function parsePositionsInput(text) {
-  const out = new Set();
-  for (const token of String(text ?? '').split(/[\s,;]+/).filter(Boolean)) {
-    const range = token.match(/^(\d+)\s*[-–]\s*(\d+)$/);
-    if (range) {
-      const a = Number(range[1]);
-      const b = Number(range[2]);
-      for (let i = Math.min(a, b); i <= Math.max(a, b); i += 1) {
-        if (i >= 1 && i <= MAX_IMAGE_POSITION) out.add(i);
-      }
-      continue;
+export function useDeepestGallery(productIds) {
+  const allProducts = useAppStore((s) => s.allProducts);
+  return useMemo(() => {
+    const wanted = new Set(productIds ?? []);
+    let max = 0;
+    for (const p of allProducts || []) {
+      if (!wanted.has(p.id)) continue;
+      max = Math.max(max, Number(p.imageCount ?? 0));
     }
-    const n = Number(token);
-    if (Number.isInteger(n) && n >= 1 && n <= MAX_IMAGE_POSITION) out.add(n);
-  }
-  return [...out].sort((a, b) => a - b);
-}
-
-/** Dedupe/sort/cap a position array. */
-export function normalizePositionList(positions) {
-  const out = new Set();
-  for (const raw of Array.isArray(positions) ? positions : []) {
-    if (Number.isInteger(raw) && raw >= 1 && raw <= MAX_IMAGE_POSITION) out.add(raw);
-  }
-  return [...out].sort((a, b) => a - b);
-}
-
-/**
- * The ONE builder for the value shape, so the radio and the tick-boxes can
- * never disagree about what a mode means.
- */
-export function buildImageScope(scope, positions) {
-  if (scope === 'positions') {
-    return { scope: 'positions', positions: normalizePositionList(positions) };
-  }
-  return { scope: scope === 'all' ? 'all' : 'main', positions: [] };
-}
-
-/** Does this value ask for more than one image per product? */
-export function imageScopeIsMulti(value) {
-  if (value?.scope === 'all') return true;
-  return value?.scope === 'positions' && (value.positions?.length ?? 0) > 1;
+    return max;
+  }, [allProducts, productIds]);
 }
 
 /**
@@ -99,6 +86,10 @@ export function useImageScope(initial = IMAGE_SCOPE_DEFAULT) {
     value,
     positionsText,
     set: (next) => setValue(buildImageScope(next?.scope, next?.positions)),
+    reset: (next = IMAGE_SCOPE_DEFAULT) => {
+      setValue(buildImageScope(next.scope, next.positions));
+      setPositionsText((next.positions ?? []).join(', '));
+    },
     setScope: (scope) => {
       if (scope === 'positions') {
         setValue(buildImageScope('positions', value.positions));
@@ -118,10 +109,6 @@ export function useImageScope(initial = IMAGE_SCOPE_DEFAULT) {
     setText: (text) => {
       setPositionsText(text);
       setValue(buildImageScope('positions', parsePositionsInput(text)));
-    },
-    reset: () => {
-      setValue(buildImageScope('main', []));
-      setPositionsText('');
     },
   };
 }
