@@ -1,4 +1,4 @@
-import { elementLabel, inPaintOrder } from './designerGeometry.js';
+import { elementLabel, inPaintOrder, toggleSelected } from './designerGeometry.js';
 
 /**
  * v0.1.64: the layer list.
@@ -36,7 +36,7 @@ export function DesignerLayers({ elements, selectedIds, onSelect, onAction }) {
                 type="button"
                 className="ld-layers__name"
                 onClick={(e) => onSelect(e.shiftKey
-                  ? (selectedIds.includes(el.id) ? selectedIds.filter((id) => id !== el.id) : [...selectedIds, el.id])
+                  ? toggleSelected(selectedIds, el.id)
                   : [el.id])}
                 onDoubleClick={() => onAction({ kind: 'rename', id: el.id })}
                 title="Click to select, double-click to rename"

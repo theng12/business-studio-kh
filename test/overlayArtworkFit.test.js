@@ -115,6 +115,39 @@ test('the editor defaults an image element to contain and honours its own fit', 
   assert.equal(INSET_FOREGROUND_FIT, 'contain');
 });
 
+/* ── 1b. the truthful preview layer's fit (static CSS) ──────────────── */
+
+const CSS_FILE = path.join(ROOT, 'renderer/index.css');
+
+/** The declaration body of the first `selector { … }` rule in index.css. */
+function cssRule(selector) {
+  const src = fs.readFileSync(CSS_FILE, 'utf8');
+  const start = src.indexOf(`${selector} {`);
+  assert.ok(start >= 0, `${selector} must exist in renderer/index.css`);
+  return src.slice(start, src.indexOf('}', start) + 1);
+}
+
+test('the truthful preview layer never crops the rendered PNG (object-fit: contain)', () => {
+  // The layer sits exactly on the canvas box. `cover` would crop the PNG
+  // whenever its aspect ratio does not exactly equal the box — a mismatch
+  // against the letterboxed backdrop right beside it, and exactly the kind
+  // of artefact v0.1.71 removed from element artwork. `contain` is the
+  // honest choice: identical when the aspect matches, no crop when it does not.
+  const rule = cssRule('.ovl-canvas__truthful');
+  assert.match(rule, /object-fit:\s*contain\b/,
+    'the truthful PNG must be contained, never cropped');
+  assert.doesNotMatch(rule, /object-fit:\s*cover\b/,
+    'the truthful PNG must not use cover (it would crop a mismatched PNG)');
+});
+
+test('the surrounding canvas layers pin the deliberate cover exception', () => {
+  // Backdrop and inset foreground show the whole image; the inset blur is the
+  // one deliberate `cover` (a blurred fill must cover its box).
+  assert.match(cssRule('.ovl-canvas__backdrop'), /object-fit:\s*contain\b/);
+  assert.match(cssRule('.ovl-canvas__inset-fg'), /object-fit:\s*contain\b/);
+  assert.match(cssRule('.ovl-canvas__inset-blur'), /object-fit:\s*cover\b/);
+});
+
 /* ── 2. the renderer half ───────────────────────────────────────────── */
 
 test('a square photo in a wide 3:1 box renders contained, not stretched', async () => {

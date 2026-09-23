@@ -131,11 +131,15 @@ test('the table invents no new IPC channel', () => {
   const used = [...MODAL.matchAll(/window\.api\.(\w+)\.(\w+)\(/g)].map((m) => `${m[1]}.${m[2]}`);
   const unique = [...new Set(used)].sort();
   assert.deepEqual(unique, [
-    // v0.1.71: the saved column sets. Four channels, all registered/validated/
-    // proxied per test/bulkColumnsWiring.test.js.
+    // v0.1.71: the saved column sets. v0.1.72 adds duplicate + the
+    // company-scoped widths. All seven are registered/validated/proxied per
+    // test/bulkColumnsWiring.test.js.
     'bulkColumns.create',
+    'bulkColumns.duplicate',
+    'bulkColumns.getWidths',
     'bulkColumns.list',
     'bulkColumns.remove',
+    'bulkColumns.setWidths',
     'bulkColumns.update',
     'images.importFromBytes',
     'images.setMainImage',
@@ -259,11 +263,17 @@ test('a cell cannot lose focus to the modal on every keystroke', () => {
   // each render, so every keystroke re-ran the effect and moved focus to the
   // dialog — the cell accepted exactly one character.
   const focusEffect = UI.match(
-    /queueMicrotask\(\(\) => dialogRef\.current\?\.focus\(\)\);\s*\n\s*\}, \[([^\]]*)\]\);/,
+    /queueMicrotask\([\s\S]*?\}, \[([^\]]*)\]\);/,
   );
   assert.ok(focusEffect, 'the Modal dialog-focus effect is missing');
   assert.equal(focusEffect[1].trim(), 'open',
     'the Modal focus effect must depend on `open` only — depending on onClose re-focuses the dialog on every parent re-render');
+  // v0.1.72: the container must not steal focus from a child that asked for
+  // it (`autoFocus`), and must fall back to itself when nothing did.
+  assert.match(UI, /dialog\.contains\(document\.activeElement\)/,
+    'the Modal focus effect must leave focus alone when something inside the dialog already has it');
+  assert.match(UI, /\|\| dialog\)\.focus\(\)/,
+    'the Modal focus effect must fall back to focusing the dialog container');
   // The Escape listener still follows the live onClose, so Esc cannot go stale.
   assert.match(UI, /window\.addEventListener\('keydown', onKey\)/,
     'the Modal Escape listener is missing');

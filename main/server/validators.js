@@ -636,6 +636,16 @@ const VALIDATORS = {
   },
   'bulkColumns:update': requireVersionedPatch,
   'bulkColumns:remove': requireNonEmptyStringFields('id'),
+  'bulkColumns:duplicate': requireNonEmptyStringFields('id'),
+  // v0.1.72: the remembered width map. `widths` is `{ [columnKey]: px }`; the
+  // DB module normalizes/rounds it, so the validator only checks the SHAPE.
+  'bulkColumns:getWidths': (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
+  'bulkColumns:setWidths': (a) => {
+    if (!isObject(a)) return 'setWidths payload must be an object';
+    if (!isString(a.companyId) || !a.companyId.trim()) return 'companyId is required';
+    if (!isObject(a.widths)) return 'widths must be an object';
+    return true;
+  },
 
   // Suppliers --------------------------------------------------------
   // Note: unlike most read paths, this one takes an OBJECT

@@ -164,10 +164,21 @@ export function Modal({
    * re-ran on every keystroke and `dialogRef.focus()` yanked the caret out of
    * the cell — the "one character, then focus lost" regression. The Escape
    * listener above still follows `onClose`; only the focus is pinned to the
-   * open transition. */
+   * open transition.
+   *
+   * v0.1.72: the dialog no longer steals focus from a child that asked for it.
+   * React commits a child's `autoFocus` before this passive effect runs, so if
+   * focus already sits inside the dialog, leave it where the screen put it
+   * (17 screens use `autoFocus`). Otherwise the container takes focus — it has
+   * tabIndex={-1} and the Escape listener lives above it, so Esc still works. */
   useEffect(() => {
     if (!open) return undefined;
-    queueMicrotask(() => dialogRef.current?.focus());
+    queueMicrotask(() => {
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      if (dialog.contains(document.activeElement)) return; // autoFocus won
+      (dialog.querySelector('[autofocus], [data-autofocus]') || dialog).focus();
+    });
   }, [open]);
 
   if (!open) return null;

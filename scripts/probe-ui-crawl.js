@@ -258,15 +258,27 @@ window.__ui = (() => {
       hit.click();
       return 'ok';
     },
-    /* Real mouse gestures. React's synthetic handlers listen on the root, and
-     * the designer's drag code listens on window, so dispatching a genuine
-     * mousedown on the target and mousemove/mouseup on window is the same path a
-     * hand takes — a plain .click() cannot exercise a drag at all. */
+    /* Real drag gestures. React's synthetic handlers listen on the root, and
+     * both the mouse-based screens and the pointer-based label designer (v0.1.72)
+     * listen on window, so dispatch BOTH a PointerEvent and the MouseEvent the
+     * older screens still use — the same pair a real mouse produces. Neither
+     * type double-fires a component, because each component subscribes to one
+     * of them. A pointerdown target is also given pointer capture best-effort,
+     * which the designer's synthetic events cannot actually take (it catches
+     * the throw); the window listeners carry the drag either way. */
     mouseDragPoint: async (target, fromX, fromY, toX, toY) => {
-      const fire = (node, type, cx, cy) => node.dispatchEvent(new MouseEvent(type, {
-        bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0,
-        buttons: type === 'mouseup' ? 0 : 1,
-      }));
+      const fire = (node, type, cx, cy) => {
+        const common = {
+          bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0,
+          buttons: type === 'mouseup' ? 0 : 1,
+        };
+        if (typeof PointerEvent === 'function') {
+          node.dispatchEvent(new PointerEvent(type.replace('mouse', 'pointer'), {
+            ...common, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+          }));
+        }
+        node.dispatchEvent(new MouseEvent(type, common));
+      };
       fire(target, 'mousedown', fromX, fromY);
       await new Promise((r) => setTimeout(r, 30));
       fire(window, 'mousemove', (fromX + toX) / 2, (fromY + toY) / 2);
@@ -289,15 +301,26 @@ window.__ui = (() => {
         r.left + r.width / 2 + dx, r.top + r.height / 2 + dy);
     },
     /* Shift-click the Nth canvas element (0 = first). Used to build a
-     * multi-selection without depending on where the boxes happen to sit. */
+     * multi-selection without depending on where the boxes happen to sit.
+     * v0.1.72: the designer selects on pointerdown, so send the pointer pair
+     * as well as the mouse pair (see mouseDragPoint). */
     clickElAt: (index, shift) => {
       const list = all('.ld-el');
       const el = list[index];
       if (!el) return 'MISS index ' + index;
       const r = el.getBoundingClientRect();
       const x = r.left + r.width / 2; const y = r.top + r.height / 2;
-      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 1, shiftKey: !!shift }));
-      window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons: 0, shiftKey: !!shift }));
+      const fire = (node, type, buttons) => {
+        const common = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons, shiftKey: !!shift };
+        if (typeof PointerEvent === 'function') {
+          node.dispatchEvent(new PointerEvent(type.replace('mouse', 'pointer'), {
+            ...common, pointerId: 1, pointerType: 'mouse', isPrimary: true,
+          }));
+        }
+        node.dispatchEvent(new MouseEvent(type, common));
+      };
+      fire(el, 'mousedown', 1);
+      fire(window, 'mouseup', 0);
       return 'ok';
     },
     /* Drag the 'se' handle of the selected element's box. */
@@ -1143,6 +1166,126 @@ async function deepLabelDesignerFlow(crawl) {
     /2 selected/.test(multiLabel) && movedCount === 2,
     `${total} element(s) · “${multiLabel}” · ${movedCount} moved · ${JSON.stringify(beforeMulti)} → ${JSON.stringify(afterMulti)}`);
 
+  /* ── v0.1.72: shift-click TOGGLES, and the element toggled off must not
+   *      move (it used to stay selected and get dragged). ─────────────── */
+  const beforeToggle = await crawl.eval(`({
+    label: (document.querySelector('.ld-align__label') || {}).innerText || '',
+    lefts: Array.from(document.querySelectorAll('.ld-el')).map((el) => el.style.left),
+  })`);
+  await crawl.eval(`window.__ui.clickElAt(0, true)`, true);
+  await crawl.settle(300);
+  const afterToggleOff = await crawl.eval(`({
+    label: (document.querySelector('.ld-align__label') || {}).innerText || '',
+    lefts: Array.from(document.querySelectorAll('.ld-el')).map((el) => el.style.left),
+  })`);
+  await crawl.eval(`window.__ui.clickElAt(0, true)`, true);
+  await crawl.settle(300);
+  const afterToggleOn = await crawl.eval(`(document.querySelector('.ld-align__label') || {}).innerText || ''`);
+  crawl.step('deep: shift-click toggles a selected element off without moving it',
+    /2 selected/.test(beforeToggle.label) && /1 selected/.test(afterToggleOff.label)
+      && JSON.stringify(beforeToggle.lefts) === JSON.stringify(afterToggleOff.lefts)
+      && /2 selected/.test(afterToggleOn),
+    `“${beforeToggle.label}” → “${afterToggleOff.label}” → “${afterToggleOn}” · positions ${JSON.stringify(beforeToggle.lefts) === JSON.stringify(afterToggleOff.lefts) ? 'unchanged' : 'CHANGED'}`);
+
+  /* ── v0.1.72: a rotated element is only reachable through its rotated
+   *      bounds. Rotate one 45°, then marquee a tiny box at the corner of its
+   *      AABB — empty space in the unrotated box, so the old raw-box hit test
+   *      would miss it. ──────────────────────────────────────────────── */
+  await crawl.eval(`(async () => {
+    const canvas = document.querySelector('.ld-canvas');
+    const r = canvas.getBoundingClientRect();
+    await window.__ui.mouseDragPoint(canvas, r.right - 6, r.bottom - 6, r.right - 6, r.bottom - 6);
+  })()`, true);
+  await crawl.settle(250);
+  await crawl.eval(`window.__ui.clickElAt(0, false)`, true);
+  await crawl.settle(250);
+  await crawl.eval(`window.__ui.fieldSet('Rotation', '45')`);
+  await crawl.settle(450);
+  const rotated = await crawl.eval(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const el = document.querySelectorAll('.ld-el')[0];
+    const canvas = document.querySelector('.ld-canvas');
+    if (!el || !canvas) return { error: 'no element or canvas' };
+    const r = el.getBoundingClientRect();
+    const cr = canvas.getBoundingClientRect();
+    const x0 = r.left + 1.5; const y0 = r.top + 1.5;
+    const x1 = r.left + 6; const y1 = r.top + 6;
+    const under = document.elementFromPoint(x0 + 1, y0 + 1);
+    const fire = (node, type, cx, cy, buttons) => {
+      const common = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0, buttons };
+      node.dispatchEvent(new PointerEvent(type.replace('mouse', 'pointer'), Object.assign({}, common, { pointerId: 1, pointerType: 'mouse', isPrimary: true })));
+      node.dispatchEvent(new MouseEvent(type, common));
+    };
+    fire(canvas, 'mousedown', cr.right - 4, cr.bottom - 4, 1);
+    fire(window, 'mouseup', cr.right - 4, cr.bottom - 4, 0);
+    await sleep(150);
+    const cleared = (document.querySelector('.ld-align__label') || {}).innerText || '';
+    fire(canvas, 'mousedown', x0, y0, 1);
+    fire(window, 'mousemove', x1, y1, 1);
+    fire(window, 'mouseup', x1, y1, 0);
+    await sleep(300);
+    return {
+      under: under ? String(under.className || under.tagName) : null,
+      cleared,
+      label: (document.querySelector('.ld-align__label') || {}).innerText || '',
+      rotation: el.style.transform || null,
+    };
+  })()`, true);
+  crawl.step('deep: a rotated element is selectable through its rotated bounds',
+    !!rotated && !rotated.error && typeof rotated.under === 'string' && !/ld-el/.test(rotated.under)
+      && !/selected/.test(rotated.cleared || '') && /selected/.test(rotated.label || ''),
+    JSON.stringify(rotated));
+
+  /* ── v0.1.72: Space-drag pans the stage — and a pan is never a marquee and
+   *      never moves the selection. Zoom in until the stage must scroll. ── */
+  const pan = await crawl.eval(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const plus = Array.from(document.querySelectorAll('.ld-bar__tools button')).find((b) => b.title === 'Zoom in');
+    for (let i = 0; i < 20 && plus; i += 1) { plus.click(); await sleep(60); }
+    await sleep(500);
+    const stage = document.querySelector('.ld-stage');
+    if (!stage) return { error: 'no stage' };
+    stage.scrollLeft = 120; stage.scrollTop = 120;
+    await sleep(80);
+    const fire = (node, type, cx, cy, buttons) => {
+      const common = { bubbles: true, cancelable: true, clientX: cx, clientY: cy, button: 0, buttons };
+      node.dispatchEvent(new PointerEvent(type.replace('mouse', 'pointer'), Object.assign({}, common, { pointerId: 1, pointerType: 'mouse', isPrimary: true })));
+      node.dispatchEvent(new MouseEvent(type, common));
+    };
+    const sr = stage.getBoundingClientRect();
+    const cx = sr.left + sr.width / 2; const cy = sr.top + sr.height / 2;
+    const before = { x: stage.scrollLeft, y: stage.scrollTop, label: (document.querySelector('.ld-align__label') || {}).innerText || '' };
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+    await sleep(150);
+    const ready = stage.classList.contains('is-pan-ready');
+    const cursor = getComputedStyle(stage).cursor;
+    fire(stage, 'mousedown', cx, cy, 1);
+    fire(window, 'mousemove', cx - 45, cy - 35, 1);
+    fire(window, 'mouseup', cx - 45, cy - 35, 0);
+    await sleep(180);
+    const after = {
+      x: stage.scrollLeft, y: stage.scrollTop,
+      marquee: !!document.querySelector('.ld-marquee'),
+      label: (document.querySelector('.ld-align__label') || {}).innerText || '',
+    };
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }));
+    await sleep(150);
+    const released = stage.classList.contains('is-pan-ready');
+    return { ready, cursor, released, before, after };
+  })()`, true);
+  crawl.step('deep: Space-drag pans the stage without marqueeing or moving the selection',
+    !!pan && !pan.error && pan.ready && !pan.released && pan.cursor === 'grab'
+      && pan.before.label === pan.after.label && pan.after.marquee === false
+      && pan.after.x === pan.before.x + 45 && pan.after.y === pan.before.y + 35,
+    JSON.stringify(pan));
+  // Back to Fit so the rest of the leg is measured at a stable zoom.
+  await crawl.eval(`(() => {
+    const b = Array.from(document.querySelectorAll('.ld-bar__tools button')).find((x) => (x.title || '').startsWith('Fit'));
+    if (b) b.click();
+    return 'ok';
+  })()`);
+  await crawl.settle(300);
+
   /* 6 ── the exact print preview renders the real document. */
   await crawl.eval(`window.__ui.click('.ld-bar__tools button', 'Exact preview')`);
   await crawl.waitFor(`!!document.querySelector('.ld-exact')`, 12_000, 'the exact preview iframe');
@@ -1464,6 +1607,66 @@ async function deepBulkTableFlow(crawl, photoPath) {
     colsWidthBefore != null && colsWidthAfter.col >= colsWidthBefore + 70 && colsWidthAfter.stored === colsWidthAfter.col,
     `${colsWidthBefore} → ${colsWidthAfter.col}px · stored ${colsWidthAfter.stored}`);
   // Leave the widths at their defaults for the rest of the flow.
+  await crawl.eval(`window.__ui.clickExact('Reset columns')`);
+  await crawl.settle(250);
+
+  /* ── v0.1.72: a width lives with the company, not just this Mac ─────────
+   * Drag the Name column wider, let the debounced company-scoped DB write
+   * land, then wipe the localStorage cache — what a second Mac sees on its
+   * first open — close the table and reopen it. The width must come back from
+   * the database, not from this Mac's cache. */
+  await crawl.eval(`window.__ui.mouseDrag('[data-col-resize="name"]', 120, 0)`, true);
+  await crawl.settle(900);
+  const companyWidth = await crawl.eval(`(() => { const c = document.querySelector('col[data-col="name"]'); return c ? parseFloat(c.style.width) : null; })()`);
+  await crawl.eval(`(() => { try { localStorage.removeItem('BulkTable.columnWidths'); } catch {} return 'ok'; })()`);
+  await crawl.eval(`window.__ui.pressEscape()`);
+  await crawl.settle(200);
+  await crawl.eval(`window.__ui.clickExact('Close')`);
+  await crawl.waitFor(`!document.querySelector('.bulk-table__grid')`, 10_000, 'the table to close for the width round-trip');
+  await crawl.settle(350);
+  await crawl.eval(`window.__ui.click('button', 'Image operations')`);
+  await crawl.settle(300);
+  const reopenedWidths = await crawl.eval(`window.__ui.bulkMenuItem('Edit in table')`, true);
+  await crawl.waitFor(`!!document.querySelector('.bulk-table__grid')`, 10_000, 'the table to reopen for the width round-trip');
+  await crawl.settle(800);
+  const adoptedWidth = await crawl.eval(`(() => {
+    const c = document.querySelector('col[data-col="name"]');
+    return { col: c ? parseFloat(c.style.width) : null, cache: localStorage.getItem('BulkTable.columnWidths') };
+  })()`);
+  crawl.step('deep bulk table: a width stored for the company is adopted on a fresh client',
+    reopenedWidths === 'ok' && companyWidth != null && adoptedWidth.col === companyWidth,
+    `dragged ${companyWidth}px · cache wiped · reopened ${adoptedWidth.col}px · cache ${adoptedWidth.cache}`);
+
+  /* ── v0.1.72: the saved set can be duplicated ────────────────────────── */
+  await crawl.eval(`window.__ui.click('button', 'Columns ▾')`);
+  await crawl.waitFor(`!!document.querySelector('.lib-columns__pop')`, 5000, 'the popover for duplicating a set');
+  const activateSet = await crawl.eval(`(() => {
+    const sel = document.querySelector('select[aria-label="Column set"]');
+    if (!sel) return 'MISS set select';
+    const opt = Array.from(sel.options).find((o) => o.textContent === ${JSON.stringify(setName)});
+    if (!opt) return 'MISS saved set option';
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    setter.call(sel, opt.value);
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    return 'ok';
+  })()`);
+  await crawl.settle(400);
+  const duplicateClicked = await crawl.eval(`window.__ui.click('.bulk-columns__set-actions button', 'Duplicate')`);
+  await crawl.settle(600);
+  const duplicated = await crawl.eval(`(() => {
+    const sel = document.querySelector('select[aria-label="Column set"]');
+    return sel ? Array.from(sel.options).map((o) => o.textContent) : [];
+  })()`);
+  crawl.step('deep bulk table: Duplicate makes a copy of the saved set',
+    activateSet === 'ok' && duplicateClicked === 'ok' && duplicated.includes(`${setName} copy`),
+    `${setName} · options ${JSON.stringify(duplicated)}`);
+
+  // Back to every column and default widths for the rest of the flow. The
+  // picker's Reset restores Every column AND closes the popover (the set
+  // dropdown's own change may close it too, so never press Esc here — that
+  // would reach the modal and close the whole table).
+  await crawl.eval(`window.__ui.click('.lib-columns__head .lib-columns__reset', 'Reset')`);
+  await crawl.settle(400);
   await crawl.eval(`window.__ui.clickExact('Reset columns')`);
   await crawl.settle(250);
 
@@ -2255,6 +2458,60 @@ async function deepOverlayPositionsFlow(crawl, photoPath) {
     && flat.cleared.triggers >= 3 && flat.cleared.items.length === 0;
   crawl.step('deep positions: the menu search flattens the tree and narrows it', flatOk, JSON.stringify(flat));
 
+  /* ── v0.1.72: the search field is always present, sits inside the arrow-key
+   *      cycle, and Escape clears a query before it closes the menu. ────── */
+  const keyCycle = await crawl.eval(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const panel = document.querySelector('.lib-bulk-menu__panel');
+    const input = panel && panel.querySelector('.lib-bulk-menu__search-input');
+    if (!panel || !input) return { error: 'no search field' };
+    const press = (key) => {
+      const t = document.activeElement || document.body;
+      t.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    };
+    const compact = Math.round(input.getBoundingClientRect().height);
+    input.focus();
+    await sleep(60);
+    const start = document.activeElement === input;
+    press('ArrowDown');
+    await sleep(90);
+    const afterDown = document.activeElement ? String(document.activeElement.className || document.activeElement.tagName) : null;
+    press('ArrowUp');
+    await sleep(90);
+    const backToSearch = document.activeElement === input;
+    // A typed query must put the flattened rows in the cycle.
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, 'overlay');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(240);
+    input.focus();
+    press('ArrowDown');
+    await sleep(90);
+    const inFlat = document.activeElement ? String(document.activeElement.className || document.activeElement.tagName) : null;
+    // Two-step Escape: clear the query, then close.
+    input.focus();
+    press('Escape');
+    await sleep(240);
+    const firstEsc = {
+      open: !!document.querySelector('.lib-bulk-menu__panel'),
+      value: (document.querySelector('.lib-bulk-menu__search-input') || {}).value ?? null,
+    };
+    press('Escape');
+    await sleep(260);
+    const secondEsc = {
+      open: !!document.querySelector('.lib-bulk-menu__panel'),
+      focus: (document.activeElement && (document.activeElement.innerText || '').trim().slice(0, 30)) || null,
+    };
+    return { compact, start, afterDown, backToSearch, inFlat, firstEsc, secondEsc };
+  })()`, true);
+  crawl.step('deep positions: the search field is in the arrow-key cycle and Escape clears it first',
+    !!keyCycle && !keyCycle.error && keyCycle.compact <= 34 && keyCycle.start
+      && /section-trigger/.test(keyCycle.afterDown || '') && keyCycle.backToSearch === true
+      && /lib-bulk-menu__item/.test(keyCycle.inFlat || '')
+      && keyCycle.firstEsc.open === true && keyCycle.firstEsc.value === ''
+      && keyCycle.secondEsc.open === false,
+    JSON.stringify(keyCycle));
+
   /* Esc closes the whole menu. */
   await crawl.eval(`window.__ui.pressEscape()`);
   await crawl.settle(250);
@@ -2432,6 +2689,25 @@ async function deepOverlayFitFlow(crawl, photoPath) {
       && !!fit.element && fit.element.fit === 'contain' && fit.element.dataFit === 'contain'
       && fit.element.natural === '900x900' && boxAspect > 2.5,
     `backdrop ${JSON.stringify(fit.backdrop)} · element ${JSON.stringify(fit.element)} · box aspect ${boxAspect.toFixed(2)}`);
+
+  /* v0.1.72: the truthful preview is the server-composed PNG at the canvas
+   * aspect. It used `object-fit: cover`, which silently crops the moment that
+   * aspect drifts (rounding, a render-size change) — the "skewed" class of bug
+   * the customer reported. It must contain, exactly like the letterboxed
+   * backdrop beside it. */
+  let truthful = null;
+  try {
+    await crawl.waitFor(`!!document.querySelector('.ovl-canvas__truthful')`, 10_000, 'the truthful preview layer');
+    truthful = await crawl.eval(`(() => {
+      const el = document.querySelector('.ovl-canvas__truthful');
+      return el ? {
+        fit: getComputedStyle(el).objectFit,
+        box: Math.round(el.getBoundingClientRect().width) + 'x' + Math.round(el.getBoundingClientRect().height),
+      } : null;
+    })()`);
+  } catch { truthful = null; }
+  crawl.step('deep overlay fit: the truthful preview contains the composed PNG (never crops)',
+    !!truthful && truthful.fit === 'contain', JSON.stringify(truthful));
 
   /* Leave Overlay Studio. */
   await crawl.eval(`window.__ui.pressEscape()`).catch(() => {});

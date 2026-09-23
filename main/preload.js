@@ -496,6 +496,10 @@ contextBridge.exposeInMainWorld('api', {
     create: (input) => invoke('bulkColumns:create', input),
     update: (id, patch) => invoke('bulkColumns:update', { id, patch }),
     remove: (id) => invoke('bulkColumns:remove', { id }),
+    duplicate: (id) => invoke('bulkColumns:duplicate', { id }),
+    /* v0.1.72: the remembered column widths travel with the data too. */
+    getWidths: (companyId) => invoke('bulkColumns:getWidths', { companyId }),
+    setWidths: (companyId, widths) => invoke('bulkColumns:setWidths', { companyId, widths }),
   },
   ai: {
     listModels:    ()                                 => invoke('ai:listModels'),

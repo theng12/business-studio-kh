@@ -2,9 +2,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CSS_PX_PER_MM, MIN_SIZE_MM, PX_PER_MM_BASE, SNAP_GUIDE_MM, alignPatches, clampBox,
   distributePatches, elementLabel, fitScale, inPaintOrder, marqueeHits, ptToPx,
-  resizeElement, scaleSelection, snapMm, smartGuides,
+  resizeElement, rotatedBounds, scaleSelection, snapMm, smartGuides, toggleSelected,
 } from './designerGeometry.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
+
+/**
+ * Keep a pointer gesture alive even when the finger/stylus leaves the element
+ * it started on. Harmless when the engine does not support capture (and for
+ * touch the browser already captures implicitly), so it is best-effort.
+ */
+function capturePointer(e) {
+  try { e.currentTarget?.setPointerCapture?.(e.pointerId); } catch { /* unsupported */ }
+}
 
 /**
  * v0.1.64: the Label Studio designer canvas.
@@ -28,13 +37,14 @@ import { appImageSrc } from '../../lib/imageUrl.js';
  * of it, so this re-implements that model in this app's terms:
  *
  *   fit/zoom → ResizeObserver + ⌘/Ctrl+wheel
- *   select   → element mousedown (stopPropagation), shift-click toggles,
+ *   select   → element pointerdown (stopPropagation), shift-click toggles,
  *              marquee on empty canvas, click-empty clears
  *   move     → drag with smart guides against sibling edges/centres, 1mm snap
  *              when snapping is on, multi-element move by a shared delta
  *   resize   → eight handles, aspect lock by element type, Shift inverts it,
  *              west/north handles keep the opposite edge still
  *   scale    → a multi-selection gets its own bounding box with handles
+ *   pan      → Space or middle-button drag scrolls the stage
  *   keys     → arrows nudge (1mm, Shift 0.1mm), Delete, ⌘D, ⌘C/⌘V, ⌘Z/⇧⌘Z
  *   menu     → right-click for lock / front / back / duplicate / delete
  *   palette  → drag a type from the toolbar and drop it where you want it
@@ -60,6 +70,10 @@ export function DesignerCanvas({
   const [exact, setExact] = useState(false);
   const [exactHtml, setExactHtml] = useState('');
   const [exactBusy, setExactBusy] = useState(false);
+  // Space held → the stage is a hand tool; `panning` is the live drag.
+  const spaceRef = useRef(false);
+  const [spaceDown, setSpaceDown] = useState(false);
+  const [panning, setPanning] = useState(false);
 
   const scale = zoom === 'fit' ? fit : Number(zoom) || 1;
   const pxPerMm = PX_PER_MM_BASE * scale;
@@ -96,6 +110,37 @@ export function DesignerCanvas({
     return () => el.removeEventListener('wheel', onWheel);
   }, [zoom, fit, onZoomChange]);
 
+  // Space is the hand tool (as in every design app): hold it and drag anywhere
+  // over the stage to pan. It must stay a plain space while a text field has
+  // focus — typing "2 5" in the size box must not turn into a pan — so the key
+  // is ignored there and only then re-armed on release/blur.
+  useEffect(() => {
+    const isField = (target) => /INPUT|TEXTAREA|SELECT/.test(target?.tagName || '') || !!target?.isContentEditable;
+    const onKeyDown = (e) => {
+      if (e.key !== ' ' && e.code !== 'Space') return;
+      if (isField(e.target)) return;
+      if (!spaceRef.current) { spaceRef.current = true; setSpaceDown(true); }
+      e.preventDefault();               // do not scroll the stage with Space
+    };
+    const release = () => { spaceRef.current = false; setSpaceDown(false); };
+    const onKeyUp = (e) => {
+      if (e.key !== ' ' && e.code !== 'Space') return;
+      release();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', release);   // alt-tab must not strand the hand tool
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', release);
+    };
+  }, []);
+
+  // Space/middle-button is a pan, never a select/move/marquee. Every gesture
+  // starter asks this first, so a pan can never also move an element.
+  const isPanGesture = useCallback((e) => e.button === 1 || spaceRef.current, []);
+
   const clientToMm = useCallback((clientX, clientY) => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
@@ -130,16 +175,34 @@ export function DesignerCanvas({
 
   /* ── move ─────────────────────────────────────────────────────────── */
   const startMove = useCallback((e, element) => {
+    if (isPanGesture(e)) return;       // Space/middle drag pans the stage, not this
     e.stopPropagation();               // the canvas must not clear the selection
     if (e.button !== 0) return;
+    capturePointer(e);
     const additive = e.shiftKey;
     const wasSelected = selectedIds.includes(element.id);
-    onSelect(additive ? Array.from(new Set([...selectedIds, element.id])) : [element.id]);
+    if (additive && wasSelected) {
+      // Shift-click TOGGLES, exactly like the Layers list: an already-selected
+      // element comes out of the selection. There is nothing to drag — the
+      // pointer is on the one box the click just removed, and seeding `movers`
+      // from the old selection would move it anyway.
+      onSelect(toggleSelected(selectedIds, element.id));
+      return;
+    }
+    // What the gesture moves: the whole selection when this element is already
+    // part of one (or is being shift-added to it), otherwise just this element.
+    let moveIds;
+    if (additive) {
+      moveIds = [...selectedIds, element.id];   // shift-add and drag the group
+      onSelect(moveIds);
+    } else if (wasSelected && selectedIds.length > 1) {
+      moveIds = selectedIds;                    // plain click keeps the group
+    } else {
+      moveIds = [element.id];                   // plain click on an unselected box
+      onSelect(moveIds);
+    }
     if (element.locked) return;
-
-    const movers = wasSelected && selectedIds.length > 1
-      ? elements.filter((el) => selectedIds.includes(el.id) && !el.locked)
-      : [element];
+    const movers = elements.filter((el) => moveIds.includes(el.id) && !el.locked);
     const initials = new Map(movers.map((el) => [el.id, { x: el.x, y: el.y }]));
     const start = clientToMm(e.clientX, e.clientY);
     const others = elements.filter((el) => el.visible !== false && el.id !== element.id);
@@ -170,20 +233,24 @@ export function DesignerCanvas({
       }
     };
     const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
       setGuides([]);
       if (moved) commit();
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [elements, selectedIds, onSelect, clientToMm, snap, patchElement, patchMany, commit]);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [elements, selectedIds, onSelect, clientToMm, snap, patchElement, patchMany, commit, isPanGesture]);
 
   /* ── resize one element ───────────────────────────────────────────── */
   const startResize = useCallback((e, element, dir) => {
+    if (isPanGesture(e)) return;
     e.stopPropagation();
     e.preventDefault();
     if (e.button !== 0) return;
+    capturePointer(e);
     onSelect([element.id]);
     if (element.locked) return;
     const start = clientToMm(e.clientX, e.clientY);
@@ -200,13 +267,15 @@ export function DesignerCanvas({
       patchElement(element.id, patch);
     };
     const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
       if (moved) commit();
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [clientToMm, onSelect, snap, patchElement, commit]);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [clientToMm, onSelect, snap, patchElement, commit, isPanGesture]);
 
   /* ── resize a whole selection ─────────────────────────────────────── */
   const selectedElements = useMemo(
@@ -215,17 +284,22 @@ export function DesignerCanvas({
   );
   const selectionBounds = useMemo(() => {
     if (selectedElements.length < 2) return null;
-    const left = Math.min(...selectedElements.map((el) => el.x));
-    const top = Math.min(...selectedElements.map((el) => el.y));
-    const right = Math.max(...selectedElements.map((el) => el.x + el.width));
-    const bottom = Math.max(...selectedElements.map((el) => el.y + el.height));
+    // The dashed box is drawn on screen, so it hugs each element's ROTATED
+    // bounds — the raw box would leave a rotated element sticking out.
+    const boxes = selectedElements.map((el) => rotatedBounds(el));
+    const left = Math.min(...boxes.map((b) => b.x));
+    const top = Math.min(...boxes.map((b) => b.y));
+    const right = Math.max(...boxes.map((b) => b.x + b.width));
+    const bottom = Math.max(...boxes.map((b) => b.y + b.height));
     return { x: left, y: top, width: right - left, height: bottom - top };
   }, [selectedElements]);
 
   const startSelectionResize = useCallback((e, dir) => {
+    if (isPanGesture(e)) return;
     e.stopPropagation();
     e.preventDefault();
     if (e.button !== 0 || !selectionBounds) return;
+    capturePointer(e);
     const snapshot = selectedElements.map((el) => ({ id: el.id, x: el.x, y: el.y, width: el.width, height: el.height }));
     const anchor = dir.includes('nw') ? 'bottom-right'
       : dir.includes('ne') ? 'bottom-left'
@@ -263,17 +337,21 @@ export function DesignerCanvas({
       patchMany(scaleSelection(snapshot, scaleX, scaleY, anchor));
     };
     const onUp = () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
       if (moved) commit();
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [selectionBounds, selectedElements, clientToMm, patchMany, commit]);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [selectionBounds, selectedElements, clientToMm, patchMany, commit, isPanGesture]);
 
   /* ── marquee on empty canvas ──────────────────────────────────────── */
-  const onCanvasMouseDown = useCallback((e) => {
+  const onCanvasPointerDown = useCallback((e) => {
+    if (isPanGesture(e)) return;       // Space/middle drag pans, it does not marquee
     if (e.target !== e.currentTarget || e.button !== 0) return;
+    capturePointer(e);
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const additive = e.shiftKey;
@@ -290,8 +368,9 @@ export function DesignerCanvas({
       setMarquee({ x0, y0, x1, y1 });
     };
     const onUp = (ev) => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
       setMarquee(null);
       if (!dragged) { if (!additive) onSelect([]); return; }
       const x1 = ev.clientX - rect.left;
@@ -301,9 +380,38 @@ export function DesignerCanvas({
       });
       onSelect(additive ? Array.from(new Set([...base, ...hits])) : hits);
     };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [selectedIds, elements, pxPerMm, onSelect]);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, [selectedIds, elements, pxPerMm, onSelect, isPanGesture]);
+
+  /* ── drag-to-pan the stage (Space or middle button) ───────────────── */
+  const onStagePointerDown = useCallback((e) => {
+    if (!isPanGesture(e)) return;
+    e.preventDefault();                // no middle-click autoscroll / text select
+    e.stopPropagation();
+    capturePointer(e);
+    const el = wrapRef.current;
+    if (!el) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startLeft = el.scrollLeft;
+    const startTop = el.scrollTop;
+    setPanning(true);
+    const onMove = (ev) => {
+      el.scrollLeft = startLeft - (ev.clientX - startX);
+      el.scrollTop = startTop - (ev.clientY - startY);
+    };
+    const endPan = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', endPan);
+      window.removeEventListener('pointercancel', endPan);
+      setPanning(false);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', endPan);
+    window.addEventListener('pointercancel', endPan);
+  }, [isPanGesture]);
 
   /* ── drop a palette item ──────────────────────────────────────────── */
   const onDrop = useCallback((e) => {
@@ -375,13 +483,14 @@ export function DesignerCanvas({
 
       <div
         ref={wrapRef}
-        className="ld-stage"
+        className={`ld-stage${spaceDown ? ' is-pan-ready' : ''}${panning ? ' is-panning' : ''}`}
+        onPointerDown={onStagePointerDown}
         style={{ backgroundImage: 'repeating-conic-gradient(rgba(15,23,42,.05) 0% 25%, transparent 25% 50%)', backgroundSize: '16px 16px' }}
       >
         <div
           ref={canvasRef}
           className="ld-canvas"
-          onMouseDown={onCanvasMouseDown}
+          onPointerDown={onCanvasPointerDown}
           onMouseMove={(e) => {
             const mm = clientToMm(e.clientX, e.clientY);
             if (mm.x >= 0 && mm.y >= 0 && mm.x <= template.widthMm && mm.y <= template.heightMm) {
@@ -424,7 +533,7 @@ export function DesignerCanvas({
                   pxPerMm={pxPerMm}
                   selected={selectedIds.includes(el.id)}
                   hideHandles={selectedIds.length >= 2}
-                  onMouseDown={startMove}
+                  onPointerDown={startMove}
                   onResize={startResize}
                   onContextMenu={(e) => {
                     e.preventDefault();
@@ -452,7 +561,7 @@ export function DesignerCanvas({
                 <span
                   key={dir}
                   className={`ld-handle ld-handle--${dir} ld-handle--bbox`}
-                  onMouseDown={(e) => startSelectionResize(e, dir)}
+                  onPointerDown={(e) => startSelectionResize(e, dir)}
                 />
               ))}
             </div>
@@ -489,7 +598,7 @@ export function DesignerCanvas({
               <button
                 key={i}
                 type="button"
-                onMouseDown={(e) => e.stopPropagation()}
+                onPointerDown={(e) => e.stopPropagation()}
                 onClick={() => { item.onClick?.(); setMenu(null); }}
               >
                 {item.label}
@@ -498,13 +607,13 @@ export function DesignerCanvas({
           ))}
         </div>
       ) : null}
-      {menu ? <div className="ld-menu-scrim" onMouseDown={() => setMenu(null)} /> : null}
+      {menu ? <div className="ld-menu-scrim" onPointerDown={() => setMenu(null)} /> : null}
     </div>
   );
 }
 
 /** One draggable element box with eight resize handles. */
-function ElementBox({ element, pxPerMm, selected, hideHandles, onMouseDown, onResize, onContextMenu, sample }) {
+function ElementBox({ element, pxPerMm, selected, hideHandles, onPointerDown, onResize, onContextMenu, sample }) {
   const style = {
     position: 'absolute',
     left: element.x * pxPerMm,
@@ -526,7 +635,7 @@ function ElementBox({ element, pxPerMm, selected, hideHandles, onMouseDown, onRe
     <div
       className={`ld-el${element.locked ? ' is-locked' : ''}`}
       style={style}
-      onMouseDown={(e) => onMouseDown(e, element)}
+      onPointerDown={(e) => onPointerDown(e, element)}
       onContextMenu={onContextMenu}
       title={elementLabel(element)}
     >
@@ -538,7 +647,7 @@ function ElementBox({ element, pxPerMm, selected, hideHandles, onMouseDown, onRe
           <span
             key={dir}
             className={`ld-handle ld-handle--${dir}`}
-            onMouseDown={(e) => onResize(e, element, dir)}
+            onPointerDown={(e) => onResize(e, element, dir)}
           />
         ))
       ) : null}

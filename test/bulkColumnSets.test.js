@@ -60,6 +60,15 @@ test('the table exists and starts empty (additive, no schema bump)', { skip: ski
   assert.deepEqual(sets.list(company.id), []);
 });
 
+test('the widths table exists (additive, no schema bump)', { skip: skipReason }, () => {
+  const company = freshCompany();
+  const cols = db.getDb().prepare('PRAGMA table_info(bulk_column_widths)').all().map((c) => c.name);
+  for (const col of ['company_id', 'widths', 'updated_at']) {
+    assert.ok(cols.includes(col), `bulk_column_widths.${col} missing`);
+  }
+  assert.equal(sets.getWidths(company.id), null, 'a company with no row has no stored widths');
+});
+
 test('a set round-trips its ordered column list', { skip: skipReason }, () => {
   const company = freshCompany('Roundtrip Co');
   const row = sets.create({ companyId: company.id, name: 'Export desk', columns: VIEW });
@@ -136,4 +145,74 @@ test('deleting a company cascades to its sets', { skip: skipReason }, () => {
   const row = sets.create({ companyId: company.id, name: 'Temp', columns: VIEW });
   db.getDb().prepare('DELETE FROM companies WHERE id = ?').run(company.id);
   assert.equal(sets.get(row.id), null, 'orphan rows must not survive the company');
+});
+
+/* ── v0.1.72: duplicate naming ──────────────────────────────────────── */
+
+test('duplicate produces "<name> copy" and uniquifies a taken name', { skip: skipReason }, () => {
+  const company = freshCompany('Uniquify Co');
+  const row = sets.create({ companyId: company.id, name: 'Squares', columns: VIEW });
+  const first = sets.duplicate(row.id);
+  assert.equal(first.name, 'Squares copy');
+  const second = sets.duplicate(row.id);
+  assert.equal(second.name, 'Squares copy 2', 'a taken copy name must not shadow the first copy');
+  const third = sets.duplicate(row.id);
+  assert.equal(third.name, 'Squares copy 3');
+  assert.deepEqual(second.columns, VIEW);
+  assert.equal(second.companyId, company.id);
+});
+
+/* ── v0.1.72: company-scoped column widths ──────────────────────────── */
+
+test('widths round-trip, overwrite and normalize', { skip: skipReason }, () => {
+  const company = freshCompany('Widths Co');
+  assert.equal(sets.getWidths(company.id), null, 'nothing stored yet');
+  assert.deepEqual(sets.setWidths(company.id, { name: 260, sku: 130 }), { name: 260, sku: 130 });
+  assert.deepEqual(sets.getWidths(company.id), { name: 260, sku: 130 });
+  // The map is written whole, not merged — a removed key disappears.
+  assert.deepEqual(sets.setWidths(company.id, { name: 300 }), { name: 300 });
+  assert.deepEqual(sets.getWidths(company.id), { name: 300 });
+  // Junk is dropped, never fatal; fractions round to whole pixels.
+  assert.deepEqual(
+    sets.normalizeWidths({ a: '120', b: -5, c: 0, d: NaN, e: 130.6, f: 'x', '  ': 10 }),
+    { a: 120, e: 131 },
+  );
+  assert.deepEqual(sets.normalizeWidths(['not', 'a', 'map']), {});
+});
+
+test('an empty width map clears the stored row', { skip: skipReason }, () => {
+  const company = freshCompany('Clear Widths Co');
+  sets.setWidths(company.id, { name: 260 });
+  assert.equal(sets.setWidths(company.id, {}), null);
+  assert.equal(sets.getWidths(company.id), null,
+    'Reset columns must clear the DB row, not leave an empty "{}" behind');
+  assert.equal(
+    db.getDb().prepare('SELECT COUNT(*) AS n FROM bulk_column_widths').get().n, 0,
+    'the row itself must be gone',
+  );
+});
+
+test('widths are scoped to their company', { skip: skipReason }, () => {
+  // Two companies in ONE database — freshCompany() re-inits the DB, so a second
+  // call would delete the first company (and its widths) underneath us.
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'msk-bulkwidths-two-'));
+  db.initDb(dataDir);
+  const a = companies.create({ name: 'Width A', isActive: true });
+  const b = companies.create({ name: 'Width B' });
+  sets.setWidths(a.id, { name: 260 });
+  assert.deepEqual(sets.getWidths(a.id), { name: 260 });
+  assert.equal(sets.getWidths(b.id), null, "one company must never read another's layout");
+  sets.setWidths(b.id, { sku: 130 });
+  assert.deepEqual(sets.getWidths(a.id), { name: 260 }, "B's write must not touch A");
+  assert.deepEqual(sets.getWidths(b.id), { sku: 130 });
+});
+
+test('deleting a company cascades to its widths row', { skip: skipReason }, () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'msk-bulkwidths-cascade-'));
+  db.initDb(dataDir);
+  const company = companies.create({ name: 'Width Cascade', isActive: true });
+  sets.setWidths(company.id, { name: 260 });
+  db.getDb().prepare('DELETE FROM companies WHERE id = ?').run(company.id);
+  assert.equal(sets.getWidths(company.id), null, 'orphan width rows must not survive the company');
+  assert.equal(db.getDb().prepare('SELECT COUNT(*) AS n FROM bulk_column_widths').get().n, 0);
 });

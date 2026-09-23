@@ -80,6 +80,48 @@ export function unionBounds(elements) {
 }
 
 /**
+ * The axis-aligned bounding box of an element AFTER its own rotation, in mm.
+ *
+ * Elements carry a real `rotation` (degrees, editable in the inspector and
+ * drawn with `transform: rotate(...)` about the centre), so a rotated box
+ * occupies more space than its raw x/y/width/height says. Marquee hit-testing,
+ * the smart-guide targets an element aligns against, and the multi-select box
+ * all have to use the box the user sees on screen — the raw box describes the
+ * print axes, not the pixels. Rotation is about the element's centre, matching
+ * `transform-origin: center center` in DesignerCanvas.
+ */
+export function rotatedBounds(el) {
+  const x = Number(el?.x) || 0;
+  const y = Number(el?.y) || 0;
+  const w = Number(el?.width) || 0;
+  const h = Number(el?.height) || 0;
+  const deg = Number(el?.rotation) || 0;
+  if (!deg) return { x, y, width: w, height: h };
+  const rad = (deg * Math.PI) / 180;
+  // Snap the 90°/180° trig residues (cos(π/2) ≈ 6e-17) to zero, so a quarter
+  // turn gives exact numbers instead of 2.0000000000000004.
+  const rawCos = Math.abs(Math.cos(rad));
+  const rawSin = Math.abs(Math.sin(rad));
+  const cos = rawCos < 1e-12 ? 0 : rawCos;
+  const sin = rawSin < 1e-12 ? 0 : rawSin;
+  const halfW = (w / 2) * cos + (h / 2) * sin;
+  const halfH = (w / 2) * sin + (h / 2) * cos;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  return { x: cx - halfW, y: cy - halfH, width: halfW * 2, height: halfH * 2 };
+}
+
+/**
+ * Shift-click toggle, shared by the canvas and the Layers panel so the two
+ * cannot disagree: an already-selected id comes out, anything else goes in at
+ * the end (keeping the existing selection order).
+ */
+export function toggleSelected(selectedIds, id) {
+  const list = Array.isArray(selectedIds) ? selectedIds : [];
+  return list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
+}
+
+/**
  * Repair a stored element list: every element needs a unique id and a type.
  *
  * Templates written by an older build (or edited by hand in the database) can
@@ -116,7 +158,12 @@ export function marqueeHits(elements, rect) {
   const bottom = Math.max(rect.y0, rect.y1);
   return (elements || [])
     .filter((el) => el.visible !== false)
-    .filter((el) => el.x < right && el.x + el.width > left && el.y < bottom && el.y + el.height > top)
+    .filter((el) => {
+      // The marquee is an on-screen rectangle, so a rotated element is hit by
+      // its rotated bounding box — not by the raw print box it was dragged from.
+      const b = rotatedBounds(el);
+      return b.x < right && b.x + b.width > left && b.y < bottom && b.y + b.height > top;
+    })
     .map((el) => el.id);
 }
 
@@ -133,8 +180,14 @@ export function smartGuides({ x, y, width, height }, siblings, threshold = SNAP_
   let nextY = y;
   if (!others.length) return { x: nextX, y: nextY, guides };
 
-  const xTargets = others.flatMap((s) => [s.x, s.x + s.width / 2, s.x + s.width]);
-  const yTargets = others.flatMap((s) => [s.y, s.y + s.height / 2, s.y + s.height]);
+  const xTargets = others.flatMap((s) => {
+    const b = rotatedBounds(s);
+    return [b.x, b.x + b.width / 2, b.x + b.width];
+  });
+  const yTargets = others.flatMap((s) => {
+    const b = rotatedBounds(s);
+    return [b.y, b.y + b.height / 2, b.y + b.height];
+  });
   const xEdges = [x, x + width / 2, x + width];
   const yEdges = [y, y + height / 2, y + height];
 
@@ -178,6 +231,10 @@ export function smartGuides({ x, y, width, height }, siblings, threshold = SNAP_
  * it, exactly as the original app did.
  */
 export function resizeElement(el, dir, dx, dy, { aspectLocked = false, shiftKey = false, snap = false } = {}) {
+  // ponytail: resizing a rotated element keeps today's unrotated maths on
+  // purpose. Handles would need to work in the element's rotated frame (and the
+  // drag delta inverse-rotated) to feel right; rotation-aware resize is out of
+  // scope here, so a rotated box resizes along its own axes.
   const locked = shiftKey ? !aspectLocked : aspectLocked;
   const initial = { x: el.x, y: el.y, width: el.width, height: el.height };
   const aspect = initial.width / Math.max(initial.height, 0.001);

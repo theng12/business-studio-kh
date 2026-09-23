@@ -50,6 +50,10 @@ function isLongTextColumn(col) { return col.long === true; }
  * clamped on read, so a stale map can never collapse a column to zero.
  */
 const COLUMN_WIDTHS_STORAGE_KEY = 'BulkTable.columnWidths';
+// v0.1.72: localStorage is the instant cache; the company-scoped row in the
+// database is what travels across Macs. Debounce the DB write so a live drag
+// does not fire one IPC call per mousemove (AGENTS.md section 6, ~500ms).
+const WIDTHS_DB_SAVE_MS = 500;
 const ROWNUM_WIDTH = 44;
 // Floor by type — ~90px for text, ~70px for numbers and short codes.
 const COLUMN_WIDTH_RULES = {
@@ -157,6 +161,9 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
   const colWidthsRef = useRef(colWidths);
   colWidthsRef.current = colWidths;
   const dragRef = useRef(null);
+  // v0.1.72: pending debounced DB write of the width map. Cleared on unmount so
+  // closing the modal mid-drag does not fire a stale IPC call.
+  const widthsSaveTimerRef = useRef(null);
   /* Where a paste will land. Kept in a ref, and mirrored from the real DOM
    * focus at paste time, because React state updates from onFocus are batched:
    * reading `focused` directly made a paste that arrived in the same tick as
@@ -385,6 +392,21 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
     }
   }
 
+  /** v0.1.72: copy the active set as "<name> copy" (the DB uniquifies when that
+   *  name is already taken). The copy is inserted at the top, like a save. */
+  async function duplicateSet(id) {
+    setSetsBusy(true);
+    try {
+      const row = await window.api.bulkColumns.duplicate(id);
+      setSavedSets((prev) => [row, ...prev]);
+      addToast(`Duplicated to “${row.name}”.`, 'success');
+    } catch (err) {
+      addToast(err.message, 'error');
+    } finally {
+      setSetsBusy(false);
+    }
+  }
+
   function chooseSet(value) {
     setSetForm(null);
     if (value === '') { applySelection(null); setActiveSet('everything'); return; }
@@ -456,6 +478,43 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
 
   /* ── column widths: drag, auto-fit, reset ───────────────────────────── */
 
+  /* v0.1.72: the company-scoped widths live in the database (so the layout
+   * travels across Macs); localStorage stays the instant cache painted on the
+   * first render. Show the cache immediately, then ADOPT the DB map once it
+   * arrives — a null means this company has never stored one, so the local
+   * cache stays as the starting point rather than being wiped. */
+  useEffect(() => {
+    if (!open || !activeCompanyId) return;
+    let alive = true;
+    window.api.bulkColumns.getWidths(activeCompanyId)
+      .then((widths) => {
+        if (!alive || !widths || typeof widths !== 'object' || Array.isArray(widths)) return;
+        colWidthsRef.current = widths;
+        setColWidths(widths);
+        saveColumnWidths(widths);
+      })
+      .catch(() => { /* offline / not reachable — the local cache still works */ });
+    return () => { alive = false; };
+  }, [open, activeCompanyId]);
+
+  // Cancel a pending debounced write when the modal closes or unmounts.
+  useEffect(() => () => {
+    if (widthsSaveTimerRef.current) clearTimeout(widthsSaveTimerRef.current);
+  }, []);
+
+  /** Cache the map at once, then schedule the company-scoped DB write. Called
+   *  on the drag's mouseup and on auto-fit — not per mousemove. */
+  function persistWidths(map) {
+    saveColumnWidths(map);
+    if (!activeCompanyId) return;
+    if (widthsSaveTimerRef.current) clearTimeout(widthsSaveTimerRef.current);
+    widthsSaveTimerRef.current = setTimeout(() => {
+      widthsSaveTimerRef.current = null;
+      window.api.bulkColumns.setWidths(activeCompanyId, map)
+        .catch((err) => addToast(err?.message ?? 'Could not save column widths.', 'error'));
+    }, WIDTHS_DB_SAVE_MS);
+  }
+
   /** The px width for a column: the stored value clamped to its type's floor
    *  and ceiling, or the default when nothing is stored. */
   function widthOf(col) {
@@ -469,7 +528,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
     const next = { ...colWidthsRef.current, [key]: px };
     colWidthsRef.current = next;
     setColWidths(next);
-    saveColumnWidths(next);
+    persistWidths(next);
   }
 
   function beginResize(e, col) {
@@ -494,7 +553,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
       dragRef.current = null;
       setResizingKey(null);
       // Persist once at the end of the gesture, not on every mousemove.
-      saveColumnWidths(colWidthsRef.current);
+      persistWidths(colWidthsRef.current);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -522,11 +581,21 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
     applyWidth(col.key, Math.round(Math.min(rule.max, Math.max(rule.min, widest + 26))));
   }
 
-  /** Forget every remembered width. */
+  /** Forget every remembered width — the local cache AND the company-scoped
+   *  DB row (an empty map deletes it), so the reset travels across Macs too. */
   function resetColumns() {
     colWidthsRef.current = {};
     setColWidths({});
     try { localStorage.removeItem(COLUMN_WIDTHS_STORAGE_KEY); } catch {}
+    // Drop a pending debounced write, or it would resurrect the row we clear.
+    if (widthsSaveTimerRef.current) {
+      clearTimeout(widthsSaveTimerRef.current);
+      widthsSaveTimerRef.current = null;
+    }
+    if (activeCompanyId) {
+      window.api.bulkColumns.setWidths(activeCompanyId, {})
+        .catch(() => { /* offline — the local reset still applied */ });
+    }
     addToast('Column widths reset.', 'info');
   }
 
@@ -843,6 +912,12 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
               disabled={setsBusy}
               onClick={() => setSetForm({ mode: 'rename', id: activeSavedSet.id, name: activeSavedSet.name })}
             >Rename</button>
+            <button
+              type="button"
+              className="lib-columns__reset"
+              disabled={setsBusy}
+              onClick={() => duplicateSet(activeSavedSet.id)}
+            >Duplicate</button>
             <button
               type="button"
               className="lib-columns__reset"

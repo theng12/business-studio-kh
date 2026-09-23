@@ -135,17 +135,44 @@ test('sections are sideways submenus, bounded and left-flipping too', () => {
   assert.match(submenu, /max-height:/, 'the submenu has no max-height bound');
 });
 
-test('the menu search flattens the tree and keyboard covers both levels', () => {
-  assert.match(LIBRARY, /lib-bulk-menu__search/, 'there is no filter field for a long menu');
-  assert.match(LIBRARY, /> 8/, 'the filter field must only appear once the menu is long');
+test('the menu search is always present and flattens the tree', () => {
+  assert.match(LIBRARY, /lib-bulk-menu__search/, 'there is no filter field');
+  assert.match(LIBRARY, /lib-bulk-menu__search-input/, 'the filter field has no input');
+  // v0.1.72: the field is no longer threshold-gated on the menu length.
+  assert.doesNotMatch(LIBRARY, /showSearch|totalItems/, 'the filter field must not be gated on the menu length');
   assert.match(LIBRARY, /searching \? \(/, 'search does not switch the panel to the flat filtered list');
   assert.match(LIBRARY, /flatItems\.map/, 'the flat filtered list is not rendered');
   assert.match(LIBRARY, /lib-bulk-menu__flat-meta/, 'flat results do not name their section');
+});
+
+test('the menu keyboard covers both levels', () => {
   assert.match(LIBRARY, /e\.key === 'ArrowDown'/, 'arrow-key navigation is missing');
   assert.match(LIBRARY, /e\.key === 'ArrowUp'/, 'arrow-key navigation is missing');
   assert.match(LIBRARY, /e\.key === 'ArrowRight'/, 'there is no key to open a submenu');
   assert.match(LIBRARY, /e\.key === 'ArrowLeft'/, 'there is no key to close a submenu');
   assert.match(LIBRARY, /e\.key === 'Escape'/, 'Escape must still close the menu');
-  assert.match(LIBRARY, /HOVER_OPEN_DELAY_MS/, 'hover opens a submenu with no delay');
+});
+
+test('the search field joins the arrow cycle and Escape clears the query first', () => {
+  assert.match(LIBRARY, /function navFocusables\(\)/, 'the arrow cycle does not know about the search field');
+  assert.match(LIBRARY, /\[searchRef\.current, \.\.\.rows\]/, 'the search field is not part of the ↑/↓ cycle');
+  assert.match(LIBRARY, /if \(query\.length > 0\)[\s\S]{0,200}setQuery\(''\)/,
+    'Escape must clear a typed query before closing the whole menu');
+  assert.match(LIBRARY, /e\.target === searchRef\.current/, 'the search field is not told apart from the rows');
+});
+
+test('hover intent points at the open submenu instead of a fixed delay', () => {
+  assert.match(LIBRARY, /import \{ pointsTowardRect \} from '\.\/menuIntent\.mjs'/,
+    'the menu does not import the pure intent helper');
+  assert.match(LIBRARY, /pointsTowardRect\(prev, next, rect\)/,
+    'the trigger hover does not consult the intent helper');
+  assert.match(LIBRARY, /setTimeout\(\(\) => openSubmenu\(sectionLabel, trigger\), HOVER_OPEN_DELAY_MS\)/,
+    'the no-clear-direction fallback delay is missing');
+  assert.match(LIBRARY, /!openSection\) \{ openSubmenu\(sectionLabel, trigger\); return; \}/,
+    'hover must open a section immediately when no submenu is open');
+  assert.match(LIBRARY, /HOVER_OPEN_DELAY_MS/, 'the hover fallback delay is missing');
   assert.match(LIBRARY, /ponytail:/, 'a deliberate shortcut needs a ponytail: note');
+  const INTENT = read('renderer/modules/ProductLibrary/menuIntent.mjs');
+  assert.match(INTENT, /export function pointsTowardRect\(prevPoint, nextPoint, rect\)/,
+    'the pure intent helper is missing or has the wrong signature');
 });
