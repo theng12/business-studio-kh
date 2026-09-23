@@ -153,9 +153,22 @@ export function Modal({
       }
     };
     window.addEventListener('keydown', onKey);
-    queueMicrotask(() => dialogRef.current?.focus());
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
+
+  /* v0.1.69: focus the dialog ONCE per open, never on a parent re-render.
+   *
+   * This effect used to live in the one above, with `onClose` in its deps. A
+   * modal that re-renders itself while the user types passes a fresh inline
+   * `onClose` each time (BulkTableModal's `requestClose`), so the effect
+   * re-ran on every keystroke and `dialogRef.focus()` yanked the caret out of
+   * the cell — the "one character, then focus lost" regression. The Escape
+   * listener above still follows `onClose`; only the focus is pinned to the
+   * open transition. */
+  useEffect(() => {
+    if (!open) return undefined;
+    queueMicrotask(() => dialogRef.current?.focus());
+  }, [open]);
 
   if (!open) return null;
 
