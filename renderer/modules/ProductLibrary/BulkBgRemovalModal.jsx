@@ -30,6 +30,13 @@ import { useState, useRef } from 'react';
 import { Modal, Button, Field, Select } from '../../components/ui.jsx';
 import { removeBackground } from '../../lib/bgRemoval.js';
 import { useAppStore } from '../../store/index.js';
+import {
+  ImageScopeField,
+  imageScopeNeedsPositions,
+  summarizeSkippedReasons,
+  useDeepestGallery,
+  useImageScope,
+} from './ImageScopeField.jsx';
 
 // Composite a transparent cutout Blob onto a solid colour, return JPEG bytes
 // (ArrayBuffer). JPEG because the result is opaque (no alpha to preserve) and
@@ -60,10 +67,14 @@ async function matteOnColor(cutoutBlob, hexColor) {
 export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
   const refreshProducts = useAppStore((s) => s.refreshProducts);
+  const galleryDepth = useDeepestGallery(productIds);
 
   const [fillColor, setFillColor] = useState('#FFFFFF');
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(null); // { i, n, label }
+  // v0.1.70: "which images" choice. Remove background has always acted on the
+  // main image only, so `main` stays its default.
+  const imageChoice = useImageScope();
   // v0.43.0: parallel workers — bg removal is ML inference + canvas matte +
   // upload; running 2-3 in parallel overlaps the I/O and gives real wall-clock
   // wins for batches. Defaults to 2 (conservative); 4 is the cap.
@@ -77,9 +88,13 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
     cancelRef.current = false;
     setRunning(true);
 
-    let done = 0;
-    let noImage = 0;
+    const { scope, positions } = imageChoice.value;
+    let done = 0;          // products whose image(s) were processed
+    let imagesDone = 0;    // cutouts added (a product can contribute several)
+    let noImage = 0;       // products with no usable images at all
+    let skipped = 0;       // products missing every requested position
     let failed = 0;
+    const skippedReasons = {};
     const failures = [];
     const cursor = { i: 0 };
     const workers = Math.max(1, Math.min(4, Number(concurrency) || 1));
@@ -88,36 +103,60 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
     // errors are caught so a failure doesn't drop the worker.
     async function processOne(productId) {
       try {
-        const imgs = await window.api.images.listByProduct(productId);
-        const main = imgs && imgs[0];
-        if (!main) { noImage += 1; return; }
-        const sku = main.sku || '';
-        setProgress({ i: done, n: count, label: `${sku} · removing background…`.trim() });
+        // v0.1.70: ask the main process for the shared image selection
+        // (main / all / positions + why skipped). The @imgly engine can only
+        // run in a renderer, so the loop lives here — but the RULE does not.
+        const listed = await window.api.images.listByProduct({ productId, scope, positions });
+        const all = Array.isArray(listed) ? listed : (listed?.images || []);
+        const targets = Array.isArray(listed?.chosen)
+          ? listed.chosen
+          : (scope === 'all' ? all : all.slice(0, 1)); // defensive: legacy array shape
+        if (targets.length === 0) {
+          const reason = listed?.skippedReason || (all.length === 0 ? 'no images' : 'no requested image');
+          if (all.length === 0) noImage += 1;
+          skipped += 1;
+          skippedReasons[reason] = (skippedReasons[reason] || 0) + 1;
+          return;
+        }
+        const mainRow = all[0] || null;
 
-        const { blob } = await removeBackground(
-          main.filepath,
-          (stage, ratio) => {
-            if (cancelRef.current) return;
-            // v0.49.33: only the local engine remains. Stages come in as
-            // `fetch:<resource>` while the model downloads on first run,
-            // and as `inference` / friends during the segmentation pass.
-            const label = String(stage).startsWith('fetch:')
-              ? `downloading model… ${Math.round(ratio * 100)}%`
-              : `removing background… ${Math.round(ratio * 100)}%`;
-            setProgress({ i: done, n: count, label: `${sku} · ${label}`.trim() });
-          },
-          // v0.1.27: stamp the cache so a rewritten image cannot reuse an old cutout.
-          main.contentHash || main.id,
-        );
-        if (cancelRef.current) return;
+        for (const img of targets) {
+          if (cancelRef.current) return;
+          const sku = img.sku || '';
+          setProgress({ i: done, n: count, label: `${sku} · removing background…`.trim() });
 
-        const bytes = await matteOnColor(blob, fillColor);
-        if (cancelRef.current) return;
-        const res = await window.api.images.importFromBytes(productId, bytes, '.jpg');
-        const added = res?.added;
-        if (added?.filepath) await window.api.images.setMainImage(productId, added.filepath);
+          const { blob } = await removeBackground(
+            img.filepath,
+            (stage, ratio) => {
+              if (cancelRef.current) return;
+              // v0.49.33: only the local engine remains. Stages come in as
+              // `fetch:<resource>` while the model downloads on first run,
+              // and as `inference` / friends during the segmentation pass.
+              const label = String(stage).startsWith('fetch:')
+                ? `downloading model… ${Math.round(ratio * 100)}%`
+                : `removing background… ${Math.round(ratio * 100)}%`;
+              setProgress({ i: done, n: count, label: `${sku} · ${label}`.trim() });
+            },
+            // v0.1.27: stamp the cache so a rewritten image cannot reuse an old cutout.
+            img.contentHash || img.id,
+          );
+          if (cancelRef.current) return;
+
+          const bytes = await matteOnColor(blob, fillColor);
+          if (cancelRef.current) return;
+          const res = await window.api.images.importFromBytes(productId, bytes, '.jpg');
+          const added = res?.added;
+          // Only promote the cutout when the source WAS the main image (the
+          // default scope). For "all" / other positions the new cutouts are
+          // appended and the original main is left alone — a position the
+          // user did not ask to change stays put.
+          if (added?.filepath && mainRow && img.filepath === mainRow.filepath) {
+            await window.api.images.setMainImage(productId, added.filepath);
+          }
+          imagesDone += 1;
+          setProgress({ i: done, n: count, label: `${sku} · done` });
+        }
         done += 1;
-        setProgress({ i: done, n: count, label: `${sku} · done` });
       } catch (err) {
         failed += 1;
         if (failures.length < 5) failures.push(err.message);
@@ -142,13 +181,15 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
     refreshProducts();
 
     const cancelled = cancelRef.current;
-    const bits = [`${done} done`];
-    if (noImage) bits.push(`${noImage} had no image`);
+    const skip = summarizeSkippedReasons(skippedReasons);
+    const bits = [`${done} product${done === 1 ? '' : 's'} done`];
+    if (imagesDone > done) bits.push(`${imagesDone} images`);
     if (failed) bits.push(`${failed} failed`);
-    const summary = `${cancelled ? 'Stopped — ' : ''}background removed: ${bits.join(', ')}`;
-    addToast(summary, failed > 0 ? 'error' : 'success');
+    let summary = `${cancelled ? 'Stopped — ' : ''}background removed: ${bits.join(', ')}`;
+    if (skip) summary += ` — ${skip}`;
+    addToast(summary, failed > 0 ? 'error' : (skip ? 'info' : 'success'));
     if (failed > 0 && failures.length) addToast(failures[0], 'error');
-    onDone?.({ done, noImage, failed, cancelled });
+    onDone?.({ done, imagesDone, noImage, skipped, skippedReasons, failed, cancelled });
     if (!cancelled) onClose?.();
   }
 
@@ -159,10 +200,10 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
       <div className="bulkbg">
         <p className="bulkbg__intro">
           Removes the background from each of the {count} selected product
-          {count === 1 ? '' : 's'}&rsquo; <strong>main image</strong>, places the
-          product on a solid background, and makes that the new main image. The
-          original shot is kept (it moves to position 2), so nothing is lost.
-          The clean result is ready for Auto-crop.
+          {count === 1 ? '' : 's'}&rsquo; chosen image(s), places the product on a
+          solid background, and adds the clean cutout as a new image. When the
+          main image is one of them it becomes the new main; the original shot
+          is kept, so nothing is lost. The clean result is ready for Auto-crop.
         </p>
 
         <Field label="Background colour">
@@ -181,6 +222,14 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
             </div>
           )}
         </Field>
+
+        <ImageScopeField
+          name="bgremoval-image-scope"
+          value={imageChoice.value}
+          onChange={imageChoice.set}
+          galleryDepth={galleryDepth}
+          disabled={running}
+        />
 
         <Field label="Parallel workers" hint="How many products to process at once. More = faster on big selections, but each one slows down a bit. Try 2 first; bump up if your Mac has cycles to spare.">
           {({ id }) => (
@@ -213,7 +262,7 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
             <Button onClick={onClose}>Cancel</Button>
           )}
           <div style={{ flex: 1 }} />
-          <Button variant="primary" disabled={running || count === 0} onClick={run}>
+          <Button variant="primary" disabled={running || count === 0 || imageScopeNeedsPositions(imageChoice.value)} onClick={run}>
             {running ? 'Working…' : `Remove background · ${count}`}
           </Button>
         </footer>

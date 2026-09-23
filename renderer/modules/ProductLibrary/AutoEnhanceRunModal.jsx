@@ -8,24 +8,37 @@
  * images:autoEnhancePreview) that updates with the controls, plus a per-run
  * "Skip preview" toggle that always starts off.
  *
- * Scope: "Main image only" (default) or "All images". In place, no per-image
- * undo — the preview is the safety net, so the modal says so.
+ * Scope: the shared "Apply to which images" control. Default stays "Main
+ * image only" (this modal's original behaviour); "All images" and "Specific
+ * positions" (1-based, products missing them skipped and reported) are opt-in.
+ * In place, no per-image undo — the preview is the safety net, so the modal
+ * says so.
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Modal, Button, Field, Select, SliderField } from '../../components/ui.jsx';
+import { Modal, Button, SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { useBulkPreview } from './useBulkPreview.js';
+import {
+  ImageScopeField,
+  formatBulkImageResult,
+  imageScopeNeedsPositions,
+  useDeepestGallery,
+  useImageScope,
+} from './ImageScopeField.jsx';
 
 export function AutoEnhanceRunModal({ open, productIds, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
   const refreshProducts = useAppStore((s) => s.refreshProducts);
+  const galleryDepth = useDeepestGallery(productIds);
 
   const [whiteBalance, setWhiteBalance] = useState(true);
   const [autoLevels, setAutoLevels] = useState(true);
   const [saturation, setSaturation] = useState(108); // % → 1.08
   const [brightness, setBrightness] = useState(100);  // % → 1.00
-  const [scope, setScope] = useState('main');
+  // v0.1.70: the shared "which images" control replaced the main/all select.
+  // Default stays "Main image only" — this modal's existing behaviour.
+  const imageChoice = useImageScope();
   const [submitting, setSubmitting] = useState(false);
   const [skipPreview, setSkipPreview] = useState(false); // per-run only
 
@@ -39,10 +52,10 @@ export function AutoEnhanceRunModal({ open, productIds, onClose, onDone }) {
     setAutoLevels(true);
     setSaturation(108);
     setBrightness(100);
-    setScope('main');
+    imageChoice.reset();
     setSubmitting(false);
     setSkipPreview(false);
-  }, [open]);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // v0.1.16: the preview request, the debounce and the blob-URL lifecycle all
   // live in useBulkPreview now (shared with AutoCropRunModal). This is just the
@@ -70,24 +83,19 @@ export function AutoEnhanceRunModal({ open, productIds, onClose, onDone }) {
     try {
       const res = await window.api.images.autoEnhanceProducts({
         productIds,
-        scope,
+        scope: imageChoice.value.scope,
+        positions: imageChoice.value.positions,
         whiteBalance,
         autoLevels,
         saturation: saturation / 100,
         brightness: brightness / 100,
       });
-      const imgs = res?.images ?? 0;
-      const prods = res?.products ?? 0;
-      const failed = res?.failed ?? 0;
       const missing = res?.missing ?? 0;
-      if (failed === 0 && missing === 0) {
-        addToast(`Enhanced ${imgs} image${imgs === 1 ? '' : 's'} across ${prods} product${prods === 1 ? '' : 's'}`, 'success');
-      } else {
-        const bits = [`${imgs} image${imgs === 1 ? '' : 's'}`];
-        if (failed) bits.push(`${failed} failed`);
-        if (missing) bits.push(`${missing} missing on disk`);
-        addToast(`Enhance done — ${bits.join(', ')}`, failed > 0 ? 'error' : 'info');
-      }
+      const { text, tone } = formatBulkImageResult(res, {
+        verb: 'Enhanced',
+        extras: [missing ? `${missing} missing on disk` : ''],
+      });
+      addToast(text, tone);
       refreshProducts();
       onDone?.(res);
       onClose?.();
@@ -166,14 +174,13 @@ export function AutoEnhanceRunModal({ open, productIds, onClose, onDone }) {
           onChange={setBrightness}
         />
 
-        <Field label="Apply to">
-          {({ id }) => (
-            <Select id={id} value={scope} onChange={(e) => setScope(e.target.value)} disabled={submitting}>
-              <option value="main">Main image only</option>
-              <option value="all">All images</option>
-            </Select>
-          )}
-        </Field>
+        <ImageScopeField
+          name="enhance-image-scope"
+          value={imageChoice.value}
+          onChange={imageChoice.set}
+          galleryDepth={galleryDepth}
+          disabled={submitting}
+        />
 
         <label className="autocrop-run__skip">
           <input type="checkbox" checked={skipPreview} onChange={(e) => setSkipPreview(e.target.checked)} disabled={submitting} />
@@ -183,7 +190,7 @@ export function AutoEnhanceRunModal({ open, productIds, onClose, onDone }) {
         <footer className="autocrop-run__footer">
           <Button onClick={onClose} disabled={submitting}>Cancel</Button>
           <div style={{ flex: 1 }} />
-          <Button variant="primary" disabled={submitting || count === 0} onClick={handleSubmit}>
+          <Button variant="primary" disabled={submitting || count === 0 || imageScopeNeedsPositions(imageChoice.value)} onClick={handleSubmit}>
             {submitting ? 'Enhancing…' : `Enhance ${count} product${count === 1 ? '' : 's'}`}
           </Button>
         </footer>
