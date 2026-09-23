@@ -28,6 +28,9 @@ const imageTemplateRuns = require('../db/imageTemplateRuns');
 const templateRenderer = require('../templateRenderer');
 const { writeUniqueFile } = require('../util/exclusiveFile');
 const { applyTemplateToFiles, validateExternalRequest } = require('../util/externalOverlay');
+const {
+  normalizePositions, selectImages,
+} = require('../util/imageScope');
 const { getDataDir } = require('../db');
 
 const APPLY_OPERATION_LIMIT = 100;
@@ -99,14 +102,18 @@ function beginApplyOperation(operationId, companyId, fingerprint) {
   return null;
 }
 
-async function runTrackedApply({ requestedOperationId, templateId, productIds, destination, companyId, emitCatalogChange, scope, source }) {
+async function runTrackedApply({ requestedOperationId, templateId, productIds, destination, companyId, emitCatalogChange, scope, positions, source }) {
   const operationId = normalizeApplyOperationId(requestedOperationId);
+  const normalizedPositions = normalizePositions(positions);
   const fingerprint = operationFingerprint({
     source,
     templateId,
     productIds,
     destination,
     scope: scope === 'all' ? 'all' : 'main',
+    // v0.1.69: positions are part of the request identity — replaying with a
+    // different position list must not be mistaken for the same operation.
+    positions: normalizedPositions,
   });
   const previous = beginApplyOperation(operationId, companyId, fingerprint);
   if (previous) return previous;
@@ -114,6 +121,7 @@ async function runTrackedApply({ requestedOperationId, templateId, productIds, d
   try {
     const result = await applyBulkInternal({
       operationId, templateId, productIds, destination, companyId, emitCatalogChange, scope,
+      positions: normalizedPositions,
     });
     completed = true;
     return result;
@@ -138,14 +146,6 @@ function imageBaseAbs(image) {
   return rel.startsWith('processed/') || rel.startsWith('ai-gallery/') || rel.startsWith('overlays/')
     ? path.join(getDataDir(), rel)
     : path.join(getDataDir(), 'assets', rel);
-}
-
-/** The images to apply to. scope 'all' → every image with a file on disk;
- *  otherwise just the main (processed-preferred) image, as before. */
-function pickTargetImages(imageList, scope) {
-  if (scope === 'all') return imageList.filter((im) => fs.existsSync(imageBaseAbs(im)));
-  const main = imageList.find((im) => im.isProcessed && im.processedFilepath) || imageList[0];
-  return main ? [main] : [];
 }
 
 /** Stamp composed bytes onto an image's RAW file in place (re-encoded to
@@ -179,18 +179,30 @@ async function overwriteImageInPlace(productId, image, bytes) {
  * loop. Returns { outputs: [...], skipped?: 'reason' }.
  *
  *   scope: 'main' (default) | 'all'
+ *   positions: optional 1-based position list (v0.1.69). When present and
+ *              non-empty it takes precedence over `scope` — position 1 is
+ *              the main image. Products that lack every requested position
+ *              are skipped with a "no Nth image" reason.
  *   destination.kind: 'append' | 'appendAsMain' | 'replaceMain'
  *                   | 'overwrite' | 'saveToFolder'
  *
  * promote-to-main only happens when exactly one image is targeted
  * (which image would become "main" is ambiguous for a multi-image run).
  */
-async function applyOverlayToProductImages({ template, product, scope, destination }) {
+async function applyOverlayToProductImages({ template, product, scope, destination, positions }) {
   const imageManager = require('../imageManager');
   const { slugify } = require('../util/slug');
   const imageList = productImages.listByProduct(product.id);
-  const targets = pickTargetImages(imageList, scope);
-  if (targets.length === 0) return { outputs: [], skipped: 'no images' };
+  // v0.1.69: the "which images / why skipped" rule lives once, in
+  // main/util/imageScope.js, so every image operation can share it.
+  const { chosen, skippedReason } = selectImages(imageList, { scope, positions });
+  const targets = chosen.filter((im) => fs.existsSync(imageBaseAbs(im)));
+  if (targets.length === 0) {
+    // Distinguish "asked for a position this product does not have" from
+    // "product has no usable images at all" — the first is an expected
+    // skip the user asked to be told about, the second is a plain no-op.
+    return { outputs: [], skipped: skippedReason || 'no images' };
+  }
 
   const ctx = buildTemplateContext(product);
   const outputs = [];
@@ -399,7 +411,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
    *   - `savedTo` is the absolute disk path for saveToFolder
    *   - `outputFilepath` is the user-friendly path for the toast
    */
-  expose('templates:applyToProduct', async ({ templateId, productId, destination, scope } = {}) => {
+  expose('templates:applyToProduct', async ({ templateId, productId, destination, scope, positions } = {}) => {
     if (!templateId) throw new Error('templateId required');
     if (!productId)  throw new Error('productId required');
     if (!destination || typeof destination !== 'object') throw new Error('destination required');
@@ -418,8 +430,9 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
     // v0.49.52: scope 'all' overlays every image; default 'main' keeps
     // the original single-image behaviour. The shared helper routes per
     // destination (append / appendAsMain / overwrite / saveToFolder).
+    // v0.1.69: an explicit `positions` list (1-based) wins over `scope`.
     const { outputs, skipped } = await applyOverlayToProductImages({
-      template, product, scope: scope === 'all' ? 'all' : 'main', destination,
+      template, product, scope: scope === 'all' ? 'all' : 'main', destination, positions,
     });
     if (skipped && outputs.length === 0) {
       throw new Error(skipped === 'no images' ? 'Product has no images to overlay' : skipped);
@@ -485,7 +498,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
     }
   });
 
-  expose('templates:applyBulk', async ({ operationId: requestedOperationId, templateId, productIds, destination, scope } = {}) => {
+  expose('templates:applyBulk', async ({ operationId: requestedOperationId, templateId, productIds, destination, scope, positions } = {}) => {
     if (!templateId) throw new Error('templateId required');
     if (!Array.isArray(productIds) || productIds.length === 0) {
       throw new Error('productIds required');
@@ -501,7 +514,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
     if (!companyId) throw new Error('No active company');
     return runTrackedApply({
       requestedOperationId, templateId, productIds, destination, companyId,
-      emitCatalogChange, scope, source: 'selection',
+      emitCatalogChange, scope, positions, source: 'selection',
     });
   });
 
@@ -518,7 +531,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
    * so the confirmation modal can show "this will hit 47 products
    * including BR-001, BR-002, BR-003…" before the user commits.
    */
-  expose('templates:applyByFilter', async ({ operationId: requestedOperationId, templateId, filters, destination, dryRun, scope } = {}) => {
+  expose('templates:applyByFilter', async ({ operationId: requestedOperationId, templateId, filters, destination, dryRun, scope, positions } = {}) => {
     if (!templateId) throw new Error('templateId required');
     const companyId = companies.getActiveId();
     if (!companyId) throw new Error('No active company');
@@ -528,6 +541,9 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
       return {
         matchedCount: all.length,
         sampleSkus: all.slice(0, 5).map((p) => p.sku),
+        // v0.1.69: the positions tick-boxes size to the deepest gallery in
+        // the match, so the dialog can offer the right range before running.
+        maxImages: all.reduce((max, p) => Math.max(max, Number(p.imageCount ?? 0)), 0),
       };
     }
     const productIds = all.map((p) => p.id);
@@ -536,7 +552,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
     }
     return runTrackedApply({
       requestedOperationId, templateId, productIds, destination, companyId,
-      emitCatalogChange, scope, source: 'filter',
+      emitCatalogChange, scope, positions, source: 'filter',
     });
   });
 }
@@ -551,12 +567,13 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
  * `products`, `productImages`, `templateRenderer`, `imageTemplateRuns`,
  * `getDataDir`, etc.
  */
-async function applyBulkInternal({ operationId = crypto.randomUUID(), templateId, productIds, destination, companyId, emitCatalogChange, scope }) {
+async function applyBulkInternal({ operationId = crypto.randomUUID(), templateId, productIds, destination, companyId, emitCatalogChange, scope, positions }) {
   const events = require('../events');
 
   const done = [];
   const failed = [];
   const skipped = [];
+  const normalizedPositions = normalizePositions(positions);
   /* v0.1.29: the collected bytes for a CLIENT to write.
    *
    * When destination.collect is set, applyOverlayToProductImages hands back the
@@ -591,8 +608,10 @@ async function applyBulkInternal({ operationId = crypto.randomUUID(), templateId
 
         // v0.49.52: shared per-product apply — honours scope ('all' →
         // every image) + the new 'overwrite' destination.
+        // v0.1.69: an explicit positions list wins over scope.
         const { outputs, skipped: reason } = await applyOverlayToProductImages({
           template, product, scope: scope === 'all' ? 'all' : 'main', destination,
+          positions: normalizedPositions,
         });
         if (reason && outputs.length === 0) {
           skipped.push({ productId: pid, sku: product.sku, reason });
@@ -639,11 +658,30 @@ async function applyBulkInternal({ operationId = crypto.randomUUID(), templateId
     });
   } catch (_) {/* swallow log errors */}
 
+  /* v0.1.69: a machine-readable summary so the modal can say WHY products
+   * were skipped ("2 products skipped: no 4th image"), not just how many.
+   * `done` counts IMAGE results; `doneCount` counts distinct products.
+   * Additive — callers that only read done/failed/skipped/total are
+   * unaffected, and the reconciled client path builds its own summary. */
+  const skippedReasons = {};
+  for (const s of skipped) {
+    const key = s.reason || 'skipped';
+    skippedReasons[key] = (skippedReasons[key] || 0) + 1;
+  }
+  const summary = {
+    productsCount: total,
+    imagesCount: done.length,
+    doneCount: new Set(done.map((d) => d.productId)).size,
+    skippedCount: skipped.length,
+    failedCount: failed.length,
+    skippedReasons,
+  };
+
   // `outputs` is present only when bytes were collected, so every other caller
   // sees exactly the payload it saw before.
   return collected.length
-    ? { operationId, done, failed, skipped, total, outputs: collected }
-    : { operationId, done, failed, skipped, total };
+    ? { operationId, done, failed, skipped, total, summary, outputs: collected }
+    : { operationId, done, failed, skipped, total, summary };
 }
 
 /**

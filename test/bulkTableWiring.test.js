@@ -23,6 +23,7 @@ const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const LIBRARY = read('renderer/modules/ProductLibrary/index.jsx');
 const MODAL = read('renderer/modules/ProductLibrary/BulkTableModal.jsx');
+const UI = read('renderer/components/ui.jsx');
 const PLANNER = read('renderer/modules/ProductLibrary/bulkGridPaste.js');
 const CSS = read('renderer/index.css');
 const PRELOAD = read('main/preload.js');
@@ -238,6 +239,47 @@ test('one user action can never produce two confirmations', () => {
   // right after it cannot re-open the unsaved-edits warning.
   assert.match(MODAL, /setEdits\(\{\}\);[\s\S]*?setConfirm\(null\);[\s\S]*?setClosePrompt\(false\);/,
     'a successful save does not clear the dirty state and both prompts');
+});
+
+/* ── v0.1.69: a keystroke must not lose the cell ─────────────────────── */
+
+test('a cell cannot lose focus to the modal on every keystroke', () => {
+  // The regression: Modal focused its dialog inside an effect that also
+  // depended on `onClose`. BulkTableModal's `requestClose` is a new function
+  // each render, so every keystroke re-ran the effect and moved focus to the
+  // dialog — the cell accepted exactly one character.
+  const focusEffect = UI.match(
+    /queueMicrotask\(\(\) => dialogRef\.current\?\.focus\(\)\);\s*\n\s*\}, \[([^\]]*)\]\);/,
+  );
+  assert.ok(focusEffect, 'the Modal dialog-focus effect is missing');
+  assert.equal(focusEffect[1].trim(), 'open',
+    'the Modal focus effect must depend on `open` only — depending on onClose re-focuses the dialog on every parent re-render');
+  // The Escape listener still follows the live onClose, so Esc cannot go stale.
+  assert.match(UI, /window\.addEventListener\('keydown', onKey\)/,
+    'the Modal Escape listener is missing');
+});
+
+test('row and cell identity never depend on a cell value', () => {
+  assert.match(MODAL, /<tr key=\{product\.id \?\? r\}/,
+    'the row key must be the product id (falling back to the index), never a value');
+  assert.match(MODAL, /key=\{c\.key\}/,
+    'the cell key must be the stable column key');
+  // The rendered value comes from (row, column), so a keystroke is a prop
+  // update — not an identity change. This is the invariant the fix depends on.
+  assert.match(MODAL, /const value = cellValue\(r, c\.key\);/,
+    'cell values must be derived from (row, column), not stored in the key');
+});
+
+test('the crawl types key by key instead of setting the value in one event', () => {
+  assert.match(CRAWL, /Input\.dispatchKeyEvent/,
+    'the crawl must dispatch real per-key events — a single synthetic set is what hid this bug');
+  assert.match(CRAWL, /every keystroke keeps focus and accumulates in the cell/,
+    'the per-keystroke focus assertion is missing');
+  assert.match(CRAWL, /a wrapping cell keeps focus while the row grows/,
+    'the wrapping-cell focus assertion is missing');
+  // The shared cause is proven in a SECOND dialog, not just the symptom.
+  assert.match(CRAWL, /a different dialog keeps the caret on every keystroke/,
+    'the cross-modal focus assertion is missing');
 });
 
 test('the version and the top What’s new entry agree', () => {

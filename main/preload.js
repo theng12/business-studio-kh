@@ -411,12 +411,15 @@ contextBridge.exposeInMainWorld('api', {
     listRuns:  (companyId, limit) => invoke('templates:listRuns', { companyId, limit }),
     // v0.26.15: Overlay Studio Phase 3 — apply templates to
     // products and route the rendered PNG per destination.
-    applyToProduct: ({ templateId, productId, destination, scope } = {}) =>
-      invoke('templates:applyToProduct', { templateId, productId, destination, scope }),
-    applyBulk: ({ templateId, productIds, destination, scope } = {}) =>
-      invoke('templates:applyBulk', { templateId, productIds, destination, scope }),
-    applyByFilter: ({ templateId, filters, destination, dryRun, scope } = {}) =>
-      invoke('templates:applyByFilter', { templateId, filters, destination, dryRun, scope }),
+    // v0.1.69: `positions` is an optional 1-based image position list
+    // (e.g. [2, 4]) that wins over `scope` when present. Additive — an
+    // older renderer that only sends `scope` behaves exactly as before.
+    applyToProduct: ({ templateId, productId, destination, scope, positions } = {}) =>
+      invoke('templates:applyToProduct', { templateId, productId, destination, scope, positions }),
+    applyBulk: ({ templateId, productIds, destination, scope, positions } = {}) =>
+      invoke('templates:applyBulk', { templateId, productIds, destination, scope, positions }),
+    applyByFilter: ({ templateId, filters, destination, dryRun, scope, positions } = {}) =>
+      invoke('templates:applyByFilter', { templateId, filters, destination, dryRun, scope, positions }),
     // v0.49.53: watermark external image files (no products). Local-only.
     applyToExternal: ({ templateId, inputPaths, outputFolder } = {}) =>
       invoke('templates:applyToExternal', { templateId, inputPaths, outputFolder }),
