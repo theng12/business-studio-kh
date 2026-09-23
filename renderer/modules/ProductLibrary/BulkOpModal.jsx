@@ -56,6 +56,7 @@ export function BulkOpModal({
   actionVerb,
   description,
   backupReminder = true,
+  runDisabled = false,
   run,
   children,
 }) {
@@ -71,6 +72,10 @@ export function BulkOpModal({
   const [running, setRunning] = useState(false);
 
   const count = productIds?.length ?? 0;
+  // v0.1.70: callers may gate the run on a form value (e.g. "Specific
+  // positions" with no positions ticked). Accept a predicate so it is
+  // evaluated against the live state, not a stale boolean.
+  const isRunDisabled = typeof runDisabled === 'function' ? !!runDisabled(state) : !!runDisabled;
 
   // Per-open: drop a stale running flag left behind by a hard cancel.
   useEffect(() => {
@@ -102,7 +107,7 @@ export function BulkOpModal({
   }, [patch, defaults, storageKey]);
 
   const handleRun = useCallback(async () => {
-    if (!count) return;
+    if (!count || isRunDisabled) return;
     setRunning(true);
     try {
       await run(state, productIds);
@@ -113,7 +118,7 @@ export function BulkOpModal({
     } finally {
       setRunning(false);
     }
-  }, [count, run, state, productIds, refreshProducts, onDone, addToast, actionVerb]);
+  }, [count, run, state, productIds, refreshProducts, onDone, addToast, actionVerb, isRunDisabled]);
 
   if (!open) return null;
 
@@ -135,7 +140,7 @@ export function BulkOpModal({
           </Button>
           <div style={{ flex: 1 }} />
           <Button onClick={onClose} disabled={running}>Cancel</Button>
-          <Button variant="primary" onClick={handleRun} disabled={running}>
+          <Button variant="primary" onClick={handleRun} disabled={running || isRunDisabled}>
             {running ? 'Running…' : `${actionVerb} ${count}`}
           </Button>
         </>

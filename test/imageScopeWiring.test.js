@@ -27,7 +27,11 @@ const root = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
 const MODAL = read('renderer/modules/ProductLibrary/BulkOverlayRunModal.jsx');
-const FIELD = read('renderer/modules/ProductLibrary/ImageScopeField.jsx');
+// v0.1.70: the pure value builders / parser live in imageScopeValue.mjs (so
+// they are unit-testable without React); the control component stays in the
+// .jsx. Both files together are "the shared control" these assertions guard.
+const FIELD = read('renderer/modules/ProductLibrary/ImageScopeField.jsx')
+  + '\n' + read('renderer/modules/ProductLibrary/imageScopeValue.mjs');
 const LIBRARY = read('renderer/modules/ProductLibrary/index.jsx');
 const PRELOAD = read('main/preload.js');
 const IPC = read('main/ipc/templates.js');

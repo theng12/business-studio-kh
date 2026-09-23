@@ -26,6 +26,9 @@ const imageManager = require('../imageManager');
 const auditLog = require('../db/auditLog');
 const { broadcast } = require('../events');
 const { writeExclusiveFile } = require('../util/exclusiveFile');
+// v0.1.70: the ONE "which images / why skipped" rule, shared by every
+// image-affecting bulk operation (see main/util/imageScope.js).
+const { selectImages } = require('../util/imageScope');
 
 // v0.22.6: image events go under entity_type='image', entity_id=<productId>
 // so a product's History modal naturally interleaves them via the
@@ -62,9 +65,27 @@ function takeIssuedDragPaths(paths) {
 function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAFE_WATERMARK_EXTS, exposeLocal }) {
   /* ─── Product images ─── */
 
-  expose('images:listByProduct', (productId) => {
-    assertProductInActiveCompany(productId);
-    return productImages.listByProduct(productId);
+  /* v0.1.70: two call shapes.
+   *
+   *   listByProduct(productId)                      → the ordered image rows.
+   *   listByProduct({ productId, scope, positions }) → the rows PLUS the
+   *     shared selection: { images, chosen, skippedReason, positions, missing }.
+   *
+   * The scoped form exists for the renderer-orchestrated Remove background
+   * flow (the @imgly engine can only run in a renderer), which needs the same
+   * "main / all / specific positions + why skipped" rule the server-side bulk
+   * handlers use. Routing the selection through this already-existing channel
+   * keeps main/util/imageScope.js the single source of truth — no duplicated
+   * rule in the renderer, no new channel. The bare-id form is untouched. */
+  expose('images:listByProduct', (arg) => {
+    if (arg != null && typeof arg === 'object' && !Array.isArray(arg)) {
+      const { productId, scope, positions } = arg;
+      assertProductInActiveCompany(productId);
+      const images = productImages.listByProduct(productId);
+      return { images, ...selectImages(images, { scope, positions }) };
+    }
+    assertProductInActiveCompany(arg);
+    return productImages.listByProduct(arg);
   });
 
   exposeLocal('images:importForProduct', async ({ productId, sourcePath }) => {
@@ -735,6 +756,11 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const filepathFilter = Array.isArray(opts.filepaths) && opts.filepaths.length
       ? new Set(opts.filepaths)
       : null;
+    // v0.1.70: "which images" choice. Auto crop has always processed every
+    // image of each product, so `all` stays the default for callers that send
+    // neither scope nor positions. `positions` (via the shared rule) wins.
+    const scope = opts.scope === 'main' ? 'main' : 'all';
+    const positions = opts.positions;
     const args = {
       scale: Math.max(0.3, Math.min(1, Number(opts.scale) || 0.85)),
       fillMode: opts.fillMode === 'blur' ? 'blur' : 'color',
@@ -746,6 +772,9 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     let productsTouched = 0;
     let failed = 0;        // images that errored
     let missing = 0;       // rows whose file was gone on disk
+    let skipped = 0;       // products with none of the requested positions
+    const skippedReasons = {};
+    const imagesByProduct = {};
     const failures = [];   // first few {sku?, filename, error} for the toast
 
     for (const productId of productIds) {
@@ -757,12 +786,27 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         if (failures.length < 5) failures.push({ productId, error: skipNotInActiveCompany(productId, OPNAME) });
         continue;
       }
-      const imgs = productImages.listByProduct(productId);
+      const all = productImages.listByProduct(productId);
+      // v0.49.8: the mobile-driven per-filepath filter still wins when given.
+      // v0.1.70: otherwise the shared rule picks main / all / positions.
+      let imgs;
+      if (filepathFilter) {
+        imgs = all.filter((img) => filepathFilter.has(img.filepath));
+      } else {
+        const selection = selectImages(all, { scope, positions });
+        imgs = selection.chosen;
+        if (imgs.length === 0) {
+          // Expected skip the user asked to be told about ("no 4th image"),
+          // not a per-image failure.
+          skipped += 1;
+          const reason = selection.skippedReason || 'no images';
+          skippedReasons[reason] = (skippedReasons[reason] || 0) + 1;
+          continue;
+        }
+      }
       let any = false;
+      let touchedImages = 0;
       for (const img of imgs) {
-        // Skip images the caller didn\'t ask for. The filter is per-filepath
-        // so it survives a position reorder between scope-pick and run.
-        if (filepathFilter && !filepathFilter.has(img.filepath)) continue;
         const absSrc = path.join(getDataDir(), 'assets', img.filepath);
         if (!fs.existsSync(absSrc)) { missing += 1; continue; }
         try {
@@ -780,6 +824,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
           });
           await writeReframedInPlace(absSrc, outPng, productId, img.filepath, img.id);
           images += 1;
+          touchedImages += 1;
           any = true;
         } catch (err) {
           failed += 1;
@@ -787,6 +832,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         }
       }
       if (any) {
+        imagesByProduct[productId] = touchedImages;
         products.touchUpdated(productId);
         // v0.49.43: `batch: true` → the client refreshes ONLY this product's
         // gallery if it's open, and skips the full grid/dashboard refetch.
@@ -794,7 +840,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         // dozens-of-products run no longer fans out into a refetch storm that
         // trips the server's own rate limiter.
         emitCatalogChange('images', 'autocrop', productId, { batch: true });
-        auditImage(productId, 'image:autocrop', { scale: args.scale, fillMode: args.fillMode });
+        auditImage(productId, 'image:autocrop', { scale: args.scale, fillMode: args.fillMode, scope, positions: positions ?? null });
         productsTouched += 1;
       }
     }
@@ -802,7 +848,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     // One full refetch for the whole batch (no `batch` flag → grid + dashboard).
     if (productsTouched > 0) emitCatalogChange('images', 'autocropBatch', null);
 
-    return { images, products: productsTouched, failed, missing, failures };
+    return { images, products: productsTouched, failed, missing, failures, skipped, skippedReasons, imagesByProduct };
   });
 
   // ─── Auto-enhance (v0.40.0) ───
@@ -840,12 +886,17 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const filepathFilter = Array.isArray(opts.filepaths) && opts.filepaths.length
       ? new Set(opts.filepaths)
       : null;
+    // v0.1.70: positions are additive on the existing scope contract.
+    const positions = opts.positions;
     const args = enhanceArgs(opts);
 
     let images = 0;
     let productsTouched = 0;
     let failed = 0;
     let missing = 0;
+    let skipped = 0;
+    const skippedReasons = {};
+    const imagesByProduct = {};
     const failures = [];
 
     for (const productId of productIds) {
@@ -859,11 +910,23 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       }
       const all = productImages.listByProduct(productId);
       // When the per-filepath filter is supplied, use it as the candidate set
-      // (ignoring `scope`). Otherwise honour the original scope semantics.
-      const imgs = filepathFilter
-        ? all.filter(img => filepathFilter.has(img.filepath))
-        : (scope === 'all' ? all : all.slice(0, 1));
+      // (ignoring `scope`). Otherwise the shared rule decides — main / all /
+      // positions — so the choice cannot drift from the other operations.
+      let imgs;
+      if (filepathFilter) {
+        imgs = all.filter(img => filepathFilter.has(img.filepath));
+      } else {
+        const selection = selectImages(all, { scope, positions });
+        imgs = selection.chosen;
+        if (imgs.length === 0) {
+          skipped += 1;
+          const reason = selection.skippedReason || 'no images';
+          skippedReasons[reason] = (skippedReasons[reason] || 0) + 1;
+          continue;
+        }
+      }
       let any = false;
+      let touchedImages = 0;
       for (const img of imgs) {
         const absSrc = path.join(getDataDir(), 'assets', img.filepath);
         if (!fs.existsSync(absSrc)) { missing += 1; continue; }
@@ -871,6 +934,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
           const outPng = await autoEnhance(absSrc, args);
           await writeReframedInPlace(absSrc, outPng, productId, img.filepath, img.id);
           images += 1;
+          touchedImages += 1;
           any = true;
         } catch (err) {
           failed += 1;
@@ -878,17 +942,18 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         }
       }
       if (any) {
+        imagesByProduct[productId] = touchedImages;
         products.touchUpdated(productId);
         // v0.49.43: per-product tick (open-product gallery only); see autocrop.
         emitCatalogChange('images', 'enhance', productId, { batch: true });
-        auditImage(productId, 'image:autoenhance', { scope, saturation: args.saturation });
+        auditImage(productId, 'image:autoenhance', { scope, positions: positions ?? null, saturation: args.saturation });
         productsTouched += 1;
       }
     }
 
     if (productsTouched > 0) emitCatalogChange('images', 'enhanceBatch', null);
 
-    return { images, products: productsTouched, failed, missing, failures };
+    return { images, products: productsTouched, failed, missing, failures, skipped, skippedReasons, imagesByProduct };
   });
 
   /* ─── Re-encode + format convert (v0.49.28) ───
@@ -913,6 +978,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const OPNAME = 'images:reencodeProducts';
     const productIds = Array.isArray(opts.productIds) ? opts.productIds : [];
     const scope = opts.scope === 'all' ? 'all' : 'main';
+    // v0.1.70: additive 1-based position list on the existing scope contract.
+    const positions = opts.positions;
     const filepathFilter = Array.isArray(opts.filepaths) && opts.filepaths.length
       ? new Set(opts.filepaths)
       : null;
@@ -961,6 +1028,9 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     let failed = 0;
     let missing = 0;
     let bytesSavedTotal = 0;
+    let skipped = 0;
+    const skippedReasons = {};
+    const imagesByProduct = {};
     const failures = [];
 
     for (const productId of productIds) {
@@ -973,10 +1043,23 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         continue;
       }
       const all = productImages.listByProduct(productId);
-      const imgs = filepathFilter
-        ? all.filter(img => filepathFilter.has(img.filepath))
-        : (scope === 'all' ? all : all.slice(0, 1));
+      // v0.1.70: per-filepath filter (mobile) wins when present; otherwise
+      // the shared rule decides which images — main / all / positions.
+      let imgs;
+      if (filepathFilter) {
+        imgs = all.filter(img => filepathFilter.has(img.filepath));
+      } else {
+        const selection = selectImages(all, { scope, positions });
+        imgs = selection.chosen;
+        if (imgs.length === 0) {
+          skipped += 1;
+          const reason = selection.skippedReason || 'no images';
+          skippedReasons[reason] = (skippedReasons[reason] || 0) + 1;
+          continue;
+        }
+      }
       let any = false;
+      let touchedImages = 0;
       for (const img of imgs) {
         const oldRel = img.filepath;
         const oldAbs = path.join(getDataDir(), 'assets', oldRel);
@@ -1090,6 +1173,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
           const newSize = fs.statSync(newAbs).size;
           bytesSavedTotal += Math.max(0, oldSize - newSize);
           images += 1;
+          touchedImages += 1;
           any = true;
         } catch (err) {
           failed += 1;
@@ -1097,11 +1181,12 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         }
       }
       if (any) {
+        imagesByProduct[productId] = touchedImages;
         products.touchUpdated(productId);
         // v0.49.43: per-product tick (open-product gallery only); see autocrop.
         emitCatalogChange('images', 'reencode', productId, { batch: true });
         auditImage(productId, 'image:reencode', {
-          targetFormat, quality, stripMetadata, resizeMode,
+          targetFormat, quality, stripMetadata, resizeMode, scope, positions: positions ?? null,
           ...(resizeMode === 'longEdge' ? { resizeLongEdge } : null),
           ...(resizeMode === 'exact'    ? { resizeWidth, resizeHeight, resizeFit, bgHex } : null),
         });
@@ -1111,7 +1196,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
 
     if (productsTouched > 0) emitCatalogChange('images', 'reencodeBatch', null);
 
-    return { images, products: productsTouched, failed, missing, failures, bytesSaved: bytesSavedTotal };
+    return { images, products: productsTouched, failed, missing, failures, bytesSaved: bytesSavedTotal, skipped, skippedReasons, imagesByProduct };
   });
 
   /* ─── v0.49.34: image metadata read ───────────────────────────────

@@ -241,7 +241,16 @@ const VALIDATORS = {
   'categories:remove':     requireStringArg('category id'),
 
   // Images ---------------------------------------------------------
-  'images:listByProduct':  requireStringArg('product id'),
+  // v0.1.70: two shapes. A bare product-id string is the legacy read; an
+  // object { productId, scope, positions } asks the handler for the shared
+  // image selection as well (used by the renderer-orchestrated Remove
+  // background flow). Positions are validated the same way as everywhere.
+  'images:listByProduct':  (a) => {
+    if (isString(a)) return true;
+    if (!isObject(a)) return 'expected a product id or { productId }';
+    if (!isString(a.productId)) return 'productId must be a string';
+    return validateOptionalPositions(a.positions);
+  },
   'images:setMainImage':   requireFields('productId', 'filepath'),
   'images:reorderImages':  requireFields('productId', 'newOrder'),
   'images:removeFromProduct': requireFields('productId', 'filepath'),
@@ -783,14 +792,30 @@ const VALIDATORS = {
   },
 
   // Image operations that were uncovered -------------------------------
-  'images:autoCropProducts':    requireFields('productIds'),
-  'images:autoEnhanceProducts': requireFields('productIds'),
+  // v0.1.70: all three bulk image ops accept the additive 1-based
+  // `positions` list (validated by validateOptionalPositions) so the shared
+  // "which images" rule can be applied. Old callers that send only their
+  // existing options (no positions) keep working.
+  'images:autoCropProducts': (a) => {
+    const base = requireFields('productIds')(a);
+    if (base !== true) return base;
+    return validateOptionalPositions(a.positions);
+  },
+  'images:autoEnhanceProducts': (a) => {
+    const base = requireFields('productIds')(a);
+    if (base !== true) return base;
+    return validateOptionalPositions(a.positions);
+  },
   // NOT productIds: this is the single-image preview, and both the renderer and
   // the handler use the singular `productId` (+ `filepath`) — like its sibling
   // `images:reframePreview`. Demanding `productIds` here rejected the live
   // Enhance preview, which then showed "Rendering…" forever.
   'images:autoEnhancePreview':  requireFields('productId', 'filepath'),
-  'images:reencodeProducts':    requireFields('productIds'),
+  'images:reencodeProducts':    (a) => {
+    const base = requireFields('productIds')(a);
+    if (base !== true) return base;
+    return validateOptionalPositions(a.positions);
+  },
   'images:findDuplicates':      (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
   'images:mergeDuplicates':     (a) => isObject(a) ? true : 'expected an object',
   'images:autoMergeDuplicates': (a) => (a == null || isObject(a)) ? true : 'expected an object or null',

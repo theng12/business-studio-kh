@@ -2205,6 +2205,116 @@ async function deepOverlayPositionsFlow(crawl, photoPath) {
 }
 
 /**
+ * v0.1.70 — the "which images" control on a DESTRUCTIVE image operation.
+ *
+ * v0.1.69 proved Specific positions on Apply overlay (non-destructive, adds a
+ * new image). This leg drives the same choice through Compress, which rewrites
+ * the source bytes and therefore exercises the shared rule on the op the
+ * customer is most likely to fire on a big selection. It seeds a product with
+ * exactly ONE image, asks Compress for position 2, and asserts:
+ *
+ *   - the modal's own positions warning appears,
+ *   - the field accepts "2" and the run button is enabled,
+ *   - the run is a reported SKIP ("1 product skipped: no 2nd image"), not a
+ *     failure and not a silent no-op.
+ *
+ * Static coverage for the other five lives in test/imageScopeAllWiring.test.js.
+ * Non-fatal like its siblings: the caller wraps it in try/catch.
+ */
+async function deepImageScopeFlow(crawl, photoPath) {
+  crawl.phase = 'deep: image scope all ops';
+
+  /* A fresh product with exactly one image (ask for the 2nd; it has none). */
+  const seeded = await crawl.eval(`(async () => {
+    const cid = await window.api.companies.getActiveId();
+    const stamp = String(Date.now()).slice(-6);
+    const p = await window.api.products.create({ companyId: cid, sku: 'UI-SCOPE-' + stamp, name: 'Image scope widget', status: 'active' });
+    let imgs = await window.api.images.listByProduct(p.id);
+    let list = imgs.images || imgs;
+    if (list.length === 0) {
+      await window.api.images.importForProduct(p.id, ${JSON.stringify(photoPath)});
+      imgs = await window.api.images.listByProduct(p.id);
+      list = imgs.images || imgs;
+    }
+    return { id: p.id, sku: p.sku, count: list.length };
+  })()`, true).catch((err) => ({ error: err.message }));
+  if (!seeded || seeded.error || seeded.count !== 1) {
+    crawl.step('deep scope: one-image product exists', false, JSON.stringify(seeded));
+    return;
+  }
+  crawl.step('deep scope: one-image product exists', true, `${seeded.sku} · ${seeded.count} image`);
+
+  await crawl.goto('Product Library');
+  await crawl.eval(`window.__ui.set('.page__header input.search-input', ${JSON.stringify(seeded.sku)})`);
+  await crawl.waitFor(`window.__ui.textOf(document.body).includes(${JSON.stringify(seeded.sku)})`, 10_000, 'the one-image product row');
+  await crawl.settle(400);
+  const picked = await crawl.eval(`(() => {
+    const boxes = Array.from(document.querySelectorAll('tbody input[type="checkbox"], .lib-grid input[type="checkbox"], .product-tile input[type="checkbox"]')).filter((b) => !b.closest('thead'));
+    boxes.slice(0, 1).forEach((b) => { if (!b.checked) b.click(); });
+    return boxes.length;
+  })()`);
+  await crawl.settle(400);
+
+  const openedMenu = await crawl.eval(`window.__ui.click('button', 'Image operations')`);
+  await crawl.settle(300);
+  const openedItem = picked > 0
+    ? await crawl.eval(`window.__ui.bulkMenuItem('Compress')`, true)
+    : 'MISS selection';
+  await crawl.waitFor(`!!document.querySelector('input[name="compress-image-scope"]')`, 8_000, 'the Compress dialog')
+    .catch(() => {});
+  await crawl.settle(300);
+
+  const positioned = await crawl.eval(`(() => {
+    const radio = document.querySelector('input[name="compress-image-scope"][type="radio"]:not(:checked)');
+    const labels = Array.from(document.querySelectorAll('.bulk-overlay-run__radio'));
+    const target = labels.find((l) => /Specific positions/.test(l.innerText));
+    if (!target) return 'MISS label';
+    const input = target.querySelector('input[type="radio"]');
+    if (!input) return 'MISS radio';
+    input.click();
+    return 'ok';
+  })()`);
+  await crawl.settle(250);
+  const setPos = await crawl.eval(`window.__ui.set('input[aria-label="Specific positions"]', '2')`);
+  await crawl.settle(250);
+
+  const state = await crawl.eval(`(() => {
+    const checked = document.querySelector('input[name="compress-image-scope"]:checked');
+    const input = document.querySelector('input[aria-label="Specific positions"]');
+    const box = document.querySelector('.image-scope__positions');
+    const hint = box ? box.querySelector('.field__hint') : null;
+    const runBtn = Array.from(document.querySelectorAll('.modal button')).find((b) => /^Compress /.test(b.innerText));
+    return {
+      radioOn: !!(checked && /Specific positions/.test(checked.closest('label').innerText)),
+      ticks: document.querySelectorAll('.image-scope__tick input').length,
+      positionsText: input ? input.value : null,
+      warning: hint ? hint.innerText : null,
+      runEnabled: !!(runBtn && !runBtn.disabled),
+    };
+  })()`);
+
+  /* The modal's own warning must update to the skip contract. */
+  const warningOk = /skipped and reported/i.test(state.warning || '');
+  await crawl.shot('image-scope-compress');
+
+  const ran = await crawl.eval(`window.__ui.click('.modal button', 'Compress ')`);
+  await crawl.waitFor(`/skipped/i.test(window.__ui.toastText())`, 15_000, 'the skip-reporting toast').catch(() => {});
+  const toast = await crawl.eval('window.__ui.toastText()');
+  await crawl.shot('image-scope-compress-skip');
+
+  crawl.step('deep scope: Compress position 2 on a one-image product reports the skip',
+    openedMenu === 'ok' && openedItem === 'ok' && positioned === 'ok' && setPos === 'ok'
+      && state.radioOn && state.positionsText === '2' && state.ticks >= 2
+      && warningOk && state.runEnabled && ran === 'ok'
+      && /skipped/i.test(toast) && /no 2nd image/i.test(toast),
+    `menu ${openedMenu} · item ${openedItem} · radio ${positioned} · set ${setPos} · run ${ran} · ${JSON.stringify(state)} · toast: ${toast || '(none)'}`);
+
+  await crawl.eval(`window.__ui.pressEscape()`).catch(() => {});
+  await crawl.eval(`window.__ui.set('.page__header input.search-input', '')`).catch(() => {});
+  await crawl.settle(250);
+}
+
+/**
  * v0.1.69 — cross-modal proof for the shared Modal focus fix.
  *
  * The bulk-table leg proves the SYMPTOM. This one proves the shared CAUSE is
@@ -2533,6 +2643,13 @@ async function main() {
     await deepModalFocusFlow(crawl);
   } catch (err) {
     crawl.step('deep modal focus flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 17 ── the image-scope control on a destructive op — Compress (v0.1.70) */
+  try {
+    await deepImageScopeFlow(crawl, photoPath);
+  } catch (err) {
+    crawl.step('deep image scope flow', false, `crawl error: ${err.message}`);
   }
 
   /* ── report ── */

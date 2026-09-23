@@ -16,10 +16,15 @@
 // compress-specific form body and IPC call.
 
 import { useCallback } from 'react';
-import { Field, Select, SliderField } from '../../components/ui.jsx';
+import { SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { BulkOpModal } from './BulkOpModal.jsx';
-import { SCOPE_OPTIONS } from './libraryConstants.js';
+import {
+  ImageScopeField,
+  formatBulkImageResult,
+  imageScopeNeedsPositions,
+  useDeepestGallery,
+} from './ImageScopeField.jsx';
 
 const QUALITY_PRESETS = [
   { value: 60, label: 'Aggressive (60)' },
@@ -34,11 +39,15 @@ const SCHEMA_VERSION = 1;
 const DEFAULTS = {
   quality: 85,
   stripMetadata: true,
+  // v0.1.70: the old `scope` key keeps its meaning (main/all) so a user's
+  // remembered choice survives; `positions` is the new additive part.
   scope: 'main',
+  positions: [],
 };
 
 export function BulkCompressModal({ open, productIds, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
+  const galleryDepth = useDeepestGallery(productIds);
 
   const run = useCallback(async (state, ids) => {
     const res = await window.api.images.reencodeProducts({
@@ -47,23 +56,16 @@ export function BulkCompressModal({ open, productIds, onClose, onDone }) {
       quality: state.quality,
       stripMetadata: state.stripMetadata,
       scope: state.scope,
+      positions: state.positions,
       // Compress never resizes.
       resize: { mode: 'none' },
     });
     const mb = res?.bytesSaved ? (res.bytesSaved / (1024 * 1024)).toFixed(1) : '0.0';
-    const failed = res?.failed || 0;
-    const images = res?.images || 0;
-    if (failed > 0) {
-      addToast(
-        `Compressed ${images}, ${failed} failed · ${mb} MB saved`,
-        failed === images ? 'error' : 'info',
-      );
-    } else {
-      addToast(
-        `Compressed ${images} image${images === 1 ? '' : 's'} · ${mb} MB saved`,
-        'success',
-      );
-    }
+    const { text, tone } = formatBulkImageResult(res, {
+      verb: 'Compressed',
+      savedLabel: `${mb} MB saved`,
+    });
+    addToast(text, tone);
   }, [addToast]);
 
   return (
@@ -87,8 +89,9 @@ export function BulkCompressModal({ open, productIds, onClose, onDone }) {
         </>
       }
       run={run}
+      runDisabled={(state) => imageScopeNeedsPositions(state)}
     >
-      {({ state, set, running }) => (
+      {({ state, set, patch, running }) => (
         <>
           <SliderField
             label="Quality"
@@ -115,13 +118,13 @@ export function BulkCompressModal({ open, productIds, onClose, onDone }) {
             ))}
           </div>
 
-          <Field label="Scope">
-            {({ id }) => (
-              <Select id={id} value={state.scope} onChange={(e) => set('scope', e.target.value)} disabled={running}>
-                {SCOPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </Select>
-            )}
-          </Field>
+          <ImageScopeField
+            name="compress-image-scope"
+            value={{ scope: state.scope, positions: state.positions }}
+            onChange={(v) => patch({ scope: v.scope, positions: v.positions })}
+            galleryDepth={galleryDepth}
+            disabled={running}
+          />
 
           <label className="toggle" style={{ marginTop: 10 }}>
             <input
