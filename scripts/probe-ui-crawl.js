@@ -1253,6 +1253,9 @@ async function deepBulkTableFlow(crawl, photoPath) {
   if (!seeded || seeded.error) { crawl.step('deep bulk table: row 0 has a main image', false, JSON.stringify(seeded)); return; }
 
   await crawl.goto('Product Library');
+  // v0.1.68: start from the default column widths so the resize assertion has a
+  // known baseline (a previous run on the same profile may have persisted some).
+  await crawl.eval(`(() => { try { localStorage.removeItem('BulkTable.columnWidths'); } catch {} return 'ok'; })()`);
   const picked = await crawl.eval(`(() => {
     const boxes = Array.from(document.querySelectorAll('tbody input[type="checkbox"], .lib-grid input[type="checkbox"], .product-tile input[type="checkbox"]')).filter((b) => !b.closest('thead'));
     boxes.slice(0, 2).forEach((b) => { if (!b.checked) b.click(); });
@@ -1275,7 +1278,7 @@ async function deepBulkTableFlow(crawl, photoPath) {
     rows: document.querySelectorAll('.bulk-table__grid tbody tr[data-row]').length,
     headers: Array.from(document.querySelectorAll('.bulk-table__grid thead th')).map((th) => th.innerText),
     inputs: document.querySelectorAll('.bulk-table__grid tbody input, .bulk-table__grid tbody select').length,
-    imageCells: document.querySelectorAll('.bulk-table__grid [data-col="image"]').length,
+    imageCells: document.querySelectorAll('.bulk-table__grid tbody [data-col="image"]').length,
     scopes: Array.from(document.querySelectorAll('input[name="bulk-table-scope"]')).map((r) => r.checked),
     modes: Array.from(document.querySelectorAll('.bulk-table__imagectl button')).map((b) => b.innerText),
     hint: (document.querySelector('.bulk-table__hint') || {}).innerText || '',
@@ -1289,6 +1292,49 @@ async function deepBulkTableFlow(crawl, photoPath) {
   crawl.step('deep bulk table: both image modes and the hint are offered',
     chrome.modes.join('|') === 'Add|Make main' && /⌘V/.test(chrome.hint) && /⇧⌘V/.test(chrome.hint),
     `modes ${JSON.stringify(chrome.modes)} · hint “${chrome.hint.slice(0, 80)}…”`);
+
+  /* ── v0.1.68 Fix 1: drag a header edge to resize, remember the width ──── */
+  const nameColWidth = () => crawl.eval(`(() => { const c = document.querySelector('col[data-col="name"]'); return c ? parseFloat(c.style.width) : null; })()`);
+  const nameBefore = await nameColWidth();
+  const dragged = await crawl.eval(`window.__ui.mouseDrag('[data-col-resize="name"]', 100, 0)`, true);
+  await crawl.settle(300);
+  const nameResized = await crawl.eval(`(() => {
+    const c = document.querySelector('col[data-col="name"]');
+    const th = document.querySelector('.bulk-table__grid thead th[title="Name"]');
+    return { col: c ? parseFloat(c.style.width) : null, rendered: th ? Math.round(th.getBoundingClientRect().width) : null };
+  })()`);
+  const storedWidths = await crawl.eval(`(() => { try { return JSON.parse(localStorage.getItem('BulkTable.columnWidths') || '{}'); } catch { return null; } })()`);
+  await crawl.shot('bulk-table-resized');
+  crawl.step('deep bulk table: dragging a header edge widens the column and remembers it',
+    dragged === 'ok' && nameBefore != null && nameResized.col >= nameBefore + 80
+      && nameResized.rendered >= nameResized.col - 6
+      && storedWidths && storedWidths.name === nameResized.col,
+    `drag ${nameBefore} → ${nameResized.col}px (rendered ${nameResized.rendered}) · stored ${JSON.stringify(storedWidths)} · ${dragged}`);
+
+  /* The width must survive closing and reopening the table. */
+  await crawl.eval(`window.__ui.clickExact('Close')`);
+  await crawl.waitFor(`!document.querySelector('.bulk-table__grid')`, 10_000, 'the table to close');
+  await crawl.settle(400);
+  await crawl.eval(`window.__ui.click('button', 'Image operations')`);
+  await crawl.settle(350);
+  const reopenedItem = await crawl.eval(`window.__ui.click('.lib-bulk-menu__item', 'Edit in table')`);
+  await crawl.waitFor(`!!document.querySelector('.bulk-table__grid')`, 10_000, 'the bulk table grid after reopen');
+  await crawl.settle(450);
+  const nameAfterReopen = await nameColWidth();
+  crawl.step('deep bulk table: the remembered column width survives close and reopen',
+    reopenedItem === 'ok' && nameAfterReopen === nameResized.col,
+    `${nameResized.col} → ${nameAfterReopen} after reopen · ${reopenedItem}`);
+
+  /* ── v0.1.68 Fix 1: Reset columns restores the defaults ──────────────── */
+  await crawl.eval(`window.__ui.clickExact('Reset columns')`);
+  await crawl.settle(250);
+  const afterReset = await crawl.eval(`(() => {
+    const c = document.querySelector('col[data-col="name"]');
+    return { col: c ? parseFloat(c.style.width) : null, stored: localStorage.getItem('BulkTable.columnWidths') };
+  })()`);
+  crawl.step('deep bulk table: Reset columns restores the default width and clears the saved map',
+    afterReset.col === 190 && afterReset.stored === null,
+    `name ${afterReset.col}px · stored ${afterReset.stored}`);
 
   /* The brand/category selects must offer an explicit "— Unassigned —" that
    * CLEARS the field. Row 0 was given a brand above, so both the option and the
@@ -1316,6 +1362,43 @@ async function deepBulkTableFlow(crawl, photoPath) {
   await crawl.settle(300);
   const typed = await crawl.eval(`document.querySelector('input[data-row="0"][data-col="subcategory"]').value`);
   crawl.step('deep bulk table: a typed cell holds', typed === 'Crawl A', JSON.stringify({ typed }));
+
+  /* ── v0.1.68 Fix 2: long values wrap and the row grows instead of being
+   * clipped. Name/Description are the columns the customer could not read. */
+  const longName = 'Bulk table long name — ' + 'the quick brown fox jumps over the lazy dog '.repeat(4).trim();
+  const longDesc = 'Long description: ' + 'wrap this value onto several lines so nothing is clipped. '.repeat(3).trim();
+  const longCellShape = await crawl.eval(`({
+    nameTextarea: !!document.querySelector('textarea[data-row="0"][data-col="name"]'),
+    nameInput: !!document.querySelector('input[data-row="0"][data-col="name"]'),
+    descTextarea: !!document.querySelector('textarea[data-row="0"][data-col="description"]'),
+  })`);
+  await crawl.eval(`window.__ui.set('textarea[data-row="0"][data-col="name"]', ${JSON.stringify(longName)})`);
+  await crawl.settle(300);
+  await crawl.eval(`window.__ui.set('textarea[data-row="0"][data-col="description"]', ${JSON.stringify(longDesc)})`);
+  await crawl.settle(300);
+  const wrapped = await crawl.eval(`(() => {
+    const ta = document.querySelector('textarea[data-row="0"][data-col="name"]');
+    const desc = document.querySelector('textarea[data-row="0"][data-col="description"]');
+    const row = ta ? ta.closest('tr') : null;
+    const cell = ta ? ta.closest('td') : null;
+    return {
+      name: ta ? ta.value : null,
+      nameH: ta ? ta.clientHeight : 0,
+      nameScrollH: ta ? ta.scrollHeight : 0,
+      nameFits: ta ? ta.scrollHeight <= ta.clientHeight + 1 : false,
+      descFits: desc ? desc.scrollHeight <= desc.clientHeight + 1 : false,
+      descH: desc ? desc.clientHeight : 0,
+      rowH: row ? Math.round(row.getBoundingClientRect().height) : 0,
+      whiteSpace: cell ? getComputedStyle(cell).whiteSpace : null,
+    };
+  })()`);
+  await crawl.shot('bulk-table-wrapped');
+  crawl.step('deep bulk table: long Name/Description values render as a growing textarea, not a clipped input',
+    longCellShape.nameTextarea && !longCellShape.nameInput && longCellShape.descTextarea
+      && wrapped.name === longName && wrapped.nameFits && wrapped.descFits
+      && wrapped.nameH > 35 && wrapped.descH > 35 && wrapped.rowH > 40
+      && wrapped.whiteSpace !== 'nowrap',
+    `textarea ${longCellShape.nameTextarea} · fits ${wrapped.nameFits}/${wrapped.descFits} · name h ${wrapped.nameH}/${wrapped.nameScrollH} · desc h ${wrapped.descH} · row ${wrapped.rowH} · white-space ${wrapped.whiteSpace}`);
 
   /* 2 ── a paste WIDER than the room left is refused, and the toast names the
    *      columns that did not fit. Start from the LAST text column, where two
@@ -1491,8 +1574,37 @@ async function deepBulkTableFlow(crawl, photoPath) {
   const summaryToast = await crawl.eval('window.__ui.toastText()');
   await crawl.shot('bulk-table-dry-run');
   crawl.step('deep bulk table: the dry run reports the summary before writing',
-    /\d+ updated/.test(summary || '') && /Confirm save/.test(summary || '') && /updated/.test(summaryToast || ''),
+    /\d+ updated/.test(summary || '') && /Save 2 products/.test(summary || '') && /updated/.test(summaryToast || ''),
     `summary: ${summary || '(none)'} · toast: ${summaryToast || '(none)'}`);
+
+  /* ── v0.1.68 Fix 3: exactly ONE confirmation, and it names the count ─── */
+  const firstPrompt = await crawl.eval(`(() => {
+    const blocks = Array.from(document.querySelectorAll('.bulk-table__confirm'));
+    const btn = blocks[0] ? Array.from(blocks[0].querySelectorAll('button')).map((b) => b.innerText) : [];
+    return { count: blocks.length, buttons: btn };
+  })()`);
+  crawl.step('deep bulk table: the dry run shows exactly one confirmation naming the product count',
+    firstPrompt.count === 1 && firstPrompt.buttons.includes('Save 2 products'),
+    `${firstPrompt.count} prompt(s) · buttons ${JSON.stringify(firstPrompt.buttons)}`);
+
+  /* Clicking Close while the summary is open must REPLACE it with the
+   * unsaved-edits prompt — never stack a second prompt under it. */
+  await crawl.eval(`window.__ui.clickExact('Close')`);
+  await crawl.settle(350);
+  const afterCloseClick = await crawl.eval(`(() => {
+    const blocks = Array.from(document.querySelectorAll('.bulk-table__confirm'));
+    return { count: blocks.length, text: blocks.map((b) => b.innerText).join(' || ') };
+  })()`);
+  crawl.step('deep bulk table: Close with the summary open shows ONE prompt, not two',
+    afterCloseClick.count === 1 && /unsaved cell edit/i.test(afterCloseClick.text),
+    `${afterCloseClick.count} prompt(s): ${String(afterCloseClick.text).slice(0, 140)}`);
+  await crawl.eval(`window.__ui.click('.bulk-table__confirm button', 'Keep editing')`);
+  await crawl.settle(300);
+
+  /* Back to a summary for the real commit. */
+  const saveAgain = await crawl.eval(`window.__ui.clickExact('Save all')`);
+  await crawl.waitFor(`!!document.querySelector('.bulk-table__confirm')`, 15_000, 'the dry-run summary again');
+  await crawl.settle(300);
 
   /* And nothing is written yet. */
   const beforeCommit = await crawl.eval(`(async () => {
@@ -1502,10 +1614,18 @@ async function deepBulkTableFlow(crawl, photoPath) {
   })()`, true);
   crawl.step('deep bulk table: the dry run wrote nothing', beforeCommit.subcategory !== 'Crawl A', JSON.stringify(beforeCommit));
 
-  await crawl.eval(`window.__ui.clickExact('Confirm save')`);
+  await crawl.eval(`window.__ui.click('.bulk-table__confirm button', 'Save 2 products')`);
   await crawl.waitFor(`!document.querySelector('.bulk-table__grid')`, 15_000, 'the table to close after saving');
   await crawl.settle(900);
   const savedToast = await crawl.eval('window.__ui.toastText()');
+  const closedClean = await crawl.eval(`({
+    modals: window.__ui.modalCount(),
+    confirms: document.querySelectorAll('.bulk-table__confirm').length,
+    dirtyPrompt: /unsaved cell edit/i.test(document.body.innerText),
+  })`);
+  crawl.step('deep bulk table: saving closes cleanly with no second confirmation',
+    saveAgain === 'ok' && closedClean.modals === 0 && closedClean.confirms === 0 && closedClean.dirtyPrompt === false,
+    JSON.stringify(closedClean));
   const afterSave = await crawl.eval(`(async () => {
     const ps = await window.api.products.list(await window.api.companies.getActiveId(), {});
     const a = ps.find((x) => x.sku === ${JSON.stringify(sku0)});
