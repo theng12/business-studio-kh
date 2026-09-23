@@ -76,6 +76,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 - **`_trash/`** (gitignored, owner's territory) and the install backup at `/tmp/mskh-install-backup/`.
 - **Hosted GitHub compute** — Actions stays disabled.
 - **Tags, releases, signing, notarization and publishing.** Merging to `main` is authorized; publishing is a separate decision (AGENTS.md §26).
+- **The closed decisions in AGENTS.md §25** — the three separate bulk modals, the `watermarks` asset kind, and the background-removal AGPL / public-distribution prerequisites. Do not re-propose them.
 
 ## OPEN / IN FLIGHT
 
@@ -87,12 +88,12 @@ At 0.1.72 nothing is mid-implementation. The honest gaps:
 | Hardware validation | **Not performed.** The runbook's results table is empty: two physical Macs, Wi-Fi loss / sleep-wake / DHCP change, a real printer (physical dimensions, Khmer glyphs, cancellation), macOS 12 hardware, iPad Safari, paid AI providers, the local background-removal model download. Loopback probes are not two-Mac evidence. |
 | x64 DMG | Built every release, **never launched**. Only the arm64 build has been run, on this one Mac. |
 | Signing / notarization | Not configured (`identity: null`); DMGs are unsigned and need `xattr -cr`. |
-| `@imgly/background-removal` licensing | The 2026-09-20 distribution audit flags its AGPL-3.0 terms against a private app. **Reason not recorded** for how or whether this is resolved — ask the owner. |
+| `@imgly/background-removal` licensing | **Closed — do not raise.** Home use; the only other user is the owner's brother, so the AGPL-3.0 terms and the audit's public-distribution prerequisites are dropped (AGENTS.md §25.3, 2026-09-23). |
 | Rotated label elements | Marquee and guides are rotation-aware; **resize is not** (deliberate `ponytail:` note at `renderer/modules/LabelStudio/designerGeometry.js:234`). A mixed-rotation multi-select can scale slightly off its drawn box. |
 | Overlay `fit: 'fill'` | Data-only per element; no UI sets it, so the owner cannot reach it. |
 | Docs reconciled 2026-09-23 | The status doc, the briefing, README, SIGNING and AI_INTEGRATION were brought back in line with the code in a docs pass on 2026-09-23, and the dated audits/plans now carry "historical" banners. If any doc drifts again, fix it in the change that caused it — the current truth for versions/commands is this file plus `docs/Business Studio KH Project Status.md`. |
 | `docs/HARDWARE_VALIDATION_RUNBOOK.md` | Still accurate ("not performed"); filling its results table is the deliverable when the owner has the hardware. |
-| Owner decisions outstanding | Independent review, signing purchase, public distribution, real-data migration — all authorization-gated. |
+| Owner decisions outstanding | Independent review, a signing purchase, real-data migration — all authorization-gated. Public distribution and licensing are closed decisions (AGENTS.md §25.3). |
 
 ## SECRETS
 
