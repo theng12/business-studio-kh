@@ -481,9 +481,10 @@ carried over unchanged; only the numbers moved. Don't retro-renumber.
 
 ## 25. Closed decisions — do not re-propose
 
-Two things were raised, looked at, and **deliberately dropped by Theng on
-2026-09-20**. They are settled, not backlog. Do not propose them again, do not
-"helpfully" fix them in passing, and do not list them as remaining work.
+Three things were raised, looked at, and **deliberately dropped by Theng** (the
+first two on 2026-09-20, the third on 2026-09-23). They are settled, not backlog.
+Do not propose them again, do not "helpfully" fix them in passing, and do not
+list them as remaining work.
 
 **1. The three remaining bulk modals stay as they are.** `renderer/modules/ProductLibrary/`
 has a shared `BulkOpModal.jsx` + `useBulkPreview.js`, used by five modals:
@@ -501,6 +502,15 @@ name is a little narrow for what actually lives there (brand logos and stamps,
 not only watermarks), but renaming the kind means migrating every existing
 user's files on disk, for a cosmetic gain. Leave both the folder and the asset
 kind alone.
+**3. The background-removal AGPL licensing question and the "public distribution"
+prerequisites are dropped.** The app is for the owner's own use and the only other person
+who runs it is his brother ("i'm home use and my customer is my brother", 2026-09-23). So the
+`@imgly/background-removal` AGPL-3.0 terms, a source-offer arrangement, notarization for the
+public, a public release and the rest of the 2026-09-20 distribution audit's "public-distribution
+prerequisites" are **not** work items. Do not raise them again, and do not list them as open.
+This closes the licensing question only: security and data-safety defects keep their normal
+weight, and the unsigned-DMG + `xattr -cr` install step still stands as the intended workflow for
+installing on the owner's Macs and his brother's.
 
 ## 26. Git workflow — a fix lands when it is merged
 
