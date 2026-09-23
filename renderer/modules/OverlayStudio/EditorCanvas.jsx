@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { elementBox } from './elementDefaults.js';
 import { renderBarcodeSVG, formatBarcodeText } from './barcodePreview.js';
+import {
+  fitForElement, BACKDROP_FIT, INSET_BLUR_FIT, INSET_FOREGROUND_FIT,
+} from './overlayFit.js';
 
 /**
  * v0.1.4: longest side of the server-rendered "truthful" preview, in px.
@@ -325,18 +328,33 @@ export function EditorCanvas({
                 : undefined}
             >
               {inset.fillMode === 'blur' && (
-                <img className="ovl-canvas__inset-blur" src={backdropSrc} alt="" draggable={false} />
+                <img
+                  className="ovl-canvas__inset-blur"
+                  src={backdropSrc}
+                  alt=""
+                  draggable={false}
+                  data-fit={INSET_BLUR_FIT}
+                  style={{ objectFit: INSET_BLUR_FIT }}
+                />
               )}
               <img
                 className="ovl-canvas__inset-fg"
                 src={backdropSrc}
                 alt=""
                 draggable={false}
-                style={{ width: insetBound, height: insetBound }}
+                data-fit={INSET_FOREGROUND_FIT}
+                style={{ width: insetBound, height: insetBound, objectFit: INSET_FOREGROUND_FIT }}
               />
             </div>
           ) : (
-            <img className="ovl-canvas__backdrop" src={backdropSrc} alt="" draggable={false} />
+            <img
+              className="ovl-canvas__backdrop"
+              src={backdropSrc}
+              alt=""
+              draggable={false}
+              data-fit={BACKDROP_FIT}
+              style={{ objectFit: BACKDROP_FIT }}
+            />
           )
         ) : (
           <div className="ovl-canvas__backdrop ovl-canvas__backdrop--checker" />
@@ -1113,6 +1131,11 @@ export function ElementContent({ element, box, productContext, canvasW, canvasH,
   if (element.type === 'image') {
     const src = resolveImageSrc(element.source, productContext);
     const why = src ? null : describeUnresolvedImage(element.source, productContext);
+    // v0.1.71: the artwork fits the box with the SAME rule the renderer uses
+    // (sharp `fit: 'contain'` by default). Without it a photo whose aspect
+    // differs from the box was stretched to fill it in the editor while the
+    // export letterboxed it. `element.fit` is honoured when present.
+    const objectFit = fitForElement(element);
     return (
       <div
         className="ovl-element__image"
@@ -1120,7 +1143,13 @@ export function ElementContent({ element, box, productContext, canvasW, canvasH,
         style={{ width: '100%', height: '100%' }}
       >
         {src ? (
-          <img src={src} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          <img
+            src={src}
+            alt=""
+            draggable={false}
+            data-fit={objectFit}
+            style={{ width: '100%', height: '100%', objectFit }}
+          />
         ) : (
           // v0.1.5: previously this just printed the raw source token
           // ("brand-icon"), so an element that could not resolve read as a
