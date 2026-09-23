@@ -304,10 +304,10 @@ main/                    # main process — CommonJS (require/module.exports)
   config.js              # config.json read/write (userData, not the DB)
   preload.js             # contextBridge surface — the ONLY api entry point
   ipc.js                 # barrel: registers every domain module in ipc/
-  ipc/                   # 23 files, one per domain (products.js, images.js, …)
-  db/                    # 29 files: index.js owns the schema + migrations,
+  ipc/                   # 24 files, one per domain (products.js, images.js, …)
+  db/                    # 30 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 28 pure helpers (slug, capabilities, landedCost,
+  util/                  # 29 pure helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode

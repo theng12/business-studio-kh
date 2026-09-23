@@ -51,7 +51,7 @@ The API does not publish per-model size / quality / source support, so
 
 | Model family | Sizes (UI labels) | Provider size strings | Qualities | Source (edit)? | `n` max |
 |---|---|---|---|---|---|
-| `gpt-image-2.5-*` | 13 ratios: `auto`, `1:1`, `3:2`, `2:3`, `4:3`, `3:4`, `16:9`, `9:16`, `7:4`, `4:7`, `21:9`, `9:21` | `auto` + `WxH` (e.g. `1536x864`, `2016x864`) | `auto`, `low`, `medium`, `high`, `xhigh`, `max` | yes | 10 |
+| `gpt-image-2.5-*` | 12 ratios: `auto`, `1:1`, `3:2`, `2:3`, `4:3`, `3:4`, `16:9`, `9:16`, `7:4`, `4:7`, `21:9`, `9:21` | `auto` + `WxH` (e.g. `1536x864`, `2016x864`) | `auto`, `low`, `medium`, `high`, `xhigh`, `max` | yes | 10 |
 | `gpt-image-2` / `1.5` / `1` / `1-mini` | `auto`, `1:1`, `3:2`, `2:3` | `auto`, `1024x1024`, `1536x1024`, `1024x1536` | `auto`, `low`, `medium`, `high` | yes | 10 |
 | `dall-e-3` / `dall-e-2` | retained for safety only — OpenAI removed both on 2026-05-12 | — | — | — | — |
 

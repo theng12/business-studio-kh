@@ -1,5 +1,8 @@
 # Concurrent editor safety follow-up
 
+> **Completed historical plan — dated 2026-09-21, base 0.1.35 (shipped in 0.1.36).** The work below was reproduced, fixed, verified and integrated; it is not a current work queue.
+> Live status: [`docs/tasks/HANDOFF.md`](../../tasks/HANDOFF.md).
+
 > Workers use Ponytail, Graphify, systematic debugging, TDD and subagent-driven-development. The owner authorized this bounded software pass and standing review/local-verification/GitHub integration; no redundant approval pauses.
 
 **Goal:** Reproduce and close confirmed lost-update and editor-lifetime failures in Catalog Studio, Social Grid and Label Templates without building a new collaboration framework.

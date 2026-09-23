@@ -1,5 +1,8 @@
 # Remaining Audited Fixes Implementation Plan
 
+> **Historical plan — dated 2026-09-20, target 0.1.34.** Its unchecked boxes are history unless the live status says otherwise, not a current backlog.
+> Live status: [`docs/tasks/HANDOFF.md`](../../tasks/HANDOFF.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close the remaining H1–H15 findings from the new-computer handoff with minimal, source-backed fixes, regression checks, local release verification, and a code-only GitHub merge.
