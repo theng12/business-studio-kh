@@ -16,7 +16,12 @@ import { useCallback } from 'react';
 import { Field, Select, SliderField } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { BulkOpModal } from './BulkOpModal.jsx';
-import { SCOPE_OPTIONS } from './libraryConstants.js';
+import {
+  ImageScopeField,
+  formatBulkImageResult,
+  imageScopeNeedsPositions,
+  useDeepestGallery,
+} from './ImageScopeField.jsx';
 
 const FORMAT_OPTIONS = [
   // No "keep" here — this modal is explicitly for changing the format.
@@ -37,11 +42,15 @@ const DEFAULTS = {
   targetFormat: 'jpeg',
   quality: 85,
   stripMetadata: true,
+  // v0.1.70: `scope` keeps its stored main/all meaning; `positions` is the
+  // new additive part of the shared image-selection contract.
   scope: 'main',
+  positions: [],
 };
 
 export function BulkConvertModal({ open, productIds, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
+  const galleryDepth = useDeepestGallery(productIds);
 
   const run = useCallback(async (state, ids) => {
     const res = await window.api.images.reencodeProducts({
@@ -50,24 +59,17 @@ export function BulkConvertModal({ open, productIds, onClose, onDone }) {
       quality: state.quality,
       stripMetadata: state.stripMetadata,
       scope: state.scope,
+      positions: state.positions,
       // Convert never resizes — pass mode:'none' explicitly so a future
       // backend change can't default-on a resize behind our back.
       resize: { mode: 'none' },
     });
     const mb = res?.bytesSaved ? (res.bytesSaved / (1024 * 1024)).toFixed(1) : '0.0';
-    const failed = res?.failed || 0;
-    const images = res?.images || 0;
-    if (failed > 0) {
-      addToast(
-        `Converted ${images}, ${failed} failed · ${mb} MB saved`,
-        failed === images ? 'error' : 'info',
-      );
-    } else {
-      addToast(
-        `Converted ${images} image${images === 1 ? '' : 's'} to ${state.targetFormat.toUpperCase()} · ${mb} MB saved`,
-        'success',
-      );
-    }
+    const { text, tone } = formatBulkImageResult(res, {
+      verb: `Converted to ${state.targetFormat.toUpperCase()}`,
+      savedLabel: `${mb} MB saved`,
+    });
+    addToast(text, tone);
   }, [addToast]);
 
   return (
@@ -90,8 +92,9 @@ export function BulkConvertModal({ open, productIds, onClose, onDone }) {
         </>
       }
       run={run}
+      runDisabled={(state) => imageScopeNeedsPositions(state)}
     >
-      {({ state, set, running }) => {
+      {({ state, set, patch, running }) => {
         // Quality slider is meaningful for JPEG / WebP (lossy). PNG is
         // lossless, so hide it instead of greying it out — less cognitive load.
         const qualityRelevant = state.targetFormat === 'jpeg' || state.targetFormat === 'webp';
@@ -117,13 +120,13 @@ export function BulkConvertModal({ open, productIds, onClose, onDone }) {
               />
             ) : null}
 
-            <Field label="Scope">
-              {({ id }) => (
-                <Select id={id} value={state.scope} onChange={(e) => set('scope', e.target.value)} disabled={running}>
-                  {SCOPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </Select>
-              )}
-            </Field>
+            <ImageScopeField
+              name="convert-image-scope"
+              value={{ scope: state.scope, positions: state.positions }}
+              onChange={(v) => patch({ scope: v.scope, positions: v.positions })}
+              galleryDepth={galleryDepth}
+              disabled={running}
+            />
 
             <label className="toggle" style={{ marginTop: 10 }}>
               <input

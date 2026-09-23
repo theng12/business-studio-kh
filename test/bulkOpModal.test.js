@@ -225,21 +225,21 @@ const MODALS = [
     entry: 'renderer/modules/ProductLibrary/BulkConvertModal.jsx',
     export: 'BulkConvertModal',
     storageKey: 'Library.bulkConvert',
-    expect: ['Convert format · 2 products', 'Convert 2', 'Target format', 'JPEG (.jpg)', 'aria-label="Quality value"', 'Main image of each product'],
+    expect: ['Convert format · 2 products', 'Convert 2', 'Target format', 'JPEG (.jpg)', 'aria-label="Quality value"', 'Main image only', 'Specific positions'],
   },
   {
     label: 'Compress',
     entry: 'renderer/modules/ProductLibrary/BulkCompressModal.jsx',
     export: 'BulkCompressModal',
     storageKey: 'Library.bulkCompress',
-    expect: ['Compress · 2 products', 'Compress 2', 'aria-label="Quality value"', 'Catalog default (85)', 'Main image of each product'],
+    expect: ['Compress · 2 products', 'Compress 2', 'aria-label="Quality value"', 'Catalog default (85)', 'Main image only', 'Specific positions'],
   },
   {
     label: 'Resize',
     entry: 'renderer/modules/ProductLibrary/BulkResizeModal.jsx',
     export: 'BulkResizeModal',
     storageKey: 'Library.bulkResize',
-    expect: ['Resize · 2 products', 'Resize 2', 'Mode', 'Max long edge (preserve aspect, never upscale)', 'Max long edge (px)', 'Main image of each product'],
+    expect: ['Resize · 2 products', 'Resize 2', 'Mode', 'Max long edge (preserve aspect, never upscale)', 'Max long edge (px)', 'Main image only', 'Specific positions'],
   },
 ];
 
