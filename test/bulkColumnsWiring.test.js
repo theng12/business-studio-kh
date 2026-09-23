@@ -37,6 +37,10 @@ const CHANNELS = [
   ['bulkColumns:create', 'create'],
   ['bulkColumns:update', 'update'],
   ['bulkColumns:remove', 'remove'],
+  // v0.1.72: the duplicate action and the company-scoped width map.
+  ['bulkColumns:duplicate', 'duplicate'],
+  ['bulkColumns:getWidths', 'getWidths'],
+  ['bulkColumns:setWidths', 'setWidths'],
 ];
 
 test('the schema creates bulk_column_sets without a version bump', () => {
@@ -49,8 +53,18 @@ test('the schema creates bulk_column_sets without a version bump', () => {
     'SCHEMA_VERSION moved — a bump wipes real content tables, and a new table needs only CREATE TABLE IF NOT EXISTS');
 });
 
+test('the schema creates bulk_column_widths without a version bump', () => {
+  assert.match(SCHEMA, /CREATE TABLE IF NOT EXISTS bulk_column_widths/,
+    'bulk_column_widths is not created — the layout could not travel across Macs');
+  assert.match(SCHEMA, /company_id TEXT PRIMARY KEY REFERENCES companies\(id\) ON DELETE CASCADE/,
+    'the width row must be company-scoped and cascade with its company');
+  const version = SCHEMA.match(/const SCHEMA_VERSION = (\d+);/);
+  assert.equal(version?.[1], '2',
+    'SCHEMA_VERSION moved — an additive table needs only CREATE TABLE IF NOT EXISTS');
+});
+
 test('the DB module implements the CRUD shape socialGridTemplates established', () => {
-  for (const fn of ['list', 'get', 'create', 'update', 'remove', 'duplicate']) {
+  for (const fn of ['list', 'get', 'create', 'update', 'remove', 'duplicate', 'getWidths', 'setWidths']) {
     assert.match(DB, new RegExp(`function ${fn}\\(`), `main/db/bulkColumnSets.js has no ${fn}()`);
   }
   assert.match(DB, /prepareOptimisticPatch/, 'updates must honour the optimistic-concurrency token');
@@ -99,6 +113,23 @@ test('the bulk table toolbar has a Columns picker over the shared control', () =
   // Up/down reorder, never drag.
   assert.match(UICOMP, /onMove/, 'ColumnsControl has no reorder hook, so reordering cannot exist');
   assert.match(MODAL, /moveColumn\(/, 'the bulk table never reorders columns');
+});
+
+test('the bulk table persists widths through the company-scoped channels', () => {
+  assert.match(MODAL, /window\.api\.bulkColumns\.(getWidths|setWidths)\(/,
+    'the bulk table never calls the width channels');
+  // localStorage stays the instant cache; the DB row is the cross-Mac value.
+  assert.match(MODAL, /COLUMN_WIDTHS_STORAGE_KEY/, 'the instant localStorage cache was dropped');
+  assert.match(MODAL, /WIDTHS_DB_SAVE_MS/, 'the DB write must be debounced, not one call per mousemove');
+  const reset = MODAL.slice(MODAL.indexOf('function resetColumns'));
+  assert.match(reset, /localStorage\.removeItem\(COLUMN_WIDTHS_STORAGE_KEY\)/,
+    'Reset columns must clear the localStorage cache');
+  assert.match(reset, /bulkColumns\.setWidths\(/, 'Reset columns must also clear the DB row');
+});
+
+test('the saved-set menu offers Duplicate next to Rename/Delete', () => {
+  assert.match(MODAL, /window\.api\.bulkColumns\.duplicate\(/, 'duplicate() is still unreachable from the UI');
+  assert.match(MODAL, />Duplicate</, 'there is no Duplicate button in the set menu');
 });
 
 test('the built-in sets exist and Everything is the default', () => {

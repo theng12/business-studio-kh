@@ -286,7 +286,7 @@ per-app choice, not the house default.
 
 ## 17. File layout (Electron apps)
 
-*(Counts re-verified 2026-09-21.)*
+*(Counts re-verified 2026-09-23.)*
 
 The shape below is what this app actually uses. Two things to note, because
 they're the parts newcomers get wrong: `db` and `ipc` are **directories with
@@ -330,7 +330,7 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 103 files — `node --test test/**/*.test.js`
+test/                    # 118 files — `node --test test/**/*.test.js`
 scripts/                 # build-icon.js, build-webclient.js,
                          # probe-overlay-renderer.js,
                          # probe-render-paint.js  (`npm run check:render`)
