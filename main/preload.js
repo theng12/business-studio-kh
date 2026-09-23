@@ -488,6 +488,15 @@ contextBridge.exposeInMainWorld('api', {
     preview: (config, pageIndex) => invoke('socialGrid:preview', { config, pageIndex }),
     exportImages: (config, outputFolder, presetId) => invoke('socialGrid:export', { config, outputFolder, presetId }),
   },
+  /* v0.1.71: named bulk-table column sets, company-scoped in the database so
+   * they follow the user across Macs. The last-used selection is localStorage,
+   * not this. */
+  bulkColumns: {
+    list: (companyId) => invoke('bulkColumns:list', { companyId }),
+    create: (input) => invoke('bulkColumns:create', input),
+    update: (id, patch) => invoke('bulkColumns:update', { id, patch }),
+    remove: (id) => invoke('bulkColumns:remove', { id }),
+  },
   ai: {
     listModels:    ()                                 => invoke('ai:listModels'),
     estimateCost:  (model, count, opts)               => invoke('ai:estimateCost', { model, count, ...(opts ?? {}) }),

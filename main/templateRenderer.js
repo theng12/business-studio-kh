@@ -350,6 +350,18 @@ function defaultResolveAsset(rel) {
   return path.join(getDataDir(), 'assets', rel);
 }
 
+/**
+ * v0.1.71: the CSS object-fit values the editor can set on an image element.
+ * `contain` is the default and matches this renderer's resize; `cover` crops
+ * to fill the box. Mirrored by renderer/modules/OverlayStudio/overlayFit.js so
+ * the editor and the export cannot drift (test/overlayArtworkFit.test.js pins
+ * the pair).
+ */
+const IMAGE_FITS = ['contain', 'cover', 'fill'];
+function sharpFitForImageElement(el) {
+  return IMAGE_FITS.includes(el?.fit) ? el.fit : 'contain';
+}
+
 async function renderImageElement(el, ctx, imgW, imgH, resolveAsset, strictImageAssets = false) {
   if (!el.source) return null;
 
@@ -377,7 +389,7 @@ async function renderImageElement(el, ctx, imgW, imgH, resolveAsset, strictImage
   const targetH = Math.max(16, Math.round((el.height ?? 0.15) * imgH));
   const opacity = Math.max(0, Math.min(1, el.opacity ?? 1));
 
-  let pipeline = sharp(abs).resize(targetW, targetH, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } });
+  let pipeline = sharp(abs).resize(targetW, targetH, { fit: sharpFitForImageElement(el), background: { r: 0, g: 0, b: 0, alpha: 0 } });
   if (opacity < 1) {
     /* v0.1.53: the mask MUST be `opacity`, not `1 - opacity`.
      *

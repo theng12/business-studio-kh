@@ -891,7 +891,7 @@ export function ProductLibrary() {
                           },
                           { label: 'Enhance',             hint: 'White-balance + auto-levels + saturation. Rewrites the source file in place.', onClick: () => setAutoEnhanceOpen(true) },
                           // v0.49.34: three focused tools instead of one combined modal.
-                          { label: 'Convert format',      hint: 'Re-encode each image as JPEG, PNG, or WebP. Renames the file on disk when the extension changes.', onClick: () => setBulkConvertOpen(true) },
+                          { label: 'Convert format',      hint: 'Re-encode images as JPEG, PNG or WebP — choose which in the dialog.', onClick: () => setBulkConvertOpen(true) },
                           { label: 'Compress',            hint: 'Re-encode at a chosen quality, keep the existing format. Shrinks file size without renaming.', onClick: () => setBulkCompressOpen(true) },
                           { label: 'Resize',              hint: 'Change pixel dimensions — cap the long edge, or set exact W × H with a fit mode and (for Contain) a background colour.', onClick: () => setBulkResizeOpen(true) },
                         ],

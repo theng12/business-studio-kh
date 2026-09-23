@@ -623,6 +623,20 @@ const VALIDATORS = {
     return true;
   },
 
+  // Bulk table column sets (v0.1.71) --------------------------------
+  // `columns` is an ordered array of catalogue keys; the DB module normalizes
+  // (strings only, de-duplicated), so the validator checks the SHAPE here.
+  'bulkColumns:list':   (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
+  'bulkColumns:create': (a) => {
+    if (!isObject(a)) return 'create payload must be an object';
+    if (!isString(a.companyId) || !a.companyId.trim()) return 'companyId is required';
+    if (!isString(a.name) || !a.name.trim()) return 'name is required';
+    if (a.columns != null && !isArray(a.columns)) return 'columns must be an array';
+    return true;
+  },
+  'bulkColumns:update': requireVersionedPatch,
+  'bulkColumns:remove': requireNonEmptyStringFields('id'),
+
   // Suppliers --------------------------------------------------------
   // Note: unlike most read paths, this one takes an OBJECT
   // (`{ companyId, filters }`) — the shape is per-handler, not per-domain,
