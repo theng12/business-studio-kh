@@ -65,10 +65,10 @@ If you don't run step 3 you'll see "Media Studio KH is damaged and can't be open
 - Auto-save per-image settings; explicit "Process" button commits the run.
 
 **AI Studio**
-- OpenAI Images integration: image-to-image edits (`/v1/images/edits`) and text-to-image generation (`/v1/images/generations`). The model list is fetched live from `/v1/models`, so new `gpt-image-*` / `dall-e-*` models appear without an app release.
+- OpenAI Images integration: image-to-image edits (`/v1/images/edits`) and text-to-image generation (`/v1/images/generations`). The model list is fetched live from `/v1/models`, so new `gpt-image-*` models appear without an app release.
 - Per-product flow: pick a source image + a prompt template → queue → review the gallery → promote to product (with optional "set as main").
 - Bulk / Folder flow: scan a folder of source images, batch-queue with a shared prompt, gallery shows all results.
-- Capability-driven aspect ratio, quality and image count; GPT Image 2.5 exposes 13 ratios and the xhigh/max tiers.
+- Capability-driven aspect ratio, quality and image count; GPT Image 2.5 exposes 12 ratios and the xhigh/max tiers.
 - Token-based cost estimates (prompt + reference image + output), with the actual cost recorded from OpenAI's usage after each run.
 - Live queue updates (WebSocket-driven in multi-Mac mode).
 
@@ -107,12 +107,12 @@ Press `Cmd+?` (or `Ctrl+?`) inside the app for the full list. Highlights:
 
 ## Development
 
-Use an Apple Silicon Mac running macOS 12 or newer, Node 24 (verified with 24.15.0), and Xcode Command Line Tools for native dependencies. Do not copy `node_modules` from another computer.
+Use an Apple Silicon Mac running macOS 12 or newer, Node 24 (the version the checkout was verified with: 24.15.0), and Xcode Command Line Tools for native dependencies. The machine that ran the 0.1.72 checks reports Node v26.8.2 / npm 11.19.1, and `npm run check` passes there too. Do not copy `node_modules` from another computer.
 
 ```bash
 npm ci
 npm run dev    # Vite + Electron with HMR
-npm run dist   # build the macOS arm64 DMG into dist/
+npm run dist   # build the macOS arm64 and x64 DMGs into dist/
 ```
 
 The packaged build skips code signing (`identity: null` in package.json) so any team member can rebuild without an Apple Developer account. Once you have a Developer ID cert, see `SIGNING.md` for the wire-up.
@@ -127,7 +127,7 @@ main/client/     # Client-mode runtime (RPC proxy, file bridges)
 main/ai/         # AI provider modules + queue runner
 renderer/        # React + Vite + Zustand UI
 renderer/modules/<Name>/   # one folder per feature module
-assets/          # bundled fonts + theme JSON (ships in DMG)
+assets/          # bundled fonts (ships in DMG)
 data/            # userData runtime (gitignored)
 ```
 

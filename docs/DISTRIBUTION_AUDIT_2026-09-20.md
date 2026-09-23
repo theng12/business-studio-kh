@@ -1,5 +1,10 @@
 # Media Studio KH distribution audit — 2026-09-20
 
+> **Historical record — distribution audit of version 0.1.31.**
+> Since fixed: the `users:list` token disclosure (token-bearing management channels now require the `users.manage` capability in `main/util/capabilities.js`; only `users:listForAttribution` is baseline) and the vulnerable runtime dependencies (`package.json` now pins `sharp ^0.35.4`, `ws ^8.21.3`, `electron ^44.4.3`).
+> Still open: signing/notarization (builds remain unsigned, `identity: null`) and the `@imgly/background-removal` AGPL-3.0 licensing question.
+> Dated evidence, not current status — live status: [`docs/tasks/HANDOFF.md`](tasks/HANDOFF.md).
+
 ## Verdict
 
 **Not ready for public distribution.** The application has a sensible foundation and a passing local verification baseline, but a confirmed multi-Mac privilege escalation, an editor save race, vulnerable dependencies, and incomplete distribution assurances prevent a release recommendation. A rewrite is not warranted by this audit. Fix the concrete release issues first.

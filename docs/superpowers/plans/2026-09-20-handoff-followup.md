@@ -1,5 +1,8 @@
 # Handoff follow-up implementation plan
 
+> **Completed historical plan — dated 2026-09-20, base 0.1.34.** The work below was executed, verified and integrated; it is not a current work queue.
+> Live status: [`docs/tasks/HANDOFF.md`](../../tasks/HANDOFF.md).
+
 > **For agentic workers:** Use subagent-driven-development, Ponytail, Graphify and focused red/green regression tests. The owner approved execution and parallel delegation; no additional approval pause is required.
 
 **Goal:** Complete the confirmed remaining data-safety, browser-context, image-identity and client-permission defects, and verify the remaining timeout/archive/editor risks honestly.
