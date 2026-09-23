@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Pagination, Select } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -1248,24 +1248,257 @@ function RefreshButton() {
  * caller and the styling is purpose-specific. If we ever need a second
  * popover in the app, extract then.
  */
+/* v0.1.69: the "Image operations ▾" menu.
+ *
+ * It had grown to three flat sections that ran off the bottom of the window
+ * with no way to scroll, so the last section could not be reached. The
+ * approved shape is a two-level menu:
+ *
+ *   - the section labels are submenu triggers ("Non-destructive ▸", …) that
+ *     open their items sideways;
+ *   - a search field at the top flattens the whole tree into ONE filtered
+ *     list, each row naming its section, because searching a tree is where
+ *     people get lost;
+ *   - both panels bound their own height to the space actually free, scroll
+ *     when longer, and flip (the main panel up, the submenu up and/or to the
+ *     left) so neither ever leaves the window;
+ *   - keyboard: ↑/↓ within a level, → opens a submenu, ← closes it, Enter
+ *     activates, Esc closes the whole menu and returns focus to the trigger.
+ *     Hover opens a submenu after HOVER_OPEN_DELAY_MS so a pointer passing
+ *     through does not flash submenus.
+ *
+ * ponytail: hover uses a fixed 120ms delay, not directional-intent tracking.
+ * That is enough to stop pass-through flashes; a user who wants a submenu and
+ * stops on the trigger gets it. If it ever feels twitchy, the ceiling is this
+ * one constant — no further machinery needed.
+ */
+const SUBMENU_WIDTH = 300;
+const MENU_EDGE = 8;
+const HOVER_OPEN_DELAY_MS = 120;
+
 function BulkActionsMenu({ label, count, disabled, sections }) {
   const [open, setOpen] = useState(false);
+  const [placement, setPlacement] = useState('down'); // main panel: 'down' | 'up'
+  const [maxHeight, setMaxHeight] = useState(null);
+  const [query, setQuery] = useState('');
+  const [openSection, setOpenSection] = useState(null); // section label | null
+  const [subPosition, setSubPosition] = useState(null); // { top, left, maxHeight }
   const containerRef = useRef(null);
+  const panelRef = useRef(null);
+  const submenuRef = useRef(null);
+  const searchRef = useRef(null);
+  const sectionTriggerRef = useRef(null);
+  const hoverTimerRef = useRef(null);
 
+  const totalItems = sections.reduce((n, sec) => n + sec.items.length, 0);
+  // Only clutter the panel with a search box once it is genuinely long.
+  const showSearch = totalItems > 8;
+  const searching = query.trim().length > 0;
+
+  // Search flattens the sections into one list; each row carries its section.
+  const flatItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const out = [];
+    for (const sec of sections) {
+      const section = sec.label.split(' · ')[0];
+      for (const it of sec.items) {
+        if (`${it.label} ${it.hint || ''}`.toLowerCase().includes(q)) out.push({ ...it, section });
+      }
+    }
+    return out;
+  }, [sections, query]);
+
+  const openSectionData = useMemo(
+    () => sections.find((sec) => sec.label === openSection) || null,
+    [sections, openSection],
+  );
+
+  function closeSubmenu() {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setOpenSection(null);
+    setSubPosition(null);
+    sectionTriggerRef.current = null;
+  }
+
+  function closeAll() {
+    closeSubmenu();
+    setOpen(false);
+    setQuery('');
+    setPlacement('down');
+    setMaxHeight(null);
+  }
+
+  function focusTriggerButton() {
+    containerRef.current?.querySelector('button')?.focus();
+  }
+
+  // The elements the keyboard walks at the CURRENT level.
+  function focusables() {
+    if (searching) return [...(panelRef.current?.querySelectorAll('.lib-bulk-menu__item') ?? [])];
+    if (openSection) return [...(submenuRef.current?.querySelectorAll('.lib-bulk-menu__item') ?? [])];
+    return [...(panelRef.current?.querySelectorAll('.lib-bulk-menu__section-trigger') ?? [])];
+  }
+
+  function moveFocus(delta) {
+    const items = focusables();
+    if (!items.length) return;
+    const current = items.indexOf(document.activeElement);
+    const next = current === -1 ? (delta > 0 ? 0 : items.length - 1) : current + delta;
+    items[Math.max(0, Math.min(items.length - 1, next))]?.focus();
+  }
+
+  function openSubmenu(sectionLabel, triggerEl) {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    sectionTriggerRef.current = triggerEl;
+    setOpenSection(sectionLabel);
+  }
+
+  function hoverSection(sectionLabel, triggerEl) {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (openSection === sectionLabel) return; // already open — no flicker
+    hoverTimerRef.current = setTimeout(() => openSubmenu(sectionLabel, triggerEl), HOVER_OPEN_DELAY_MS);
+  }
+
+  // Esc / click-outside close. Arrow keys walk the current level; → opens a
+  // submenu from its trigger, ← closes it. Enter/Space on a button is its
+  // native click, so it is deliberately not handled here.
   useEffect(() => {
     if (!open) return undefined;
     function onDocDown(e) {
       if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target)) setOpen(false);
+      if (!containerRef.current.contains(e.target)) closeAll();
     }
-    function onKey(e) { if (e.key === 'Escape') setOpen(false); }
+    function onKey(e) {
+      if (e.key === 'Escape') { closeAll(); focusTriggerButton(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); moveFocus(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); moveFocus(-1); return; }
+      if (e.key === 'Home') { e.preventDefault(); focusables()[0]?.focus(); return; }
+      if (e.key === 'End') { e.preventDefault(); const items = focusables(); items[items.length - 1]?.focus(); return; }
+      if (e.key === 'ArrowRight') {
+        if (searching) return;
+        const active = document.activeElement;
+        if (active?.classList?.contains('lib-bulk-menu__section-trigger')) {
+          e.preventDefault();
+          openSubmenu(active.dataset.sectionLabel, active);
+          setTimeout(() => { focusables()[0]?.focus(); }, 0);
+        }
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        if (!openSection) return;
+        e.preventDefault();
+        const label = openSection;
+        closeSubmenu();
+        setTimeout(() => {
+          panelRef.current?.querySelector(`[data-section-label="${label.replace(/"/g, '\\"')}"]`)?.focus();
+        }, 0);
+        return;
+      }
+      if (e.key === 'Enter' && e.target === searchRef.current) {
+        const first = focusables()[0];
+        if (first) { e.preventDefault(); first.click(); }
+      }
+    }
     document.addEventListener('mousedown', onDocDown);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onDocDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, searching, openSection]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Focus the first item when the menu opens (the search stays one Tab away).
+  useEffect(() => {
+    if (!open) return undefined;
+    const timer = setTimeout(() => { focusables()[0]?.focus(); }, 0);
+    return () => clearTimeout(timer);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Close any submenu when the search flattens the tree.
+  useEffect(() => {
+    if (searching && openSection) closeSubmenu();
+  }, [searching]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Main panel bounds: re-measure on open, when the content changes, on
+  // resize and on any ancestor scroll.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const measure = () => {
+      const container = containerRef.current;
+      const panel = panelRef.current;
+      if (!container || !panel) return;
+      const rect = container.getBoundingClientRect();
+      const below = window.innerHeight - rect.bottom - MENU_EDGE;
+      const above = rect.top - MENU_EDGE;
+      const natural = panel.scrollHeight;
+      const nextPlacement = natural > below && above > below ? 'up' : 'down';
+      const available = nextPlacement === 'up' ? above : below;
+      setPlacement(nextPlacement);
+      setMaxHeight(Math.max(0, Math.min(natural, available)));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
+  }, [open, searching, flatItems.length, sections, showSearch]);
+
+  // Submenu bounds: side placement, vertical flip, scrolling. Re-measures on
+  // panel scroll so it stays anchored to its trigger row.
+  useLayoutEffect(() => {
+    if (!open || !openSection) return undefined;
+    const measure = () => {
+      const container = containerRef.current;
+      const panel = panelRef.current;
+      const submenu = submenuRef.current;
+      const trigger = sectionTriggerRef.current;
+      if (!container || !panel || !submenu || !trigger) return;
+      const cRect = container.getBoundingClientRect();
+      const pRect = panel.getBoundingClientRect();
+      const tRect = trigger.getBoundingClientRect();
+      const natural = submenu.scrollHeight;
+      const below = window.innerHeight - tRect.top - MENU_EDGE;
+      const above = tRect.top - MENU_EDGE;
+      const flipUp = natural > below && above > below;
+      const available = flipUp ? above : below;
+      const height = Math.max(0, Math.min(natural, available));
+      let topViewport = flipUp ? tRect.bottom - height : tRect.top;
+      topViewport = Math.max(MENU_EDGE, Math.min(topViewport, window.innerHeight - MENU_EDGE - height));
+      // Sideways by default; flip to the LEFT when the right edge would leave
+      // the window, and clamp inside it if neither side fully fits.
+      let leftViewport = pRect.right + 4;
+      if (leftViewport + SUBMENU_WIDTH > window.innerWidth - MENU_EDGE) {
+        leftViewport = pRect.left - 4 - SUBMENU_WIDTH;
+        if (leftViewport < MENU_EDGE) leftViewport = Math.max(MENU_EDGE, window.innerWidth - MENU_EDGE - SUBMENU_WIDTH);
+      }
+      setSubPosition({
+        top: topViewport - cRect.top,
+        left: leftViewport - cRect.left,
+        maxHeight: height,
+      });
+    };
+    measure();
+    const panel = panelRef.current;
+    window.addEventListener('resize', measure);
+    window.addEventListener('scroll', measure, true);
+    panel?.addEventListener('scroll', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+      panel?.removeEventListener('scroll', measure);
+    };
+  }, [open, openSection]);
+
+  function toggle() {
+    setOpen((v) => {
+      if (!v) { setQuery(''); setPlacement('down'); setMaxHeight(null); }
+      else closeSubmenu();
+      return !v;
+    });
+  }
 
   // v0.49.30: caller can pass a custom `label` (e.g. "Image operations (N) ▾").
   // Falls back to the v0.49.29 generic label when not given.
@@ -1275,7 +1508,8 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
     <div className="lib-bulk-menu" ref={containerRef}>
       <Button
         variant="primary"
-        onClick={() => setOpen((v) => !v)}
+        onClick={toggle}
+        onKeyDown={(e) => { if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setOpen(true); } }}
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -1283,24 +1517,96 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
         {triggerLabel}
       </Button>
       {open ? (
-        <div className="lib-bulk-menu__panel" role="menu">
-          {sections.map((sec, sx) => (
-            <div key={sec.label} className="lib-bulk-menu__section">
-              {sx > 0 ? <div className="lib-bulk-menu__divider" /> : null}
-              <div className="lib-bulk-menu__heading">{sec.label}</div>
-              {sec.items.map((it) => (
+        <div
+          className="lib-bulk-menu__panel"
+          role="menu"
+          ref={panelRef}
+          style={{
+            maxHeight: maxHeight != null ? `${maxHeight}px` : undefined,
+            ...(placement === 'up' ? { top: 'auto', bottom: 'calc(100% + 4px)' } : null),
+          }}
+        >
+          {showSearch ? (
+            <div className="lib-bulk-menu__search">
+              <input
+                ref={searchRef}
+                className="input lib-bulk-menu__search-input"
+                type="search"
+                value={query}
+                placeholder="Filter operations…"
+                aria-label="Filter operations"
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+          ) : null}
+          {searching ? (
+            flatItems.length === 0 ? (
+              <div className="lib-bulk-menu__empty">No matching operations</div>
+            ) : (
+              flatItems.map((it) => (
                 <button
-                  key={it.label}
+                  key={`${it.section}:${it.label}`}
                   type="button"
                   className="lib-bulk-menu__item"
-                  onClick={() => { setOpen(false); it.onClick(); }}
+                  onClick={() => { closeAll(); it.onClick(); }}
                   role="menuitem"
                 >
                   <div className="lib-bulk-menu__item-label">{it.label}</div>
-                  {it.hint ? <div className="lib-bulk-menu__item-hint">{it.hint}</div> : null}
+                  <div className="lib-bulk-menu__flat-meta">{it.section}</div>
                 </button>
-              ))}
-            </div>
+              ))
+            )
+          ) : (
+            sections.map((sec, sx) => (
+              <div key={sec.label} className="lib-bulk-menu__section">
+                {sx > 0 ? <div className="lib-bulk-menu__divider" /> : null}
+                <button
+                  type="button"
+                  className={`lib-bulk-menu__section-trigger${openSection === sec.label ? ' is-open' : ''}`}
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={openSection === sec.label}
+                  data-section-label={sec.label}
+                  onClick={(e) => {
+                    if (openSection === sec.label) closeSubmenu();
+                    else openSubmenu(sec.label, e.currentTarget);
+                  }}
+                  onMouseEnter={(e) => hoverSection(sec.label, e.currentTarget)}
+                  onMouseLeave={() => { if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current); }}
+                >
+                  <span className="lib-bulk-menu__section-label">{sec.label}</span>
+                  <span className="lib-bulk-menu__chevron" aria-hidden>▸</span>
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      ) : null}
+      {open && openSection && openSectionData ? (
+        <div
+          className="lib-bulk-menu__submenu"
+          role="menu"
+          aria-label={openSection}
+          ref={submenuRef}
+          style={{
+            top: subPosition ? `${subPosition.top}px` : undefined,
+            left: subPosition ? `${subPosition.left}px` : undefined,
+            maxHeight: subPosition ? `${subPosition.maxHeight}px` : undefined,
+            visibility: subPosition ? 'visible' : 'hidden',
+          }}
+        >
+          <div className="lib-bulk-menu__heading">{openSectionData.label}</div>
+          {openSectionData.items.map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              className="lib-bulk-menu__item"
+              onClick={() => { closeAll(); it.onClick(); }}
+              role="menuitem"
+            >
+              <div className="lib-bulk-menu__item-label">{it.label}</div>
+              {it.hint ? <div className="lib-bulk-menu__item-hint">{it.hint}</div> : null}
+            </button>
           ))}
         </div>
       ) : null}
