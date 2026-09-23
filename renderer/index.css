@@ -7691,16 +7691,21 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 }
 
 /* v0.49.44: truthful preview layer. Sits above the backdrop, below the
-   element selection boxes. `object-fit: cover` matches the export's
-   composition (the rendered PNG is at the design canvas's aspect
-   ratio, same as the editor's letterboxed canvas size). Pointer-events
-   off so clicks pass through to the element overlays below. */
+   element selection boxes. v0.1.72: `object-fit: contain`, not `cover`.
+   This layer sits exactly on the canvas box, so `contain` shows the whole
+   server-rendered PNG and never crops it — identical to `cover` when the
+   PNG's aspect ratio equals the box's (the normal case), and correct when
+   rounding or a future render-size change makes them differ: `cover` would
+   silently crop the PNG while the letterboxed backdrop beside it shows the
+   whole image, the same visible mismatch the v0.1.71 artwork-fit fix
+   removed. Pointer-events off so clicks pass through to the element
+   overlays below. */
 .ovl-canvas__truthful {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   pointer-events: none;
   z-index: 1;
 }
@@ -10724,8 +10729,15 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   position: relative; flex: 1; display: flex; align-items: center; justify-content: center;
   overflow: auto; padding: 48px; background-color: #eef1f6; min-height: 0;
 }
-.ld-canvas { position: relative; flex: none; box-shadow: 0 24px 65px rgba(15,23,42,.2); overflow: hidden; }
+/* v0.1.72: hold Space (or drag with the middle button) to pan the stage — the
+ * hand tool. The class is on the stage so the cursor is right over elements too. */
+.ld-stage.is-pan-ready, .ld-stage.is-pan-ready * { cursor: grab !important; }
+.ld-stage.is-panning, .ld-stage.is-panning * { cursor: grabbing !important; }
+.ld-canvas { position: relative; flex: none; box-shadow: 0 24px 65px rgba(15,23,42,.2); overflow: hidden; touch-action: none; }
 .ld-el { box-sizing: border-box; }
+/* Pointer drags on touch/stylus: without this the browser claims the gesture as
+ * a scroll and cancels the pointer stream mid-drag. */
+.ld-el, .ld-handle { touch-action: none; }
 .ld-el.is-locked { cursor: not-allowed !important; }
 .ld-el__content { width: 100%; height: 100%; overflow: hidden; }
 .ld-placeholder {

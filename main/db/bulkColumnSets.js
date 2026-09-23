@@ -37,6 +37,24 @@ function normalizeColumns(value) {
   return out;
 }
 
+/**
+ * v0.1.72: the width map is `{ [columnKey]: px }`. Only positive finite
+ * numbers survive, coerced to whole pixels — the renderer additionally clamps
+ * each value to its column's floor/ceiling on read, so a stale or hostile map
+ * can never collapse a column. Same forgiving-read posture as normalizeColumns.
+ */
+function normalizeWidths(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  for (const [rawKey, rawPx] of Object.entries(value)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+    const px = Number(rawPx);
+    if (!key || !Number.isFinite(px) || px <= 0) continue;
+    out[key] = Math.round(px);
+  }
+  return out;
+}
+
 function rowToSet(row) {
   if (!row) return null;
   return {
@@ -90,10 +108,57 @@ function remove(id) {
   return getDb().prepare('DELETE FROM bulk_column_sets WHERE id = ?').run(id).changes > 0;
 }
 
+/**
+ * v0.1.72: the remembered column widths for one company. Returns `null` when
+ * this company has never stored a layout (so the renderer knows to keep its
+ * localStorage cache rather than adopt an empty map), or the normalized map.
+ */
+function getWidths(companyId) {
+  const row = getDb()
+    .prepare('SELECT widths FROM bulk_column_widths WHERE company_id = ?')
+    .get(companyId);
+  if (!row) return null;
+  return normalizeWidths(parseJson(row.widths, {}));
+}
+
+/**
+ * v0.1.72: upsert the whole width map for a company. An EMPTY map deletes the
+ * row instead of storing `'{}'` — so "Reset columns" clears the DB row as well
+ * as the localStorage cache, and the next Mac to open the table falls back to
+ * the type defaults. Returns the stored map, or null after a delete.
+ */
+function setWidths(companyId, widths) {
+  const next = normalizeWidths(widths);
+  const db = getDb();
+  if (Object.keys(next).length === 0) {
+    db.prepare('DELETE FROM bulk_column_widths WHERE company_id = ?').run(companyId);
+    return null;
+  }
+  db.prepare(`INSERT INTO bulk_column_widths (company_id, widths, updated_at)
+              VALUES (?, ?, ?)
+              ON CONFLICT(company_id) DO UPDATE SET
+                widths = excluded.widths,
+                updated_at = excluded.updated_at`)
+    .run(companyId, JSON.stringify(next), new Date().toISOString());
+  return getWidths(companyId);
+}
+
+/**
+ * Copy a set as "<name> copy", uniquifying with a numeric suffix when that
+ * name is already taken in the same company — so a duplicate is always
+ * findable in the menu instead of shadowing an existing set.
+ */
 function duplicate(id) {
   const set = get(id);
   if (!set) throw new Error('Column set not found');
-  return create({ companyId: set.companyId, name: `${set.name} copy`, columns: set.columns });
+  const taken = new Set(list(set.companyId).map((s) => s.name));
+  const base = `${set.name} copy`;
+  let name = base;
+  for (let n = 2; taken.has(name); n += 1) name = `${base} ${n}`;
+  return create({ companyId: set.companyId, name, columns: set.columns });
 }
 
-module.exports = { list, get, create, update, remove, duplicate, normalizeColumns };
+module.exports = {
+  list, get, create, update, remove, duplicate,
+  getWidths, setWidths, normalizeColumns, normalizeWidths,
+};

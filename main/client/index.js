@@ -809,6 +809,9 @@ const PROXIED_CHANNELS = [
   // v0.1.71: named bulk-table column sets live with the data too — a client
   // Mac asks the server for the company's saved views.
   'bulkColumns:list','bulkColumns:create','bulkColumns:update','bulkColumns:remove',
+  // v0.1.72: the remembered width map and the duplicate action also live with
+  // the data, so a client Mac proxies them to the server like the sets.
+  'bulkColumns:duplicate','bulkColumns:getWidths','bulkColumns:setWidths',
   // v0.26.15: apply-template handlers (single + bulk + by-filter).
   'images:setMainImage','images:reorderImages','images:removeFromProduct','images:flipSource',
   'images:importFromBytes','watermarks:uploadFromBytes',

@@ -42,6 +42,8 @@ import {
   saveVisibleColumns,
 } from './LibraryColumns.jsx';
 import { PROCESS_STATUS_OPTIONS, STATUS_OPTIONS } from './libraryConstants.js';
+// v0.1.72: pure directional hover-intent test for the bulk menu's submenus.
+import { pointsTowardRect } from './menuIntent.mjs';
 
 /**
  * v0.26.23: persist the Table/Grid view toggle across navigation.
@@ -1256,24 +1258,34 @@ function RefreshButton() {
  *
  *   - the section labels are submenu triggers ("Non-destructive ▸", …) that
  *     open their items sideways;
- *   - a search field at the top flattens the whole tree into ONE filtered
- *     list, each row naming its section, because searching a tree is where
- *     people get lost;
+ *   - a search field sits at the top of the panel always and flattens the
+ *     whole tree into ONE filtered list once a query is typed, each row
+ *     naming its section, because searching a tree is where people get lost;
  *   - both panels bound their own height to the space actually free, scroll
  *     when longer, and flip (the main panel up, the submenu up and/or to the
  *     left) so neither ever leaves the window;
- *   - keyboard: ↑/↓ within a level, → opens a submenu, ← closes it, Enter
- *     activates, Esc closes the whole menu and returns focus to the trigger.
- *     Hover opens a submenu after HOVER_OPEN_DELAY_MS so a pointer passing
- *     through does not flash submenus.
+ *   - keyboard: ↑/↓ walk the current level with the search field as the first
+ *     stop at the top level, → opens a submenu, ← closes it, Enter activates,
+ *     Esc clears a typed query first and only closes the whole menu once the
+ *     search field is empty. Hover opens a section's submenu immediately when
+ *     none is open, and keeps an open submenu while the pointer is travelling
+ *     toward it.
  *
- * ponytail: hover uses a fixed 120ms delay, not directional-intent tracking.
- * That is enough to stop pass-through flashes; a user who wants a submenu and
- * stops on the trigger gets it. If it ever feels twitchy, the ceiling is this
- * one constant — no further machinery needed.
+ * ponytail: hover intent is one pure geometry test (pointsTowardRect in
+ * menuIntent.mjs) plus the fallback delay below. The ceiling is that test: it
+ * only protects the straight path from a trigger into its own submenu, and a
+ * submenu still closes only on Esc / click-outside / switching sections, so a
+ * fast diagonal pass can open one and leave it open until the pointer settles.
+ * If switching ever feels slow or eager, tune HOVER_OPEN_DELAY_MS; no further
+ * machinery is planned.
  */
 const SUBMENU_WIDTH = 300;
 const MENU_EDGE = 8;
+// Fallback only: the delay used when the pointer crossed onto a new trigger
+// without a clear direction (first sample, or a stationary pointer), so the
+// shared-submenu path still ends up switching rather than sticking forever.
+// A pointer heading at the open submenu is protected by pointsTowardRect and
+// never waits. Short enough that "stop on a trigger" still feels immediate.
 const HOVER_OPEN_DELAY_MS = 120;
 
 function BulkActionsMenu({ label, count, disabled, sections }) {
@@ -1289,10 +1301,9 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
   const searchRef = useRef(null);
   const sectionTriggerRef = useRef(null);
   const hoverTimerRef = useRef(null);
+  const pointerRef = useRef(null); // last pointer sample { x, y }
+  const hoveredTriggerRef = useRef(null); // section trigger under the pointer
 
-  const totalItems = sections.reduce((n, sec) => n + sec.items.length, 0);
-  // Only clutter the panel with a search box once it is genuinely long.
-  const showSearch = totalItems > 8;
   const searching = query.trim().length > 0;
 
   // Search flattens the sections into one list; each row carries its section.
@@ -1323,6 +1334,8 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
 
   function closeAll() {
     closeSubmenu();
+    hoveredTriggerRef.current = null;
+    pointerRef.current = null;
     setOpen(false);
     setQuery('');
     setPlacement('down');
@@ -1333,15 +1346,24 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
     containerRef.current?.querySelector('button')?.focus();
   }
 
-  // The elements the keyboard walks at the CURRENT level.
+  // The ROW elements the keyboard walks at the CURRENT level.
   function focusables() {
     if (searching) return [...(panelRef.current?.querySelectorAll('.lib-bulk-menu__item') ?? [])];
     if (openSection) return [...(submenuRef.current?.querySelectorAll('.lib-bulk-menu__item') ?? [])];
     return [...(panelRef.current?.querySelectorAll('.lib-bulk-menu__section-trigger') ?? [])];
   }
 
+  // The search field is the first stop of the top level, so ↓ from it lands on
+  // the first visible row (the flattened results when a query is typed) and ↑
+  // from that row comes back. Inside a submenu the cycle stays local to it.
+  function navFocusables() {
+    const rows = focusables();
+    if (openSection || !searchRef.current) return rows;
+    return [searchRef.current, ...rows];
+  }
+
   function moveFocus(delta) {
-    const items = focusables();
+    const items = navFocusables();
     if (!items.length) return;
     const current = items.indexOf(document.activeElement);
     const next = current === -1 ? (delta > 0 ? 0 : items.length - 1) : current + delta;
@@ -1354,15 +1376,41 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
     setOpenSection(sectionLabel);
   }
 
-  function hoverSection(sectionLabel, triggerEl) {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    if (openSection === sectionLabel) return; // already open — no flicker
-    hoverTimerRef.current = setTimeout(() => openSubmenu(sectionLabel, triggerEl), HOVER_OPEN_DELAY_MS);
+  // Directional hover intent. Each pointer sample records where the pointer
+  // is, then looks at which section trigger (if any) it is over. Crossing onto
+  // a different trigger:
+  //   - with no submenu open, open that section immediately;
+  //   - with a submenu open and the movement aimed at it, keep it — the
+  //     pointer is on its way to the submenu, not choosing a new section;
+  //   - otherwise fall back to a short delay before switching.
+  function onPointerMove(e) {
+    const next = { x: e.clientX, y: e.clientY };
+    const prev = pointerRef.current;
+    pointerRef.current = next;
+    const trigger = e.target?.closest?.('.lib-bulk-menu__section-trigger') || null;
+    if (trigger === hoveredTriggerRef.current) return;
+    hoveredTriggerRef.current = trigger;
+    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+    if (!trigger) return;
+    const sectionLabel = trigger.dataset.sectionLabel;
+    if (!sectionLabel || openSection === sectionLabel) return;
+    if (!openSection) { openSubmenu(sectionLabel, trigger); return; }
+    const rect = submenuRef.current?.getBoundingClientRect();
+    if (prev && rect && pointsTowardRect(prev, next, rect)) return;
+    hoverTimerRef.current = setTimeout(() => openSubmenu(sectionLabel, trigger), HOVER_OPEN_DELAY_MS);
   }
 
-  // Esc / click-outside close. Arrow keys walk the current level; → opens a
-  // submenu from its trigger, ← closes it. Enter/Space on a button is its
-  // native click, so it is deliberately not handled here.
+  function onPointerLeave() {
+    hoveredTriggerRef.current = null;
+    pointerRef.current = null;
+    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+  }
+
+  // Esc / click-outside close. Arrow keys walk the current level (search field
+  // included, see navFocusables); → opens a submenu from its trigger, ← closes
+  // it. Enter/Space on a button is its native click, so it is deliberately not
+  // handled here — except Enter in the search field, which activates the first
+  // visible row.
   useEffect(() => {
     if (!open) return undefined;
     function onDocDown(e) {
@@ -1370,11 +1418,23 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
       if (!containerRef.current.contains(e.target)) closeAll();
     }
     function onKey(e) {
-      if (e.key === 'Escape') { closeAll(); focusTriggerButton(); return; }
+      if (e.key === 'Escape') {
+        // Standard menu-search behaviour: the first Esc clears a typed query
+        // and keeps the menu open; only an empty field closes the whole menu.
+        if (query.length > 0) {
+          e.preventDefault();
+          setQuery('');
+          searchRef.current?.focus();
+          return;
+        }
+        closeAll(); focusTriggerButton(); return;
+      }
       if (e.key === 'ArrowDown') { e.preventDefault(); moveFocus(1); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); moveFocus(-1); return; }
-      if (e.key === 'Home') { e.preventDefault(); focusables()[0]?.focus(); return; }
-      if (e.key === 'End') { e.preventDefault(); const items = focusables(); items[items.length - 1]?.focus(); return; }
+      // Home/End still jump between ROWS; while the search field has the caret
+      // they keep their native text-editing meaning.
+      if (e.key === 'Home') { if (e.target === searchRef.current) return; e.preventDefault(); focusables()[0]?.focus(); return; }
+      if (e.key === 'End') { if (e.target === searchRef.current) return; e.preventDefault(); const items = focusables(); items[items.length - 1]?.focus(); return; }
       if (e.key === 'ArrowRight') {
         if (searching) return;
         const active = document.activeElement;
@@ -1406,9 +1466,10 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
       document.removeEventListener('mousedown', onDocDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open, searching, openSection]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, searching, openSection, query]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Focus the first item when the menu opens (the search stays one Tab away).
+  // Focus the first row when the menu opens; the search field is one ↑ (or Tab)
+  // away, and ↑/↓ cycle between them.
   useEffect(() => {
     if (!open) return undefined;
     const timer = setTimeout(() => { focusables()[0]?.focus(); }, 0);
@@ -1444,7 +1505,7 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
       window.removeEventListener('resize', measure);
       window.removeEventListener('scroll', measure, true);
     };
-  }, [open, searching, flatItems.length, sections, showSearch]);
+  }, [open, searching, flatItems.length, sections]);
 
   // Submenu bounds: side placement, vertical flip, scrolling. Re-measures on
   // panel scroll so it stays anchored to its trigger row.
@@ -1505,7 +1566,12 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
   const triggerLabel = label || `Bulk actions${count != null ? ` (${count})` : ''} ▾`;
 
   return (
-    <div className="lib-bulk-menu" ref={containerRef}>
+    <div
+      className="lib-bulk-menu"
+      ref={containerRef}
+      onMouseMove={onPointerMove}
+      onMouseLeave={onPointerLeave}
+    >
       <Button
         variant="primary"
         onClick={toggle}
@@ -1526,19 +1592,19 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
             ...(placement === 'up' ? { top: 'auto', bottom: 'calc(100% + 4px)' } : null),
           }}
         >
-          {showSearch ? (
-            <div className="lib-bulk-menu__search">
-              <input
-                ref={searchRef}
-                className="input lib-bulk-menu__search-input"
-                type="search"
-                value={query}
-                placeholder="Filter operations…"
-                aria-label="Filter operations"
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-          ) : null}
+          {/* v0.1.72: always present — it is one compact row, and searching a
+              long tree is exactly where the field earns its space. */}
+          <div className="lib-bulk-menu__search">
+            <input
+              ref={searchRef}
+              className="input lib-bulk-menu__search-input"
+              type="search"
+              value={query}
+              placeholder="Filter operations…"
+              aria-label="Filter operations"
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
           {searching ? (
             flatItems.length === 0 ? (
               <div className="lib-bulk-menu__empty">No matching operations</div>
@@ -1571,8 +1637,6 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
                     if (openSection === sec.label) closeSubmenu();
                     else openSubmenu(sec.label, e.currentTarget);
                   }}
-                  onMouseEnter={(e) => hoverSection(sec.label, e.currentTarget)}
-                  onMouseLeave={() => { if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current); }}
                 >
                   <span className="lib-bulk-menu__section-label">{sec.label}</span>
                   <span className="lib-bulk-menu__chevron" aria-hidden>▸</span>

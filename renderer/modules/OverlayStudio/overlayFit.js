@@ -15,7 +15,12 @@
  * test/overlayArtworkFit.test.js.
  */
 
-/** object-fit values the editor understands (and the renderer can honour). */
+/**
+ * object-fit values the editor understands (and the renderer can honour).
+ * `fill` (true stretch) is data-only: no Overlay Studio control can set an
+ * element's `fit`, and nothing defaults to it — a hand-tuned template can
+ * opt in explicitly, which the editor and renderer both then honour.
+ */
 export const FIT_VALUES = ['contain', 'cover', 'fill'];
 
 /** The element's chosen fit, or `contain` when it has none / an unknown one. */

@@ -50,16 +50,16 @@ test('selecting an element cannot be undone by the canvas underneath', () => {
   const move = CANVAS.slice(CANVAS.indexOf('const startMove'), CANVAS.indexOf('const startResize'));
   assert.match(move, /e\.stopPropagation\(\)/,
     'startMove must stop propagation — without it the canvas clears the selection');
-  assert.match(CANVAS, /onMouseDown=\{\(e\) => onMouseDown\(e, element\)\}/,
+  assert.match(CANVAS, /onPointerDown=\{\(e\) => onPointerDown\(e, element\)\}/,
     'element boxes must be the things that start a move');
 });
 
-test('a drag pushes ONE history entry, not one per mousemove', () => {
-  // `commit()` is called on mouseup; anything else would make undo useless.
+test('a drag pushes ONE history entry, not one per pointermove', () => {
+  // `commit()` is called on pointerup; anything else would make undo useless.
   const commitLines = CANVAS.split('\n').filter((line) => line.includes('commit()'));
   assert.ok(commitLines.length >= 3, `expected a commit at the end of every gesture, found ${commitLines.length}`);
   assert.ok(!commitLines.some((line) => line.includes('onMove')),
-    'commit() must not run inside a mousemove handler — that would push one history entry per pixel');
+    'commit() must not run inside a pointermove handler — that would push one history entry per pixel');
   // One commit per gesture: move, single resize, selection resize.
   const onUpCount = (CANVAS.match(/const onUp = \(\) => \{/g) || []).length;
   assert.equal(commitLines.length, onUpCount, 'every gesture needs exactly one commit');
