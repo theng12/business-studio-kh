@@ -2695,7 +2695,7 @@ async function deepOverlayFitFlow(crawl, photoPath) {
    * aspect drifts (rounding, a render-size change) — the "skewed" class of bug
    * the customer reported. It must contain, exactly like the letterboxed
    * backdrop beside it. */
-  let truthful = null;
+  let truthful;
   try {
     await crawl.waitFor(`!!document.querySelector('.ovl-canvas__truthful')`, 10_000, 'the truthful preview layer');
     truthful = await crawl.eval(`(() => {

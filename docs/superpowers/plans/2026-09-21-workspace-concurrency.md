@@ -1,5 +1,8 @@
 # Project status and Image Workspace concurrency plan
 
+> **Historical plan — dated 2026-09-21, base 0.1.36.** Its unchecked items are history unless the live status says otherwise, not a current backlog.
+> Live status: [`docs/tasks/HANDOFF.md`](../../tasks/HANDOFF.md).
+
 > **For agentic workers:** Use subagent-driven-development; owner authorizes bounded parallel work and integration without additional approval pauses.
 
 **Goal:** Replace the obsolete new-computer handoff framing and finish the remaining reproducible same-image Workspace concurrency investigation.

@@ -90,7 +90,7 @@ At 0.1.72 nothing is mid-implementation. The honest gaps:
 | `@imgly/background-removal` licensing | The 2026-09-20 distribution audit flags its AGPL-3.0 terms against a private app. **Reason not recorded** for how or whether this is resolved — ask the owner. |
 | Rotated label elements | Marquee and guides are rotation-aware; **resize is not** (deliberate `ponytail:` note at `renderer/modules/LabelStudio/designerGeometry.js:234`). A mixed-rotation multi-select can scale slightly off its drawn box. |
 | Overlay `fit: 'fill'` | Data-only per element; no UI sets it, so the owner cannot reach it. |
-| `docs/Business Studio KH Project Status.md` | **Stale and contradictory:** it calls 0.1.50 the current pass and 0.1.36 the current release, and says checks run on an isolated Node 24.15.0, while the repo is 0.1.72 and `npm run check` runs on the host Node v26.8.2. Not reconciled. |
+| Docs reconciled 2026-09-23 | The status doc, the briefing, README, SIGNING and AI_INTEGRATION were brought back in line with the code in a docs pass on 2026-09-23, and the dated audits/plans now carry "historical" banners. If any doc drifts again, fix it in the change that caused it — the current truth for versions/commands is this file plus `docs/Business Studio KH Project Status.md`. |
 | `docs/HARDWARE_VALIDATION_RUNBOOK.md` | Still accurate ("not performed"); filling its results table is the deliverable when the owner has the hardware. |
 | Owner decisions outstanding | Independent review, signing purchase, public distribution, real-data migration — all authorization-gated. |
 

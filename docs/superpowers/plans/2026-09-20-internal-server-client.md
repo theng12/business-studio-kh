@@ -1,5 +1,8 @@
 # Internal server/client reliability and speed implementation plan
 
+> **Completed historical plan — dated 2026-09-20, base 0.1.32.** The work below was executed, verified and integrated; it is not a current work queue.
+> Live status: [`docs/tasks/HANDOFF.md`](../../tasks/HANDOFF.md).
+
 **Goal:** Complete the owner's internal server/client improvement note while preserving the finished 0.1.32 server-address fixes, existing data, and working workflows.
 **Status:** Implementation and local verification complete. See [the validation record](../../INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md) for results; repository integration is recorded in the final task handoff and Git history.
 **Architecture:** Keep existing Electron/React/Zustand/SQLite IPC/RPC architecture. Use existing event paths and native request context/caching primitives. No rewrite, public-distribution work, new paid services, speculative sync layers, or blind dependency upgrades.

@@ -1,5 +1,7 @@
 # SDD ledger — plan: docs/superpowers/plans/2026-09-20-remaining-audited-fixes.md
 
+> **Historical record — a dated SDD ledger for the 2026-09-20 plan.** The tasks below were completed at that time; the unchecked plan boxes are history, not a current backlog. Live status: [`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md).
+
 Pre-flight: no shared interfaces recorded yet; task batches will be kept bounded and reviewed at the end.
 
 2026-09-20 — Task 1 complete (H5, H8, H13, H15):
