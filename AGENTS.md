@@ -29,6 +29,11 @@ drifted badly before this check.
   every release has its DMGs built into `dist/` and ready (both arches — see §20).
   Work that exists only on a branch, or has no packaged DMG, is not "done".
 
+- **Every release updates `docs/tasks/HANDOFF.md`.** Read it first in a new session, and keep it
+  current: the version, anything newly learned, anything newly forbidden, and what is still open.
+  A stale handoff is worse than none, because it is trusted — if it disagrees with the code, the
+  code wins and the file gets fixed.
+
 ---
 
 ## 1. Navigation — left sidebar, never top tabs
