@@ -986,6 +986,31 @@ function runMigrations(database) {
     );
     CREATE INDEX IF NOT EXISTS idx_social_grid_templates_company_updated
       ON social_grid_templates(company_id, updated_at DESC);
+
+    /* v0.1.71: named column sets for the bulk edit table.
+     *
+     * The bulk table's columns are a catalogue (product fields, price-group
+     * amount/currency pairs, custom fields). This remembers a NAMED, ordered
+     * selection so the same view can be recalled on another Mac — the owner
+     * runs two Macs and a client Mac, so a localStorage-only preference would
+     * not travel. Company-scoped for the same reason. The columns column is an
+     * ordered JSON array of catalogue keys; the renderer drops keys the
+     * catalogue no longer offers, so a set saved before a custom field was
+     * removed stays usable. Written by main/db/bulkColumnSets.js.
+     *
+     * Additive on purpose: CREATE TABLE IF NOT EXISTS on the normal boot path,
+     * no SCHEMA_VERSION bump, so an existing install picks it up without
+     * wiping anything (see the migration note in AGENTS.md section 14). */
+    CREATE TABLE IF NOT EXISTS bulk_column_sets (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      columns TEXT NOT NULL DEFAULT '[]',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_bulk_column_sets_company_updated
+      ON bulk_column_sets(company_id, updated_at DESC);
   `);
 
   database

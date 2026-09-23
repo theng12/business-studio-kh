@@ -2,6 +2,21 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.71',
+    date: '2026-09-23',
+    items: [
+      'NEW — the bulk edit table now lets you choose which columns you see. "Columns ▾" in its toolbar opens the same picker the Product Library uses: tick a column to show it, untick to hide it, and use the up/down arrows beside a ticked column to reorder the table. Everything stays the default, so the table opens exactly as wide as it did before.',
+      'NEW — ready-made column sets: Everything, Basics (SKU, name, brand, category, status, stock), Prices (retail and wholesale plus every price group, each with its currency) and Logistics (supplier SKU, HS code, carton width/height/depth, weight). Pick one from the set menu and the table narrows to it.',
+      'NEW — save your own column set. "Save as set…" names the current selection; the set menu then offers it, with Rename and Delete when a saved set is active. Saved sets are kept with your company data in the database, so they follow you to your other Mac and to a client Mac, not just the Mac you made them on. The set you last used is remembered on this Mac instantly and offline.',
+      'FIX — hiding a bulk-table column never loses work. An edit you already typed is kept and still saved even if its column is hidden, because edits belong to the product and the field, not to the column being on screen. The toolbar says how many edits are tucked away in hidden columns, so nothing disappears silently.',
+      'FIX — SKU is always sent when you save even if its column is hidden, because SKU is what matches each row. Hiding a wide set of columns is safe, and so is renaming a SKU.',
+      'FIX — photographs in the Overlay Studio editor are no longer stretched to fill their box. The editor now fits artwork exactly the way the exported file does — contained, never stretched — for the canvas backdrop, the inset blur and foreground, and image elements. A square photo stays square inside a wide 3:1 box; a chosen "cover" fit is honoured too. Nothing about element positions changed; the box is still the source of truth and the artwork fits inside it.',
+      'POLISH — the Image operations menu hint for Convert format now matches the dialog, which has always started on Main image only: "Re-encode images as JPEG, PNG or WebP — choose which in the dialog."',
+      'Internal — saved sets are additive: a new company-scoped bulk_column_sets table (id, company_id, name, columns JSON array, created_at, updated_at) with a (company_id, updated_at DESC) index, created with CREATE TABLE IF NOT EXISTS on the normal boot path and no SCHEMA_VERSION bump. main/db/bulkColumnSets.js follows socialGridTemplates; bulkColumns:list/create/update/remove are registered with expose(), validated in main/server/validators.js, proxied in main/client/index.js and exposed on main/preload.js. The selection rules (Everything/Basics/Prices/Logistics, resolve, toggle, reorder, hidden-edit count) live pure in renderer/modules/ProductLibrary/bulkColumns.js; the save-row builder moved to renderer/modules/ProductLibrary/bulkTableRows.js so "a hidden SKU is still saved" is unit-tested. ColumnsControl in LibraryColumns.jsx was generalized with optional defs/label/header/onMove/lockedItems props rather than forked, so the Library popover is unchanged. The editor fit mapping lives in renderer/modules/OverlayStudio/overlayFit.js and is mirrored by main/templateRenderer.js (default contain, unchanged for every existing template).',
+      'Internal — tests: test/bulkColumnSets.test.js (native CRUD + company scoping + cascade), test/bulkColumnSelection.test.js (hidden SKU saved, hidden edits kept, set resolution, widths untouched by a selection save), test/bulkColumnsWiring.test.js (the screen → preload → IPC → validator → client-proxy chain, built-in sets, and the untouched Bulk AI modals) and test/overlayArtworkFit.test.js (the pure fit mapping plus a real render of a square photo in a 3:1 box). scripts/probe-ui-crawl.js gained column-selection steps inside deepBulkTableFlow (hide, reopen, save a set, switch sets, resize) and a deepOverlayFitFlow leg that opens the real editor on the mismatched case and asserts the rendered object-fit.',
+    ],
+  },
+  {
     version: '0.1.70',
     date: '2026-09-23',
     items: [

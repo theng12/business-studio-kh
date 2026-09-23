@@ -806,6 +806,9 @@ const PROXIED_CHANNELS = [
   'socialGrid:listTemplates','socialGrid:getTemplate','socialGrid:saveTemplate',
   'socialGrid:updateTemplate','socialGrid:deleteTemplate','socialGrid:duplicateTemplate',
   'socialGrid:plan',
+  // v0.1.71: named bulk-table column sets live with the data too — a client
+  // Mac asks the server for the company's saved views.
+  'bulkColumns:list','bulkColumns:create','bulkColumns:update','bulkColumns:remove',
   // v0.26.15: apply-template handlers (single + bulk + by-filter).
   'images:setMainImage','images:reorderImages','images:removeFromProduct','images:flipSource',
   'images:importFromBytes','watermarks:uploadFromBytes',

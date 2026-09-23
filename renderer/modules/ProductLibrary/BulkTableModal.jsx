@@ -25,27 +25,16 @@ import { appImageSrc } from '../../lib/imageUrl.js';
 import { CURRENCIES } from '../../lib/currencies.js';
 import { STATUS_OPTIONS } from './libraryConstants.js';
 import { GRID_MAX_ROWS, planPaste } from './bulkGridPaste.js';
+import { productValue, buildSaveRows } from './bulkTableRows.js';
+import { ColumnsControl } from './LibraryColumns.jsx';
+import {
+  BUILTIN_SETS, builtinSetColumns, loadColumnSelection, saveColumnSelection,
+  resolveSelection, selectionColumns, toggleColumn, moveColumn,
+  orderedCatalogue, isEverything, hiddenEditedColumns,
+} from './bulkColumns.js';
 
 const CURRENCY_CODES = CURRENCIES.map((c) => c.code);
 const HISTORY_LIMIT = 200;
-
-/** The value a product carries for one column key, as the cell shows it. */
-function productValue(product, key) {
-  if (!product) return '';
-  if (key.startsWith('price:')) {
-    return product.prices?.[key.slice('price:'.length)]?.amount ?? '';
-  }
-  if (key.startsWith('priceCurrency:')) {
-    return product.prices?.[key.slice('priceCurrency:'.length)]?.currency ?? 'USD';
-  }
-  if (key.startsWith('custom:')) {
-    return product.customFields?.[key.slice('custom:'.length)] ?? '';
-  }
-  if (key === 'tags') {
-    return Array.isArray(product.tags) ? product.tags.join(', ') : '';
-  }
-  return product[key] ?? '';
-}
 
 /** Which columns can receive pasted TEXT. The Image cell cannot. */
 function isTextColumn(col) { return col.key !== 'image'; }
@@ -277,11 +266,148 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
     for (const k of customKeys) {
       cols.push({ key: `custom:${k}`, label: k, type: 'text', long: true });
     }
+    // v0.1.71: logistics & sourcing — the fields the Logistics built-in set
+    // needs, and the same field names bulkUpsert already accepts.
+    cols.push({ key: 'supplierSku', label: 'Supplier SKU', type: 'text' });
+    cols.push({ key: 'hsCode', label: 'HS code', type: 'text' });
+    cols.push({ key: 'cartonWCm', label: 'Carton width (cm)', type: 'number' });
+    cols.push({ key: 'cartonHCm', label: 'Carton height (cm)', type: 'number' });
+    cols.push({ key: 'cartonDCm', label: 'Carton depth (cm)', type: 'number' });
+    cols.push({ key: 'weightPerUnitKg', label: 'Weight (kg)', type: 'number' });
     cols.push({ key: 'image', label: 'Image', type: 'image' });
     return cols;
   }, [brands, categories, priceGroups, customKeys]);
 
-  const textColumns = useMemo(() => columns.filter(isTextColumn), [columns]);
+  const catalogueKeys = useMemo(() => columns.map((c) => c.key), [columns]);
+
+  /* v0.1.71: which columns are on screen, and in what order. The selection is
+   * an ordered array of keys, or `null` for Everything (the historical
+   * behaviour, and the default). Saved sets live in the database; the
+   * last-used selection lives in localStorage so it is instant and offline. */
+  const [colSelection, setColSelection] = useState(loadColumnSelection);
+
+  const visibleColumns = useMemo(() => {
+    const resolved = resolveSelection(colSelection, catalogueKeys);
+    if (resolved === null) return columns;
+    const byKey = new Map(columns.map((c) => [c.key, c]));
+    return resolved.map((k) => byKey.get(k)).filter(Boolean);
+  }, [columns, catalogueKeys, colSelection]);
+
+  const visibleKeySet = useMemo(() => new Set(visibleColumns.map((c) => c.key)), [visibleColumns]);
+
+  /* The picker lists selected columns in their chosen order first, then the
+   * rest of the catalogue — so arrows reorder what is on screen, and a fresh
+   * table (Everything) is simply catalogue order. */
+  const pickerCatalogue = useMemo(() => {
+    const order = orderedCatalogue(catalogueKeys, colSelection);
+    const byKey = new Map(columns.map((c) => [c.key, c]));
+    return order.map((k) => byKey.get(k)).filter(Boolean);
+  }, [columns, catalogueKeys, colSelection]);
+
+  function applySelection(selection) {
+    const resolved = selection === null ? null : resolveSelection(selection, catalogueKeys);
+    setColSelection(resolved);
+    saveColumnSelection(resolved);
+  }
+
+  function toggleColumnVisibility(key) {
+    applySelection(toggleColumn(colSelection, key, catalogueKeys));
+    setActiveSet('__custom');
+  }
+
+  function moveColumnOrder(key, dir) {
+    applySelection(moveColumn(colSelection, key, dir, catalogueKeys));
+    setActiveSet('__custom');
+  }
+
+  /* ── saved sets (company-scoped, in the database) ───────────────────── */
+
+  const [savedSets, setSavedSets] = useState([]);
+  const [activeSet, setActiveSet] = useState('everything');
+  const [setForm, setSetForm] = useState(null); // { mode: 'save'|'rename', id?, name }
+  const [setsBusy, setSetsBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open || !activeCompanyId) return;
+    let alive = true;
+    window.api.bulkColumns.list(activeCompanyId)
+      .then((rows) => { if (alive) setSavedSets(Array.isArray(rows) ? rows : []); })
+      .catch(() => { /* offline / not reachable — built-ins still work */ });
+    return () => { alive = false; };
+  }, [open, activeCompanyId]);
+
+  async function saveSet(name) {
+    const trimmed = String(name ?? '').trim();
+    if (!trimmed) { addToast('Give the set a name first.', 'info'); return; }
+    const columns = selectionColumns(colSelection, catalogueKeys);
+    setSetsBusy(true);
+    try {
+      const row = await window.api.bulkColumns.create({ companyId: activeCompanyId, name: trimmed, columns });
+      setSavedSets((prev) => [row, ...prev]);
+      setActiveSet(row.id);
+      setSetForm(null);
+      addToast(`Saved column set “${row.name}”.`, 'success');
+    } catch (err) {
+      addToast(err.message, 'error');
+    } finally {
+      setSetsBusy(false);
+    }
+  }
+
+  async function renameSet(id, name) {
+    const trimmed = String(name ?? '').trim();
+    if (!trimmed) { addToast('Give the set a name first.', 'info'); return; }
+    setSetsBusy(true);
+    try {
+      const row = await window.api.bulkColumns.update(id, { name: trimmed });
+      setSavedSets((prev) => prev.map((s) => (s.id === id ? row : s)));
+      setSetForm(null);
+      addToast(`Renamed to “${row.name}”.`, 'success');
+    } catch (err) {
+      addToast(err.message, 'error');
+    } finally {
+      setSetsBusy(false);
+    }
+  }
+
+  async function deleteSet(id) {
+    const target = savedSets.find((s) => s.id === id);
+    setSetsBusy(true);
+    try {
+      await window.api.bulkColumns.remove(id);
+      setSavedSets((prev) => prev.filter((s) => s.id !== id));
+      if (activeSet === id) setActiveSet('everything');
+      addToast(`Deleted column set “${target?.name ?? ''}”.`, 'success');
+    } catch (err) {
+      addToast(err.message, 'error');
+    } finally {
+      setSetsBusy(false);
+    }
+  }
+
+  function chooseSet(value) {
+    setSetForm(null);
+    if (value === '') { applySelection(null); setActiveSet('everything'); return; }
+    const builtin = BUILTIN_SETS.find((s) => s.key === value);
+    if (builtin) {
+      applySelection(builtinSetColumns(value, catalogueKeys));
+      setActiveSet(value);
+      return;
+    }
+    const saved = savedSets.find((s) => s.id === value);
+    if (saved) {
+      applySelection(saved.columns);
+      setActiveSet(value);
+    }
+  }
+
+  const activeSavedSet = savedSets.find((s) => s.id === activeSet) ?? null;
+  const isEverythingSelection = isEverything(colSelection, catalogueKeys);
+
+  // Paste walks the columns ON SCREEN, so hiding one takes it out of the
+  // paste block. (Edits in a hidden column are still kept and saved — see the
+  // hidden-edit note in the toolbar.)
+  const textColumns = useMemo(() => visibleColumns.filter(isTextColumn), [visibleColumns]);
   const textColumnKeys = useMemo(() => textColumns.map((c) => c.key), [textColumns]);
 
   /* ── edits + undo ───────────────────────────────────────────────────── */
@@ -540,111 +666,17 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
 
   /* ── saving ─────────────────────────────────────────────────────────── */
 
-  function numericOrProblem(raw) {
-    const trimmed = String(raw ?? '').trim();
-    if (trimmed === '') return { value: null };
-    const n = Number(trimmed);
-    if (!Number.isFinite(n)) return { problem: `“${trimmed}” is not a number` };
-    return { value: n };
-  }
-
   /**
    * Turn the edited cells into one bulkUpsert row per changed product.
-   * Only the touched cells are included (plus `sku`, which keys the row), so
-   * with conflictPolicy 'overwrite' an emptied cell clears its field and an
-   * untouched field is never sent at all.
+   *
+   * v0.1.71: the builder moved to bulkTableRows.js so the two rules that must
+   * hold are unit-testable:
+   *   - SKU is ALWAYS read (even when its column is hidden) — it keys the row;
+   *   - edits are iterated by key, so an edit in a hidden column still saves.
+   * This thin wrapper only supplies the visible rows + the edit map.
    */
-  function buildSaveRows() {
-    const byRow = new Map();
-    for (const key of Object.keys(edits)) {
-      const sep = key.indexOf(':');
-      const row = Number(key.slice(0, sep));
-      const col = key.slice(sep + 1);
-      if (!Number.isInteger(row) || row < 0 || row >= rows.length) continue;
-      if (!byRow.has(row)) byRow.set(row, new Set());
-      byRow.get(row).add(col);
-    }
-
-    const saveRows = [];
-    const meta = [];
-    const problems = [];
-
-    for (const [row, touched] of [...byRow.entries()].sort((a, b) => a[0] - b[0])) {
-      const product = rows[row];
-      const rowNo = row + 1;
-      const sku = String(cellValue(row, 'sku') ?? '').trim();
-      if (!sku) problems.push({ rowNo, reason: 'SKU is empty' });
-
-      const out = { sku };
-      const prices = {};
-      const customFields = {};
-      let problemsForRow = 0;
-
-      for (const key of touched) {
-        const raw = cellValue(row, key);
-        if (key === 'sku' || key === 'image') continue;
-
-        if (key.startsWith('price:') || key.startsWith('priceCurrency:')) {
-          const group = key.startsWith('price:') ? key.slice('price:'.length) : key.slice('priceCurrency:'.length);
-          const entry = prices[group] ?? {};
-          if (key.startsWith('price:')) {
-            const parsed = numericOrProblem(raw);
-            if (parsed.problem) { problems.push({ rowNo, reason: `${parsed.problem} in the ${group} price` }); problemsForRow += 1; }
-            else entry.amount = parsed.value;
-          } else {
-            entry.currency = String(raw ?? '').trim() || undefined;
-          }
-          prices[group] = entry;
-          continue;
-        }
-
-        if (key.startsWith('custom:')) {
-          customFields[key.slice('custom:'.length)] = String(raw ?? '').trim() === '' ? null : String(raw);
-          continue;
-        }
-
-        if (key === 'priceRetail' || key === 'priceWholesale' || key === 'stockQty') {
-          const parsed = numericOrProblem(raw);
-          if (parsed.problem) { problems.push({ rowNo, reason: `${parsed.problem} in ${key}` }); problemsForRow += 1; }
-          else out[key] = parsed.value;
-          continue;
-        }
-
-        const value = String(raw ?? '');
-        switch (key) {
-          case 'tags':
-            out.tags = value.split(',').map((t) => t.trim()).filter(Boolean);
-            break;
-          case 'brandId':
-          case 'categoryId':
-            out[key] = value || null;
-            break;
-          case 'status':
-            out.status = value || 'active';
-            break;
-          case 'priceRetailCurrency':
-          case 'priceWholesaleCurrency':
-            out[key] = value.trim() || 'USD';
-            break;
-          default:
-            out[key] = value === '' ? null : value;
-        }
-      }
-
-      if (problemsForRow === 0) {
-        if (Object.keys(prices).length > 0) out.prices = prices;
-        if (Object.keys(customFields).length > 0) out.customFields = customFields;
-        saveRows.push(out);
-        meta.push({
-          id: product.id, rowNo, sku, originalSku: product.sku,
-          skuEdited: sku !== product.sku,
-          // A rename with no other touched cell leaves bulkUpsert with no diff
-          // to report, so the success message has to count it itself.
-          onlySku: touched.size === 1 && touched.has('sku'),
-        });
-      }
-    }
-    return { saveRows, meta, problems };
+  function buildRows() {
+    return buildSaveRows(rows, edits);
   }
 
   async function runDryRun() {
@@ -652,7 +684,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
       addToast('No cell edits to save yet.', 'info');
       return;
     }
-    const { saveRows, meta, problems } = buildSaveRows();
+    const { saveRows, meta, problems } = buildRows();
     if (problems.length) {
       const summary = problems.map((p) => `row ${p.rowNo}: ${p.reason}`).join('; ');
       showConfirm({ kind: 'refuse', summary: `Save refused — ${summary}` });
@@ -763,7 +795,94 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
 
   const dirty = Object.keys(edits).length;
   const truncated = candidateCount - rows.length;
-  const totalWidth = ROWNUM_WIDTH + columns.reduce((sum, c) => sum + widthOf(c), 0);
+  const totalWidth = ROWNUM_WIDTH + visibleColumns.reduce((sum, c) => sum + widthOf(c), 0);
+  // Edits are keyed by product + FIELD, so hiding a column never discards them.
+  // The toolbar says how many are tucked away so nothing disappears silently.
+  const hiddenDirty = hiddenEditedColumns(edits, catalogueKeys, colSelection);
+
+  /* v0.1.71: the sets menu that rides above the shared ColumnsControl list.
+   * Built-ins are code-only; saved sets are company-scoped DB rows. */
+  const setSelectValue = isEverythingSelection
+    ? 'everything'
+    : (BUILTIN_SETS.some((s) => s.key === activeSet) || savedSets.some((s) => s.id === activeSet))
+      ? activeSet
+      : '__custom';
+  const columnsHeader = (
+    <div className="bulk-columns__sets">
+      <div className="bulk-columns__sets-row">
+        <Select
+          aria-label="Column set"
+          className="bulk-columns__set-select"
+          value={setSelectValue}
+          disabled={setsBusy}
+          onChange={(e) => chooseSet(e.target.value)}
+        >
+          <option value="__custom">Custom</option>
+          <optgroup label="Built-in">
+            {BUILTIN_SETS.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+          </optgroup>
+          {savedSets.length ? (
+            <optgroup label="Saved">
+              {savedSets.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </optgroup>
+          ) : null}
+        </Select>
+      </div>
+      <div className="bulk-columns__set-actions">
+        <button
+          type="button"
+          className="lib-columns__reset"
+          disabled={setsBusy}
+          onClick={() => setSetForm({ mode: 'save', name: '' })}
+        >Save as set…</button>
+        {activeSavedSet ? (
+          <>
+            <button
+              type="button"
+              className="lib-columns__reset"
+              disabled={setsBusy}
+              onClick={() => setSetForm({ mode: 'rename', id: activeSavedSet.id, name: activeSavedSet.name })}
+            >Rename</button>
+            <button
+              type="button"
+              className="lib-columns__reset"
+              disabled={setsBusy}
+              onClick={() => deleteSet(activeSavedSet.id)}
+            >Delete</button>
+          </>
+        ) : null}
+      </div>
+      {setForm ? (
+        <div className="bulk-columns__set-form">
+          <input
+            className="input bulk-columns__set-input"
+            aria-label="Set name"
+            placeholder="Set name"
+            value={setForm.name}
+            disabled={setsBusy}
+            onChange={(e) => setSetForm((f) => ({ ...f, name: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return;
+              if (setForm.mode === 'rename') renameSet(setForm.id, setForm.name);
+              else saveSet(setForm.name);
+            }}
+          />
+          <button
+            type="button"
+            className="lib-columns__reset"
+            disabled={setsBusy}
+            onClick={() => (setForm.mode === 'rename' ? renameSet(setForm.id, setForm.name) : saveSet(setForm.name))}
+          >{setForm.mode === 'rename' ? 'Rename set' : 'Save set'}</button>
+          <button
+            type="button"
+            className="lib-columns__reset"
+            disabled={setsBusy}
+            onClick={() => setSetForm(null)}
+          >Cancel</button>
+        </div>
+      ) : null}
+    </div>
+  );
 
   return (
     <Modal
@@ -821,6 +940,27 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
           </div>
 
           <div className="bulk-table__spacer" />
+          {hiddenDirty > 0 ? (
+            <span
+              className="bulk-table__hidden-edits"
+              role="status"
+              title="Edits are keyed by product and field, so hiding a column does not discard them — they are still saved."
+            >
+              {hiddenDirty} hidden column edit{hiddenDirty === 1 ? '' : 's'} kept
+            </span>
+          ) : null}
+          <ColumnsControl
+            defs={pickerCatalogue}
+            visibleCols={visibleKeySet}
+            onToggle={toggleColumnVisibility}
+            onMove={moveColumnOrder}
+            onReset={() => { applySelection(null); setActiveSet('everything'); }}
+            label={`Columns ▾ · ${visibleColumns.length}/${columns.length}`}
+            lockedItems={[]}
+            header={columnsHeader}
+            title="Choose which columns appear in the bulk table"
+            resetTitle="Show every column (the Everything set)"
+          />
           <Button onClick={resetColumns} disabled={busy} title="Forget the saved column widths and go back to the defaults">Reset columns</Button>
           <Button onClick={undo} disabled={busy} title="Undo the last cell edit (⌘Z)">Undo</Button>
           <Button variant="primary" onClick={runDryRun} disabled={busy || dirty === 0} className="bulk-table__save">
@@ -840,12 +980,12 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
           <table className="bulk-table__grid" style={{ tableLayout: 'fixed', width: `${totalWidth}px`, minWidth: '100%' }}>
             <colgroup>
               <col data-col="#" style={{ width: `${ROWNUM_WIDTH}px` }} />
-              {columns.map((c) => <col key={c.key} data-col={c.key} style={{ width: `${widthOf(c)}px` }} />)}
+              {visibleColumns.map((c) => <col key={c.key} data-col={c.key} style={{ width: `${widthOf(c)}px` }} />)}
             </colgroup>
             <thead>
               <tr>
                 <th className="bulk-table__rownum" scope="col">#</th>
-                {columns.map((c) => (
+                {visibleColumns.map((c) => (
                   <th
                     key={c.key}
                     scope="col"
@@ -871,7 +1011,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
               {rows.map((product, r) => (
                 <tr key={product.id ?? r} className="bulk-table__row" data-row={r}>
                   <td className="bulk-table__rownum">{r + 1}</td>
-                  {columns.map((c) => {
+                  {visibleColumns.map((c) => {
                     if (c.type === 'image') {
                       const img = imageFor(r);
                       return (
