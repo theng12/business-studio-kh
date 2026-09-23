@@ -18,7 +18,7 @@
  * cells) lives in bulkGridPaste.js — pure, unit-tested, reused here unchanged.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Modal, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
@@ -50,6 +50,87 @@ function productValue(product, key) {
 /** Which columns can receive pasted TEXT. The Image cell cannot. */
 function isTextColumn(col) { return col.key !== 'image'; }
 
+/** Columns that hold free text long enough to wrap; they render a textarea. */
+function isLongTextColumn(col) { return col.long === true; }
+
+/* ── column widths ──────────────────────────────────────────────────────
+ * v0.1.68: every data column is drag-resizable. The width map lives in ONE
+ * localStorage key as `{ [columnKey]: px }`, following the same
+ * load-on-init / save-on-change pattern as ProductLibrary.panelVisible.
+ * A value below that column's floor (or a type whose rules changed) is
+ * clamped on read, so a stale map can never collapse a column to zero.
+ */
+const COLUMN_WIDTHS_STORAGE_KEY = 'BulkTable.columnWidths';
+const ROWNUM_WIDTH = 44;
+// Floor by type — ~90px for text, ~70px for numbers and short codes.
+const COLUMN_WIDTH_RULES = {
+  text: { width: 150, min: 90, max: 420 },
+  number: { width: 100, min: 70, max: 200 },
+  currency: { width: 92, min: 70, max: 160 },
+  select: { width: 150, min: 90, max: 280 },
+  image: { width: 120, min: 90, max: 220 },
+};
+// A few columns deserve more room (or a higher ceiling) than their type.
+const COLUMN_WIDTH_BY_KEY = {
+  name: { width: 190, min: 90, max: 480 },
+  description: { width: 240, min: 90, max: 640 },
+  tags: { width: 190, min: 90, max: 480 },
+  sku: { width: 130, min: 90, max: 320 },
+};
+function columnWidthRule(col) {
+  if (COLUMN_WIDTH_BY_KEY[col.key]) return COLUMN_WIDTH_BY_KEY[col.key];
+  if (col.key.startsWith('custom:')) return { width: 150, min: 90, max: 480 };
+  return COLUMN_WIDTH_RULES[col.type] ?? COLUMN_WIDTH_RULES.text;
+}
+function loadColumnWidths() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+}
+function saveColumnWidths(map) {
+  try { localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(map)); } catch {}
+}
+
+/**
+ * v0.1.68: a one-row textarea that grows to fit its value. The bulk table's
+ * cells used to be single-line <input>s inside a `white-space: nowrap` cell,
+ * so a long name/description/tag was clipped and appeared to "disappear".
+ * Height is re-synced from scrollHeight on value change (which covers typing
+ * and the paste path, since the paste handler writes through React state),
+ * on focus, and on paste directly. `overflow: hidden` + a synced height is
+ * the standard auto-grow; nothing gets its own scrollbar.
+ */
+function AutoGrowTextarea({ value, className, onFocus, ...props }) {
+  const ref = useRef(null);
+  const sync = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const needed = el.scrollHeight;
+    el.style.height = `${needed}px`;
+    // border-box: scrollHeight omits the border, so 1px of border can still
+    // clip the last line — and `overflow: hidden` would hide it silently.
+    if (el.scrollHeight > el.clientHeight) {
+      el.style.height = `${needed + (el.scrollHeight - el.clientHeight)}px`;
+    }
+  };
+  useLayoutEffect(sync, [value]);
+  return (
+    <textarea
+      ref={ref}
+      rows={1}
+      className={className}
+      value={value}
+      onInput={sync}
+      onFocus={(e) => { sync(); onFocus?.(e); }}
+      onPaste={() => requestAnimationFrame(sync)}
+      {...props}
+    />
+  );
+}
+
+
 export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
@@ -76,9 +157,17 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
   const [confirm, setConfirm] = useState(null);     // dry-run summary / refusal
   const [closePrompt, setClosePrompt] = useState(false);
   const [busy, setBusy] = useState(false);
+  // v0.1.68: remembered column widths (`{ [key]: px }`), loaded once at mount.
+  const [colWidths, setColWidths] = useState(loadColumnWidths);
+  const [resizingKey, setResizingKey] = useState(null);
 
   const historyRef = useRef([]);
   const imagesAddedRef = useRef(0);
+  // Mirror of colWidths so a live drag can read the latest map without waiting
+  // for a re-render, and so the drag's mouseup persists exactly what is shown.
+  const colWidthsRef = useRef(colWidths);
+  colWidthsRef.current = colWidths;
+  const dragRef = useRef(null);
   /* Where a paste will land. Kept in a ref, and mirrored from the real DOM
    * focus at paste time, because React state updates from onFocus are batched:
    * reading `focused` directly made a paste that arrived in the same tick as
@@ -158,7 +247,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
 
   const columns = useMemo(() => {
     const cols = [
-      { key: 'name', label: 'Name', type: 'text' },
+      { key: 'name', label: 'Name', type: 'text', long: true },
       { key: 'sku', label: 'SKU', type: 'text' },
       {
         key: 'brandId', label: 'Brand', type: 'select',
@@ -172,8 +261,8 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
       { key: 'colorFinish', label: 'Color / Finish', type: 'text' },
       { key: 'unit', label: 'Unit', type: 'text' },
       { key: 'variant', label: 'Variant', type: 'text' },
-      { key: 'description', label: 'Description', type: 'text' },
-      { key: 'tags', label: 'Tags (comma-separated)', type: 'text' },
+      { key: 'description', label: 'Description', type: 'text', long: true },
+      { key: 'tags', label: 'Tags (comma-separated)', type: 'text', long: true },
       { key: 'status', label: 'Status', type: 'select', options: STATUS_OPTIONS.map((o) => ({ value: o.value, label: o.label })) },
       { key: 'stockQty', label: 'Stock', type: 'number' },
       { key: 'priceRetail', label: 'Retail price', type: 'number' },
@@ -186,7 +275,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
       cols.push({ key: `priceCurrency:${g.key}`, label: `${g.label} currency`, type: 'currency' });
     }
     for (const k of customKeys) {
-      cols.push({ key: `custom:${k}`, label: k, type: 'text' });
+      cols.push({ key: `custom:${k}`, label: k, type: 'text', long: true });
     }
     cols.push({ key: 'image', label: 'Image', type: 'image' });
     return cols;
@@ -230,12 +319,96 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
     }
     setEdits(entry.edits);
     setConfirm(null);
+    setClosePrompt(false);
   }
 
   function cellValue(row, key) {
     const edited = edits[`${row}:${key}`];
     if (edited !== undefined) return edited;
     return productValue(rows[row], key);
+  }
+
+  /* ── column widths: drag, auto-fit, reset ───────────────────────────── */
+
+  /** The px width for a column: the stored value clamped to its type's floor
+   *  and ceiling, or the default when nothing is stored. */
+  function widthOf(col) {
+    const rule = columnWidthRule(col);
+    const stored = Number(colWidths[col.key]);
+    if (Number.isFinite(stored) && stored > 0) return Math.min(rule.max, Math.max(rule.min, stored));
+    return rule.width;
+  }
+
+  function applyWidth(key, px) {
+    const next = { ...colWidthsRef.current, [key]: px };
+    colWidthsRef.current = next;
+    setColWidths(next);
+    saveColumnWidths(next);
+  }
+
+  function beginResize(e, col) {
+    e.preventDefault();
+    e.stopPropagation();
+    const rule = columnWidthRule(col);
+    const startX = e.clientX;
+    const startWidth = widthOf(col);
+    dragRef.current = { key: col.key, startX, startWidth, rule };
+    setResizingKey(col.key);
+    const onMove = (ev) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+      const px = Math.round(Math.min(drag.rule.max, Math.max(drag.rule.min, drag.startWidth + (ev.clientX - drag.startX))));
+      const next = { ...colWidthsRef.current, [drag.key]: px };
+      colWidthsRef.current = next;
+      setColWidths(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      dragRef.current = null;
+      setResizingKey(null);
+      // Persist once at the end of the gesture, not on every mousemove.
+      saveColumnWidths(colWidthsRef.current);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
+
+  /** Double-click the resize strip: size the column to its widest rendered
+   *  value (or its header), clamped to the type's floor and ceiling. A canvas
+   *  measure is enough — the grid uses one font size throughout. */
+  function autoFitColumn(col) {
+    const rule = columnWidthRule(col);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const family = getComputedStyle(document.body).fontFamily || 'sans-serif';
+    ctx.font = `12px ${family}`;
+    let widest = ctx.measureText(col.label).width;
+    const sel = `[data-row][data-col="${CSS.escape(col.key)}"]`;
+    for (const el of document.querySelectorAll(sel)) {
+      const raw = 'value' in el ? el.value : (el.selectedOptions?.[0]?.textContent ?? '');
+      for (const line of String(raw ?? '').split('\n')) {
+        widest = Math.max(widest, ctx.measureText(line).width);
+      }
+    }
+    // +26px covers cell padding, the sort/resize strip and a little breathing room.
+    applyWidth(col.key, Math.round(Math.min(rule.max, Math.max(rule.min, widest + 26))));
+  }
+
+  /** Forget every remembered width. */
+  function resetColumns() {
+    colWidthsRef.current = {};
+    setColWidths({});
+    try { localStorage.removeItem(COLUMN_WIDTHS_STORAGE_KEY); } catch {}
+    addToast('Column widths reset.', 'info');
+  }
+
+  /* One prompt per action: opening one dismisses the other, so the dry-run
+   * summary and the unsaved-close prompt can never stack. */
+  function showConfirm(next) {
+    setClosePrompt(false);
+    setConfirm(next);
   }
 
   /* ── keyboard: ⌘Z undo, ⌘V / ⇧⌘V set the image mode ─────────────────── */
@@ -482,7 +655,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
     const { saveRows, meta, problems } = buildSaveRows();
     if (problems.length) {
       const summary = problems.map((p) => `row ${p.rowNo}: ${p.reason}`).join('; ');
-      setConfirm({ kind: 'refuse', summary: `Save refused — ${summary}` });
+      showConfirm({ kind: 'refuse', summary: `Save refused — ${summary}` });
       addToast(`Save refused — ${summary}`, 'error');
       return;
     }
@@ -518,13 +691,13 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
       const detail = dryProblems.map((p) => `row ${p.rowNo}: ${p.reason}`).join('; ');
       if (dryProblems.length) {
         const text = `Save refused · ${summary} — ${detail}`;
-        setConfirm({ kind: 'refuse', summary: text });
+        showConfirm({ kind: 'refuse', summary: text });
         addToast(text, 'error');
         return;
       }
-      setConfirm({
+      showConfirm({
         kind: 'save', summary: `${summary}${detail ? ` — ${detail}` : ''}`,
-        rows: saveRows, meta, updated, renames,
+        rows: saveRows, meta, updated, renames, count: saveRows.length,
       });
       addToast(`Ready to save · ${summary}`, 'info');
     } catch (err) {
@@ -563,6 +736,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
       setEdits({});
       historyRef.current = [];
       setConfirm(null);
+      setClosePrompt(false);
       onDone?.();
     } catch (err) {
       addToast(err.message, 'error');
@@ -575,6 +749,8 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
 
   function requestClose() {
     if (Object.keys(edits).length > 0) {
+      // Dismiss any open summary first: one action, one prompt.
+      setConfirm(null);
       setClosePrompt(true);
       return;
     }
@@ -587,6 +763,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
 
   const dirty = Object.keys(edits).length;
   const truncated = candidateCount - rows.length;
+  const totalWidth = ROWNUM_WIDTH + columns.reduce((sum, c) => sum + widthOf(c), 0);
 
   return (
     <Modal
@@ -644,6 +821,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
           </div>
 
           <div className="bulk-table__spacer" />
+          <Button onClick={resetColumns} disabled={busy} title="Forget the saved column widths and go back to the defaults">Reset columns</Button>
           <Button onClick={undo} disabled={busy} title="Undo the last cell edit (⌘Z)">Undo</Button>
           <Button variant="primary" onClick={runDryRun} disabled={busy || dirty === 0} className="bulk-table__save">
             {busy ? 'Working…' : 'Save all'}
@@ -659,12 +837,33 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
         ) : null}
 
         <div className="bulk-table__scroll">
-          <table className="bulk-table__grid">
+          <table className="bulk-table__grid" style={{ tableLayout: 'fixed', width: `${totalWidth}px`, minWidth: '100%' }}>
+            <colgroup>
+              <col data-col="#" style={{ width: `${ROWNUM_WIDTH}px` }} />
+              {columns.map((c) => <col key={c.key} data-col={c.key} style={{ width: `${widthOf(c)}px` }} />)}
+            </colgroup>
             <thead>
               <tr>
                 <th className="bulk-table__rownum" scope="col">#</th>
                 {columns.map((c) => (
-                  <th key={c.key} scope="col" title={c.label}>{c.label}</th>
+                  <th
+                    key={c.key}
+                    scope="col"
+                    title={c.label}
+                    className={resizingKey === c.key ? 'is-resizing' : undefined}
+                  >
+                    <span className="bulk-table__th-label">{c.label}</span>
+                    <span
+                      className="bulk-table__resizer"
+                      data-col-resize={c.key}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={`Resize ${c.label} column`}
+                      title="Drag to resize · double-click to fit the widest value"
+                      onMouseDown={(e) => beginResize(e, c)}
+                      onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); autoFitColumn(c); }}
+                    />
+                  </th>
                 ))}
               </tr>
             </thead>
@@ -712,6 +911,22 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
                         </td>
                       );
                     }
+                    // Long free-text columns wrap and grow instead of clipping.
+                    if (isLongTextColumn(c)) {
+                      return (
+                        <td key={c.key} className="bulk-table__cell bulk-table__cell--wrap">
+                          <AutoGrowTextarea
+                            className="bulk-table__textarea"
+                            data-row={r}
+                            data-col={c.key}
+                            value={value == null ? '' : String(value)}
+                            onFocus={() => focusCell(r, c.key)}
+                            onChange={(e) => setCell(r, c.key, e.target.value)}
+                            aria-label={`${c.label} row ${r + 1}`}
+                          />
+                        </td>
+                      );
+                    }
                     const isCurrency = c.type === 'currency';
                     return (
                       <td key={c.key} className="bulk-table__cell">
@@ -754,7 +969,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
               <>
                 <Button onClick={() => setConfirm(null)} disabled={busy}>Keep editing</Button>
                 <Button variant="primary" onClick={commitSave} disabled={busy}>
-                  {busy ? 'Saving…' : 'Confirm save'}
+                  {busy ? 'Saving…' : `Save ${confirm.count ?? 0} product${(confirm.count ?? 0) === 1 ? '' : 's'}`}
                 </Button>
               </>
             ) : (
