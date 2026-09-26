@@ -208,6 +208,19 @@
   .overlay-template-card .name { font-weight: 600; font-size: 13px; color: var(--text); }
   .overlay-template-card .meta { font-size: 11px; color: var(--muted); }
   .overlay-empty { padding: 20px; text-align: center; font-size: 13px; color: var(--muted); }
+  /* v0.1.73: post-apply save step. The result is already in the library by the
+     time this opens; the sheet only handles the copy on THIS iPhone / iPad.
+     Short on purpose — it appears right after Apply, so it must not feel like
+     a second job. */
+  .overlay-done-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+  .overlay-done-thumb {
+    width: 100%; aspect-ratio: 1; max-height: 38vh; object-fit: contain;
+    background: repeating-conic-gradient(#f3f3f3 0% 25%, #ffffff 0% 50%) 0 0 / 20px 20px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  [data-theme="dark"] .overlay-done-thumb { background: repeating-conic-gradient(#262626 0% 25%, #1e1e1e 0% 50%) 0 0 / 20px 20px; }
+  .overlay-done-line { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.4; }
+  .overlay-done-line.is-name { font-weight: 600; color: var(--text); word-break: break-all; }
   /* v0.49.11: preview is now BIG. The 42vh cap squashed it to ~140px on a
      phone and ~310px on iPad, so the user couldn\'t actually evaluate the
      result before applying. Now it\'s width-driven (square) up to 75vh —
@@ -970,10 +983,46 @@
         <div class="reframe-chips" id="overlayDestChips"></div>
       </div>
 
+      <div class="reframe-row">
+        <div class="reframe-row-label">After applying</div>
+        <div class="reframe-chips" id="overlaySaveChips"></div>
+      </div>
+
       <div class="reframe-actions">
         <button class="btn" id="overlayCancelBtn" type="button">Cancel</button>
         <button class="btn btn--primary" id="overlayApplyBtn" type="button" disabled>Apply</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- v0.1.73: post-apply save step. Everything the overlay produced is already
+     in the library by the time this opens ["Apply overlay and put a copy on
+     this iPhone / iPad" is the one flow the brother asked for], so this sheet
+     is only about the device copy.
+     iOS only lets a web page into Photos through its own share sheet, and only
+     over HTTPS — Web Share needs a secure context. Served over plain HTTP
+     (the LAN / Tailscale address this viewer has always used) navigator.share
+     does not exist at all, so the primary button opens the image full-screen
+     instead and points at the native press-and-hold -> Save Image gesture,
+     which is the one route into Photos that always works. -->
+<div class="sheet-overlay" id="overlayDoneSheet" role="dialog" aria-modal="true" aria-label="Overlay applied">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Overlay applied</h3>
+      <button class="icon-btn" id="overlayDoneClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="overlay-done-body">
+      <img class="overlay-done-thumb" id="overlayDoneThumb" alt="Overlay result" hidden />
+      <div class="overlay-done-line is-name" id="overlayDoneName"></div>
+      <div class="overlay-done-line" id="overlayDoneHint"></div>
+      <div class="reframe-actions">
+        <button class="btn" id="overlayDoneFilesBtn" type="button">Save to Files</button>
+        <button class="btn btn--primary" id="overlayDoneSaveBtn" type="button">Save to Photos</button>
+      </div>
+      <button class="btn" id="overlayDoneKeepBtn" type="button">Done</button>
     </div>
   </div>
 </div>
@@ -1133,6 +1182,10 @@
     // device so the sheet opens ready-to-apply.
     overlayTemplateId: 'iskh.web.overlayTemplateId',
     overlayDestKind:   'iskh.web.overlayDestKind', // 'append' | 'replaceMain'
+    // v0.1.73 — Overlay: "also save a copy to this device" is per-device,
+    // because it is the device that receives the copy. Defaults ON; '0' is the
+    // explicit opt-out a user sets by tapping the chip.
+    overlaySaveToDevice: 'iskh.web.overlaySaveToDevice',
   };
   function normalizeServerAddress(raw) {
     if (typeof raw !== 'string') throw new Error('Server URL must be text.');
@@ -1195,7 +1248,11 @@
     // product\'s main image (parity with desktop), output is a derived
     // image. No scope / multi-select integration — Overlay produces new
     // images instead of editing existing ones.
-    overlay: null, // { productId, templates: [], templateId, destKind, previewSeq, previewUrl }
+    overlay: null, // { productId, templates: [], templateId, destKind, save, previewSeq, previewUrl }
+    // v0.1.73 — the post-apply "copy this onto the device" sheet. Holds the
+    // already-fetched bytes so tapping Save does not refetch them (and so the
+    // tap keeps its user activation while the share sheet opens).
+    overlayDone: null, // { productId, filepath, blob, file, filename, url }
     // v0.49.12 — multi-select inside one product\'s gallery. Long-press a
     // tile to enter; tap any tile in select-mode to toggle. Selection is
     // a Set of `filepath` strings (not indexes) so it survives reorders.
@@ -2315,17 +2372,32 @@
     openSheet('tileMenuSheet');
   }
 
-  /* v0.49.6 — save an image to the device. Prefers the iOS share sheet
-     (`navigator.share` with a File) since that surfaces "Save Image" right
-     into Photos with one tap. Falls back to a triggered <a download>, which
-     on iOS routes through Files (user can then move to Photos). Either way,
-     no long-press required. */
-  function saveImageToDevice(ctx) {
+  /* ── saving an image to this device ───────────────────────────────
+     v0.1.73: ONE code path for every "get a copy onto this iPhone / iPad"
+     entry point (the ⋯ tile menu, and the sheet that follows an overlay
+     apply), because the two rules that decide the outcome are easy to get
+     subtly different:
+
+       1. iOS gives a web page exactly one route into Photos — its own share
+          sheet, via navigator.share with a File. Web Share requires a SECURE
+          CONTEXT, so on the plain-HTTP LAN / Tailscale address this viewer has
+          always been served from, navigator.share is not merely refused: it
+          does not exist.
+       2. <a download> works anywhere, with no gesture and no HTTPS, but iOS
+          puts the file in Files — never in Photos.
+
+     So: share when we can, Files when we cannot, and never call the Files
+     copy "saved to Photos". */
+
+  /* Fetch an image's bytes once and wrap them as a File named for the product.
+     `suffix` overrides the default position-number tail — the overlay result
+     passes the template name instead, matching the desktop saveToFolder
+     naming (`<sku>-<template>.png`). */
+  function imageFileFor(ctx) {
     var rel = ctx.filepath || '';
-    if (!rel) { toast('No image to save'); return; }
-    toast('Preparing image…');
+    if (!rel) return Promise.reject(new Error('No image to save'));
     var enc = rel.split('/').map(encodeURIComponent).join('/');
-    fetch(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } })
+    return fetch(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } })
       .then(function (res) {
         if (!res.ok) throw new Error('Server returned ' + res.status);
         return res.blob();
@@ -2333,27 +2405,59 @@
       .then(function (blob) {
         var ext = (blob.type && blob.type.split('/')[1]) || (rel.split('.').pop() || 'jpg');
         var sku = (ctx.sku || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'image';
-        var filename = sku + '-' + ((ctx.index || 0) + 1) + '.' + ext;
-        // Try the native share sheet first — iOS shows "Save Image" which
-        // saves to Photos directly. canShare() is the gate per spec.
+        var tail = ctx.suffix || String((ctx.index || 0) + 1);
+        var filename = sku + '-' + tail + '.' + ext;
         var file = null;
         try { file = new File([blob], filename, { type: blob.type || 'image/jpeg' }); } catch (_) {}
-        if (file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-          return navigator.share({ files: [file] }).catch(function (e) {
-            // User cancellation isn\'t an error — only surface real failures.
-            if (e && e.name !== 'AbortError') toast('Share failed: ' + e.message);
-          });
-        }
-        // Fallback: trigger an <a download>. iOS routes this through the
-        // Files app; user can long-press the file → Share → Save Image.
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement('a');
-        a.href = url; a.download = filename;
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(function () { URL.revokeObjectURL(url); }, 0);
-        toast('Downloading…');
-      })
-      .catch(function (e) { toast('Save failed: ' + e.message); });
+        return { blob: blob, file: file, filename: filename };
+      });
+  }
+
+  // canShare() is the spec gate: it is false when the platform has no share
+  // sheet, when files are unsupported, or when the context is not secure.
+  function canShareImage(file) {
+    return !!(file && navigator.share && navigator.canShare && navigator.canShare({ files: [file] }));
+  }
+
+  /* Resolves 'shared' | 'cancelled' | 'unavailable' | 'failed: <message>'.
+     'unavailable' also covers NotAllowedError, which iOS throws when the tap
+     that started the flow is older than its transient-activation window — the
+     overlay render plus the image fetch can outlive it, which WebKit documents
+     as expected. Both meanings are "use another route", not an error. */
+  function shareImage(file) {
+    if (!canShareImage(file)) return Promise.resolve('unavailable');
+    return navigator.share({ files: [file] })
+      .then(function () { return 'shared'; })
+      .catch(function (e) {
+        // Cancelling the sheet is a normal outcome, not a failure.
+        if (e && e.name === 'AbortError') return 'cancelled';
+        if (e && e.name === 'NotAllowedError') return 'unavailable';
+        return 'failed: ' + ((e && e.message) || 'share failed');
+      });
+  }
+
+  /* <a download>: the no-HTTPS, no-gesture route. Lands in Files. */
+  function downloadBlobToDevice(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+    toast('Saving to Files…');
+  }
+
+  /* v0.49.6 — save an image to the device from the tile menu. */
+  function saveImageToDevice(ctx) {
+    var rel = ctx.filepath || '';
+    if (!rel) { toast('No image to save'); return; }
+    toast('Preparing image…');
+    imageFileFor(ctx).then(function (out) {
+      return shareImage(out.file).then(function (status) {
+        if (status === 'shared' || status === 'cancelled') return;
+        if (status.indexOf('failed: ') === 0) { toast('Share failed: ' + status.slice(8)); return; }
+        downloadBlobToDevice(out.blob, out.filename);
+      });
+    }).catch(function (e) { toast('Save failed: ' + e.message); });
   }
   function menuRow(label, onClick, destructive) {
     var r = document.createElement('div');
@@ -3478,6 +3582,9 @@
       templates: [],
       templateId: localStorage.getItem(LS.overlayTemplateId) || null,
       destKind:   localStorage.getItem(LS.overlayDestKind)   || 'append',
+      // v0.1.73: "also put a copy on this device". Default ON — the whole
+      // point of the flow for a phone user — and '0' is the explicit opt-out.
+      save:       localStorage.getItem(LS.overlaySaveToDevice) !== '0',
       previewSeq: 0,
       previewUrl: null,
     };
@@ -3525,6 +3632,16 @@
     destEl.innerHTML = '';
     destEl.appendChild(reframeChip('Append (new image)',  o.destKind === 'append',      function () { setOverlayDest('append'); }));
     destEl.appendChild(reframeChip('Replace main',        o.destKind === 'replaceMain', function () { setOverlayDest('replaceMain'); }));
+    // v0.1.73 — device-copy toggle. A plain on/off chip rather than a
+    // checkbox: the sheet already speaks in chips, and the label carries the
+    // meaning ("Save to this device" filled = on).
+    var saveEl = document.getElementById('overlaySaveChips');
+    saveEl.innerHTML = '';
+    saveEl.appendChild(reframeChip(
+      o.save ? 'Save to this device' : 'Save to this device: off',
+      o.save,
+      function () { setOverlaySave(!o.save); }
+    ));
     // Preview label
     var t = o.templates && o.templates.length && o.templateId
       ? o.templates.find(function (x) { return x.id === o.templateId; })
@@ -3549,6 +3666,12 @@
     try { localStorage.setItem(LS.overlayDestKind, kind); } catch (_) {}
     paintOverlaySheet();
     // Destination doesn\'t affect the preview pixels, so no preview rerun.
+  }
+  function setOverlaySave(on) {
+    if (!state.overlay) return;
+    state.overlay.save = !!on;
+    try { localStorage.setItem(LS.overlaySaveToDevice, on ? '1' : '0'); } catch (_) {}
+    paintOverlaySheet();
   }
   var overlayPreviewTimer = null;
   function scheduleOverlayPreview(delayMs) {
@@ -3589,6 +3712,12 @@
   function applyOverlaySheet() {
     var o = state.overlay; if (!o || !o.templateId) return;
     var pid = o.productId, tid = o.templateId, dest = { kind: o.destKind };
+    var saveToDevice = !!o.save;
+    // The device copy is named after the template, the way the desktop's
+    // saveToFolder destination names its files, so "which overlay is this?"
+    // is answerable from the filename alone. Read it before the sheet closes.
+    var picked = (o.templates || []).filter(function (t) { return t.id === tid; })[0];
+    var templateName = (picked && picked.name) || '';
     closeOverlaySheet();
     var btn = document.getElementById('overlayBtn');
     btn.disabled = true; btn.textContent = 'Applying…';
@@ -3604,10 +3733,103 @@
         if (prod) prod.imageCount = (prod.imageCount || 0) + 1;
         renderGallery(pid);
         toast((res && res.skipped) ? 'Overlay matched an existing image (no duplicate added)' : 'Overlay applied');
+        // v0.1.73 — the library copy is done; this is the device copy.
+        var rel = res && res.outputFilepath;
+        if (saveToDevice && rel) offerOverlaySave(pid, rel, templateName);
       })
       .catch(function (e) { toast('Overlay failed: ' + e.message); })
       .finally(function () { btn.disabled = false; btn.textContent = '◫ Overlay'; });
   }
+
+  /* ── v0.1.73: "also save a copy to this device" ───────────────────
+     Runs only when the Overlay sheet's toggle is on. The library copy already
+     exists by now, so everything here is about the phone.
+
+     Order matters. We try the share sheet FIRST, immediately after the apply
+     round-trip, because on HTTPS the tap that pressed Apply may still be
+     inside its transient-activation window — when it is, the whole thing
+     collapses to "tap Apply, tap Save Image, done". When iOS has already
+     expired that window (or when the viewer is on plain HTTP, where Web Share
+     does not exist at all) we fall back to a sheet that offers the two routes
+     that do work, so the copy is never silently skipped. */
+  function skuForProduct(pid) {
+    if (currentDetail && currentDetail.id === pid && currentDetail.sku) return currentDetail.sku;
+    var prod = state.products.filter(function (p) { return p.id === pid; })[0];
+    return (prod && prod.sku) || '';
+  }
+  function slugForFilename(text, fallback) {
+    var slug = String(text || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    return slug || fallback;
+  }
+  function offerOverlaySave(pid, relpath, templateName) {
+    var ctx = {
+      filepath: relpath,
+      productId: pid,
+      sku: skuForProduct(pid),
+      suffix: slugForFilename(templateName, 'overlay'),
+    };
+    imageFileFor(ctx).then(function (out) {
+      return shareImage(out.file).then(function (status) {
+        if (status === 'shared' || status === 'cancelled') return;
+        if (status.indexOf('failed: ') === 0) toast('Share failed: ' + status.slice(8));
+        openOverlayDoneSheet(pid, relpath, out);
+      });
+    }).catch(function (e) { toast('Save to device failed: ' + e.message); });
+  }
+  function openOverlayDoneSheet(pid, relpath, out) {
+    state.overlayDone = {
+      productId: pid, filepath: relpath,
+      blob: out.blob, file: out.file, filename: out.filename, url: null,
+    };
+    var img = document.getElementById('overlayDoneThumb');
+    img.hidden = !out.blob;
+    if (out.blob) {
+      state.overlayDone.url = URL.createObjectURL(out.blob);
+      img.src = state.overlayDone.url;
+      img.hidden = false;
+    }
+    var shareable = canShareImage(out.file);
+    document.getElementById('overlayDoneName').textContent = out.filename;
+    document.getElementById('overlayDoneSaveBtn').textContent = shareable ? 'Save to Photos' : 'Open image to save';
+    document.getElementById('overlayDoneFilesBtn').hidden = shareable;
+    document.getElementById('overlayDoneHint').textContent = shareable
+      ? 'Opens the iOS share sheet. Tap Save Image to put it in Photos.'
+      : 'Press and hold the image, then tap Save Image to put it in Photos.';
+    openSheet('overlayDoneSheet');
+  }
+  function closeOverlayDoneSheet() {
+    closeSheet('overlayDoneSheet');
+    if (state.overlayDone && state.overlayDone.url) {
+      try { URL.revokeObjectURL(state.overlayDone.url); } catch (_) {}
+    }
+    state.overlayDone = null;
+  }
+  function saveOverlayDone() {
+    var done = state.overlayDone; if (!done) return;
+    if (canShareImage(done.file)) {
+      shareImage(done.file).then(function (status) {
+        if (status.indexOf('failed: ') === 0) toast('Share failed: ' + status.slice(8));
+      });
+      return;
+    }
+    // No share sheet (plain HTTP): the native press-and-hold sheet is the one
+    // route into Photos that needs neither HTTPS nor a gesture we cannot
+    // produce, so show the result full-screen ready for that press. The
+    // fullscreen viewer has no touch-callout suppression — that is exactly the
+    // "save to camera roll without a save button" case it was built for.
+    var rel = done.filepath, name = done.filename, pid = done.productId;
+    closeOverlayDoneSheet();
+    openImgPreview([{ filepath: rel, filename: name }], 0, pid);
+  }
+  function downloadOverlayDone() {
+    var done = state.overlayDone; if (!done) return;
+    downloadBlobToDevice(done.blob, done.filename);
+  }
+  document.getElementById('overlayDoneSaveBtn').addEventListener('click', saveOverlayDone);
+  document.getElementById('overlayDoneFilesBtn').addEventListener('click', downloadOverlayDone);
+  document.getElementById('overlayDoneKeepBtn').addEventListener('click', closeOverlayDoneSheet);
+  document.getElementById('overlayDoneClose').addEventListener('click', closeOverlayDoneSheet);
+  document.getElementById('overlayDoneSheet').addEventListener('click', function (e) { if (e.target === this) closeOverlayDoneSheet(); });
   document.getElementById('overlayBtn').addEventListener('click', function () {
     if (!currentDetail) return;
     var pid = currentDetail.id;

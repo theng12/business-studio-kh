@@ -93,7 +93,10 @@ function makeElement(id) {
   return element;
 }
 
-function loadBrowserHarness({ companyData = {}, deferReorder = false, deferAssets = false } = {}) {
+function loadBrowserHarness({
+  companyData = {}, deferReorder = false, deferAssets = false,
+  assetsOk = false, shareAvailable = false, shareDenied = false, overlayApply = null,
+} = {}) {
   const elements = new Map();
   const storage = new Map();
   const pendingActivations = [];
@@ -101,6 +104,8 @@ function loadBrowserHarness({ companyData = {}, deferReorder = false, deferAsset
   const pendingReorders = [];
   const pendingAssets = [];
   const revokedUrls = [];
+  const shares = [];
+  const gets = [];
   const calls = [];
   let objectUrl = 0;
 
@@ -131,19 +136,42 @@ function loadBrowserHarness({ companyData = {}, deferReorder = false, deferAsset
   BrowserURL.createObjectURL = () => `blob:test-${++objectUrl}`;
   BrowserURL.revokeObjectURL = (url) => revokedUrls.push(url);
 
+  // The viewer's save path asks the platform for a share sheet. Over HTTPS
+  // iOS provides one; over plain HTTP `navigator.share` is not defined at all,
+  // which is what `shareAvailable: false` reproduces.
+  const navigator = {};
+  if (shareAvailable) {
+    navigator.canShare = (data) => !!(data && Array.isArray(data.files) && data.files.length);
+    navigator.share = (data) => {
+      shares.push(data);
+      if (shareDenied) {
+        const err = new Error('The request is not allowed by the user agent');
+        err.name = 'NotAllowedError';
+        return Promise.reject(err);
+      }
+      return Promise.resolve();
+    };
+  }
+
   const fetch = (url, options = {}) => {
     if (deferAssets && String(url).includes('/assets/')) {
       const request = deferred();
       pendingAssets.push({ url: String(url), request });
       return request.promise;
     }
-    if (options.method !== 'POST') return Promise.resolve(response(null, 404));
+    if (options.method !== 'POST') {
+      if (String(url).includes('/assets/')) gets.push(String(url));
+      return Promise.resolve(response(null, assetsOk && String(url).includes('/assets/') ? 200 : 404));
+    }
     const body = JSON.parse(options.body);
     calls.push({ url: String(url), auth: options.headers.Authorization, ...body });
     if (deferReorder && body.channel === 'images:reorderImages') {
       const request = deferred();
       pendingReorders.push(request);
       return request.promise;
+    }
+    if (body.channel === 'templates:applyToProduct' && overlayApply) {
+      return Promise.resolve(response(overlayApply));
     }
     if (body.channel === 'companies:setActive') {
       const request = deferred();
@@ -178,10 +206,15 @@ function loadBrowserHarness({ companyData = {}, deferReorder = false, deferAsset
     renderGallery: renderGallery,
     openDetail: openDetail,
     reorderImageNeighbor: reorderImageNeighbor,
+    openOverlaySheet: openOverlaySheet,
+    applyOverlaySheet: applyOverlaySheet,
+    saveImageToDevice: saveImageToDevice,
+    closeOverlayDoneSheet: closeOverlayDoneSheet,
   };` + script.slice(end);
   const context = {
     URL: BrowserURL,
     Blob,
+    File,
     Error,
     Promise,
     document,
@@ -189,7 +222,7 @@ function loadBrowserHarness({ companyData = {}, deferReorder = false, deferAsset
     localStorage,
     fetch,
     location: { origin: 'http://viewer.test' },
-    navigator: {},
+    navigator,
     IntersectionObserver: class { disconnect() {} observe() {} unobserve() {} },
     setTimeout,
     clearTimeout,
@@ -235,6 +268,8 @@ function loadBrowserHarness({ companyData = {}, deferReorder = false, deferAsset
     },
     pendingAssets,
     revokedUrls,
+    shares,
+    gets,
     flush,
   };
 }
@@ -500,4 +535,135 @@ test('product A reorder completion preserves product B pending blob paint and lo
   assert.equal(gallery.children[1], second);
   assert.equal(harness.pendingAssets.length, 2, 'no duplicate asset fetch');
   assert.equal(harness.calls.filter((call) => call.channel === 'images:listByProduct').length, 1);
+});
+
+/* ── v0.1.73: overlay apply → a copy on this device ──────────────────
+   The brother's flow: apply an overlay in the phone's web viewer and have
+   the result land on the device as well as in the library. What is testable
+   here is the agreement between the viewer and the platform: over HTTPS iOS
+   supplies a share sheet, over plain HTTP it supplies nothing at all, and the
+   code must not confuse "saved to Files" with "saved to Photos". */
+
+async function overlayHarness(options = {}) {
+  const harness = loadBrowserHarness({
+    assetsOk: true,
+    overlayApply: {
+      outputFilepath: 'SKU-1/002--gold-frame.png',
+      image: { filepath: 'SKU-1/002--gold-frame.png' },
+      count: 1,
+    },
+    ...options,
+  });
+  const { hooks } = harness;
+  hooks.setSession('http://server.test', 'token-a');
+  hooks.state.companyId = 'C1';
+  hooks.state.products = [{ id: 'p1', sku: 'SKU-1', imageCount: 1 }];
+  hooks.openOverlaySheet({ productId: 'p1' });
+  await harness.flush(); // templates:list resolves before the pick is faked in
+  hooks.state.overlay.templates = [{ id: 't1', name: 'Gold Frame' }];
+  hooks.state.overlay.templateId = 't1';
+  return harness;
+}
+
+test('overlay apply hands the result to the share sheet when the device toggle is on', async () => {
+  const harness = await overlayHarness({ shareAvailable: true });
+  const { hooks } = harness;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  const applied = harness.calls.filter((call) => call.channel === 'templates:applyToProduct');
+  assert.equal(applied.length, 1, 'the overlay is applied to the library');
+  assert.equal(applied[0].args.destination.kind, 'append');
+
+  // The rendered bytes are fetched with the bearer token, named after the
+  // template, and offered to iOS — that is the only route into Photos.
+  assert.deepEqual(harness.gets, ['http://server.test/assets/SKU-1/002--gold-frame.png']);
+  assert.equal(harness.shares.length, 1, 'the share sheet is offered the result');
+  assert.equal(harness.shares[0].files[0].name, 'SKU-1-gold-frame.png');
+  assert.equal(harness.shares[0].files[0].type, 'image/jpeg');
+
+  // Share succeeded, so the fallback sheet must stay shut.
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), false);
+});
+
+test('overlay apply over plain HTTP offers the press-and-hold route instead of the share sheet', async () => {
+  const harness = await overlayHarness(); // no navigator.share: an HTTP origin
+  const { hooks } = harness;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.shares.length, 0);
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), true);
+  assert.equal(harness.elements.get('overlayDoneName').textContent, 'SKU-1-gold-frame.png');
+  assert.equal(harness.elements.get('overlayDoneSaveBtn').textContent, 'Open image to save');
+  assert.equal(harness.elements.get('overlayDoneFilesBtn').hidden, false);
+  assert.match(harness.elements.get('overlayDoneHint').textContent, /Press and hold/);
+  assert.equal(hooks.state.overlayDone.filepath, 'SKU-1/002--gold-frame.png');
+
+  // Closing the sheet releases the preview blob it created.
+  const previewUrl = hooks.state.overlayDone.url;
+  assert.match(previewUrl, /^blob:test-/);
+  hooks.closeOverlayDoneSheet();
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), false);
+  assert.ok(harness.revokedUrls.includes(previewUrl), 'the preview blob is revoked');
+  assert.equal(hooks.state.overlayDone, null);
+});
+
+test('overlay apply leaves the device untouched when the toggle is off', async () => {
+  const harness = await overlayHarness({ shareAvailable: true });
+  const { hooks } = harness;
+  hooks.state.overlay.save = false;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.calls.filter((call) => call.channel === 'templates:applyToProduct').length, 1);
+  assert.deepEqual(harness.gets, [], 'no image is fetched for the device');
+  assert.equal(harness.shares.length, 0);
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), false);
+});
+
+test('the device-copy toggle defaults on, flips on tap, and is remembered per device', async () => {
+  const harness = await overlayHarness();
+  const { hooks } = harness;
+  assert.equal(hooks.state.overlay.save, true, 'the copy is offered by default');
+
+  const chip = harness.elements.get('overlaySaveChips').children[0];
+  assert.match(chip.textContent, /Save to this device/);
+  chip.dispatch('click', { preventDefault() {} });
+
+  assert.equal(hooks.state.overlay.save, false);
+  assert.equal(harness.elements.get('overlaySaveChips').children[0].textContent, 'Save to this device: off');
+
+  // A second overlay sheet on the same device reads the stored choice back.
+  hooks.state.overlay = null;
+  hooks.openOverlaySheet({ productId: 'p1' });
+  assert.equal(hooks.state.overlay.save, false, 'the choice survives reopening the sheet');
+});
+
+test('tile-menu save falls back to a Files download only when iOS refuses the share sheet', async () => {
+  const shared = loadBrowserHarness({ assetsOk: true, shareAvailable: true });
+  shared.hooks.setSession('http://server.test', 'token-a');
+  shared.hooks.saveImageToDevice({ productId: 'p1', filepath: 'SKU-1/001.jpg', index: 0, sku: 'SKU-1' });
+  await shared.flush();
+  await shared.flush();
+  assert.equal(shared.shares.length, 1);
+  assert.doesNotMatch(shared.elements.get('toast').textContent, /Files/);
+
+  // A refused share (activation expired while the render was in flight) must
+  // still end somewhere useful rather than with an error toast and no file.
+  const denied = loadBrowserHarness({ assetsOk: true, shareAvailable: true, shareDenied: true });
+  denied.hooks.setSession('http://server.test', 'token-a');
+  denied.hooks.saveImageToDevice({ productId: 'p1', filepath: 'SKU-1/001.jpg', index: 0, sku: 'SKU-1' });
+  await denied.flush();
+  await denied.flush();
+  assert.equal(denied.shares.length, 1, 'the share sheet was attempted');
+  assert.match(denied.elements.get('toast').textContent, /Saving to Files/);
 });
