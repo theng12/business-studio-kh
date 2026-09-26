@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.73',
+    date: '2026-09-26',
+    items: [
+      'NEW — the phone / iPad web viewer can save an overlaid photo onto the device in the same flow as applying it. The Overlay sheet has a new "Save to this device" chip (on by default, remembered per device): apply as usual and the finished image is offered for saving straight away instead of only landing in the library for you to hunt down afterwards.',
+      'NEW — when the viewer is reached over HTTPS the save opens the iOS share sheet, so "Save Image" puts the result in Photos. When it is reached over the plain-HTTP LAN or Tailscale address, iOS gives no share sheet at all, so the same button opens the image full-screen with "Save to Files" beside it — press and hold the image and tap Save Image to reach Photos from there.',
+      'FIX — "Save image to device" in a photo’s ⋯ menu no longer stops at an error when iOS refuses the share sheet mid-flow (the render took long enough that the tap was no longer considered live). It falls back to the Files download instead, so the action always ends with a file.',
+      'Internal — the viewer now routes every device-save through one path in webclient/index.html (imageFileFor / canShareImage / shareImage / downloadBlobToDevice) shared by the ⋯ menu and the new post-apply sheet; the new #overlayDoneSheet offers whichever route the platform actually supports, and the source of the filename is the template name, matching the desktop saveToFolder naming. main/webclientHtml.js was regenerated from webclient/index.html. No server, IPC, preload or database changes.',
+      'Internal — tests: five new cases in test/webclientContext.test.js drive the real browser script — share sheet over HTTPS, press-and-hold fallback over plain HTTP, toggle off leaving the device untouched, the toggle defaulting on and persisting per device, and the ⋯ menu falling back to a Files download when the share is refused.',
+    ],
+  },
+  {
     version: '0.1.72',
     date: '2026-09-23',
     items: [
