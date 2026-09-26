@@ -8,23 +8,34 @@
 <meta name="theme-color" content="#111114" />
 <title>Media Studio KH — Web</title>
 <!--
-  Media Studio KH — Phase-1 web/iPad client.
+  Media Studio KH — phone / iPad web viewer.
 
-  A self-contained, build-free viewer that talks to the SAME server your
-  Mac clients use (HTTP+WS RPC over Tailscale). It needs no changes to the
-  app or server: it POSTs to /api/rpc and fetches /assets/<rel> with the
-  Bearer token via fetch() (which, unlike <img src>, can send the auth
+  A self-contained, build-free page that talks to the SAME server the Mac
+  clients use (HTTP + WS RPC). It POSTs to /api/rpc and fetches /assets/<rel>
+  with the Bearer token via fetch() (which, unlike <img src>, can send the auth
   header — so images load as blob URLs).
 
-  This is read-only on purpose: it proves the iPad → server pipeline and
-  gives a usable Library browser. The full editable app (the real React UI
-  served from the server) is phase 2.
+  SERVED BY THE APP, NOT BY A SEPARATE WEB SERVER. When this Mac is in Server
+  mode the app answers GET /m with this file, from the compiled string in
+  main/webclientHtml.js (regenerate with `npm run webclient:bundle`, or just
+  `npm run dist`, which does it in predist). On the iPad open
+  http://<mac>:<serverPort>/m — the same address and port the Mac clients use —
+  and paste a user token from Settings → Multi-Mac. Do NOT hand-serve this
+  folder with `python3 -m http.server`: the page has to come from the app's own
+  server so /api/rpc and /assets/ share its origin.
 
-  How to run: serve this folder over http on the server Mac, e.g.
-    cd webclient && python3 -m http.server 8088
-  then on the iPad open  http://<mac-tailscale-name>:8088/  and enter your
-  server URL (e.g. http://<mac-tailscale-name>:41xx) + a user token from
-  Settings → Multi-Mac on the server.
+  It is no longer read-only (that was the Phase-1 description): roles with
+  write capability get add-photo, reframe, enhance, overlay, AI and delete,
+  all through the same RPC the desktop app uses. Viewer roles see a browser.
+
+  Two platform rules shape the UI here, and both have bitten us:
+    - Web Share (navigator.share) needs a SECURE CONTEXT. On the plain-HTTP
+      LAN / Tailscale address this page is normally served from, it does not
+      exist at all, so "save to Photos" cannot be a plain button there. See the
+      device-save block above saveImageToDevice.
+    - The only routes into Photos are iOS's own share sheet (share sheet →
+      Save Image) and the native press-and-hold menu. An <a download> reaches
+      Files, never Photos, and must not be labelled as anything else.
 -->
 <style>
   :root {
@@ -211,8 +222,18 @@
   /* v0.1.73: post-apply save step. The result is already in the library by the
      time this opens; the sheet only handles the copy on THIS iPhone / iPad.
      Short on purpose — it appears right after Apply, so it must not feel like
-     a second job. */
-  .overlay-done-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+     a second job.
+
+     v0.1.74: the body now matches `.reframe-sheet` exactly — same
+     `overflow-y: auto; flex: 1; min-height: 0` and the same safe-area bottom
+     padding — so a long thumbnail plus the buttons behave the same way in both
+     sheets instead of two near-identical bodies drifting apart. */
+  .overlay-done-body {
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    flex: 1; min-height: 0;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
   .overlay-done-thumb {
     width: 100%; aspect-ratio: 1; max-height: 38vh; object-fit: contain;
     background: repeating-conic-gradient(#f3f3f3 0% 25%, #ffffff 0% 50%) 0 0 / 20px 20px;
@@ -337,6 +358,23 @@
   .img-preview-close {
     position: absolute; top: max(16px, env(safe-area-inset-top)); right: 16px; z-index: 2;
   }
+  /* v0.1.74: shown only when the lightbox was opened to hand the picture to
+     iOS (see openOverlayForSaving). Without it the user arrives at a
+     full-screen picture with the instruction they just read left behind on the
+     sheet, and no way to guess that a press-and-hold is the next step.
+     It sits just above the #1 of N pill rather than at the top: the top row
+     already belongs to the Close button, and on a 390px phone a centred pill
+     there runs underneath it. Bottom-centre is also nearer the thumb. */
+  .img-preview-hint {
+    position: absolute;
+    bottom: calc(max(20px, env(safe-area-inset-bottom)) + 40px);
+    left: 50%; transform: translateX(-50%);
+    max-width: calc(100% - 28px);
+    padding: 6px 14px; background: rgba(255,255,255,0.16); color: #fff;
+    border-radius: 999px; font-size: 12px; line-height: 1.35; text-align: center;
+    pointer-events: none;
+  }
+  .img-preview-hint[hidden] { display: none; }
   .img-preview-info {
     position: absolute; bottom: max(20px, env(safe-area-inset-bottom)); left: 50%;
     transform: translateX(-50%);
@@ -815,6 +853,7 @@
   <button class="img-preview-nav img-preview-nav-prev" id="imgPreviewPrev" type="button" aria-label="Previous image">‹</button>
   <button class="img-preview-nav img-preview-nav-next" id="imgPreviewNext" type="button" aria-label="Next image">›</button>
   <div class="img-preview-stage" id="imgPreviewStage"><img id="imgPreviewImg" alt="" /></div>
+  <div class="img-preview-hint" id="imgPreviewHint" hidden></div>
   <div class="img-preview-info" id="imgPreviewInfo"></div>
 </div>
 
@@ -1367,6 +1406,10 @@
     document.body.classList.remove('is-selecting');
     var detail = document.getElementById('detail');
     if (detail) detail.classList.remove('open');
+    // v0.1.74: the post-overlay save sheet belongs to a session too. Leaving it
+    // up across a disconnect would keep a blob of the old server's image alive
+    // and offer to save from a token that no longer works.
+    if (state.overlayDone) closeOverlayDoneSheet();
   }
 
   /* ── transport ─────────────────────────────────────────────── */
@@ -2389,6 +2432,20 @@
      So: share when we can, Files when we cannot, and never call the Files
      copy "saved to Photos". */
 
+  /* v0.1.74: the extension comes from the stored path; the blob's MIME type is
+     only a fallback. serveAsset in main/server/index.js maps just jpg / jpeg /
+     png / webp / svg and answers everything else — heic, gif, tif, bmp, avif —
+     with application/octet-stream. Reading the subtype first therefore saved an
+     ordinary .jpg as "SKU-1.octet-stream", typed as a non-image, which is
+     exactly what makes the iOS share sheet drop its "Save Image" action. The
+     File we hand iOS should always describe the picture it actually contains. */
+  var IMAGE_TYPE_BY_EXT = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+    svg: 'image/svg+xml',
+    gif: 'image/gif', heic: 'image/heic', heif: 'image/heif',
+    tif: 'image/tiff', tiff: 'image/tiff', bmp: 'image/bmp', avif: 'image/avif',
+  };
+
   /* Fetch an image's bytes once and wrap them as a File named for the product.
      `suffix` overrides the default position-number tail — the overlay result
      passes the template name instead, matching the desktop saveToFolder
@@ -2403,12 +2460,16 @@
         return res.blob();
       })
       .then(function (blob) {
-        var ext = (blob.type && blob.type.split('/')[1]) || (rel.split('.').pop() || 'jpg');
+        var fromPath = (rel.split('.').pop() || '').toLowerCase();
+        var ext = IMAGE_TYPE_BY_EXT[fromPath] ? fromPath
+          : ((blob.type && blob.type.indexOf('image/') === 0 && blob.type.split('/')[1]) || 'jpg');
+        var type = (blob.type && blob.type.indexOf('image/') === 0) ? blob.type
+          : (IMAGE_TYPE_BY_EXT[ext] || 'image/jpeg');
         var sku = (ctx.sku || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'image';
         var tail = ctx.suffix || String((ctx.index || 0) + 1);
         var filename = sku + '-' + tail + '.' + ext;
         var file = null;
-        try { file = new File([blob], filename, { type: blob.type || 'image/jpeg' }); } catch (_) {}
+        try { file = new File([blob], filename, { type: type }); } catch (_) {}
         return { blob: blob, file: file, filename: filename };
       });
   }
@@ -3777,6 +3838,12 @@
     }).catch(function (e) { toast('Save to device failed: ' + e.message); });
   }
   function openOverlayDoneSheet(pid, relpath, out) {
+    // v0.1.74: a second apply can land here while a previous sheet is still up
+    // (the first fetch was slow, the user applied again). Release that blob
+    // instead of dropping the only reference to it.
+    if (state.overlayDone && state.overlayDone.url) {
+      try { URL.revokeObjectURL(state.overlayDone.url); } catch (_) {}
+    }
     state.overlayDone = {
       productId: pid, filepath: relpath,
       blob: out.blob, file: out.file, filename: out.filename, url: null,
@@ -3786,15 +3853,17 @@
     if (out.blob) {
       state.overlayDone.url = URL.createObjectURL(out.blob);
       img.src = state.overlayDone.url;
-      img.hidden = false;
     }
     var shareable = canShareImage(out.file);
     document.getElementById('overlayDoneName').textContent = out.filename;
     document.getElementById('overlayDoneSaveBtn').textContent = shareable ? 'Save to Photos' : 'Open image to save';
     document.getElementById('overlayDoneFilesBtn').hidden = shareable;
+    // v0.1.74: one instruction, not the whole procedure — the press-and-hold
+    // step is repeated on the picture itself once it is open (see
+    // openOverlayForSaving), so this line only has to say what the button does.
     document.getElementById('overlayDoneHint').textContent = shareable
       ? 'Opens the iOS share sheet. Tap Save Image to put it in Photos.'
-      : 'Press and hold the image, then tap Save Image to put it in Photos.';
+      : 'Opens the picture full-screen, where you can press and hold it to save.';
     openSheet('overlayDoneSheet');
   }
   function closeOverlayDoneSheet() {
@@ -3804,22 +3873,32 @@
     }
     state.overlayDone = null;
   }
-  function saveOverlayDone() {
-    var done = state.overlayDone; if (!done) return;
-    if (canShareImage(done.file)) {
-      shareImage(done.file).then(function (status) {
-        if (status.indexOf('failed: ') === 0) toast('Share failed: ' + status.slice(8));
-      });
-      return;
-    }
-    // No share sheet (plain HTTP): the native press-and-hold sheet is the one
-    // route into Photos that needs neither HTTPS nor a gesture we cannot
-    // produce, so show the result full-screen ready for that press. The
-    // fullscreen viewer has no touch-callout suppression — that is exactly the
-    // "save to camera roll without a save button" case it was built for.
+  /* No share sheet — either the viewer is on plain HTTP, where navigator.share
+     does not exist, or iOS refused this particular call: the native
+     press-and-hold sheet is the one route into Photos that needs neither HTTPS
+     nor a gesture we cannot produce, so show the result full-screen ready for
+     that press. The fullscreen viewer has no touch-callout suppression, which
+     is exactly the "save to camera roll without a save button" case it was
+     built for — and it now carries the instruction with it, because the sheet
+     that explained it is closed by the time the picture appears. */
+  function openOverlayForSaving(done) {
     var rel = done.filepath, name = done.filename, pid = done.productId;
     closeOverlayDoneSheet();
-    openImgPreview([{ filepath: rel, filename: name }], 0, pid);
+    openImgPreview([{ filepath: rel, filename: name }], 0, pid,
+      'Press and hold the picture, then tap Save Image');
+  }
+  function saveOverlayDone() {
+    var done = state.overlayDone; if (!done) return;
+    if (!canShareImage(done.file)) { openOverlayForSaving(done); return; }
+    // This runs inside the tap, so the share call below holds a fresh
+    // activation even when the automatic one after Apply had expired.
+    shareImage(done.file).then(function (status) {
+      if (status === 'shared' || status === 'cancelled') return;
+      // v0.1.74: 'unavailable' or a real failure used to leave the tap doing
+      // visibly nothing. Fall through to the route that always works.
+      if (status.indexOf('failed: ') === 0) toast('Share failed: ' + status.slice(8));
+      openOverlayForSaving(done);
+    });
   }
   function downloadOverlayDone() {
     var done = state.overlayDone; if (!done) return;
@@ -3905,12 +3984,18 @@
 
   var previewState = null; // { images: [...], index: number, productId }
 
-  function openImgPreview(imgs, startIndex, productId) {
+  function openImgPreview(imgs, startIndex, productId, hint) {
     if (!imgs || !imgs.length) return;
     var n = imgs.length;
     var idx = Math.max(0, Math.min(startIndex || 0, n - 1));
     previewState = { images: imgs, index: idx, productId: productId };
     paintImgPreview();
+    // v0.1.74: an optional one-line instruction pinned to the top of the
+    // lightbox, for the case where the user has to do something here rather
+    // than just look. Every other caller passes nothing and gets no pill.
+    var hintEl = document.getElementById('imgPreviewHint');
+    hintEl.textContent = hint || '';
+    hintEl.hidden = !hint;
     document.getElementById('imgPreview').classList.add('open');
     document.body.style.overflow = 'hidden';
   }
