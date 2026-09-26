@@ -96,7 +96,7 @@ function makeElement(id) {
 function loadBrowserHarness({
   companyData = {}, deferReorder = false, deferAssets = false,
   assetsOk = false, assetBlob = null, shareAvailable = false, shareDenied = false,
-  overlayApply = null, renderPreview = null, userAgent = '',
+  overlayApply = null, renderPreview = null, userAgent = '', applyBulk = null, productList = null,
 } = {}) {
   const elements = new Map();
   const storage = new Map();
@@ -179,6 +179,12 @@ function loadBrowserHarness({
     if (body.channel === 'templates:renderPreview' && renderPreview) {
       return Promise.resolve(response(renderPreview));
     }
+    if (body.channel === 'templates:applyBulk' && applyBulk) {
+      return Promise.resolve(response(applyBulk));
+    }
+    if (body.channel === 'products:list' && productList) {
+      return Promise.resolve(response(productList));
+    }
     if (body.channel === 'companies:setActive') {
       const request = deferred();
       pendingActivations.push({ id: body.args, request });
@@ -215,6 +221,13 @@ function loadBrowserHarness({
     openOverlaySheet: openOverlaySheet,
     applyOverlaySheet: applyOverlaySheet,
     paintOverlaySheet: paintOverlaySheet,
+    setListSelect: setListSelect,
+    toggleListSelected: toggleListSelected,
+    selectPageProducts: selectPageProducts,
+    startSaveQueue: startSaveQueue,
+    closeSaveQueue: closeSaveQueue,
+    nextQueueItem: nextQueueItem,
+    downloadAllQueue: downloadAllQueue,
     saveImageToDevice: saveImageToDevice,
     closeOverlayDoneSheet: closeOverlayDoneSheet,
     openImgPreview: openImgPreview,
@@ -906,4 +919,167 @@ test('opening the overlay sheet clears a dead preview from the last visit', asyn
   assert.equal(img.src, '');
   assert.equal(img.hidden, true);
   assert.equal(harness.elements.get('overlayBusy').textContent, 'Pick a template to preview…');
+});
+
+/* ── v0.1.76: applying one overlay to several products ───────────────
+   He picks 5–10 products in the list and wants the overlay on all of them,
+   with the choice of keeping the results in the products or just saving them
+   to the phone. What is testable here is that the two destinations take
+   genuinely different routes, and that the batch never quietly becomes a
+   one-product apply. */
+
+const BATCH_BYTES = { __bin: true, b64: Buffer.from('batch-render-bytes').toString('base64') };
+
+function batchHarness(options = {}) {
+  return loadBrowserHarness({
+    assetsOk: true,
+    companyData: { C1: [] },
+    renderPreview: { bytes: BATCH_BYTES },
+    productList: [
+      { id: 'p1', sku: 'SKU-1', imageCount: 2 },
+      { id: 'p2', sku: 'SKU-2', imageCount: 2 },
+      { id: 'p3', sku: 'SKU-3', imageCount: 2 },
+    ],
+    ...options,
+  });
+}
+
+test('selecting products feeds one batch apply, not one apply per product', async () => {
+  const harness = batchHarness({
+    shareAvailable: true,
+    applyBulk: {
+      done: [{ productId: 'p1', sku: 'SKU-1', outputFilepath: 'SKU-1/003.png' },
+             { productId: 'p2', sku: 'SKU-2', outputFilepath: 'SKU-2/003.png' }],
+      failed: [], skipped: [], total: 2,
+      summary: { productsCount: 2, doneCount: 2, failedCount: 0, skippedCount: 0 },
+    },
+  });
+  const { hooks } = harness;
+  hooks.setSession('http://server.test', 'token-a');
+  hooks.state.companyId = 'C1';
+  hooks.state.products = [{ id: 'p1', sku: 'SKU-1' }, { id: 'p2', sku: 'SKU-2' }, { id: 'p3', sku: 'SKU-3' }];
+
+  hooks.setListSelect(true);
+  assert.equal(harness.elements.get('bulkBar').hidden, false, 'the batch bar appears in select mode');
+  hooks.toggleListSelected('p1');
+  hooks.toggleListSelected('p2');
+  assert.equal(harness.elements.get('bulkCount').textContent, '2 selected');
+  assert.equal(harness.elements.get('bulkOverlayBtn').disabled, false);
+
+  hooks.openOverlaySheet({ productIds: ['p1', 'p2'] });
+  await harness.flush();
+  hooks.state.overlay.templates = [{ id: 't1', name: 'Gold Frame' }];
+  hooks.state.overlay.templateId = 't1';
+  hooks.paintOverlaySheet();
+
+  // A batch has no single result to preview, and the label says how many.
+  assert.equal(harness.elements.get('overlayPreview').hidden, true);
+  assert.match(harness.elements.get('overlayPreviewLabel').textContent, /2 products/);
+  assert.equal(harness.elements.get('overlayApplyBtn').textContent, 'Apply to 2');
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  const bulk = harness.calls.filter((c) => c.channel === 'templates:applyBulk');
+  assert.equal(bulk.length, 1, 'one batch call');
+  assert.deepEqual(bulk[0].args.productIds, ['p1', 'p2']);
+  assert.equal(bulk[0].args.destination.kind, 'append');
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:applyToProduct').length, 0,
+    'the single-product channel is not used for a batch');
+  assert.equal(hooks.state.listSelect, false, 'select mode ends once the batch starts');
+});
+
+test('a save-only batch renders each product in turn and queues them to save', async () => {
+  const harness = batchHarness(); // plain HTTP: no share sheet
+  const { hooks } = harness;
+  hooks.setSession('http://server.test', 'token-a');
+  hooks.state.companyId = 'C1';
+  hooks.state.products = [{ id: 'p1', sku: 'SKU-1' }, { id: 'p2', sku: 'SKU-2' }];
+
+  hooks.startSaveQueue([
+    { productId: 'p1', sku: 'SKU-1', filepath: null, templateId: 't1', templateName: 'Gold Frame' },
+    { productId: 'p2', sku: 'SKU-2', filepath: null, templateId: 't1', templateName: 'Gold Frame' },
+  ]);
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.elements.get('saveQueueSheet').classList.contains('open'), true);
+  assert.equal(harness.elements.get('saveQueueProgress').textContent, '1 of 2 · SKU-1');
+  assert.equal(harness.elements.get('saveQueueName').textContent, 'SKU-1-gold-frame.png');
+  assert.match(harness.elements.get('saveQueueHint').textContent, /press and hold/i);
+  assert.equal(harness.elements.get('saveQueueSaveBtn').hidden, true, 'no share sheet over HTTP');
+  assert.equal(harness.elements.get('saveQueueNextBtn').textContent, 'Next');
+
+  // Only the picture on screen has been rendered — not the whole batch.
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:renderPreview').length, 1);
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:applyBulk').length, 0,
+    'save-only writes nothing, so there is no batch to ask for');
+
+  hooks.nextQueueItem();
+  await harness.flush();
+  await harness.flush();
+  assert.equal(harness.elements.get('saveQueueProgress').textContent, '2 of 2 · SKU-2');
+  assert.equal(harness.elements.get('saveQueueNextBtn').textContent, 'Done');
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:renderPreview').length, 2);
+
+  hooks.nextQueueItem(); // past the end closes
+  assert.equal(harness.elements.get('saveQueueSheet').classList.contains('open'), false);
+  assert.equal(hooks.state.saveQueue, null);
+});
+
+test('the batch destination decides whether the products are touched', async () => {
+  // Replace main must reach the batch channel with that destination, and
+  // save-only must not reach it at all.
+  const harness = batchHarness({
+    applyBulk: { done: [{ productId: 'p1', sku: 'SKU-1', outputFilepath: 'SKU-1/003.png' }], failed: [], skipped: [], total: 1 },
+  });
+  const { hooks } = harness;
+  hooks.setSession('http://server.test', 'token-a');
+  hooks.state.companyId = 'C1';
+  hooks.state.products = [{ id: 'p1', sku: 'SKU-1' }];
+
+  hooks.openOverlaySheet({ productIds: ['p1'] });
+  await harness.flush();
+  hooks.state.overlay.templates = [{ id: 't1', name: 'Gold Frame' }];
+  hooks.state.overlay.templateId = 't1';
+  hooks.state.overlay.destKind = 'replaceMain';
+  hooks.paintOverlaySheet();
+  harness.calls.length = 0;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  const bulk = harness.calls.filter((c) => c.channel === 'templates:applyBulk');
+  assert.equal(bulk.length, 1);
+  assert.equal(bulk[0].args.destination.kind, 'replaceMain');
+});
+
+test('selecting a whole page fills the selection, and leaving select mode empties it', async () => {
+  const harness = batchHarness();
+  const { hooks } = harness;
+  hooks.setSession('http://server.test', 'token-a');
+  hooks.state.companyId = 'C1';
+  hooks.state.products = [{ id: 'p1', sku: 'SKU-1' }, { id: 'p2', sku: 'SKU-2' }];
+  hooks.state.filtered = hooks.state.products;
+  hooks.state.page = 0;
+  hooks.setListSelect(true);
+
+  hooks.selectPageProducts();
+  assert.equal(hooks.state.listSelected.size, 2);
+  assert.equal(harness.elements.get('bulkCount').textContent, '2 selected');
+
+  // A second tap clears the page again rather than re-adding it.
+  hooks.selectPageProducts();
+  assert.equal(hooks.state.listSelected.size, 0);
+
+  hooks.toggleListSelected('p1');
+  assert.equal(hooks.state.listSelected.size, 1);
+  hooks.setListSelect(false);
+  assert.equal(hooks.state.listSelected.size, 0, 'a hidden selection must not survive');
+  assert.equal(harness.elements.get('bulkBar').hidden, true);
+  assert.equal(harness.elements.get('selectModeBtn').textContent, 'Select');
 });

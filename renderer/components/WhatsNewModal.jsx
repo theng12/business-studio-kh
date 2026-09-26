@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.76',
+    date: '2026-09-26',
+    items: [
+      'NEW — the phone viewer can apply one overlay to several products at once. "Select" in the list toolbar turns the product cards into tick-boxes: tap the ones you want ("Select page" takes the whole page), then "Overlay…" opens the same overlay sheet with the count on the button — "Apply to 8" or "Apply and save 8". Built for 5–10 products at a time; the server takes up to 1000 in one batch.',
+      'NEW — the sheet still asks what should happen to the products, so a batch can either add the overlaid picture to each product or leave every product alone and just give you the pictures. Both routes end with the results saved to your phone if you leave the save toggle on.',
+      'NEW — when a batch has several results to save, they arrive as a queue rather than one sheet that keeps reopening: "Saving 3 of 8 · TB-R3000-SS", the picture, and Next. "Download all" walks the whole batch in one go for browsers that accept a run of downloads (Chrome asks once); where they do not, each picture is still saved on its own with the press-and-hold you already know.',
+      'Internal — the batch path is templates:applyBulk, the same channel the desktop Apply overlay uses, so a batch never becomes N single applies; save-only batches never call it at all and compose each product through templates:renderPreview instead, one product at a time, which keeps a single image in memory on a phone instead of ten. Selection state (listSelect/listSelected) is separate from the existing image-filepath selection and is cleared on company switch, session reset and on leaving select mode. webclient/index.html only — no server, IPC, preload or database change; main/webclientHtml.js regenerated.',
+      'Internal — tests: four more cases in test/webclientContext.test.js (selection feeding one batch call and never the single-product channel, a save-only batch rendering and queueing one product at a time, the destination deciding whether products are touched, and select-mode-clears-the-selection). One of them also pins `.reframe-preview[hidden] { display: none; }`: the batch hides the preview block, and that block is `display: flex`, which beats the browser\'s own [hidden] handling — the same trap as `.reframe-row` in 0.1.75.',
+    ],
+  },
+  {
     version: '0.1.75',
     date: '2026-09-26',
     items: [
