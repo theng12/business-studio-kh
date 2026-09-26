@@ -242,6 +242,10 @@
   [data-theme="dark"] .overlay-done-thumb { background: repeating-conic-gradient(#262626 0% 25%, #1e1e1e 0% 50%) 0 0 / 20px 20px; }
   .overlay-done-line { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.4; }
   .overlay-done-line.is-name { font-weight: 600; color: var(--text); word-break: break-all; }
+  /* v0.1.76: in the save queue the picture IS the button — the press-and-hold
+     happens on it directly, so it gets more height than the single-result
+     thumbnail, which sends the user to the fullscreen viewer instead. */
+  .overlay-done-thumb--tall { max-height: 52vh; }
   /* v0.49.11: preview is now BIG. The 42vh cap squashed it to ~140px on a
      phone and ~310px on iPad, so the user couldn\'t actually evaluate the
      result before applying. Now it\'s width-driven (square) up to 75vh —
@@ -258,6 +262,10 @@
     border: 1px solid var(--border); border-radius: var(--radius);
     overflow: hidden; display: flex; align-items: center; justify-content: center;
   }
+  /* v0.1.76: the batch overlay run has no single result to preview, so the
+     block is hidden with the attribute — and `display: flex` above beats the
+     browser's own [hidden] handling, so say it explicitly. */
+  .reframe-preview[hidden] { display: none; }
   [data-theme="dark"] .reframe-preview { background: repeating-conic-gradient(#262626 0% 25%, #1e1e1e 0% 50%) 0 0 / 20px 20px; }
   .reframe-preview img { max-width: 100%; max-height: 100%; display: block; object-fit: contain; }
   .reframe-preview .reframe-busy {
@@ -416,6 +424,31 @@
   .card .sku { font-weight: 600; font-size: 13px; word-break: break-all; }
   .card .name { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .card .imgcount { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  /* v0.1.76: product multi-select for batch actions. The tick sits in the card
+     corner so the selection is visible at a glance and the layout does not
+     shift when select mode is entered. */
+  .card { position: relative; }
+  .card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-bg); }
+  .card .tick {
+    position: absolute; top: 8px; right: 8px; width: 24px; height: 24px;
+    border-radius: 50%; border: 1.5px solid var(--border-strong); background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    color: transparent; font-size: 14px; font-weight: 700; line-height: 1;
+  }
+  .card.is-selected .tick { background: var(--accent); border-color: var(--accent); color: #fff; }
+  /* The batch bar sits directly under the header — visible without scrolling,
+     and it never collides with the pager at the foot of the list. */
+  #bulkBar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 16px 10px; border-bottom: 1px solid var(--border);
+  }
+  #bulkBar[hidden] { display: none; }
+  #bulkBar .bulk-count { font-size: 13px; font-weight: 600; flex: 1; }
+  #bulkBar .btn { padding: 8px 14px; }
+  /* Saving several overlay results in a row: the same shape as the single
+     result sheet, with a position line instead of a name-only header. */
+  .queue-progress { font-size: 12px; color: var(--muted); text-align: center; }
 
   .pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 8px 16px 28px; }
   .loading, .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
@@ -793,11 +826,21 @@
         <span id="sortPickerLabel">Newest</span>
         <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
+      <!-- v0.1.76: enter select mode to batch-apply an overlay across several
+           products. Off by default; the chip doubles as the way out. -->
+      <button class="chip" id="selectModeBtn" type="button" aria-pressed="false">Select</button>
     </div>
     <!-- Row 3: search fills the full width edge-to-edge. -->
     <input class="search" id="search" type="search" placeholder="Search SKU / name…" autocapitalize="off" autocorrect="off" autocomplete="off" />
     <!-- Row 4: tiny count, tucked under the search. -->
     <span class="count" id="count"></span>
+    <!-- v0.1.76: batch bar. Appears in select mode only, so the list keeps its
+         normal look the rest of the time. -->
+    <div id="bulkBar" hidden>
+      <span class="bulk-count" id="bulkCount">0 selected</span>
+      <button class="btn" id="bulkAllBtn" type="button">Select page</button>
+      <button class="btn btn--primary" id="bulkOverlayBtn" type="button" disabled>Overlay…</button>
+    </div>
   </header>
   <div id="list"><div class="loading">Loading…</div></div>
   <div class="pager" id="pager"></div>
@@ -1070,6 +1113,38 @@
   </div>
 </div>
 
+<!-- v0.1.76: saving several overlay results in a row. Same body as the single
+     result sheet — picture, name, the platform's save route — plus where you
+     are in the batch and a way to move on. Over plain HTTP each picture really
+     is saved on its own (press and hold), so this is the honest shape of
+     "apply to 8 products and put them on my phone": one at a time, with a
+     count so it does not feel endless. "Download all" exists for the browsers
+     that accept a run of downloads (Chrome asks once and then obliges). -->
+<div class="sheet-overlay" id="saveQueueSheet" role="dialog" aria-modal="true" aria-label="Save overlay results">
+  <div class="sheet-box">
+    <div class="sheet-head">
+      <h3>Save results</h3>
+      <button class="icon-btn" id="saveQueueClose" type="button" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="overlay-done-body">
+      <div class="queue-progress" id="saveQueueProgress"></div>
+      <img class="overlay-done-thumb overlay-done-thumb--tall" id="saveQueueThumb" alt="Overlay result" hidden />
+      <div class="overlay-done-line is-name" id="saveQueueName"></div>
+      <div class="overlay-done-line" id="saveQueueHint"></div>
+      <div class="reframe-actions">
+        <button class="btn" id="saveQueueFilesBtn" type="button">Save to Files</button>
+        <button class="btn btn--primary" id="saveQueueSaveBtn" type="button">Save to Photos</button>
+      </div>
+      <div class="reframe-actions">
+        <button class="btn" id="saveQueueAllBtn" type="button">Download all</button>
+        <button class="btn" id="saveQueueNextBtn" type="button">Next</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- v0.49.7: sort picker sheet. The direction toggle pill lives at the top so
      the same screen handles "sort by what" + "ascending or descending" without
      a second sheet. Rows below are the available sort keys (Recently edited /
@@ -1303,6 +1378,17 @@
     selectMode: false,
     selected: new Set(),
     suppressNextClick: false, // set after long-press fires so the click event doesn\'t toggle
+    // v0.1.76 — BATCH overlay across several products. `listSelect` puts the
+    // product list into select mode and `listSelected` holds PRODUCT ids —
+    // deliberately separate from the image `selected` set above, which is the
+    // photos inside one product and is cleared when a detail sheet closes.
+    listSelect: false,
+    listSelected: new Set(),
+    // v0.1.76 — the save-results queue. `items` is a list of
+    // { productId, sku, filepath?, templateId, templateName }; filepath is set
+    // when the result already exists in the library, absent when the picture
+    // has to be rendered (the save-only destination).
+    saveQueue: null,
   };
 
   // v0.47.0: built-in prompt library mirrored from renderer/lib/promptLibrary.js
@@ -1408,6 +1494,12 @@
     state.selected.clear();
     state.selectMode = false;
     document.body.classList.remove('is-selecting');
+    // v0.1.76: a batch selection and a save queue belong to the session that
+    // made them, just like the image selection above.
+    state.listSelected.clear();
+    state.listSelect = false;
+    if (state.saveQueue) closeSaveQueue();
+    paintBulkBar();
     var detail = document.getElementById('detail');
     if (detail) detail.classList.remove('open');
     // v0.1.74: the post-overlay save sheet belongs to a session too. Leaving it
@@ -1544,6 +1636,12 @@
     state.selected.clear();
     state.selectMode = false;
     document.body.classList.remove('is-selecting');
+    // v0.1.76: product ids mean nothing in another company, so the batch
+    // selection cannot survive the switch.
+    state.listSelected.clear();
+    state.listSelect = false;
+    if (state.saveQueue) closeSaveQueue();
+    paintBulkBar();
     var detail = document.getElementById('detail');
     if (detail) detail.classList.remove('open');
     state.companyId = request.id;
@@ -1983,18 +2081,73 @@
   }
 
   function card(p) {
-    var el = document.createElement('div'); el.className = 'card'; el.dataset.id = p.id;
+    var el = document.createElement('div');
+    var chosen = state.listSelect && state.listSelected.has(p.id);
+    el.className = 'card' + (chosen ? ' is-selected' : '');
+    el.dataset.id = p.id;
     var cnt = (p.imageCount != null ? p.imageCount : '');
     el.innerHTML =
+      (state.listSelect ? '<div class="tick">✓</div>' : '') +
       '<div class="thumb" data-thumb="' + p.id + '">' + (cnt ? '' : 'no image') + '</div>' +
       '<div class="meta">' +
         '<div class="sku">' + escapeHtml(p.sku || '(no SKU)') + '</div>' +
         (p.name ? '<div class="name">' + escapeHtml(p.name) + '</div>' : '') +
         (cnt !== '' ? '<div class="imgcount">' + cnt + ' image' + (cnt === 1 ? '' : 's') + '</div>' : '') +
       '</div>';
-    el.addEventListener('click', function () { openDetail(p); });
+    el.addEventListener('click', function () {
+      // v0.1.76: in select mode a tap picks the product instead of opening it.
+      if (state.listSelect) toggleListSelected(p.id, el);
+      else openDetail(p);
+    });
     return el;
   }
+
+  /* ── v0.1.76: selecting several products for one batch ──────────────
+     A phone user picking 5–10 products to overlay needs a way to say which
+     ones. This is deliberately its own mode rather than a long-press on a
+     card: a long press on a card is ambiguous with scrolling on a phone, and
+     nothing on screen would tell him the mode had started. */
+  function paintBulkBar() {
+    var n = state.listSelected.size;
+    document.getElementById('bulkBar').hidden = !state.listSelect;
+    document.getElementById('bulkCount').textContent = n === 1 ? '1 selected' : n + ' selected';
+    document.getElementById('bulkOverlayBtn').disabled = n === 0;
+    var chip = document.getElementById('selectModeBtn');
+    chip.textContent = state.listSelect ? 'Cancel' : 'Select';
+    chip.classList.toggle('is-active', state.listSelect);
+    chip.setAttribute('aria-pressed', state.listSelect ? 'true' : 'false');
+  }
+  function setListSelect(on) {
+    state.listSelect = !!on;
+    // Leaving select mode drops the selection: a stale set that is no longer
+    // visible anywhere is how you apply an overlay to the wrong products.
+    if (!state.listSelect) state.listSelected.clear();
+    paintBulkBar();
+    render();
+  }
+  function toggleListSelected(id, el) {
+    if (state.listSelected.has(id)) state.listSelected.delete(id);
+    else state.listSelected.add(id);
+    if (el) el.classList.toggle('is-selected', state.listSelected.has(id));
+    paintBulkBar();
+  }
+  function selectPageProducts() {
+    var start = state.page * PAGE_SIZE;
+    var pageItems = state.filtered.slice(start, start + PAGE_SIZE);
+    var allChosen = pageItems.length > 0 && pageItems.every(function (p) { return state.listSelected.has(p.id); });
+    pageItems.forEach(function (p) {
+      if (allChosen) state.listSelected.delete(p.id);
+      else state.listSelected.add(p.id);
+    });
+    paintBulkBar();
+    render();
+  }
+  document.getElementById('selectModeBtn').addEventListener('click', function () { setListSelect(!state.listSelect); });
+  document.getElementById('bulkAllBtn').addEventListener('click', selectPageProducts);
+  document.getElementById('bulkOverlayBtn').addEventListener('click', function () {
+    if (!state.listSelected.size) return;
+    openOverlaySheet({ productIds: Array.from(state.listSelected) });
+  });
 
   // Only fetch a card's thumbnail once it scrolls into view — so a page of
   // 24 cards doesn't fire 24 full-image downloads at once (the big drag on
@@ -3670,9 +3823,17 @@
      the desktop\'s `templates:applyToProduct` semantics; no scope picker
      because the operation always produces a derived image, not an edit. */
   function openOverlaySheet(o) {
-    if (!o || !o.productId) return;
+    if (!o) return;
+    // v0.1.76: the same sheet serves one product and a batch of them. In batch
+    // mode there is no single image to preview — the preview block is hidden
+    // and the run goes through templates:applyBulk (or a per-product render
+    // when the destination is save-only).
+    var ids = Array.isArray(o.productIds) ? o.productIds.slice() : null;
+    if (!ids && !o.productId) return;
     state.overlay = {
-      productId: o.productId,
+      productId: o.productId || null,
+      productIds: ids,
+      batch: !!(ids && ids.length),
       templates: [],
       templateId: localStorage.getItem(LS.overlayTemplateId) || null,
       destKind:   localStorage.getItem(LS.overlayDestKind)   || 'append',
@@ -3706,7 +3867,7 @@
         state.overlay.templateId = null;
       }
       paintOverlaySheet();
-      if (state.overlay.templateId) scheduleOverlayPreview(0);
+      if (state.overlay.templateId && !state.overlay.batch) scheduleOverlayPreview(0);
     }).catch(function (e) {
       if (!state.overlay) return;
       document.getElementById('overlayBusy').hidden = false;
@@ -3758,23 +3919,36 @@
     var t = o.templates && o.templates.length && o.templateId
       ? o.templates.find(function (x) { return x.id === o.templateId; })
       : null;
+    // v0.1.76: a batch has no single result to preview, so the whole preview
+    // block goes away and the label carries the count instead.
+    document.getElementById('overlayPreview').hidden = !!o.batch;
     document.getElementById('overlayPreviewLabel').textContent = !t
-      ? 'Pick a template above'
+      ? (o.batch ? o.productIds.length + ' products — pick a template' : 'Pick a template above')
       : (o.destKind === 'saveOnly'
         ? ('Applying “' + (t.name || '') + '” — saved to this device only')
-        : ('Applying “' + (t.name || '') + '” to the main image'));
+        : (o.batch
+          ? ('Applying “' + (t.name || '') + '” to ' + o.productIds.length + ' products')
+          : ('Applying “' + (t.name || '') + '” to the main image')));
     // Apply button
     var btn = document.getElementById('overlayApplyBtn');
     btn.disabled = !o.templateId;
-    btn.textContent = o.destKind === 'replaceMain' ? 'Apply (replace main)'
-      : (o.destKind === 'saveOnly' ? 'Apply and save' : 'Apply (append)');
+    if (o.batch) {
+      var n = o.productIds.length;
+      btn.textContent = o.destKind === 'saveOnly'
+        ? ('Apply and save ' + n)
+        : ('Apply to ' + n + (o.destKind === 'replaceMain' ? ' (replace main)' : ''));
+    } else {
+      btn.textContent = o.destKind === 'replaceMain' ? 'Apply (replace main)'
+        : (o.destKind === 'saveOnly' ? 'Apply and save' : 'Apply (append)');
+    }
   }
   function pickOverlayTemplate(id) {
     if (!state.overlay) return;
     state.overlay.templateId = id;
     try { localStorage.setItem(LS.overlayTemplateId, id); } catch (_) {}
     paintOverlaySheet();
-    scheduleOverlayPreview(150);
+    // A batch has no preview block to fill, so there is nothing to render.
+    if (!state.overlay.batch) scheduleOverlayPreview(150);
   }
   function setOverlayDest(kind) {
     if (!state.overlay) return;
@@ -3835,7 +4009,11 @@
     var picked = (o.templates || []).filter(function (t) { return t.id === tid; })[0];
     var templateName = (picked && picked.name) || '';
     var saveOnly = o.destKind === 'saveOnly';
+    var batchIds = o.batch ? o.productIds.slice() : null;
     closeOverlaySheet();
+    // v0.1.76: a batch closes the sheet too — select mode can end, the
+    // selection is now the job.
+    if (batchIds) { setListSelect(false); runBulkOverlay(batchIds, tid, templateName, dest, saveToDevice); return; }
     var btn = document.getElementById('overlayBtn');
     btn.disabled = true; btn.textContent = 'Applying…';
     // v0.1.75: save-only never reaches applyToProduct at all. The compose step
@@ -4003,6 +4181,196 @@
   document.getElementById('overlayDoneFilesBtn').addEventListener('click', downloadOverlayDone);
   document.getElementById('overlayDoneKeepBtn').addEventListener('click', closeOverlayDoneSheet);
   document.getElementById('overlayDoneClose').addEventListener('click', closeOverlayDoneSheet);
+
+  /* ── v0.1.76: batch overlay across the selected products ─────────────
+     Two shapes, because the two destinations are honestly different jobs:
+
+       - Append / Replace main: one call to templates:applyBulk, which is the
+         same batch path the desktop's Apply overlay uses. The library copies
+         exist afterwards; if the device toggle is on they are then saved.
+
+       - Save copy only: nothing is written anywhere, so there is no batch to
+         ask for — the results are rendered one product at a time and queued
+         for saving. One at a time is deliberate: it keeps a single image in
+         memory on a phone instead of ten, and it means the queue can show
+         progress instead of a long silence. */
+  function runBulkOverlay(ids, templateId, templateName, dest, saveToDevice) {
+    var companyAtStart = state.companyId;
+    var btn = document.getElementById('bulkOverlayBtn');
+    btn.disabled = true; btn.textContent = 'Working…';
+    var restore = function () { btn.disabled = false; btn.textContent = 'Overlay…'; };
+
+    if (dest.kind === 'saveOnly') {
+      restore();
+      startSaveQueue(ids.map(function (id) {
+        var prod = state.products.filter(function (p) { return p.id === id; })[0];
+        return { productId: id, sku: (prod && prod.sku) || '', filepath: null, templateId: templateId, templateName: templateName };
+      }));
+      return;
+    }
+
+    rpc('templates:applyBulk', { templateId: templateId, productIds: ids, destination: dest })
+      .then(function (res) {
+        var done = (res && res.done) || [];
+        var failed = (res && res.failed) || [];
+        // The list is stale the moment images are added and every card's image
+        // count is now wrong, so reload it rather than patching twenty-four.
+        return rpc('products:list', { companyId: companyAtStart, filters: {} })
+          .then(function (rows) {
+            if (state.companyId !== companyAtStart) return;   // switched company mid-run
+            state.products = rows || [];
+            applyFilter();
+            render();
+            // doneCount is products; done.length is images. The batch here
+            // targets one image per product, but read the product count so the
+            // sentence stays true if that ever changes (v0.1.69 added it).
+            var applied = (res && res.summary && res.summary.doneCount) || done.length;
+            toast(failed.length
+              ? ('Applied to ' + applied + ', ' + failed.length + ' failed')
+              : ('Applied to ' + applied + ' product' + (applied === 1 ? '' : 's')));
+            if (saveToDevice && done.length) {
+              startSaveQueue(done.map(function (d) {
+                return {
+                  productId: d.productId, sku: d.sku || '', filepath: d.outputFilepath || null,
+                  templateId: templateId, templateName: templateName,
+                };
+              }).filter(function (item) { return item.filepath; }));
+            }
+          });
+      })
+      .catch(function (e) { toast('Overlay failed: ' + e.message); })
+      .finally(restore);
+  }
+
+  /* ── v0.1.76: work through the results, saving one after another ──────
+     The single-result sheet sends the user to the fullscreen viewer for the
+     press-and-hold, which is right for one picture. Here that would double
+     the gestures for every picture in the batch, so the queue shows the
+     picture at full width and the press happens right on it. */
+  function startSaveQueue(items) {
+    if (!items || !items.length) return;
+    if (state.saveQueue) closeSaveQueue();
+    state.saveQueue = { items: items, index: 0, out: null, url: null };
+    openSheet('saveQueueSheet');
+    paintSaveQueue();
+  }
+  function closeSaveQueue() {
+    if (!state.saveQueue) return;
+    releaseQueueBlob();
+    state.saveQueue = null;
+    closeSheet('saveQueueSheet');
+  }
+  function releaseQueueBlob() {
+    var q = state.saveQueue;
+    if (q && q.url) { try { URL.revokeObjectURL(q.url); } catch (_) {} q.url = null; }
+  }
+  /* The bytes for one queue entry: fetched from the library when the overlay
+     was applied, rendered on demand when it was save-only. */
+  function queueEntryBytes(item) {
+    if (item.filepath) {
+      return imageFileFor({
+        filepath: item.filepath, productId: item.productId, sku: item.sku,
+        suffix: slugForFilename(item.templateName, 'overlay'),
+      });
+    }
+    return rpc('templates:renderPreview', { templateId: item.templateId, productId: item.productId })
+      .then(function (res) {
+        return imageFileFromEnvelope(res && res.bytes, overlaySaveFilename(item.productId, item.templateName));
+      });
+  }
+  function paintSaveQueue() {
+    var q = state.saveQueue; if (!q) return;
+    var item = q.items[q.index];
+    var progress = document.getElementById('saveQueueProgress');
+    var name = document.getElementById('saveQueueName');
+    var hint = document.getElementById('saveQueueHint');
+    var img = document.getElementById('saveQueueThumb');
+    var saveBtn = document.getElementById('saveQueueSaveBtn');
+    var nextBtn = document.getElementById('saveQueueNextBtn');
+    progress.textContent = (q.index + 1) + ' of ' + q.items.length + (item.sku ? ' · ' + item.sku : '');
+    name.textContent = 'Preparing…';
+    hint.textContent = '';
+    saveBtn.disabled = true;
+    nextBtn.textContent = q.index + 1 >= q.items.length ? 'Done' : 'Next';
+    releaseQueueBlob();
+    q.out = null;
+    img.hidden = true;
+    img.src = '';
+    queueEntryBytes(item).then(function (out) {
+      // Moved on, closed, or superseded while the bytes were in flight.
+      if (!state.saveQueue || state.saveQueue !== q || q.items[q.index] !== item) return;
+      if (!out) { name.textContent = 'Could not prepare this picture'; return; }
+      q.out = out;
+      q.url = URL.createObjectURL(out.blob);
+      img.src = q.url;
+      img.hidden = false;
+      name.textContent = out.filename;
+      // Same platform rule as everywhere else: the share sheet is the route
+      // into Photos/gallery, and it only exists over a secure context.
+      var shareable = canShareImage(out.file);
+      saveBtn.hidden = !shareable;
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save to Photos';
+      document.getElementById('saveQueueFilesBtn').textContent = DEVICE_FILES_LABEL;
+      hint.textContent = shareable
+        ? 'Tap ' + DEVICE_SAVE_MENU + ' in the share sheet, then Next.'
+        : 'Press and hold the picture above, tap ' + DEVICE_SAVE_MENU + ', then Next.';
+    }).catch(function (e) {
+      if (!state.saveQueue || state.saveQueue !== q) return;
+      name.textContent = 'Failed: ' + e.message;
+    });
+  }
+  function saveQueueCurrent() {
+    var q = state.saveQueue; if (!q || !q.out) return;
+    if (!canShareImage(q.out.file)) return;
+    shareImage(q.out.file).then(function (status) {
+      if (status === 'shared' || status === 'cancelled') return;
+      if (status.indexOf('failed: ') === 0) toast('Share failed: ' + status.slice(8));
+    });
+  }
+  function downloadQueueCurrent() {
+    var q = state.saveQueue; if (!q || !q.out) return;
+    downloadBlobToDevice(q.out.blob, q.out.filename);
+  }
+  /* "Download all" renders/fetches each result in turn and triggers a
+     download for it — Chrome asks once to allow multiple files and then
+     obliges; Safari may take only the first, which is why the per-picture
+     route above still exists. */
+  function downloadAllQueue() {
+    var q = state.saveQueue; if (!q) return;
+    var progress = document.getElementById('saveQueueProgress');
+    var items = q.items.slice();
+    var ok = 0;
+    var step = function (i) {
+      if (!state.saveQueue || state.saveQueue !== q) return;    // cancelled
+      if (i >= items.length) {
+        toast('Downloaded ' + ok + ' of ' + items.length);
+        q.index = items.length - 1;
+        paintSaveQueue();
+        return;
+      }
+      progress.textContent = 'Downloading ' + (i + 1) + ' of ' + items.length + '…';
+      queueEntryBytes(items[i]).then(function (out) {
+        if (!state.saveQueue || state.saveQueue !== q) return;
+        if (out) { downloadBlobToDevice(out.blob, out.filename); ok += 1; }
+        // A gap between triggers: browsers drop downloads fired in one burst.
+        setTimeout(function () { step(i + 1); }, 500);
+      }).catch(function () { setTimeout(function () { step(i + 1); }, 500); });
+    };
+    step(0);
+  }
+  function nextQueueItem() {
+    var q = state.saveQueue; if (!q) return;
+    if (q.index + 1 >= q.items.length) { closeSaveQueue(); return; }
+    q.index += 1;
+    paintSaveQueue();
+  }
+  document.getElementById('saveQueueSaveBtn').addEventListener('click', saveQueueCurrent);
+  document.getElementById('saveQueueFilesBtn').addEventListener('click', downloadQueueCurrent);
+  document.getElementById('saveQueueAllBtn').addEventListener('click', downloadAllQueue);
+  document.getElementById('saveQueueNextBtn').addEventListener('click', nextQueueItem);
+  document.getElementById('saveQueueClose').addEventListener('click', closeSaveQueue);
+  document.getElementById('saveQueueSheet').addEventListener('click', function (e) { if (e.target === this) closeSaveQueue(); });
   document.getElementById('overlayDoneSheet').addEventListener('click', function (e) { if (e.target === this) closeOverlayDoneSheet(); });
   document.getElementById('overlayBtn').addEventListener('click', function () {
     if (!currentDetail) return;
