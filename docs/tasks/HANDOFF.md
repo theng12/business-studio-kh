@@ -13,7 +13,7 @@ code, the code wins — and then fix this file in the same change.
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into `_trash/README.md`. |
-| Distribution | Two **unsigned** DMGs per release, `dist/Business Studio KH-<version>-arm64.dmg` and `-x64.dmg` (AGENTS.md §20). They are handed to the owner; nothing is tagged, released, signed or published. `dist/` is gitignored. **`dist/` means the OWNER'S checkout** (`$HOME/Developer/media-studio-kh/dist`) — that is where he looks for them. `npm run dist` writes them into the build worktree instead, so copy the release's two DMGs across before saying the release is done. |
+| Distribution | Two **unsigned** DMGs per release, `dist/Business Studio KH-<version>-arm64.dmg` and `-x64.dmg` (AGENTS.md §20). They are handed to the owner; nothing is tagged, released, signed or published. `dist/` is gitignored. **`dist/` means the OWNER'S checkout** (`$HOME/Developer/media-studio-kh/dist`) — that is where he looks for them. `npm run dist` writes them into the build worktree instead, so copy the release's two DMGs across before saying the release is done. **Only the newest two releases are kept** (Theng, 2026-09-26): run `npm run dmgs:prune` after a build, which moves anything older to `_trash/old-dmgs/`. |
 | Hosted CI | **Disabled on purpose.** Before any push, `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` must return `false`. Never enable or dispatch a workflow. |
 
 ## THE WORKING LOOP
@@ -33,7 +33,9 @@ Replace `<wt>` with a worktree that has `node_modules` installed — this projec
 | 7 | `node scripts/probe-ui-crawl.js --port 9333 --out /tmp/mskh-ui/shots` | 144 steps at 0.1.72; the only check that exercises real React screens. It creates companies and edits products — never point it at real data. |
 | 8 | Version bump | `npm version <next> --no-git-tag-version` (updates `package.json` + `package-lock.json`), then the top `WhatsNewModal.jsx` entry — plain-text bullets, `NEW —` / `FIX —` / `POLISH —` / `Internal —`. |
 | 9 | `npm run dist` | Both arches. `predist` = `webclient:bundle` + `install:sharp`; `postdist` = `native:host` (restores dev bindings). Emits the two DMGs plus `dist/mac-arm64/` and `dist/mac/`. |
-| 10 | Install | Quit the running app, copy the app (or mount the DMG) to `/Applications`, then `xattr -dr com.apple.quarantine "/Applications/Business Studio KH.app"` (unsigned build). |
+| 9b | `npm run dmgs:prune` | Keeps the newest two releases and **moves** older DMGs to `_trash/old-dmgs/` (never deletes). Dry run: `npm run dmgs:prune:dry`. Theng's rule from 2026-09-26; pinned by `test/dmgRetention.test.js`. |
+| 9c | Copy the two DMGs into the owner's `dist/` | `$HOME/Developer/media-studio-kh/dist` is where he looks; `npm run dist` only fills the worktree. Verify with `shasum -a 256`. |
+| 10 | Install | Quit the running app, copy the app (or mount the DMG) to `/Applications`, then `xattr -dr com.apple.quarantine "/Applications/Business Studio KH.app"` (unsigned build). Move the replaced app into `_trash/` rather than deleting it. |
 | 11 | Ship | `git add -A`, commit, `git push -u origin codex/<topic>`, `gh pr create`, then `gh pr merge <number> --merge --delete-branch`, then `git switch main && git pull --ff-only`. |
 | 12 | Record | Branch name + SHA into `_trash/README.md` **before** deleting it; update this file with the new version/commit and anything newly learned. |
 

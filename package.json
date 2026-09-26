@@ -25,7 +25,9 @@
     "install:sharp": "npm install --no-save --include=optional --force --cache node_modules/.cache/npm-sharp @img/sharp-darwin-arm64@0.35.4 @img/sharp-libvips-darwin-arm64@1.3.3 @img/sharp-darwin-x64@0.35.4 @img/sharp-libvips-darwin-x64@1.3.3",
     "check:render": "electron scripts/probe-render-paint.js",
     "check:images": "electron scripts/probe-app-image-cors.js",
-    "check:client-server": "cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/probe-server-client.js"
+    "check:client-server": "cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/probe-server-client.js",
+    "dmgs:prune": "node scripts/prune-dmgs.js --apply",
+    "dmgs:prune:dry": "node scripts/prune-dmgs.js"
   },
   "dependencies": {
     "@imgly/background-removal": "^1.7.0",
