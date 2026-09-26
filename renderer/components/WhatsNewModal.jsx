@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.74',
+    date: '2026-09-26',
+    items: [
+      'FIX — a copy saved from the phone viewer is no longer named after the server’s MIME label. The server labels JPEG, PNG, WebP and SVG and calls everything else "application/octet-stream", so a photo in another format saved as something like "SKU-1.octet-stream" and arrived at iOS as an unknown file — which is what removes "Save Image" from the share sheet. The name and the type now come from the picture’s own extension. A normal catalog is unaffected (imports are JPEG, PNG or WebP); this is about catalogs carrying other formats, and about never handing iOS a file that lies about what it is.',
+      'FIX — tapping "Save to Photos" can no longer do nothing. If iOS refuses the share sheet at that moment (the tap is no longer considered live), the picture now opens full-screen ready for the press-and-hold route instead of the tap appearing to be ignored.',
+      'POLISH — the press-and-hold instruction travels with the picture. When the viewer opens a result full-screen to be saved, a line at the top says "Press and hold the picture, then tap Save Image" — before this, the instruction stayed behind on the sheet that had just closed.',
+      'POLISH — the overlay save sheet lays out like the other image sheets, including space for the iPhone home indicator, and disconnecting while it is open now closes it and releases the preview it was holding.',
+      'Internal — the web viewer file header no longer describes itself as a read-only Phase-1 page served by python3 -m http.server; it documents that the app itself serves it at /m and that Web Share needs a secure context. `webclient/index.html` device-save helpers were reworked around an IMAGE_TYPE_BY_EXT table; main/webclientHtml.js regenerated. No server, IPC, preload or database changes.',
+      'Internal — tests: six more cases in test/webclientContext.test.js (instruction carried into the fullscreen viewer, refused deliberate save falls back, session reset releases the sheet, a second save offer releasing the first sheet, path-derived name/type against an octet-stream response, and the ordinary lightbox staying pill-free).',
+    ],
+  },
+  {
     version: '0.1.73',
     date: '2026-09-26',
     items: [

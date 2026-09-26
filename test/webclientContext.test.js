@@ -14,12 +14,12 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function response(result, status = 200) {
+function response(result, status = 200, blob = null) {
   return {
     ok: status >= 200 && status < 300,
     status,
     async json() { return status >= 200 && status < 300 ? { result } : { error: result }; },
-    async blob() { return new Blob(['image']); },
+    async blob() { return blob || new Blob(['image']); },
   };
 }
 
@@ -95,7 +95,8 @@ function makeElement(id) {
 
 function loadBrowserHarness({
   companyData = {}, deferReorder = false, deferAssets = false,
-  assetsOk = false, shareAvailable = false, shareDenied = false, overlayApply = null,
+  assetsOk = false, assetBlob = null, shareAvailable = false, shareDenied = false,
+  overlayApply = null,
 } = {}) {
   const elements = new Map();
   const storage = new Map();
@@ -161,7 +162,8 @@ function loadBrowserHarness({
     }
     if (options.method !== 'POST') {
       if (String(url).includes('/assets/')) gets.push(String(url));
-      return Promise.resolve(response(null, assetsOk && String(url).includes('/assets/') ? 200 : 404));
+      const ok = assetsOk && String(url).includes('/assets/');
+      return Promise.resolve(response(null, ok ? 200 : 404, ok ? assetBlob : null));
     }
     const body = JSON.parse(options.body);
     calls.push({ url: String(url), auth: options.headers.Authorization, ...body });
@@ -210,6 +212,7 @@ function loadBrowserHarness({
     applyOverlaySheet: applyOverlaySheet,
     saveImageToDevice: saveImageToDevice,
     closeOverlayDoneSheet: closeOverlayDoneSheet,
+    openImgPreview: openImgPreview,
   };` + script.slice(end);
   const context = {
     URL: BrowserURL,
@@ -583,7 +586,7 @@ test('overlay apply hands the result to the share sheet when the device toggle i
   assert.deepEqual(harness.gets, ['http://server.test/assets/SKU-1/002--gold-frame.png']);
   assert.equal(harness.shares.length, 1, 'the share sheet is offered the result');
   assert.equal(harness.shares[0].files[0].name, 'SKU-1-gold-frame.png');
-  assert.equal(harness.shares[0].files[0].type, 'image/jpeg');
+  assert.equal(harness.shares[0].files[0].type, 'image/png');
 
   // Share succeeded, so the fallback sheet must stay shut.
   assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), false);
@@ -603,7 +606,7 @@ test('overlay apply over plain HTTP offers the press-and-hold route instead of t
   assert.equal(harness.elements.get('overlayDoneName').textContent, 'SKU-1-gold-frame.png');
   assert.equal(harness.elements.get('overlayDoneSaveBtn').textContent, 'Open image to save');
   assert.equal(harness.elements.get('overlayDoneFilesBtn').hidden, false);
-  assert.match(harness.elements.get('overlayDoneHint').textContent, /Press and hold/);
+  assert.match(harness.elements.get('overlayDoneHint').textContent, /press and hold/i);
   assert.equal(hooks.state.overlayDone.filepath, 'SKU-1/002--gold-frame.png');
 
   // Closing the sheet releases the preview blob it created.
@@ -613,6 +616,124 @@ test('overlay apply over plain HTTP offers the press-and-hold route instead of t
   assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), false);
   assert.ok(harness.revokedUrls.includes(previewUrl), 'the preview blob is revoked');
   assert.equal(hooks.state.overlayDone, null);
+});
+
+test('the press-and-hold route carries its instruction into the fullscreen viewer', async () => {
+  const harness = await overlayHarness();
+  const { hooks } = harness;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  // Tapping the button is what opens the picture; the sheet is gone by then, so
+  // the instruction has to travel with the picture or the user is left staring
+  // at a full-screen image with no idea that a press-and-hold is the next step.
+  harness.elements.get('overlayDoneSaveBtn').dispatch('click');
+  await harness.flush();
+
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), false);
+  assert.equal(harness.elements.get('imgPreview').classList.contains('open'), true);
+  assert.equal(harness.elements.get('imgPreviewHint').hidden, false);
+  assert.match(harness.elements.get('imgPreviewHint').textContent, /Press and hold the picture/);
+  assert.equal(hooks.state.overlayDone, null, 'the sheet released its state');
+
+  // An ordinary lightbox visit (a gallery tile) must not carry the pill.
+  hooks.state.overlay = null;
+  hooks.openDetail({ id: 'p1', sku: 'SKU-1', imageCount: 1 });
+  harness.imageList('p1', [{ filepath: 'SKU-1/001.jpg', filename: '001.jpg' }]);
+  await harness.flush();
+  hooks.openImgPreview([{ filepath: 'SKU-1/001.jpg', filename: '001.jpg' }], 0, 'p1');
+  assert.equal(harness.elements.get('imgPreviewHint').hidden, true, 'no pill without a hint');
+});
+
+test('a deliberate Save tap whose share is refused still lands on the fallback', async () => {
+  // canShare() is true, so the user gets a real "Save to Photos" button, but
+  // every navigator.share call is refused (the iOS activation-expired case).
+  // The tap must not end up doing visibly nothing.
+  const harness = await overlayHarness({ shareAvailable: true, shareDenied: true });
+  const { hooks } = harness;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.elements.get('overlayDoneSaveBtn').textContent, 'Save to Photos');
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), true);
+
+  harness.elements.get('overlayDoneSaveBtn').dispatch('click');
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.shares.length, 2, 'the automatic share and the deliberate one');
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), false);
+  assert.equal(harness.elements.get('imgPreview').classList.contains('open'), true);
+  assert.equal(harness.elements.get('imgPreviewHint').hidden, false);
+});
+
+test('a session reset closes the save sheet and releases its blob', async () => {
+  const harness = await overlayHarness();
+  const { hooks } = harness;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+  const previewUrl = hooks.state.overlayDone.url;
+
+  hooks.resetSessionState();
+
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), false);
+  assert.ok(harness.revokedUrls.includes(previewUrl), 'the blob is released on disconnect');
+  assert.equal(hooks.state.overlayDone, null);
+});
+
+test('a second save offer releases the sheet that was already open', async () => {
+  // Apply leaves the Apply button live again (applyOverlaySheet's .finally)
+  // before the device fetch settles, so a fast user can apply twice and put two
+  // offers in flight. The earlier sheet's blob must not be orphaned.
+  const harness = await overlayHarness(); // no share sheet, so each offer opens the sheet
+  const { hooks } = harness;
+  hooks.state.overlay.save = true;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+  const firstUrl = hooks.state.overlayDone && hooks.state.overlayDone.url;
+  assert.match(firstUrl || '', /^blob:test-/, 'the first offer opened a sheet with a blob');
+
+  hooks.state.overlay = { productId: 'p1', templates: [{ id: 't1', name: 'Gold Frame' }], templateId: 't1', destKind: 'append', save: true, previewSeq: 0, previewUrl: null };
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  assert.ok(harness.revokedUrls.includes(firstUrl), 'the replaced blob is revoked, not dropped');
+  assert.match(hooks.state.overlayDone.url, /^blob:test-/);
+  assert.notEqual(hooks.state.overlayDone.url, firstUrl);
+});
+
+test('the saved file is named and typed from its path, not from an octet-stream response', async () => {
+  // serveAsset answers every extension it does not map (heic, gif, tif, …) with
+  // application/octet-stream, so reading the MIME subtype named files
+  // "SKU-1-1.octet-stream" and typed them as non-images — which is exactly what
+  // hides "Save Image" in the iOS share sheet.
+  const harness = loadBrowserHarness({
+    assetsOk: true,
+    assetBlob: new Blob(['image'], { type: 'application/octet-stream' }),
+    shareAvailable: true,
+  });
+  harness.hooks.setSession('http://server.test', 'token-a');
+  harness.hooks.saveImageToDevice({ productId: 'p1', filepath: 'SKU-1/001.jpg', index: 0, sku: 'SKU-1' });
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.shares.length, 1);
+  assert.equal(harness.shares[0].files[0].name, 'SKU-1-1.jpg');
+  assert.equal(harness.shares[0].files[0].type, 'image/jpeg');
 });
 
 test('overlay apply leaves the device untouched when the toggle is off', async () => {
