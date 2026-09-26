@@ -690,6 +690,32 @@ test('a session reset closes the save sheet and releases its blob', async () => 
   assert.equal(hooks.state.overlayDone, null);
 });
 
+test('a second save offer releases the sheet that was already open', async () => {
+  // Apply leaves the Apply button live again (applyOverlaySheet's .finally)
+  // before the device fetch settles, so a fast user can apply twice and put two
+  // offers in flight. The earlier sheet's blob must not be orphaned.
+  const harness = await overlayHarness(); // no share sheet, so each offer opens the sheet
+  const { hooks } = harness;
+  hooks.state.overlay.save = true;
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+  const firstUrl = hooks.state.overlayDone && hooks.state.overlayDone.url;
+  assert.match(firstUrl || '', /^blob:test-/, 'the first offer opened a sheet with a blob');
+
+  hooks.state.overlay = { productId: 'p1', templates: [{ id: 't1', name: 'Gold Frame' }], templateId: 't1', destKind: 'append', save: true, previewSeq: 0, previewUrl: null };
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  assert.ok(harness.revokedUrls.includes(firstUrl), 'the replaced blob is revoked, not dropped');
+  assert.match(hooks.state.overlayDone.url, /^blob:test-/);
+  assert.notEqual(hooks.state.overlayDone.url, firstUrl);
+});
+
 test('the saved file is named and typed from its path, not from an octet-stream response', async () => {
   // serveAsset answers every extension it does not map (heic, gif, tif, …) with
   // application/octet-stream, so reading the MIME subtype named files
