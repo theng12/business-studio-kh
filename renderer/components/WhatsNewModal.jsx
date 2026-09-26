@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.75',
+    date: '2026-09-26',
+    items: [
+      'NEW — the phone viewer can apply an overlay and just save the picture, without adding anything to the product. The Overlay sheet has a third destination, "Save copy only": the overlay is composed and handed to the device exactly as before, but the catalog keeps the images it had — no new image, no new main image, no change to the image count. This is what the request was for: apply an overlay to send the result on, not to file another copy in the library.',
+      'FIX — the save instruction now names the menu the phone actually has. On Android the press-and-hold menu says "Download image" (and the file button says "Download"); on iPhone and iPad it stays "Save Image" and "Save to Files". Before this, an Android user was told to tap a menu item that does not exist.',
+      'FIX — reopening the Overlay sheet no longer shows a broken image behind the "Rendering preview…" spinner. The preview box is one shared element, and the previous visit\'s preview was released when that sheet closed, so the dead picture stayed on screen until the next render arrived.',
+      'Internal — the save-only destination never calls templates:applyToProduct. It composes through templates:renderPreview with no maxPx, which the handler documents as identical to the export path, so the saved file is the same pixels the library would have received while the library is not touched at all. The bytes arrive over the existing { __bin, b64 } RPC envelope and are wrapped client-side by imageFileFromEnvelope, so there is no second fetch; the fullscreen press-and-hold fallback now accepts a blob URL as well as a server path, and takes over releasing it. downloadBlobToDevice and the hint strings are platform-aware (IS_ANDROID). webclient/index.html only — no server, IPC, preload or database change; main/webclientHtml.js regenerated.',
+      'Internal — tests: four more cases in test/webclientContext.test.js (save-only never calling applyToProduct and leaving the image count alone, a save-only result reaching the press-and-hold route with no asset fetch and the lightbox releasing the blob, the Android/iPhone wording split, and the stale preview being cleared on open). One of them also pins the `.reframe-row[hidden] { display: none; }` rule, because `display: flex` on that row beats the browser\'s own [hidden] handling.',
+    ],
+  },
+  {
     version: '0.1.74',
     date: '2026-09-26',
     items: [
