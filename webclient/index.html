@@ -271,6 +271,10 @@
   }
   /* Each control row: small label on top + a chip row beneath. */
   .reframe-row { display: flex; flex-direction: column; gap: 6px; }
+  /* v0.1.75: `display: flex` above beats the user-agent [hidden] rule, so a
+     row toggled hidden (the "After applying" row under the save-only
+     destination) would stay on screen. Say it explicitly. */
+  .reframe-row[hidden] { display: none; }
   .reframe-row-label {
     font-size: 11px; font-weight: 700; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.06em; padding-left: 2px;
@@ -1022,7 +1026,7 @@
         <div class="reframe-chips" id="overlayDestChips"></div>
       </div>
 
-      <div class="reframe-row">
+      <div class="reframe-row" id="overlaySaveRow">
         <div class="reframe-row-label">After applying</div>
         <div class="reframe-chips" id="overlaySaveChips"></div>
       </div>
@@ -2432,6 +2436,17 @@
      So: share when we can, Files when we cannot, and never call the Files
      copy "saved to Photos". */
 
+  /* v0.1.75: the press-and-hold menu does not have the same wording on every
+     platform, and an instruction that names a menu item which is not there is
+     worse than none. iOS offers "Save Image" (into Photos); Android offers
+     "Download image" (into Downloads, which the gallery app picks up); a
+     desktop browser offers "Save image as…". The owner's brother is on Android,
+     which is how this was found — the screenshot he sent showed the iOS wording
+     on a Samsung phone. */
+  var IS_ANDROID = /Android/i.test((navigator.userAgent || ''));
+  var DEVICE_SAVE_MENU = IS_ANDROID ? 'Download image' : 'Save Image';
+  var DEVICE_FILES_LABEL = IS_ANDROID ? 'Download' : 'Save to Files';
+
   /* v0.1.74: the extension comes from the stored path; the blob's MIME type is
      only a fallback. serveAsset in main/server/index.js maps just jpg / jpeg /
      png / webp / svg and answers everything else — heic, gif, tif, bmp, avif —
@@ -2474,6 +2489,27 @@
       });
   }
 
+  /* v0.1.75: the same shape as imageFileFor, built from bytes the server
+     already handed back over the RPC (`{ __bin, b64 }`) instead of from a
+     second HTTP fetch. The save-only overlay destination uses this: the render
+     it needs is the one it just asked for, so there is nothing on disk to
+     fetch and nothing to render twice. Returns null when the envelope is not
+     binary — the caller says so rather than handing iOS an empty file. */
+  function imageFileFromEnvelope(env, filename) {
+    if (!env || env.__bin !== true || typeof env.b64 !== 'string') return null;
+    var blob;
+    try { blob = new Blob([decodeEnvelopeBytes(env.b64)], { type: 'image/png' }); } catch (_) { return null; }
+    var file = null;
+    try { file = new File([blob], filename, { type: 'image/png' }); } catch (_) {}
+    return { blob: blob, file: file, filename: filename };
+  }
+  function decodeEnvelopeBytes(b64) {
+    var bin = atob(b64);
+    var u8 = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  }
+
   // canShare() is the spec gate: it is false when the platform has no share
   // sheet, when files are unsupported, or when the context is not secure.
   function canShareImage(file) {
@@ -2497,14 +2533,15 @@
       });
   }
 
-  /* <a download>: the no-HTTPS, no-gesture route. Lands in Files. */
+  /* <a download>: the no-HTTPS, no-gesture route. Lands in Files (iOS) or
+     Downloads (Android). */
   function downloadBlobToDevice(blob, filename) {
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url; a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 0);
-    toast('Saving to Files…');
+    toast(IS_ANDROID ? 'Downloading…' : 'Saving to Files…');
   }
 
   /* v0.49.6 — save an image to the device from the tile menu. */
@@ -3205,11 +3242,7 @@
   function envelopeToBlobUrl(env, mime) {
     if (!env || env.__bin !== true || typeof env.b64 !== 'string') return null;
     try {
-      var bin = atob(env.b64);
-      var len = bin.length;
-      var u8 = new Uint8Array(len);
-      for (var i = 0; i < len; i++) u8[i] = bin.charCodeAt(i);
-      return URL.createObjectURL(new Blob([u8], { type: mime || 'image/png' }));
+      return URL.createObjectURL(new Blob([decodeEnvelopeBytes(env.b64)], { type: mime || 'image/png' }));
     } catch (_) { return null; }
   }
 
@@ -3649,6 +3682,15 @@
       previewSeq: 0,
       previewUrl: null,
     };
+    // v0.1.75: the preview <img> is a shared element, and the URL the last
+    // visit put in it was revoked when that sheet closed. Leaving it there
+    // shows a broken-image icon behind the spinner until the next render lands
+    // — which is exactly what the owner's brother photographed on his phone.
+    var previewImg = document.getElementById('overlayPreviewImg');
+    previewImg.hidden = true;
+    previewImg.src = '';
+    document.getElementById('overlayBusy').hidden = false;
+    document.getElementById('overlayBusy').textContent = 'Pick a template to preview…';
     paintOverlaySheet();           // paint with whatever\'s in state
     openSheet('overlaySheet');
     // Fetch the catalog and re-paint. Each company\'s templates are
@@ -3693,10 +3735,19 @@
     destEl.innerHTML = '';
     destEl.appendChild(reframeChip('Append (new image)',  o.destKind === 'append',      function () { setOverlayDest('append'); }));
     destEl.appendChild(reframeChip('Replace main',        o.destKind === 'replaceMain', function () { setOverlayDest('replaceMain'); }));
+    // v0.1.75: "just give me the picture" — the library is not touched at all.
+    // The request that produced this came from a phone user who applies an
+    // overlay to send the result on, and had no use for another copy of it
+    // sitting in the catalog.
+    destEl.appendChild(reframeChip('Save copy only',      o.destKind === 'saveOnly',    function () { setOverlayDest('saveOnly'); }));
     // v0.1.73 — device-copy toggle. A plain on/off chip rather than a
     // checkbox: the sheet already speaks in chips, and the label carries the
     // meaning ("Save to this device" filled = on).
     var saveEl = document.getElementById('overlaySaveChips');
+    // Saving is the whole point of the save-only destination, so the toggle
+    // has nothing to switch off there — the row goes away rather than sitting
+    // there contradicting the destination next to it.
+    document.getElementById('overlaySaveRow').hidden = o.destKind === 'saveOnly';
     saveEl.innerHTML = '';
     saveEl.appendChild(reframeChip(
       o.save ? 'Save to this device' : 'Save to this device: off',
@@ -3707,12 +3758,16 @@
     var t = o.templates && o.templates.length && o.templateId
       ? o.templates.find(function (x) { return x.id === o.templateId; })
       : null;
-    document.getElementById('overlayPreviewLabel').textContent =
-      t ? ('Applying “' + (t.name || '') + '” to the main image') : 'Pick a template above';
+    document.getElementById('overlayPreviewLabel').textContent = !t
+      ? 'Pick a template above'
+      : (o.destKind === 'saveOnly'
+        ? ('Applying “' + (t.name || '') + '” — saved to this device only')
+        : ('Applying “' + (t.name || '') + '” to the main image'));
     // Apply button
     var btn = document.getElementById('overlayApplyBtn');
     btn.disabled = !o.templateId;
-    btn.textContent = o.destKind === 'replaceMain' ? 'Apply (replace main)' : 'Apply (append)';
+    btn.textContent = o.destKind === 'replaceMain' ? 'Apply (replace main)'
+      : (o.destKind === 'saveOnly' ? 'Apply and save' : 'Apply (append)');
   }
   function pickOverlayTemplate(id) {
     if (!state.overlay) return;
@@ -3779,9 +3834,26 @@
     // is answerable from the filename alone. Read it before the sheet closes.
     var picked = (o.templates || []).filter(function (t) { return t.id === tid; })[0];
     var templateName = (picked && picked.name) || '';
+    var saveOnly = o.destKind === 'saveOnly';
     closeOverlaySheet();
     var btn = document.getElementById('overlayBtn');
     btn.disabled = true; btn.textContent = 'Applying…';
+    // v0.1.75: save-only never reaches applyToProduct at all. The compose step
+    // is the same one the live preview already uses (templates:renderPreview
+    // with no maxPx, which the handler documents as pixel-identical to the
+    // export path), so the phone gets the full-resolution result and the
+    // product keeps its images, its main image, its count and its history.
+    if (saveOnly) {
+      rpc('templates:renderPreview', { templateId: tid, productId: pid })
+        .then(function (res) {
+          var out = imageFileFromEnvelope(res && res.bytes, overlaySaveFilename(pid, templateName));
+          if (!out) { toast('Could not render the overlay'); return; }
+          deliverOverlaySave(pid, null, out);
+        })
+        .catch(function (e) { toast('Overlay failed: ' + e.message); })
+        .finally(function () { btn.disabled = false; btn.textContent = '◫ Overlay'; });
+      return;
+    }
     rpc('templates:applyToProduct', { templateId: tid, productId: pid, destination: dest })
       .then(function (res) {
         // Append: new image at end of gallery. ReplaceMain: new image at #0,
@@ -3822,6 +3894,13 @@
     var slug = String(text || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
     return slug || fallback;
   }
+  /* v0.1.75: the name a saved overlay carries, matching the desktop's
+     saveToFolder naming. Used by the save-only destination, which has no
+     library row to read a filename from. */
+  function overlaySaveFilename(pid, templateName) {
+    var sku = (skuForProduct(pid) || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'image';
+    return sku + '-' + slugForFilename(templateName, 'overlay') + '.png';
+  }
   function offerOverlaySave(pid, relpath, templateName) {
     var ctx = {
       filepath: relpath,
@@ -3829,13 +3908,19 @@
       sku: skuForProduct(pid),
       suffix: slugForFilename(templateName, 'overlay'),
     };
-    imageFileFor(ctx).then(function (out) {
-      return shareImage(out.file).then(function (status) {
-        if (status === 'shared' || status === 'cancelled') return;
-        if (status.indexOf('failed: ') === 0) toast('Share failed: ' + status.slice(8));
-        openOverlayDoneSheet(pid, relpath, out);
-      });
-    }).catch(function (e) { toast('Save to device failed: ' + e.message); });
+    imageFileFor(ctx)
+      .then(function (out) { deliverOverlaySave(pid, relpath, out); })
+      .catch(function (e) { toast('Save to device failed: ' + e.message); });
+  }
+  /* v0.1.75: split out of offerOverlaySave so the save-only destination — which
+     already holds the rendered bytes and has no library path to fetch — runs
+     the identical share-then-sheet handover. */
+  function deliverOverlaySave(pid, relpath, out) {
+    return shareImage(out.file).then(function (status) {
+      if (status === 'shared' || status === 'cancelled') return;
+      if (status.indexOf('failed: ') === 0) toast('Share failed: ' + status.slice(8));
+      openOverlayDoneSheet(pid, relpath, out);
+    });
   }
   function openOverlayDoneSheet(pid, relpath, out) {
     // v0.1.74: a second apply can land here while a previous sheet is still up
@@ -3858,11 +3943,12 @@
     document.getElementById('overlayDoneName').textContent = out.filename;
     document.getElementById('overlayDoneSaveBtn').textContent = shareable ? 'Save to Photos' : 'Open image to save';
     document.getElementById('overlayDoneFilesBtn').hidden = shareable;
+    document.getElementById('overlayDoneFilesBtn').textContent = DEVICE_FILES_LABEL;
     // v0.1.74: one instruction, not the whole procedure — the press-and-hold
     // step is repeated on the picture itself once it is open (see
     // openOverlayForSaving), so this line only has to say what the button does.
     document.getElementById('overlayDoneHint').textContent = shareable
-      ? 'Opens the iOS share sheet. Tap Save Image to put it in Photos.'
+      ? 'Opens the share sheet. Tap ' + DEVICE_SAVE_MENU + ' to put it in your pictures.'
       : 'Opens the picture full-screen, where you can press and hold it to save.';
     openSheet('overlayDoneSheet');
   }
@@ -3874,18 +3960,27 @@
     state.overlayDone = null;
   }
   /* No share sheet — either the viewer is on plain HTTP, where navigator.share
-     does not exist, or iOS refused this particular call: the native
-     press-and-hold sheet is the one route into Photos that needs neither HTTPS
-     nor a gesture we cannot produce, so show the result full-screen ready for
-     that press. The fullscreen viewer has no touch-callout suppression, which
-     is exactly the "save to camera roll without a save button" case it was
-     built for — and it now carries the instruction with it, because the sheet
-     that explained it is closed by the time the picture appears. */
+     does not exist, or the platform refused this particular call: the native
+     press-and-hold menu is the one route into the camera roll that needs
+     neither HTTPS nor a gesture we cannot produce, so show the result
+     full-screen ready for that press. The fullscreen viewer has no
+     touch-callout suppression, which is exactly the "save to camera roll
+     without a save button" case it was built for — and it now carries the
+     instruction with it, because the sheet that explained it is closed by the
+     time the picture appears. */
   function openOverlayForSaving(done) {
     var rel = done.filepath, name = done.filename, pid = done.productId;
-    closeOverlayDoneSheet();
-    openImgPreview([{ filepath: rel, filename: name }], 0, pid,
-      'Press and hold the picture, then tap Save Image');
+    var url = done.url;
+    // The picture shown here is the one we already have in hand. A library
+    // image can be re-fetched by path, but a save-only overlay exists nowhere
+    // else, so the lightbox is handed the blob itself. Ownership passes with
+    // it: detach from the sheet first so closing the sheet does not revoke the
+    // URL the lightbox is about to display, and let closeImgPreview release it.
+    state.overlayDone = null;
+    closeSheet('overlayDoneSheet');
+    var shown = rel ? { filepath: rel, filename: name } : { blobUrl: url, filename: name };
+    openImgPreview([shown], 0, pid,
+      'Press and hold the picture, then tap ' + DEVICE_SAVE_MENU);
   }
   function saveOverlayDone() {
     var done = state.overlayDone; if (!done) return;
@@ -4002,9 +4097,13 @@
   function paintImgPreview() {
     var s = previewState; if (!s) return;
     var img = s.images[s.index];
-    var rel = (img.isProcessed && img.processedFilepath) ? img.processedFilepath : img.filepath;
     var el = document.getElementById('imgPreviewImg');
     el.src = ''; // clear while the new one loads (avoids a flash of the old)
+    el.alt = img.filename || '';
+    // v0.1.75: an image that exists only in this browser — a save-only overlay
+    // result — arrives as a blob URL instead of a server path.
+    if (img.blobUrl) { el.src = img.blobUrl; return; }
+    var rel = (img.isProcessed && img.processedFilepath) ? img.processedFilepath : img.filepath;
     assetUrl(rel, s.productId).then(function (url) {
       // Bail if state moved on (rapid prev/next swipes).
       if (url && previewState && previewState.images[previewState.index] === img) {
@@ -4029,6 +4128,12 @@
     document.getElementById('imgPreview').classList.remove('open');
     // Restore scroll lock state — detail sheet (if open) needs it back.
     document.body.style.overflow = document.getElementById('detail').classList.contains('open') ? 'hidden' : '';
+    // v0.1.75: release a blob this viewer was handed. Server-backed images use
+    // the shared blob cache and are not ours to revoke.
+    if (previewState) {
+      var shown = previewState.images[previewState.index];
+      if (shown && shown.blobUrl) { try { URL.revokeObjectURL(shown.blobUrl); } catch (_) {} }
+    }
     previewState = null;
     document.getElementById('imgPreviewImg').src = '';
   }
