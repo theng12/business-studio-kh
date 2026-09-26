@@ -410,6 +410,18 @@ Configured in `package.json` under
   one app, roughly doubling the file size. Two separate DMGs are the house
   choice.
 
+**Keep only the newest two releases (added 2026-09-26, Theng's ask).** When a build is
+finished, `dist/` holds the release just made plus the one before it, and anything two or
+more generations old is cleared out — a version that is two releases back is never opened
+again, and twelve 240 MB DMGs had piled up. Use `npm run dmgs:prune` (dry run:
+`npm run dmgs:prune:dry`); it **moves** the old DMGs to `_trash/old-dmgs/`, never deletes
+them, per the working rule at the top of this file. The rule, the numeric version sort and
+the no-delete property are pinned by `test/dmgRetention.test.js`.
+
+**`dist/` means the owner's checkout** — `$HOME/Developer/media-studio-kh/dist`,
+which is where he looks for a release. `npm run dist` writes into the build worktree
+instead, so copy the current two DMGs across as the last step of a release.
+
 ## 21. Packaging-safe paths — dev layout ≠ packaged layout
 
 The single nastiest bug class in this app: code that resolves paths relative to the **source tree** works in `npm run dev` but breaks in the packaged DMG, because the compiled main-process files live at a different depth inside `dist-electron/main/…` (and inside the asar). These never throw in tests or dev — only on a client's machine. Rules:
