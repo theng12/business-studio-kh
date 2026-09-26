@@ -96,7 +96,7 @@ function makeElement(id) {
 function loadBrowserHarness({
   companyData = {}, deferReorder = false, deferAssets = false,
   assetsOk = false, assetBlob = null, shareAvailable = false, shareDenied = false,
-  overlayApply = null,
+  overlayApply = null, renderPreview = null, userAgent = '',
 } = {}) {
   const elements = new Map();
   const storage = new Map();
@@ -141,6 +141,7 @@ function loadBrowserHarness({
   // iOS provides one; over plain HTTP `navigator.share` is not defined at all,
   // which is what `shareAvailable: false` reproduces.
   const navigator = {};
+  if (userAgent) navigator.userAgent = userAgent;
   if (shareAvailable) {
     navigator.canShare = (data) => !!(data && Array.isArray(data.files) && data.files.length);
     navigator.share = (data) => {
@@ -174,6 +175,9 @@ function loadBrowserHarness({
     }
     if (body.channel === 'templates:applyToProduct' && overlayApply) {
       return Promise.resolve(response(overlayApply));
+    }
+    if (body.channel === 'templates:renderPreview' && renderPreview) {
+      return Promise.resolve(response(renderPreview));
     }
     if (body.channel === 'companies:setActive') {
       const request = deferred();
@@ -210,9 +214,11 @@ function loadBrowserHarness({
     reorderImageNeighbor: reorderImageNeighbor,
     openOverlaySheet: openOverlaySheet,
     applyOverlaySheet: applyOverlaySheet,
+    paintOverlaySheet: paintOverlaySheet,
     saveImageToDevice: saveImageToDevice,
     closeOverlayDoneSheet: closeOverlayDoneSheet,
     openImgPreview: openImgPreview,
+    closeImgPreview: closeImgPreview,
   };` + script.slice(end);
   const context = {
     URL: BrowserURL,
@@ -226,6 +232,8 @@ function loadBrowserHarness({
     fetch,
     location: { origin: 'http://viewer.test' },
     navigator,
+    // The viewer decodes the server's `{ __bin, b64 }` envelopes with atob.
+    atob,
     IntersectionObserver: class { disconnect() {} observe() {} unobserve() {} },
     setTimeout,
     clearTimeout,
@@ -787,4 +795,115 @@ test('tile-menu save falls back to a Files download only when iOS refuses the sh
   await denied.flush();
   assert.equal(denied.shares.length, 1, 'the share sheet was attempted');
   assert.match(denied.elements.get('toast').textContent, /Saving to Files/);
+});
+
+/* ── v0.1.75: "just give me the picture" ─────────────────────────────
+   The phone user applies an overlay to send the result on. He asked for the
+   save without the library copy, so the save-only destination must never
+   reach templates:applyToProduct — no new image, no new main, no image count,
+   no history. The compose it needs is the one the live preview already uses. */
+
+const OVERLAY_BYTES = { __bin: true, b64: Buffer.from('overlay-render-bytes').toString('base64') };
+
+test('save-only renders the overlay without touching the product', async () => {
+  const harness = await overlayHarness({ shareAvailable: true, renderPreview: { bytes: OVERLAY_BYTES } });
+  const { hooks } = harness;
+  hooks.state.overlay.destKind = 'saveOnly';
+  hooks.paintOverlaySheet();
+
+  assert.equal(harness.elements.get('overlayApplyBtn').textContent, 'Apply and save');
+  assert.match(harness.elements.get('overlayPreviewLabel').textContent, /saved to this device only/);
+  assert.equal(harness.elements.get('overlaySaveRow').hidden, true,
+    'the device toggle is not offered when saving is the whole point');
+  // `.reframe-row` sets display:flex, which beats the user-agent [hidden] rule;
+  // without this override the row would be marked hidden and still be on screen.
+  assert.match(source, /\.reframe-row\[hidden\] \{ display: none; \}/);
+
+  const countBefore = hooks.state.products[0].imageCount;
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:applyToProduct').length, 0,
+    'nothing is added to the library');
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:renderPreview').length, 1,
+    'the overlay is composed, not applied');
+  assert.equal(hooks.state.products[0].imageCount, countBefore, 'the image count is untouched');
+
+  // The bytes arrive over the RPC, so there is no second fetch of anything.
+  assert.deepEqual(harness.gets, []);
+  assert.equal(harness.shares.length, 1, 'the render is handed to the share sheet');
+  assert.equal(harness.shares[0].files[0].name, 'SKU-1-gold-frame.png');
+  assert.equal(harness.shares[0].files[0].type, 'image/png');
+  assert.equal(harness.shares[0].files[0].size, 'overlay-render-bytes'.length);
+});
+
+test('a save-only result reaches the press-and-hold route without a library file', async () => {
+  const harness = await overlayHarness({ renderPreview: { bytes: OVERLAY_BYTES } }); // plain HTTP
+  const { hooks } = harness;
+  hooks.state.overlay.destKind = 'saveOnly';
+  hooks.paintOverlaySheet();
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), true);
+  assert.equal(hooks.state.overlayDone.filepath, null, 'there is no library path to re-fetch');
+
+  harness.elements.get('overlayDoneSaveBtn').dispatch('click');
+  await harness.flush();
+
+  // The lightbox must show the bytes we already hold — there is nothing on the
+  // server to fetch — and must take over releasing that blob.
+  assert.equal(harness.elements.get('imgPreview').classList.contains('open'), true);
+  assert.deepEqual(harness.gets, [], 'no asset fetch for an image that only exists in the browser');
+  const shown = harness.elements.get('imgPreviewImg').src;
+  assert.match(shown, /^blob:test-/);
+
+  hooks.closeImgPreview();
+  assert.ok(harness.revokedUrls.includes(shown), 'the lightbox releases the blob it was handed');
+});
+
+test('the press-and-hold instruction names the menu the platform actually has', async () => {
+  const iphone = await overlayHarness({
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+  });
+  iphone.hooks.applyOverlaySheet();
+  await iphone.flush(); await iphone.flush(); await iphone.flush();
+  assert.equal(iphone.elements.get('overlayDoneFilesBtn').textContent, 'Save to Files');
+  iphone.elements.get('overlayDoneSaveBtn').dispatch('click');
+  await iphone.flush();
+  assert.match(iphone.elements.get('imgPreviewHint').textContent, /tap Save Image/);
+
+  // The owner's brother is on Android, where the same gesture is "Download
+  // image" — the iOS wording sent him looking for a menu item that is not there.
+  const android = await overlayHarness({
+    userAgent: 'Mozilla/5.0 (Linux; Android 14; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36',
+  });
+  android.hooks.applyOverlaySheet();
+  await android.flush(); await android.flush(); await android.flush();
+  assert.equal(android.elements.get('overlayDoneFilesBtn').textContent, 'Download');
+  android.elements.get('overlayDoneSaveBtn').dispatch('click');
+  await android.flush();
+  assert.match(android.elements.get('imgPreviewHint').textContent, /tap Download image/);
+});
+
+test('opening the overlay sheet clears a dead preview from the last visit', async () => {
+  const harness = await overlayHarness();
+  const img = harness.elements.get('overlayPreviewImg');
+  // The previous visit's blob URL was revoked when that sheet closed, so the
+  // shared <img> still holds a src that can no longer load — the broken-image
+  // icon the owner photographed behind the spinner.
+  img.src = 'blob:test-from-last-visit';
+  img.hidden = false;
+
+  harness.hooks.state.overlay = null;
+  harness.hooks.openOverlaySheet({ productId: 'p1' });
+
+  assert.equal(img.src, '');
+  assert.equal(img.hidden, true);
+  assert.equal(harness.elements.get('overlayBusy').textContent, 'Pick a template to preview…');
 });
