@@ -282,7 +282,7 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
    * 3's batch runner reuses the underlying compose() function, not
    * this IPC handler.
    */
-  expose('templates:renderPreview', async ({ templateId, template: inline, productId, maxPx } = {}) => {
+  expose('templates:renderPreview', async ({ templateId, template: inline, productId, maxPx, position } = {}) => {
     const template = inline || (templateId ? imageTemplates.get(templateId) : null);
     if (!template) throw new Error('Template not found');
     const product = productId ? products.get(productId) : null;
@@ -309,13 +309,20 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
       ? Math.round(Number(maxPx))
       : null;
 
-    // Pick the best base image: processed wins over raw. Falls back
-    // to a blank canvas if there's nothing to overlay onto (useful
-    // for testing a template against a fresh product).
+    // Pick the base image. v0.1.77: `position` (1-based, 1 = the main image)
+    // names which of the product's images to compose onto, so a preview can
+    // show the picture the user actually chose to overlay rather than always
+    // the main one. Omitted — every caller before this — keeps the old rule:
+    // processed wins over raw, falling back to a blank canvas when there is
+    // nothing to overlay onto (useful for testing a template on a fresh
+    // product). A position the product does not have falls back the same way
+    // as no image at all, which is what the apply path reports as "no Nth
+    // image" rather than failing.
     let inputImage = null;
     if (product) {
       const images = productImages.listByProduct(product.id);
-      const first = images.find((i) => i.isProcessed && i.processedFilepath) || images[0];
+      const wanted = Number.isInteger(position) && position >= 1 ? images[position - 1] : null;
+      const first = wanted || images.find((i) => i.isProcessed && i.processedFilepath) || images[0];
       if (first) {
         const rel = (first.isProcessed && first.processedFilepath) ? first.processedFilepath : first.filepath;
         const abs = rel.startsWith('processed/') || rel.startsWith('ai-gallery/') || rel.startsWith('overlays/')
