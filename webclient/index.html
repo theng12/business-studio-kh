@@ -361,11 +361,15 @@
   /* v0.1.74: shown only when the lightbox was opened to hand the picture to
      iOS (see openOverlayForSaving). Without it the user arrives at a
      full-screen picture with the instruction they just read left behind on the
-     sheet, and no way to guess that a press-and-hold is the next step. */
+     sheet, and no way to guess that a press-and-hold is the next step.
+     It sits just above the #1 of N pill rather than at the top: the top row
+     already belongs to the Close button, and on a 390px phone a centred pill
+     there runs underneath it. Bottom-centre is also nearer the thumb. */
   .img-preview-hint {
-    position: absolute; top: max(16px, env(safe-area-inset-top)); left: 50%;
-    transform: translateX(-50%);
-    max-width: calc(100% - 150px);
+    position: absolute;
+    bottom: calc(max(20px, env(safe-area-inset-bottom)) + 40px);
+    left: 50%; transform: translateX(-50%);
+    max-width: calc(100% - 28px);
     padding: 6px 14px; background: rgba(255,255,255,0.16); color: #fff;
     border-radius: 999px; font-size: 12px; line-height: 1.35; text-align: center;
     pointer-events: none;
@@ -2437,6 +2441,7 @@
      File we hand iOS should always describe the picture it actually contains. */
   var IMAGE_TYPE_BY_EXT = {
     jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+    svg: 'image/svg+xml',
     gif: 'image/gif', heic: 'image/heic', heif: 'image/heif',
     tif: 'image/tiff', tiff: 'image/tiff', bmp: 'image/bmp', avif: 'image/avif',
   };
@@ -3848,7 +3853,6 @@
     if (out.blob) {
       state.overlayDone.url = URL.createObjectURL(out.blob);
       img.src = state.overlayDone.url;
-      img.hidden = false;
     }
     var shareable = canShareImage(out.file);
     document.getElementById('overlayDoneName').textContent = out.filename;
