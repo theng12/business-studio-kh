@@ -1039,11 +1039,11 @@
 </div>
 
 <!-- v0.49.14: Overlay sheet. Different shape from Reframe / Enhance:
-     Overlay produces a derived image (appended or replacing main), so no
-     scope picker — always operates on the product\'s main image. Picker
-     row at the top to choose a template (horizontal scroll of cards),
-     destination chips below (Append / Replace main), preview in the
-     middle, Apply at the bottom. -->
+     Overlay produces a derived image, so the picker rows are: which images it
+     lands on (main / all / the gallery selection / one position number for a
+     batch), the template itself, and the destination. Preview in the middle,
+     Apply at the bottom. v0.1.77 added the "Apply to" row — before that this
+     sheet always operated on the product\'s main image. -->
 <div class="sheet-overlay" id="overlaySheet" role="dialog" aria-modal="true" aria-label="Apply overlay">
   <div class="sheet-box">
     <div class="sheet-head">
@@ -1062,6 +1062,17 @@
       <div class="reframe-row">
         <div class="reframe-row-label">Template</div>
         <div class="overlay-template-strip" id="overlayTemplateStrip"></div>
+      </div>
+
+      <!-- v0.1.77: which images the overlay lands on. Position 1 is the main
+           image, the same numbering the desktop's "Apply to which images"
+           control uses. One product offers the gallery selection; a batch
+           offers a single position number applied to every product. -->
+      <div class="reframe-row" id="overlayScopeRow">
+        <div class="reframe-row-label">Apply to</div>
+        <div class="reframe-chips" id="overlayScopeChips"></div>
+        <input id="overlayPositionInput" type="number" min="1" max="50" step="1" inputmode="numeric"
+               aria-label="Image position" hidden />
       </div>
 
       <div class="reframe-row">
@@ -3834,6 +3845,14 @@
       productId: o.productId || null,
       productIds: ids,
       batch: !!(ids && ids.length),
+      // v0.1.77: which images the overlay lands on.
+      //   scope 'main'     — the main image (the only thing this sheet used to do)
+      //   scope 'all'      — every image of the product / of each product
+      //   scope 'selected' — the images ticked in the gallery (one product only)
+      //   scope 'position' — one position number, applied to each product (batch)
+      imgs: Array.isArray(o.imgs) ? o.imgs : [],
+      scope: 'main',
+      position: 2,          // the "second photo" case is the one that was asked for
       templates: [],
       templateId: localStorage.getItem(LS.overlayTemplateId) || null,
       destKind:   localStorage.getItem(LS.overlayDestKind)   || 'append',
@@ -3891,6 +3910,33 @@
         strip.appendChild(card);
       });
     }
+    // v0.1.77 — "Apply to": which images the overlay lands on. A single
+    // product gets the gallery selection as a third option (the same chip the
+    // Reframe sheet offers); a batch gets a position number instead, because
+    // "which photos" has no single answer across several products.
+    var scopeEl = document.getElementById('overlayScopeChips');
+    scopeEl.innerHTML = '';
+    if (o.batch) {
+      scopeEl.appendChild(reframeChip('Main image (each)', o.scope === 'main',  function () { setOverlayScope('main'); }));
+      scopeEl.appendChild(reframeChip('All images (each)', o.scope === 'all',   function () { setOverlayScope('all'); }));
+      scopeEl.appendChild(reframeChip('Photo #',           o.scope === 'position', function () { setOverlayScope('position'); }));
+    } else {
+      scopeEl.appendChild(reframeChip('Main image',        o.scope === 'main',  function () { setOverlayScope('main'); }));
+      scopeEl.appendChild(reframeChip('All images',        o.scope === 'all',   function () { setOverlayScope('all'); }));
+      var picked = selectionCount();
+      if (picked > 0) {
+        scopeEl.appendChild(reframeChip('Selected (' + picked + ')', o.scope === 'selected', function () { setOverlayScope('selected'); }));
+      } else if (o.scope === 'selected') {
+        // The gallery selection can be cleared while this sheet is open.
+        o.scope = 'main';
+      }
+    }
+    var posInput = document.getElementById('overlayPositionInput');
+    posInput.hidden = o.scope !== 'position';
+    // Leave the field alone while it is being typed into, or a half-typed
+    // number gets overwritten by the clamp on every keystroke.
+    var typing = typeof document.activeElement !== 'undefined' && document.activeElement === posInput;
+    if (!posInput.hidden && !typing) posInput.value = String(overlayPositionNumber(o));
     // Destination chips
     var destEl = document.getElementById('overlayDestChips');
     destEl.innerHTML = '';
@@ -3925,10 +3971,10 @@
     document.getElementById('overlayPreviewLabel').textContent = !t
       ? (o.batch ? o.productIds.length + ' products — pick a template' : 'Pick a template above')
       : (o.destKind === 'saveOnly'
-        ? ('Applying “' + (t.name || '') + '” — saved to this device only')
+        ? ('Applying “' + (t.name || '') + '” to ' + overlayTargetLabel(o) + ' — saved to this device only')
         : (o.batch
-          ? ('Applying “' + (t.name || '') + '” to ' + o.productIds.length + ' products')
-          : ('Applying “' + (t.name || '') + '” to the main image')));
+          ? ('Applying “' + (t.name || '') + '” to ' + overlayTargetLabel(o) + ' of ' + o.productIds.length + ' products')
+          : ('Applying “' + (t.name || '') + '” to ' + overlayTargetLabel(o))));
     // Apply button
     var btn = document.getElementById('overlayApplyBtn');
     btn.disabled = !o.templateId;
@@ -3957,6 +4003,64 @@
     paintOverlaySheet();
     // Destination doesn\'t affect the preview pixels, so no preview rerun.
   }
+  function setOverlayScope(kind) {
+    var o = state.overlay; if (!o) return;
+    o.scope = kind;
+    paintOverlaySheet();
+    // The scope decides WHICH image is shown, so unlike the destination this
+    // does change the preview — rerender it.
+    if (!o.batch && o.templateId) scheduleOverlayPreview(150);
+  }
+  /* The 1-based positions a single product's overlay should target, or null
+     when `scope` already says it ('main' / 'all'). The gallery selection is a
+     set of filepaths, so it is mapped through the sheet's own image list —
+     which is the same order the server counts positions in. */
+  function overlaySelectedPositions(o) {
+    if (!o.imgs || !o.imgs.length) return [];
+    var out = [];
+    o.imgs.forEach(function (im, i) {
+      if (state.selected.has(im.filepath)) out.push(i + 1);
+    });
+    return out;
+  }
+  function overlayPositions(o) {
+    if (o.scope === 'selected') return overlaySelectedPositions(o);
+    if (o.scope === 'position') return [overlayPositionNumber(o)];
+    return null;   // 'main' or 'all' are carried by scope
+  }
+  function overlayPositionNumber(o) {
+    var n = Math.round(Number(o.position));
+    if (!Number.isFinite(n) || n < 1) n = 1;
+    if (n > 50) n = 50;
+    return n;
+  }
+  /* What the apply calls actually send. `positions` wins over `scope` on the
+     server, so main/all are sent as a scope and everything else as a list. */
+  function overlayScopeArgs(o) {
+    if (o.scope === 'all') return { scope: 'all' };
+    var positions = overlayPositions(o);
+    if (positions && positions.length) return { positions: positions };
+    return {};   // main image
+  }
+  /* Which image the preview should compose onto: the first one the run will
+     touch, so the picture on screen is the picture he is about to change. */
+  function overlayPreviewPosition(o) {
+    if (o.scope === 'position') return overlayPositionNumber(o);
+    if (o.scope === 'selected') {
+      var picks = overlaySelectedPositions(o);
+      return picks.length ? picks[0] : 1;
+    }
+    return 1;
+  }
+  function overlayTargetLabel(o) {
+    if (o.scope === 'all') return o.batch ? 'all images' : ('all ' + (o.imgs.length || '') + ' images').replace('  ', ' ');
+    if (o.scope === 'position') return 'photo #' + overlayPositionNumber(o);
+    if (o.scope === 'selected') {
+      var n = overlaySelectedPositions(o).length;
+      return n + ' selected image' + (n === 1 ? '' : 's');
+    }
+    return 'the main image';
+  }
   function setOverlaySave(on) {
     if (!state.overlay) return;
     state.overlay.save = !!on;
@@ -3975,7 +4079,12 @@
   }
   function runOverlayPreview(seq) {
     var o = state.overlay; if (!o || !o.templateId) return;
-    rpc('templates:renderPreview', { templateId: o.templateId, productId: o.productId })
+    // v0.1.77: compose onto the image the run will actually touch, so the
+    // preview is not quietly showing the main photo while the apply is aimed
+    // at photo #2.
+    rpc('templates:renderPreview', {
+      templateId: o.templateId, productId: o.productId, position: overlayPreviewPosition(o),
+    })
       .then(function (res) {
         if (!state.overlay || state.overlay.previewSeq !== seq) return;
         var url = envelopeToBlobUrl(res && res.bytes, 'image/png');
@@ -4012,8 +4121,17 @@
     var batchIds = o.batch ? o.productIds.slice() : null;
     closeOverlaySheet();
     // v0.1.76: a batch closes the sheet too — select mode can end, the
-    // selection is now the job.
-    if (batchIds) { setListSelect(false); runBulkOverlay(batchIds, tid, templateName, dest, saveToDevice); return; }
+    // selection is now the job. The scope is read before closing, because
+    // closeOverlaySheet drops the sheet state.
+    if (batchIds) {
+      var batchJob = {
+        productIds: batchIds, scope: o.scope, position: overlayPositionNumber(o),
+        scopeArgs: overlayScopeArgs(o), saveToDevice: saveToDevice,
+      };
+      setListSelect(false);
+      runBulkOverlay(batchJob, tid, templateName, dest);
+      return;
+    }
     var btn = document.getElementById('overlayBtn');
     btn.disabled = true; btn.textContent = 'Applying…';
     // v0.1.75: save-only never reaches applyToProduct at all. The compose step
@@ -4022,17 +4140,25 @@
     // export path), so the phone gets the full-resolution result and the
     // product keeps its images, its main image, its count and its history.
     if (saveOnly) {
-      rpc('templates:renderPreview', { templateId: tid, productId: pid })
-        .then(function (res) {
-          var out = imageFileFromEnvelope(res && res.bytes, overlaySaveFilename(pid, templateName));
-          if (!out) { toast('Could not render the overlay'); return; }
-          deliverOverlaySave(pid, null, out);
-        })
-        .catch(function (e) { toast('Overlay failed: ' + e.message); })
-        .finally(function () { btn.disabled = false; btn.textContent = '◫ Overlay'; });
+      // Saving is the whole flow here; nothing is applied, so the button goes
+      // straight back to normal and the queue takes over.
+      btn.disabled = false; btn.textContent = '◫ Overlay';
+      // Several images can be targeted, and each one is its own picture to
+      // save, so a single result here becomes the same queue the batch uses.
+      var targets = overlayPositions(o);
+      var everyTarget = (o.scope === 'all')
+        ? (o.imgs || []).map(function (im, i) { return i + 1; })
+        : (targets && targets.length ? targets : [1]);
+      startSaveQueue(everyTarget.map(function (pos) {
+        return {
+          productId: pid, sku: skuForProduct(pid), filepath: null, position: pos,
+          templateId: tid, templateName: templateName,
+        };
+      }), true);   // one picture: offer the share sheet the moment it exists
       return;
     }
-    rpc('templates:applyToProduct', { templateId: tid, productId: pid, destination: dest })
+    var scopeArgs = overlayScopeArgs(o);
+    rpc('templates:applyToProduct', Object.assign({ templateId: tid, productId: pid, destination: dest }, scopeArgs))
       .then(function (res) {
         // Append: new image at end of gallery. ReplaceMain: new image at #0,
         // original demoted to #1. Either way bust the caches + re-render.
@@ -4075,9 +4201,17 @@
   /* v0.1.75: the name a saved overlay carries, matching the desktop's
      saveToFolder naming. Used by the save-only destination, which has no
      library row to read a filename from. */
-  function overlaySaveFilename(pid, templateName) {
+  /* v0.1.77: the name a saved overlay carries, matching the desktop's
+     saveToFolder naming. Position 1 (the main image) keeps the plain
+     `<sku>-<template>.png`; when several images of the SAME product are in
+     play, the position goes in the name so two of them cannot arrive as
+     `SKU-gold-frame.png` twice. */
+  function overlaySaveFilename(pid, templateName, position) {
     var sku = (skuForProduct(pid) || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'image';
-    return sku + '-' + slugForFilename(templateName, 'overlay') + '.png';
+    var slug = slugForFilename(templateName, 'overlay');
+    var pos = Number(position);
+    var mid = (Number.isInteger(pos) && pos > 1) ? ('p' + pos + '-') : '';
+    return sku + '-' + mid + slug + '.png';
   }
   function offerOverlaySave(pid, relpath, templateName) {
     var ctx = {
@@ -4194,22 +4328,47 @@
          for saving. One at a time is deliberate: it keeps a single image in
          memory on a phone instead of ten, and it means the queue can show
          progress instead of a long silence. */
-  function runBulkOverlay(ids, templateId, templateName, dest, saveToDevice) {
+  function runBulkOverlay(job, templateId, templateName, dest) {
     var companyAtStart = state.companyId;
     var btn = document.getElementById('bulkOverlayBtn');
     btn.disabled = true; btn.textContent = 'Working…';
     var restore = function () { btn.disabled = false; btn.textContent = 'Overlay…'; };
+    var skuOf = function (id) {
+      var prod = state.products.filter(function (p) { return p.id === id; })[0];
+      return (prod && prod.sku) || '';
+    };
 
     if (dest.kind === 'saveOnly') {
       restore();
-      startSaveQueue(ids.map(function (id) {
-        var prod = state.products.filter(function (p) { return p.id === id; })[0];
-        return { productId: id, sku: (prod && prod.sku) || '', filepath: null, templateId: templateId, templateName: templateName };
-      }));
+      // One queue entry per image the run targets. "Photo #2" is the same
+      // position in every product; "All images" is 1..imageCount for each,
+      // read off the product rows the list is already showing.
+      var entries = [];
+      job.productIds.forEach(function (id) {
+        var positions;
+        if (job.scope === 'all') {
+          var prod = state.products.filter(function (p) { return p.id === id; })[0];
+          var n = Math.max(1, (prod && prod.imageCount) || 1);
+          positions = [];
+          for (var i = 1; i <= n; i += 1) positions.push(i);
+        } else if (job.scope === 'position') {
+          positions = [job.position];
+        } else {
+          positions = [null];   // main image: let the server pick it
+        }
+        positions.forEach(function (pos) {
+          entries.push({
+            productId: id, sku: skuOf(id), filepath: null, position: pos,
+            templateId: templateId, templateName: templateName,
+          });
+        });
+      });
+      startSaveQueue(entries);
       return;
     }
 
-    rpc('templates:applyBulk', { templateId: templateId, productIds: ids, destination: dest })
+    rpc('templates:applyBulk', Object.assign(
+      { templateId: templateId, productIds: job.productIds, destination: dest }, job.scopeArgs))
       .then(function (res) {
         var done = (res && res.done) || [];
         var failed = (res && res.failed) || [];
@@ -4221,14 +4380,13 @@
             state.products = rows || [];
             applyFilter();
             render();
-            // doneCount is products; done.length is images. The batch here
-            // targets one image per product, but read the product count so the
-            // sentence stays true if that ever changes (v0.1.69 added it).
+            // doneCount is products; done.length is images. The two differ as
+            // soon as a run targets more than one image per product.
             var applied = (res && res.summary && res.summary.doneCount) || done.length;
             toast(failed.length
               ? ('Applied to ' + applied + ', ' + failed.length + ' failed')
               : ('Applied to ' + applied + ' product' + (applied === 1 ? '' : 's')));
-            if (saveToDevice && done.length) {
+            if (job.saveToDevice && done.length) {
               startSaveQueue(done.map(function (d) {
                 return {
                   productId: d.productId, sku: d.sku || '', filepath: d.outputFilepath || null,
@@ -4247,10 +4405,20 @@
      press-and-hold, which is right for one picture. Here that would double
      the gestures for every picture in the batch, so the queue shows the
      picture at full width and the press happens right on it. */
-  function startSaveQueue(items) {
+  /* `autoShare` keeps the v0.1.73 promise for the one-picture case: tap Apply
+     and the share sheet comes to you, without a second tap. It can only be
+     tried once the bytes exist, so it happens when the first (and only) item
+     lands — and if the platform refuses it (activation long expired), the
+     queue is simply left on screen with its Save button. Multi-picture runs
+     never auto-share: popping a share sheet per picture would be worse than
+     the queue. */
+  function startSaveQueue(items, autoShare) {
     if (!items || !items.length) return;
     if (state.saveQueue) closeSaveQueue();
-    state.saveQueue = { items: items, index: 0, out: null, url: null };
+    state.saveQueue = {
+      items: items, index: 0, out: null, url: null,
+      autoShare: !!autoShare && items.length === 1,
+    };
     openSheet('saveQueueSheet');
     paintSaveQueue();
   }
@@ -4268,15 +4436,28 @@
      was applied, rendered on demand when it was save-only. */
   function queueEntryBytes(item) {
     if (item.filepath) {
+      // Library entries are named after the image they came from. The stored
+      // basename is the position number (001.png, 002.png …), which is what
+      // keeps two results from the same product apart.
+      var stored = String(item.filepath).split('/').pop() || '';
+      var storedPos = parseInt(stored.replace(/\D+$/, ''), 10);
       return imageFileFor({
         filepath: item.filepath, productId: item.productId, sku: item.sku,
-        suffix: slugForFilename(item.templateName, 'overlay'),
+        suffix: overlaySaveSuffix(item.templateName, storedPos),
       });
     }
-    return rpc('templates:renderPreview', { templateId: item.templateId, productId: item.productId })
-      .then(function (res) {
-        return imageFileFromEnvelope(res && res.bytes, overlaySaveFilename(item.productId, item.templateName));
-      });
+    return rpc('templates:renderPreview', {
+      templateId: item.templateId, productId: item.productId, position: item.position,
+    }).then(function (res) {
+      return imageFileFromEnvelope(res && res.bytes,
+        overlaySaveFilename(item.productId, item.templateName, item.position));
+    });
+  }
+  // `<template>` for the main image, `p3-<template>` for anything else.
+  function overlaySaveSuffix(templateName, position) {
+    var slug = slugForFilename(templateName, 'overlay');
+    var pos = Number(position);
+    return (Number.isInteger(pos) && pos > 1) ? ('p' + pos + '-' + slug) : slug;
   }
   function paintSaveQueue() {
     var q = state.saveQueue; if (!q) return;
@@ -4315,6 +4496,15 @@
       hint.textContent = shareable
         ? 'Tap ' + DEVICE_SAVE_MENU + ' in the share sheet, then Next.'
         : 'Press and hold the picture above, tap ' + DEVICE_SAVE_MENU + ', then Next.';
+      // One picture, and the platform can share: offer it straight away rather
+      // than making him find the button (v0.1.77; the 0.1.73 flow did this).
+      if (q.autoShare) {
+        q.autoShare = false;
+        shareImage(out.file).then(function (status) {
+          if (!state.saveQueue || state.saveQueue !== q) return;
+          if (status === 'shared' || status === 'cancelled') closeSaveQueue();
+        });
+      }
     }).catch(function (e) {
       if (!state.saveQueue || state.saveQueue !== q) return;
       name.textContent = 'Failed: ' + e.message;
@@ -4372,12 +4562,25 @@
   document.getElementById('saveQueueClose').addEventListener('click', closeSaveQueue);
   document.getElementById('saveQueueSheet').addEventListener('click', function (e) { if (e.target === this) closeSaveQueue(); });
   document.getElementById('overlayDoneSheet').addEventListener('click', function (e) { if (e.target === this) closeOverlayDoneSheet(); });
+  // v0.1.77 — the batch "Photo #" number. Clamped on the way in so a stray 0
+  // or 99 cannot reach the server; the label and (for one product) the preview
+  // follow the number that was typed.
+  document.getElementById('overlayPositionInput').addEventListener('input', function () {
+    var o = state.overlay; if (!o) return;
+    var before = overlayPositionNumber(o);
+    o.position = overlayPositionNumber({ position: this.value });
+    paintOverlaySheet();
+    if (!o.batch && o.templateId && o.position !== before) scheduleOverlayPreview(250);
+  });
   document.getElementById('overlayBtn').addEventListener('click', function () {
     if (!currentDetail) return;
     var pid = currentDetail.id;
     getImageList(pid).then(function (imgs) {
       if (!imgs || !imgs.length) { toast('Add a photo first — overlay needs a base image'); return; }
-      openOverlaySheet({ productId: pid });
+      // The image list comes along so the sheet can offer "Selected (N)" and
+      // count positions — the server numbers images the same way this list is
+      // ordered (v0.1.77).
+      openOverlaySheet({ productId: pid, imgs: imgs });
     });
   });
   document.getElementById('overlayCancelBtn').addEventListener('click', closeOverlaySheet);

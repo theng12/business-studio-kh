@@ -850,6 +850,9 @@ test('save-only renders the overlay without touching the product', async () => {
   assert.equal(harness.shares[0].files[0].name, 'SKU-1-gold-frame.png');
   assert.equal(harness.shares[0].files[0].type, 'image/png');
   assert.equal(harness.shares[0].files[0].size, 'overlay-render-bytes'.length);
+  // One picture and a share sheet that works: the sheet is offered without a
+  // second tap, so the run is over and the queue closes itself.
+  assert.equal(harness.elements.get('saveQueueSheet').classList.contains('open'), false);
 });
 
 test('a save-only result reaches the press-and-hold route without a library file', async () => {
@@ -863,21 +866,18 @@ test('a save-only result reaches the press-and-hold route without a library file
   await harness.flush();
   await harness.flush();
 
-  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), true);
-  assert.equal(hooks.state.overlayDone.filepath, null, 'there is no library path to re-fetch');
-
-  harness.elements.get('overlayDoneSaveBtn').dispatch('click');
-  await harness.flush();
-
-  // The lightbox must show the bytes we already hold — there is nothing on the
-  // server to fetch — and must take over releasing that blob.
-  assert.equal(harness.elements.get('imgPreview').classList.contains('open'), true);
+  // No share sheet over HTTP, so the queue takes over: the picture itself is
+  // the press target, and there is no library path to re-fetch.
+  assert.equal(harness.elements.get('saveQueueSheet').classList.contains('open'), true);
+  assert.equal(harness.elements.get('saveQueueProgress').textContent, '1 of 1 · SKU-1');
+  assert.equal(harness.elements.get('saveQueueSaveBtn').hidden, true, 'no share sheet over HTTP');
+  assert.match(harness.elements.get('saveQueueHint').textContent, /press and hold/i);
   assert.deepEqual(harness.gets, [], 'no asset fetch for an image that only exists in the browser');
-  const shown = harness.elements.get('imgPreviewImg').src;
-  assert.match(shown, /^blob:test-/);
 
-  hooks.closeImgPreview();
-  assert.ok(harness.revokedUrls.includes(shown), 'the lightbox releases the blob it was handed');
+  const shown = harness.elements.get('saveQueueThumb').src;
+  assert.match(shown, /^blob:test-/);
+  hooks.closeSaveQueue();
+  assert.ok(harness.revokedUrls.includes(shown), 'the queue releases the blob it was showing');
 });
 
 test('the press-and-hold instruction names the menu the platform actually has', async () => {
@@ -1082,4 +1082,126 @@ test('selecting a whole page fills the selection, and leaving select mode emptie
   assert.equal(hooks.state.listSelected.size, 0, 'a hidden selection must not survive');
   assert.equal(harness.elements.get('bulkBar').hidden, true);
   assert.equal(harness.elements.get('selectModeBtn').textContent, 'Select');
+});
+
+/* ── v0.1.77: which images the overlay lands on ──────────────────────
+   "More control": main image, every image, the ones ticked in the gallery, or
+   one position number applied across a batch. The server has always taken this
+   (scope + 1-based positions); the phone never offered it. */
+
+test('one product can target all of its images or the ticked ones', async () => {
+  const harness = await overlayHarness({
+    renderPreview: { bytes: OVERLAY_BYTES },
+    overlayApply: { outputFilepath: 'SKU-1/002.png', image: { filepath: 'SKU-1/002.png' }, count: 1 },
+  });
+  const { hooks } = harness;
+  hooks.state.overlay.imgs = [
+    { filepath: 'SKU-1/001.png' }, { filepath: 'SKU-1/002.png' }, { filepath: 'SKU-1/003.png' },
+  ];
+  hooks.state.selected = new Set(['SKU-1/001.png', 'SKU-1/003.png']);
+
+  // The chips only appear for real choices: main, all, and the selection.
+  hooks.paintOverlaySheet();
+  const chips = harness.elements.get('overlayScopeChips').children.map((c) => c.textContent);
+  assert.deepEqual(chips, ['Main image', 'All images', 'Selected (2)']);
+
+  // Ticking two photos in the gallery sends those two positions, not "main".
+  hooks.state.overlay.scope = 'selected';
+  hooks.paintOverlaySheet();
+  harness.calls.length = 0;
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  const applied = harness.calls.filter((c) => c.channel === 'templates:applyToProduct');
+  assert.deepEqual(applied[0].args.positions, [1, 3], '1-based, in image order');
+  assert.equal(applied[0].args.scope, undefined, 'positions win over scope');
+
+  // "All images" is carried by scope, which the server expands itself.
+  const imgs = [{ filepath: 'SKU-1/001.png' }, { filepath: 'SKU-1/002.png' }, { filepath: 'SKU-1/003.png' }];
+  hooks.state.overlay = {
+    productId: 'p1', productIds: null, batch: false, imgs: imgs,
+    scope: 'all', position: 2, templates: [{ id: 't1', name: 'Gold Frame' }], templateId: 't1',
+    destKind: 'append', save: false, previewSeq: 0, previewUrl: null,
+  };
+  harness.calls.length = 0;
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  const all = harness.calls.filter((c) => c.channel === 'templates:applyToProduct');
+  assert.equal(all[0].args.scope, 'all');
+  assert.equal(all[0].args.positions, undefined);
+});
+
+test('the preview follows the photo the overlay is aimed at', async () => {
+  const harness = await overlayHarness({ renderPreview: { bytes: OVERLAY_BYTES } });
+  const { hooks } = harness;
+  hooks.state.overlay.imgs = [{ filepath: 'a' }, { filepath: 'b' }];
+  hooks.state.overlay.scope = 'position';
+  hooks.state.overlay.position = 2;
+  hooks.state.overlay.templateId = 't1';
+
+  harness.calls.length = 0;
+  hooks.paintOverlaySheet();
+  assert.match(harness.elements.get('overlayPreviewLabel').textContent, /photo #2/);
+  assert.equal(harness.elements.get('overlayPositionInput').hidden, false);
+
+  // Compose on photo 2, not on the main image the preview used to be stuck on.
+  await harness.flush();
+  const preview = harness.calls.filter((c) => c.channel === 'templates:renderPreview');
+  assert.equal(preview.length, 0, 'paint alone does not render');
+});
+
+test('a batch can hit the same photo number in every product', async () => {
+  const harness = batchHarness({
+    applyBulk: { done: [{ productId: 'p1', sku: 'SKU-1', outputFilepath: 'SKU-1/002.png' }], failed: [], skipped: [], total: 1,
+      summary: { doneCount: 1, failedCount: 0, skippedCount: 0 } },
+  });
+  const { hooks } = harness;
+  hooks.setSession('http://server.test', 'token-a');
+  hooks.state.companyId = 'C1';
+  hooks.state.products = [{ id: 'p1', sku: 'SKU-1', imageCount: 3 }];
+
+  hooks.openOverlaySheet({ productIds: ['p1'] });   // batch
+  await harness.flush();
+  hooks.state.overlay.templates = [{ id: 't1', name: 'Gold Frame' }];
+  hooks.state.overlay.templateId = 't1';
+  hooks.state.overlay.scope = 'position';
+  hooks.state.overlay.position = 2;
+  hooks.paintOverlaySheet();
+
+  const chips = harness.elements.get('overlayScopeChips').children.map((c) => c.textContent);
+  assert.deepEqual(chips, ['Main image (each)', 'All images (each)', 'Photo #']);
+  assert.match(harness.elements.get('overlayApplyBtn').textContent, /Apply to 1/);
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+  await harness.flush();
+
+  const bulk = harness.calls.filter((c) => c.channel === 'templates:applyBulk');
+  assert.deepEqual(bulk[0].args.positions, [2], 'the same position for every product');
+});
+
+test('saving several images of one product queues one entry each, with distinct names', async () => {
+  const harness = await overlayHarness({ renderPreview: { bytes: OVERLAY_BYTES } });
+  const { hooks } = harness;
+  hooks.state.overlay.imgs = [{ filepath: 'a' }, { filepath: 'b' }, { filepath: 'c' }];
+  hooks.state.overlay.scope = 'selected';
+  hooks.state.selected = new Set(['a', 'c']);
+  hooks.state.overlay.destKind = 'saveOnly';
+  hooks.paintOverlaySheet();
+
+  hooks.applyOverlaySheet();
+  await harness.flush();
+  await harness.flush();
+
+  assert.equal(harness.elements.get('saveQueueProgress').textContent, '1 of 2 · SKU-1');
+  assert.equal(harness.elements.get('saveQueueName').textContent, 'SKU-1-gold-frame.png',
+    'the main image keeps the plain name');
+  hooks.nextQueueItem();
+  await harness.flush();
+  await harness.flush();
+  assert.equal(harness.elements.get('saveQueueProgress').textContent, '2 of 2 · SKU-1');
+  assert.equal(harness.elements.get('saveQueueName').textContent, 'SKU-1-p3-gold-frame.png',
+    'a second picture from the same product cannot share the first name');
 });

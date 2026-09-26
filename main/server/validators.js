@@ -399,6 +399,12 @@ const VALIDATORS = {
     if (a.template != null && !isObject(a.template)) return 'template must be an object';
     if (!a.templateId && !a.template) return 'either templateId or template required';
     if (a.productId != null && !isString(a.productId)) return 'productId must be a string';
+    // v0.1.77: which of the product's images to compose onto. 1-based, position
+    // 1 = the main image, the same numbering the apply handlers use. Omitted =
+    // the main image, which is what every existing caller gets.
+    if (a.position != null && (!Number.isInteger(a.position) || a.position < 1 || a.position > 50)) {
+      return 'position must be an integer between 1 and 50';
+    }
     return true;
   },
   // v0.26.15: apply-template handlers. destination shape:

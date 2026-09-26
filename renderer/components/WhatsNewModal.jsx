@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.77',
+    date: '2026-09-26',
+    items: [
+      'NEW — the phone viewer can choose which of a product’s photos the overlay lands on. The Overlay sheet has an "Apply to" row: Main image, All images, or Selected (N) for the photos you have ticked in the gallery. Position 1 is the main image — the same numbering the desktop’s "Apply to which images" control has always used.',
+      'NEW — the same row drives the batch: applying to several selected products can hit the main image of each, all images of each, or one photo number across all of them ("Photo #2", say). That is the "only position 2" case, and it works with either destination — add the results to the products, or save them and leave the products alone.',
+      'NEW — when several photos of one product are overlaid at once, each result is saved separately with its own name (SKU-gold-frame.png for the main image, SKU-p3-gold-frame.png for the third) and the queue counts them, so two pictures can never arrive as the same file.',
+      'FIX — the live preview now shows the photo the overlay is actually aimed at. It always composed onto the main image, so choosing photo 2 would have previewed photo 1.',
+      'Internal — new optional position argument on templates:renderPreview (1-based, 50 max, validated in main/server/validators.js), so a preview can compose onto a chosen image; omitted it behaves exactly as before, which is what the desktop editor and every other caller gets. The web viewer sends scope/positions to templates:applyToProduct and templates:applyBulk using the existing server rule (positions win over scope; a position the product lacks skips it with "no Nth image"). The save queue gained per-position entries and position-aware names, and the single-picture case still auto-offers the share sheet the moment its bytes exist. No database change; main/webclientHtml.js regenerated.',
+      'Internal — tests: four more cases in test/webclientContext.test.js (positions sent for a gallery selection, scope sent for all-images, the batch photo number reaching applyBulk, and the preview following the chosen photo), plus the queue naming for a second picture from one product. Two older cases were rewritten because save-only single applies now run through the queue rather than the one-result sheet.',
+    ],
+  },
+  {
     version: '0.1.76',
     date: '2026-09-26',
     items: [
