@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.74',
+    date: '2026-09-26',
+    items: [
+      'FIX — saving a photo from the phone viewer no longer misnames the file or strips its picture type. Images the server does not label (HEIC, GIF, TIFF, BMP, AVIF) arrived as "application/octet-stream", so a saved copy was called something like "SKU-1.octet-stream" and iOS treated it as an unknown file — which removes the "Save Image" action from the share sheet. The name and type now come from the picture itself, so the share sheet always offers Save Image.',
+      'FIX — tapping "Save to Photos" can no longer do nothing. If iOS refuses the share sheet at that moment (the tap is no longer considered live), the picture now opens full-screen ready for the press-and-hold route instead of the tap appearing to be ignored.',
+      'POLISH — the press-and-hold instruction travels with the picture. When the viewer opens a result full-screen to be saved, a line at the top says "Press and hold the picture, then tap Save Image" — before this, the instruction stayed behind on the sheet that had just closed.',
+      'POLISH — the overlay save sheet lays out like the other image sheets, including space for the iPhone home indicator, and disconnecting while it is open now closes it and releases the preview it was holding.',
+      'Internal — the web viewer file header no longer describes itself as a read-only Phase-1 page served by python3 -m http.server; it documents that the app itself serves it at /m and that Web Share needs a secure context. `webclient/index.html` device-save helpers were reworked around an IMAGE_TYPE_BY_EXT table; main/webclientHtml.js regenerated. No server, IPC, preload or database changes.',
+      'Internal — tests: five more cases in test/webclientContext.test.js (instruction carried into the fullscreen viewer, refused deliberate save falls back, session reset releases the sheet, path-derived name/type against an octet-stream response, and the ordinary lightbox staying pill-free).',
+    ],
+  },
+  {
     version: '0.1.73',
     date: '2026-09-26',
     items: [
