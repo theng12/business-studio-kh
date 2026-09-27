@@ -5,6 +5,7 @@ import {
   resizeElement, rotatedBounds, scaleSelection, snapMm, smartGuides, toggleSelected,
 } from './designerGeometry.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
+import { priceEntry, formatPriceEntry } from '../../lib/prices.js';
 
 /**
  * Keep a pointer gesture alive even when the finger/stylus leaves the element
@@ -667,7 +668,13 @@ function ElementPreview({ element, pxPerMm, sample }) {
   const value = useMemo(() => {
     if (element.manualValue != null && element.manualValue !== '') return element.manualValue;
     const field = element.field || (element.type === 'qr' ? 'sku' : element.type === 'barcode' ? 'barcode' : 'name');
-    const fromSample = sample?.[field];
+    /* v0.1.79: a `price.<group>` field is not a flat key on the product, so
+       `sample[field]` was always undefined and every group price previewed as
+       the hardcoded sample below — the canvas disagreed with the printed
+       label. Resolve it exactly as main/studioRenderer.js productValue does. */
+    const fromSample = field.startsWith('price.')
+      ? formatPriceEntry(priceEntry(sample, field.slice(6)), '$')
+      : sample?.[field];
     if (fromSample != null && fromSample !== '') return fromSample;
     if (element.type === 'date') return '2027-12-31';
     if (element.type === 'country') return 'Cambodia';

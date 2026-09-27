@@ -22,7 +22,7 @@ import { defaultElement } from './elementDefaults.js';
 import { EditorCanvas } from './EditorCanvas.jsx';
 import { Inspector } from './Inspector.jsx';
 import { BulkOverlayRunModal } from '../ProductLibrary/BulkOverlayRunModal.jsx';
-import { formatPrice } from '../../lib/currencies.js';
+import { priceEntry } from '../../lib/prices.js';
 
 /**
  * Template editor — the heart of Overlay Studio.
@@ -44,19 +44,15 @@ import { formatPrice } from '../../lib/currencies.js';
  * a transparent checkerboard backdrop appears.
  */
 /**
- * v0.1.78: one price group's value for a product, formatted the way the
- * main-process context builder formats it (main/util/prices.js
- * `formatPriceEntry` + the renderer's currency mirror). Kept next to the
- * editor's other token helpers so the preview and the export agree.
+ * v0.1.78/0.1.79: one price group's value for a product, as the token needs
+ * it — the bare amount, matching what {price_retail} prints and what
+ * main/ipc/templates.js puts in the context. Shared resolver
+ * (renderer/lib/prices.js) so both shapes — `{ amount, currency }` and the
+ * legacy bare number — are read the same way everywhere.
  */
-function formatGroupPrice(product, key) {
-  const raw = product?.prices?.[key];
-  const amount = (raw && typeof raw === 'object') ? raw.amount : raw;
-  if (amount === '' || amount == null) return '';
-  const n = Number(amount);
-  if (!Number.isFinite(n)) return '';
-  const currency = (raw && typeof raw === 'object') ? raw.currency : null;
-  return currency ? formatPrice(n, currency) : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+function groupPriceToken(product, key) {
+  const amount = priceEntry(product, key).amount;
+  return amount == null ? '' : String(amount);
 }
 
 export function TemplateEditor({ templateId, onClose, onChanged }) {
@@ -171,7 +167,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
     for (const group of priceGroups) {
       const key = String(group?.key ?? '').toLowerCase();
       if (!key) continue;
-      prices[key] = formatGroupPrice(backdropProduct, group.key);
+      prices[key] = groupPriceToken(backdropProduct, group.key);
     }
     return {
       sku: backdropProduct.sku,

@@ -2218,14 +2218,27 @@
     document.body.style.overflow = 'hidden';
 
     // Resolve category id → human name via the per-company map we loaded at
-    // boot. Price is the retail figure; formatted with two decimals when set.
+    // boot.
     var catName = p.categoryId && state.categoriesById ? state.categoriesById[p.categoryId] : null;
-    var priceR = (p.priceRetail != null && p.priceRetail !== '') ? ('$' + Number(p.priceRetail).toFixed(2)) : null;
+    /* v0.1.79: every price this product has, not just retail — and in the
+     * product's own currency rather than a hardcoded "$". The company's price
+     * groups come from the same company row the switcher uses, and the amounts
+     * are read through the shared rule so a group stored as { amount,
+     * currency } and one stored as a bare number both show up. */
+    var priceRows = [];
+    [['Price', 'retail'], ['Wholesale', 'wholesale']].forEach(function (pair) {
+      var text = formatDevicePrice(priceEntryFor(p, pair[1]));
+      if (text) priceRows.push([pair[0], text]);
+    });
+    priceGroupsForDevice().forEach(function (g) {
+      var text = formatDevicePrice(priceEntryFor(p, g.key));
+      if (text) priceRows.push([(g.label || g.key) + ' price', text]);
+    });
     var rows = [
       ['Name', p.name], ['Category', catName], ['Color / finish', p.colorFinish],
-      ['Price', priceR], ['Barcode', p.barcode],
-      ['Status', p.status], ['Images', p.imageCount],
-    ].filter(function (r) { return r[1] != null && r[1] !== ''; });
+    ].concat(priceRows).concat([
+      ['Barcode', p.barcode], ['Status', p.status], ['Images', p.imageCount],
+    ]).filter(function (r) { return r[1] != null && r[1] !== ''; });
     fields.innerHTML = rows.map(function (r) {
       return '<div class="row"><span class="k">' + escapeHtml(r[0]) + '</span><span class="v">' + escapeHtml(String(r[1])) + '</span></div>';
     }).join('');
@@ -4746,6 +4759,52 @@
   document.getElementById('detail').addEventListener('click', function (e) { if (e.target === this) closeDetail(); });
 
   /* ── helpers ───────────────────────────────────────────────── */
+
+  /* ── v0.1.79: prices on the phone ─────────────────────────────────
+     Mirrors main/util/currencies.js and the price rule in
+     main/util/prices.js. Until now this sheet printed "$12.50" — dollars,
+     retail only — for every product, whatever currency it is sold in and
+     whatever price groups the company defines, so a riel price showed as
+     dollars and a VIP price was invisible. Mirrors are only safe while
+     something checks them: test/devicePriceMirror.test.js reads this table and
+     fails when it drifts from the main-process one. */
+  var CURRENCY_SYMBOLS = {
+    USD: '$', CNY: '¥', KHR: '៛', THB: '฿', VND: '₫', EUR: '€',
+    JPY: '¥', KRW: '₩', INR: '₹', IDR: 'Rp', MYR: 'RM', SGD: 'S$',
+  };
+  var WHOLE_NUMBER_CURRENCIES = { KHR: 1, VND: 1, IDR: 1, JPY: 1, KRW: 1 };
+
+  function numOrNull(value) {
+    if (value === '' || value == null) return null;
+    var n = Number(value);
+    return isFinite(n) ? n : null;
+  }
+  /** `{ amount, currency }` for retail, wholesale or a company price group —
+   *  tolerating the legacy bare-number shape, exactly like the desktop. */
+  function priceEntryFor(product, source) {
+    var src = String(source || 'retail');
+    if (src === 'retail')    return { amount: numOrNull(product.priceRetail),    currency: product.priceRetailCurrency || null };
+    if (src === 'wholesale') return { amount: numOrNull(product.priceWholesale), currency: product.priceWholesaleCurrency || null };
+    var raw = product.prices ? product.prices[src] : null;
+    if (raw && typeof raw === 'object') return { amount: numOrNull(raw.amount), currency: raw.currency || null };
+    return { amount: numOrNull(raw), currency: null };
+  }
+  function formatDevicePrice(entry) {
+    if (!entry || entry.amount == null) return '';
+    if (entry.currency) {
+      var code = String(entry.currency).toUpperCase();
+      var decimals = WHOLE_NUMBER_CURRENCIES[code] ? 0 : 2;
+      var amount = entry.amount.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+      var symbol = CURRENCY_SYMBOLS[code];
+      return symbol ? (symbol + amount) : (amount + ' ' + code);
+    }
+    return '$' + entry.amount.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  function priceGroupsForDevice() {
+    var company = (state.companies || []).filter(function (c) { return c.id === state.companyId; })[0];
+    return (company && Array.isArray(company.priceGroups)) ? company.priceGroups : [];
+  }
+
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
