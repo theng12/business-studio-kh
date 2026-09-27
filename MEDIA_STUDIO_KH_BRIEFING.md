@@ -36,11 +36,12 @@ studio, an overlay/watermark studio, and a purchasing area.
   exception is AI Studio, which calls a provider you configure and pay for
   yourself; everything else — including background removal — runs on the Mac.
 - **One Mac or several.** See **Modes** below.
-- **Both architectures ship; only arm64 has been launched.** Every release
-  builds two unsigned DMGs — `Media Studio KH-<v>-arm64.dmg` and `-x64.dmg`
-  (`build.mac.target[].arch: ["arm64","x64"]` in `package.json`, verified
-  2026-09-23). Only the arm64 build has ever been run, on one Mac; the x64 DMG
-  has never been launched.
+- **The Apple silicon build ships.** Every release builds one unsigned DMG —
+  `Media Studio KH-<v>-arm64.dmg` (`build.mac.target[].arch: ["arm64"]` in
+  `package.json`; arm64-only since 2026-09-27 at Theng's instruction, before
+  that both arches were built and the Intel one was never launched). An Intel
+  DMG is still one command — `npm run dist:x64` — but only on request
+  (AGENTS.md §20).
 
 ---
 

@@ -28,7 +28,7 @@ Updated: 2026-09-23 (Asia/Bangkok). Purpose: the single authoritative record of 
 
 **Audience.** Home use: this Mac plus the owner's brother's Mac. There is no public release, so the 2026-09-20 audit's public-distribution prerequisites are not work items; the background-removal AGPL-3.0 licensing question is a **closed decision** (AGENTS.md §25.3). Unsigned DMGs installed with `xattr -cr` are the intended workflow.
 
-**Open.** Hardware and provider validation (the runbook's results table is still empty); the x64 DMG has never been launched; signing/notarization is not configured (not required for the home/family install flow); label-designer resize is deliberately not rotation-aware.
+**Open.** Hardware and provider validation (the runbook's results table is still empty); signing/notarization is not configured (not required for the home/family install flow); label-designer resize is deliberately not rotation-aware. The Intel DMG question is closed rather than open: releases are arm64-only since 2026-09-27 (AGENTS.md §20) — before that both were built and the x64 one was never launched.
 
 ## Historical records
 
@@ -103,7 +103,7 @@ to the token model in 0.1.50 (`main/ai/pricing.js`). Tests:
 - [x] **Review 3** (`f2a8776..8cdca5f`): P2 **Skip existing replaced Tags** (the tags block ignored the policy); P3 `create()` stored a blank status; P3 title-row hint gating.
 - [x] **Review 4** (`8cdca5f..8d0c583`): P3 status normalized once at the `bulkUpsert` boundary (blank/whitespace = not supplied; insert defaults `active`, existing rows untouched, dry-run and live agree); P3 no-op rows are no longer counted as `updated`, so the post-Apply review matches the preview and the Skip label.
 - [x] **W1–W5 statuses above are "verified" only in the sense of fresh self-run checks on that tree; there has been no independent review since the F1–F5 corrections. 0.1.37 is nevertheless merged at the owner's direction.**
-- Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer). *(Superseded 2026-09-22 for Intel only: AGENTS.md §20 now requires both `arm64` and `x64` DMGs per release, and `test/releaseScripts.test.js` pins it. Universal binaries remain rejected. See the Current status section.)*
+- Closed decisions remain closed (three bulk modals, `watermarks` asset folder, no Intel/universal packaging, no signing purchase, no real-data transfer). *(Superseded twice for Intel: from 2026-09-22 AGENTS.md §20 required both `arm64` and `x64` DMGs per release, and since 2026-09-27 it requires **arm64 only**, at Theng's instruction; `test/releaseScripts.test.js` pins whichever is current. Universal binaries remain rejected, and `npm run dist:x64` still builds an Intel DMG on request. See the Current status section.)*
 
 **Artifacts:**
 
@@ -260,7 +260,7 @@ Read [AGENTS.md](../AGENTS.md), then this status record and [the completed valid
 
 ## Historical environment and migration notes — not assigned
 
-The setup and data-transfer material in this section is retained from earlier migration planning for provenance. It is not a current assignment or a handoff procedure. Both `arm64` and `x64` DMGs ship (AGENTS.md §20), macOS 12 or newer; only `arm64` has actually been launched and validated, so treat the Intel build as runtime-untested. Windows is not a target. Use Node 24; the current checkout was verified with Node **24.15.0**, npm **11.12.1** (the host shell now runs Node v26.8.2 / npm 11.19.1, where `npm run check` also passes). Node 20 is insufficient for the current Electron/better-sqlite3 dependencies. Install Git and Xcode Command Line Tools first (`xcode-select -p` verifies the tools; `xcode-select --install` installs them if missing).
+The setup and data-transfer material in this section is retained from earlier migration planning for provenance. It is not a current assignment or a handoff procedure. Releases are `arm64`-only (AGENTS.md §20, Theng's instruction of 2026-09-27), macOS 12 or newer; an Intel DMG can still be built on request with `npm run dist:x64` and would be runtime-untested. Windows is not a target. Use Node 24; the current checkout was verified with Node **24.15.0**, npm **11.12.1** (the host shell now runs Node v26.8.2 / npm 11.19.1, where `npm run check` also passes). Node 20 is insufficient for the current Electron/better-sqlite3 dependencies. Install Git and Xcode Command Line Tools first (`xcode-select -p` verifies the tools; `xcode-select --install` installs them if missing).
 
 ```bash
 git clone https://github.com/theng12/media-studio-kh.git
