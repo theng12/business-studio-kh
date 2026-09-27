@@ -155,7 +155,12 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
 
   // Build the product context for token-filling in the live preview.
   const backdropProduct = products.find((p) => p.id === backdropProductId) ?? null;
-  const priceGroups = (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [];
+  // Memoised so the context below does not rebuild (and re-fill every token)
+  // on each render just because `.find()` returns a fresh array reference.
+  const priceGroups = useMemo(
+    () => (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [],
+    [companies, activeCompanyId],
+  );
   const productContext = useMemo(() => {
     if (!backdropProduct) return null;
     const brand = backdropProduct.brandId ? brands.find((b) => b.id === backdropProduct.brandId) : null;
