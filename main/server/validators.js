@@ -923,6 +923,7 @@ const VALIDATORS = {
   'backups:last':                () => true,
   'backups:list':                () => true,
   'backups:openFolder':          () => true,
+  'backups:pickFile':            () => true,
   'backups:pickFolder':          () => true,
   'backups:preview':             requireNonEmptyStringFields('backupPath'),
   'backups:restore':             requireNonEmptyStringFields('backupPath'),

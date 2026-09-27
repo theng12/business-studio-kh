@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('api', {
     preview:    (backupPath)    => invoke('backups:preview', { backupPath }),
     reveal:     (backupPath)    => invoke('backups:reveal', { backupPath }),
     openFolder: ()              => invoke('backups:openFolder'),
+    pickFile:   ()              => invoke('backups:pickFile'),
     pickFolder: ()              => invoke('backups:pickFolder'),
     restore:    (backupPath)    => invoke('backups:restore', { backupPath }),
   },

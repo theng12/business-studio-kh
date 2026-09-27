@@ -39,18 +39,35 @@ const CLIENT = path.join(ROOT, 'main', 'client', 'index.js');
 /**
  * Channels the UI deliberately does not offer in client mode.
  *
- * EMPTY, and that is the point: there are no longer any. The two entries this
- * list held — `templates:applyToExternal` and `files:scanImageFiles`, both from
- * Overlay Studio's "Watermark external photos" tool — are now implemented on the
- * client (main/client/index.js), with the template's logo fetched from the
- * server, and the UI no longer hides the tool.
+ * Was empty until v0.1.83. The two entries this list held before that —
+ * `templates:applyToExternal` and `files:scanImageFiles`, both from Overlay
+ * Studio's "Watermark external photos" tool — were implemented on the client
+ * (main/client/index.js), with the template's logo fetched from the server, and
+ * the UI no longer hides the tool.
  *
- * The mechanism is kept because deliberate mode-gating is a legitimate design
- * choice for future features. An entry must name the gating code that hides the
- * feature, and the test below fails if that gating disappears — so an exemption
- * can never outlive its reason.
+ * Deliberate mode-gating is a legitimate design choice for a feature that
+ * cannot work across two Macs, so the mechanism stays. An entry must name the
+ * gating code that hides the feature, and the test below fails if that gating
+ * disappears — so an exemption can never outlive its reason.
  */
-const MODE_GATED = [];
+const MODE_GATED = [
+  {
+    // v0.1.83: Settings → Backups → "Restore from a file…". The dialog and the
+    // file are on the Mac you are sitting at, while `backups:restore` runs
+    // against the server's data folder — so on a client Mac the picked file
+    // could not be read by the machine that has to read it. Unlike
+    // `files:scanImageFiles` (which was made to work by fetching the file over
+    // the wire) there is nothing to send: the restore needs the whole archive
+    // on the data-owning Mac, and copying a multi-GB backup across the network
+    // is not something this button should quietly start doing. The folder list
+    // works in client mode, which is the sane way to restore there.
+    channel: 'backups:pickFile',
+    gate: {
+      file: 'renderer/modules/Settings/BackupsPanel.jsx',
+      mustContain: '{!isClient && <Button onClick={handleRestoreFromFile}',
+    },
+  },
+];
 
 /** Channels that are broken on a client Mac. Empty, and it must stay empty. */
 const KNOWN_CLIENT_GAPS = [];

@@ -77,6 +77,17 @@ export function BackupsPanel({ config }) {
     }
   }
 
+  /**
+   * v0.1.83: the list is read once on mount, so a backup file copied into the
+   * folder with Finder (or dropped there by another app) stayed invisible
+   * until the user left Settings and came back. Refresh re-reads it, and says
+   * so while it does.
+   */
+  async function handleRefresh() {
+    setList((prev) => ({ ...prev, loading: true }));
+    await refresh();
+  }
+
   async function handleReveal(backupPath) {
     try { await window.api.backups.reveal(backupPath); }
     catch (err) { addToast(err.message, 'error'); }
@@ -130,6 +141,28 @@ export function BackupsPanel({ config }) {
     }
   }
 
+  /**
+   * v0.1.83: restore a backup that is NOT in the backups folder — the route
+   * for the old Business Studio KH backups, which were written by another app to
+   * somewhere else entirely. Picks the file, then runs the exact same
+   * preview → confirm → restore path the list uses, so there is one restore
+   * implementation and one warning.
+   */
+  async function handleRestoreFromFile() {
+    let backupPath;
+    try {
+      backupPath = await window.api.backups.pickFile();
+    } catch (err) {
+      addToast(`Couldn't open the file chooser: ${err.message}`, 'error');
+      return;
+    }
+    if (!backupPath) return; // cancelled
+    await handleRestore({
+      backupPath,
+      fileName: backupPath.split('/').pop(),
+    });
+  }
+
   return (
     <div className="settings-page">
       <h2 className="settings-section-heading">Backups</h2>
@@ -181,12 +214,25 @@ export function BackupsPanel({ config }) {
           ? 'Newest first. Restore replaces the server data folder, keeps a safety copy, then restarts the server while this client reconnects.'
           : 'Newest first. Restore replaces the current data folder (a safety copy of the old data is kept) and restarts the app.'}
       >
+        <div className="setting-control-row" style={{ marginBottom: 8 }}>
+          <Button variant="ghost" onClick={handleRefresh} disabled={list.loading}>
+            {list.loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+          {/* v0.1.83: only on the Mac that owns the data folder — a file picked
+              on a client Mac cannot be read by the server that restores it.
+              Same guard as Reveal / Open / Change below. */}
+          {!isClient && <Button onClick={handleRestoreFromFile} disabled={restoringPath !== null}>Restore from a file…</Button>}
+        </div>
         <div className="backups-list">
           {list.loading ? (
             <p className="muted" style={{ margin: 0 }}>Loading…</p>
           ) : list.backups.length === 0 ? (
             <p className="muted" style={{ margin: 0 }}>
-              No backups yet. Click <strong>Create backup now</strong> above to make your first one.
+              No backups in this folder yet. Click <strong>Create backup now</strong> above to make
+              your first one
+              {isClient
+                ? '.'
+                : <>, or <strong>Restore from a file…</strong> to bring in a backup kept somewhere else.</>}
             </p>
           ) : (
             <ul className="backups-table">

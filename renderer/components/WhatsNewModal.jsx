@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.83',
+    date: '2026-09-27',
+    items: [
+      'NEW — Settings → Backups can now restore a backup kept anywhere on this Mac: "Restore from a file…" opens a chooser instead of only offering the files already in the backups folder. That matters for a backup from the old app or from an external drive, which had to be copied into the folder first — and the list did not notice a file that appeared while the screen was open, which made it look as though the copy had failed.',
+      'NEW — a Refresh button next to the backup list, so a file you just dropped into the backups folder shows up without leaving Settings and coming back.',
+      'Nothing about restoring changed: a file picked this way goes through the same checks and the same "this REPLACES everything in your current data folder" warning as a row in the list, your current data is still moved aside first, and a file that is not a backup is refused before you are asked to confirm anything. On a second Mac in multi-Mac mode the button is not shown, because the file would be on that Mac while the restore runs on the machine holding the data.',
+      'Internal — new local-only channel backups:pickFile (exposeLocal, validator () => true) plus window.api.backups.pickFile; the panel reuses handleRestore() rather than adding a second restore path. test/backupFromFile.test.js covers the local-only registration, the cancelled/foreign-file/declined cases leaving everything untouched, and the pick → preview → confirm → restore order.',
+    ],
+  },
+  {
     version: '0.1.82',
     date: '2026-09-27',
     items: [
