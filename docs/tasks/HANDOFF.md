@@ -1,7 +1,7 @@
 # HANDOFF — Media Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.81, commit `39f7611`, 2026-09-27**. If it disagrees with the
+that produced it. It was true at **v0.1.82, commit `01da7b9`, 2026-09-27**. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,7 +9,7 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Media Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.81**, merged to `main` at `39f7611` (PR #78) and installed at `/Applications/Media Studio KH.app`. Replaced apps are in `_trash/Media Studio KH-0.1.7{2,…,0}.app` and `-0.1.80.app`. |
+| Current release | **0.1.82**, merged to `main` at `01da7b9` (PR #81) and installed at `/Applications/Media Studio KH.app`. Replaced apps are in `_trash/Media Studio KH-0.1.7{2,…,9}.app` and `-0.1.8{0,1}.app`. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into `_trash/README.md`. |
@@ -25,8 +25,8 @@ Replace `<wt>` with a worktree that has `node_modules` installed — this projec
 |---|---|---|
 | 1 | `cd <wt> && git switch main && git pull --ff-only` | Start from merged `main`. |
 | 2 | `git switch -c codex/<topic>` | One branch per change or release. |
-| 3 | `npm run check` | `npm run lint && npm test`. **988 pass** at 0.1.81. Three eslint warnings are pre-existing (unused disable directives in three unrelated test files); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flake:** 0–2 tests can fail on a run — several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output). Seen once on 2026-09-26, clean in four follow-up runs; re-run before believing a failure. |
-| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **146 pass** at 0.1.81. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
+| 3 | `npm run check` | `npm run lint && npm test`. **992 pass** at 0.1.82. Three eslint warnings are pre-existing (unused disable directives in three unrelated test files); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flake:** 0–2 tests can fail on a run — several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output). Seen once on 2026-09-26, clean in four follow-up runs; re-run before believing a failure. |
+| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **150 pass** at 0.1.82. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
 | 4b | `node scripts/probe-webclient-context.js` | Real Chromium against `webclient/index.html` with loopback fixtures. **Any web-viewer change should run this** — it is the only check that loads the real page. Not in `package.json`; needs `env -u ELECTRON_RUN_AS_NODE`. |
 | 5 | `npm run check:images`, `check:render`, `check:client-server` | Electron probes. **This shell exports `ELECTRON_RUN_AS_NODE=1` globally**, so GUI probes need `env -u ELECTRON_RUN_AS_NODE npx electron …` or they behave as Node and fail. |
 | 6 | `env -u ELECTRON_RUN_AS_NODE npx electron . --remote-debugging-port=9333 --user-data-dir=/tmp/mskh-ui/userdata` | Launch for the crawl. **Footgun:** with no `config.json` in that user-data dir the app uses the owner's real data folder. Write `/tmp/mskh-ui/userdata/config.json` first: `{"dataDir":"/tmp/mskh-ui/data","firstLaunchHandled":true}`. |
@@ -97,7 +97,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 
 ## OPEN / IN FLIGHT
 
-At 0.1.81 nothing is mid-implementation. The honest gaps:
+At 0.1.82 nothing is mid-implementation. The honest gaps:
 
 | Gap | State |
 |---|---|
@@ -108,6 +108,7 @@ At 0.1.81 nothing is mid-implementation. The honest gaps:
 | Viewer saves never exercised on a real device | Unit-tested in `test/webclientContext.test.js` (34 cases) and the packaged `/m` page is verified to serve the current markup, but no real phone has run the share sheet, the press-and-hold step, or the `<a download>` route. Also unknown: how often the automatic post-Apply `navigator.share` survives the render-plus-fetch inside the browser's transient-activation window, i.e. how often the one-tap path actually happens. |
 | `<a download>` in standalone mode | "Save to Files" / "Download" toasts immediately and cannot learn whether the download happened, and WebKit has historically ignored downloads in Add to Home Screen apps (which this page invites with `apple-mobile-web-app-capable`). Check on the device; if it silently does nothing, hide that button in standalone mode rather than lying. |
 | Save-on-apply is ON by default | Deliberate: it is the feature the request was for, one tap to disable, remembered per device. It applies only to the two library destinations — the save-only destination always saves, because that is the whole point of choosing it. |
+| Importing the OLD app's data | **Backups: yes, merged: no.** An `image-studio-kh-backup` (Image Studio KH) now lists and restores, provided its database is schema v2 — a recent backup from that app is, and `validateSQLiteDatabase` refuses anything else on purpose (v0.1.82, proven end to end by `test/legacyBackupImport.test.js` + a case in `test/archiveRestore.test.js`). An `.iskhbundle` from the old app needed no change at all. What does NOT exist is a merge: a restore REPLACES the data folder (the previous one is renamed aside), so two catalogues cannot be combined this way. |
 | Independent review | **None by a third party.** 0.1.73–0.1.74 did get one adversarial pass from a second agent in the same family (findings D1–D3, R1–R5, N1–N6 in PR #61); its one layout "defect" was retracted on re-derivation, which is exactly why that is not independent review. No human or third-party model has read the tree. |
 | Hardware validation | **Not performed.** The runbook's results table is empty: two physical Macs, Wi-Fi loss / sleep-wake / DHCP change, a real printer (physical dimensions, Khmer glyphs, cancellation), macOS 12 hardware, iPad Safari, paid AI providers, the local background-removal model download. Loopback probes are not two-Mac evidence. |
 | x64 DMG | Built every release, **never launched**. Only the arm64 build has been run, on this one Mac. |
