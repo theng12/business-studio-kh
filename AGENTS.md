@@ -26,7 +26,7 @@ drifted badly before this check.
 
 - **Commit-and-push, plus a `dist/` DMG.** Finished work is committed and pushed —
   never left sitting uncommitted in a worktree. When this project ships a Mac app,
-  every release has its DMGs built into `dist/` and ready (both arches — see §20).
+  every release has its DMG built into `dist/` and ready (one arm64 DMG since 2026-09-27 — see §20).
   Work that exists only on a branch, or has no packaged DMG, is not "done".
 
 - **Every release updates `docs/tasks/HANDOFF.md`.** Read it first in a new session, and keep it
@@ -494,7 +494,7 @@ carried over unchanged; only the numbers moved. Don't retro-renumber.
 
 ## 25. Closed decisions — do not re-propose
 
-Three things were raised, looked at, and **deliberately dropped by Theng** (the
+Four things were raised, looked at, and **deliberately dropped by Theng** (the
 first two on 2026-09-20, the third on 2026-09-23, the fourth on 2026-09-27).
 They are settled, not backlog. Do not propose them again, do not "helpfully"
 fix them in passing, and do not list them as remaining work.
