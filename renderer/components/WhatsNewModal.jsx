@@ -2,6 +2,14 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.80',
+    date: '2026-09-27',
+    items: [
+      'POLISH — the History drawer reads a price change in words. Changing a VIP or Dealer price is stored as one price-groups record, so the drawer said "Prices" and printed a JSON blob; it now shows the group by name and the amount, e.g. "VIP price: 1234.5 USD → 1300 USD".',
+      'Internal — removed two imports the v0.1.55 price work left behind in main/socialGridRenderer.js (resolvePrice, formatPrice). Dead code only; it was two of the five long-standing lint warnings, so the suite now reports three.',
+    ],
+  },
+  {
     version: '0.1.79',
     date: '2026-09-27',
     items: [
