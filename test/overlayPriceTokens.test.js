@@ -81,7 +81,9 @@ test('a price group the owner created becomes a token', { skip: skipReason }, as
     });
 
     const ctx = templates.buildTemplateContext(products.get(product.id));
-    assert.equal(ctx.prices.vip, '$1,234.50', 'the VIP group is formatted like every other price');
+    // The bare amount, like {price_retail} prints — a formatted group price
+    // beside a raw retail price on one image was the inconsistency.
+    assert.equal(ctx.prices.vip, '1234.5');
     assert.equal(ctx.prices.dealer, '', 'a group this product has no price for is empty, not missing');
     assert.equal(Object.prototype.hasOwnProperty.call(ctx.prices, 'nope'), false, 'unknown keys are not invented');
 
@@ -92,7 +94,7 @@ test('a price group the owner created becomes a token', { skip: skipReason }, as
       'VIP {price_vip} / retail {price_retail} / {price_nope}',
       { ...ctx, priceRetail: 100 },
     );
-    assert.equal(out, 'VIP $1,234.50 / retail 100 / {price_nope}',
+    assert.equal(out, 'VIP 1234.5 / retail 100 / {price_nope}',
       'his token resolves; a typo stays visible instead of silently blanking');
     assert.equal(template.id.length > 0, true);
   } finally {

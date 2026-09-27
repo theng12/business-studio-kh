@@ -2,6 +2,19 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.79',
+    date: '2026-09-27',
+    items: [
+      'NEW — the Label Designer can print your own price groups. "Product field" now lists Retail, Wholesale and every group you have created (VIP, Dealer, …), so a label can carry a VIP price the same way a catalog or a social post already could. Before this the renderer supported it and the dropdown did not, so it could only be done from the API.',
+      'FIX — a label’s live preview now shows the real group price instead of a hardcoded sample. The canvas looked the field up as a plain key, so every group price previewed as "9.99" while the printed label showed the true number.',
+      'FIX — the phone viewer shows every price a product has, in the product’s own currency. It printed one figure in dollars — retail only — so a product priced in riel showed as dollars and a VIP price was invisible. Retail, wholesale and each of your groups now appear on the product sheet, formatted the way the desktop formats them.',
+      'FIX — the catalog CSV and the Google Shopping feed carry your price groups and the right currency. Both exported the retail price only, and the Google feed labelled every product "USD" — including riel, baht and dong ones. The generic sheet now has a price and currency column per group, matching the Excel export.',
+      'FIX — the bulk edit table shows a group price that was stored as a plain number (rows written before v0.1.55). It read the newer `{ amount, currency }` shape only, so those cells looked empty for a price that exists.',
+      'POLISH — {price_vip} and friends print the bare amount, exactly like {price_retail} and {price_wholesale}. 0.1.78 formatted group prices with a currency symbol while retail stayed a bare number, so one image could show "$1,234.50" next to "100" — the inconsistency that started this audit. Write the currency in the template text, as those templates always have.',
+      'Internal — one price rule, three places: main/util/prices.js stays canonical, renderer/lib/prices.js is a new mirror for the renderer (test/priceMirror.test.js runs both over the same fixtures, including the legacy bare-number shape and nonsense values), and the phone viewer carries its own copy that test/devicePriceMirror.test.js checks against main/util/currencies.js. test/pricePaths.test.js (native) walks one product through the catalog page, the label, the generic CSV and the Google feed and fails if any of them drops or mis-formats a group. The label field list moved to renderer/modules/LabelStudio/labelFields.js so it is testable without a DOM.',
+    ],
+  },
+  {
     version: '0.1.78',
     date: '2026-09-27',
     items: [

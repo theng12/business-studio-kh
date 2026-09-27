@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Input, Modal, Select } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -16,12 +16,11 @@ const TYPES = [
   ['productImage', 'Product image'], ['logo', 'Brand logo'], ['image', 'Image'], ['cert', 'Cert badge'],
   ['date', 'Date'], ['country', 'Country'], ['rect', 'Rectangle'], ['colorbar', 'Color bar'], ['divider', 'Divider'],
 ];
-const FIELDS = [
-  ['name', 'Product name'], ['sku', 'SKU'], ['barcode', 'Barcode'], ['secondaryCode', 'Secondary code'],
-  ['description', 'Description'], ['colorFinish', 'Color / Finish'], ['variant', 'Variant'],
-  ['unit', 'Unit'], ['priceRetail', 'Retail price'], ['priceWholesale', 'Wholesale price'],
-  ['expiryDate', 'Expiry date'], ['countryOfOrigin', 'Country of origin'],
-];
+/* v0.1.79: the field list now comes from labelFields.js so the company's own
+ * price groups can be chosen here — the renderer resolved `price.<key>` all
+ * along, so printing a VIP price was possible from the API and impossible from
+ * this screen. */
+import { fieldOptions } from './labelFields.js';
 
 function makeElement(type, n) {
   const base = { id: `${type}-${Date.now()}-${n}`, type, x: 4, y: 4 + n * 2, width: 30, height: 8,
@@ -71,7 +70,7 @@ const ALIGN_MODES = [
   ['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom'],
 ];
 
-function Inspector({ element, selectionCount = 0, onChange, onRemove, onPickImage, onDuplicate, onLayer }) {
+function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, onRemove, onPickImage, onDuplicate, onLayer }) {
   if (!element && selectionCount > 1) {
     // v0.1.64: with several elements selected the single-element form would be a
     // lie. Say what is selected and point at the tools that act on a group.
@@ -97,7 +96,7 @@ function Inspector({ element, selectionCount = 0, onChange, onRemove, onPickImag
   const set = (key, value) => onChange({ [key]: value });
   return <aside className="studio-inspector"><div className="inspector-title"><div><span>{element.type}</span><strong>{TYPES.find(([id]) => id === element.type)?.[1] || element.type}</strong></div><Button variant="ghost" onClick={onRemove}>Remove</Button></div>
     {!['rect', 'colorbar', 'divider', 'productImage', 'logo', 'image', 'cert'].includes(element.type) ? <>
-      <label>Product field<Select value={element.field || 'name'} onChange={(e) => set('field', e.target.value)}>{FIELDS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></label>
+      <label>Product field<Select value={element.field || 'name'} onChange={(e) => set('field', e.target.value)}>{fieldOptions(priceGroups).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></label>
       <label>Manual text<Input value={element.manualValue || ''} placeholder="Uses product field when empty" onChange={(e) => set('manualValue', e.target.value)} /></label>
     </> : null}
     {['image', 'cert'].includes(element.type) ? <Button variant="ghost" onClick={onPickImage}>{element.src ? 'Replace image…' : 'Choose image…'}</Button> : null}
@@ -121,6 +120,12 @@ export function LabelTemplates() {
   const [snap, setSnap] = useState(true);
   const history = useDesignerHistory();
   const selected = selectedIds.length === 1 ? (draft?.elements?.find((x) => x.id === selectedIds[0]) || null) : null;
+  // v0.1.79: this company's price groups, so a label can print one of them.
+  const companies = useAppStore((s) => s.companies);
+  const priceGroups = useMemo(
+    () => (companies ?? []).find((c) => c.id === companyId)?.priceGroups ?? [],
+    [companies, companyId],
+  );
   const requestSeq = useRef(0); const remoteSeq = useRef(0); const editorGeneration = useRef(0); const latest = useRef(null); const dirty = useRef(false); const saveQueue = useRef(null); const saveRef = useRef(null); const acknowledgedRevision = useRef(null);
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
@@ -499,6 +504,7 @@ export function LabelTemplates() {
           <Inspector
             element={selected}
             selectionCount={selectedIds.length}
+            priceGroups={priceGroups}
             onChange={(patch) => changeElement(selectedIds[0], patch)}
             onRemove={() => removeElements()}
             onPickImage={pickElementImage}
