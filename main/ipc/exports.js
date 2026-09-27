@@ -46,7 +46,10 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     const categoriesById = new Map(require('../db/categories').list(companyId).map((c) => [c.id, c]));
     const { buildCatalogCsv } = require('../util/catalogCsv');
     const fmt = ['generic', 'shopify', 'google'].includes(format) ? format : 'generic';
-    const csv = buildCatalogCsv({ products, brandsById, categoriesById, format: fmt });
+    // v0.1.79: the company's own price groups travel with the sheet, so it
+    // carries the same price columns the Excel export does.
+    const priceGroups = require('../db/companies').get(companyId)?.priceGroups ?? [];
+    const csv = buildCatalogCsv({ products, brandsById, categoriesById, priceGroups, format: fmt });
     return { csv, count: products.length, filename: `catalog-${fmt}.csv` };
   });
 

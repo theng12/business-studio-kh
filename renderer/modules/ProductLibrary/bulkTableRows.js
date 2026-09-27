@@ -14,6 +14,22 @@
  * move, not a rewrite, so the save path is unchanged.
  */
 
+/* v0.1.79: the shared price rule, so a group price is read the same way in the
+ * table as in a catalog, a label or an overlay token. `priceEntry` returns
+ * { amount, currency } for both stored shapes (and for retail/wholesale). */
+function groupEntry(product, key) {
+  const raw = product?.prices?.[key];
+  if (raw && typeof raw === 'object') return { amount: raw.amount, currency: raw.currency };
+  return { amount: raw, currency: null };
+}
+function amountOf(product, key) {
+  const amount = groupEntry(product, key).amount;
+  return amount == null ? '' : amount;
+}
+function currencyOf(product, key) {
+  return groupEntry(product, key).currency || 'USD';
+}
+
 /** Scalar product fields the bulk table treats as numbers. */
 export const NUMERIC_PRODUCT_KEYS = [
   'priceRetail', 'priceWholesale', 'stockQty',
@@ -24,10 +40,13 @@ export const NUMERIC_PRODUCT_KEYS = [
 export function productValue(product, key) {
   if (!product) return '';
   if (key.startsWith('price:')) {
-    return product.prices?.[key.slice('price:'.length)]?.amount ?? '';
+    // v0.1.79: prices[group] is { amount, currency } normally, but rows written
+    // before v0.1.55 hold a bare number — reading `.amount` off those showed an
+    // empty cell for a price that exists. Shared resolver, one rule.
+    return amountOf(product, key.slice('price:'.length));
   }
   if (key.startsWith('priceCurrency:')) {
-    return product.prices?.[key.slice('priceCurrency:'.length)]?.currency ?? 'USD';
+    return currencyOf(product, key.slice('priceCurrency:'.length));
   }
   if (key.startsWith('custom:')) {
     return product.customFields?.[key.slice('custom:'.length)] ?? '';
