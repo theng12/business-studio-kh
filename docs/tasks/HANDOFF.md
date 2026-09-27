@@ -1,7 +1,7 @@
 # HANDOFF — Business Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.77, commit `750fc04`, 2026-09-26**. If it disagrees with the
+that produced it. It was true at **v0.1.79, commit `e8abaee`, 2026-09-27**. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,7 +9,7 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Business Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.77**, merged to `main` at `750fc04` (PR #69) and installed at `/Applications/Business Studio KH.app`. Replaced apps are in `_trash/Business Studio KH-0.1.7{2,3,4,5,6}.app`. |
+| Current release | **0.1.79**, merged to `main` at `e8abaee` (PR #74) and installed at `/Applications/Business Studio KH.app`. Replaced apps are in `_trash/Business Studio KH-0.1.7{2,3,4,5,6,7,8}.app`. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into `_trash/README.md`. |
@@ -25,8 +25,8 @@ Replace `<wt>` with a worktree that has `node_modules` installed — this projec
 |---|---|---|
 | 1 | `cd <wt> && git switch main && git pull --ff-only` | Start from merged `main`. |
 | 2 | `git switch -c codex/<topic>` | One branch per change or release. |
-| 3 | `npm run check` | `npm run lint && npm test`. **956 pass** at 0.1.77. Five eslint warnings are pre-existing (unused disable directives in three unrelated test files). **Known flake:** 0–2 tests can fail on a run — several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output). Seen once on 2026-09-26, clean in four follow-up runs; re-run before believing a failure. |
-| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **145 pass** at 0.1.78. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
+| 3 | `npm run check` | `npm run lint && npm test`. **976 pass** at 0.1.79. Five eslint warnings are pre-existing (unused disable directives in three unrelated test files). **Known flake:** 0–2 tests can fail on a run — several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output). Seen once on 2026-09-26, clean in four follow-up runs; re-run before believing a failure. |
+| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **146 pass** at 0.1.79. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
 | 4b | `node scripts/probe-webclient-context.js` | Real Chromium against `webclient/index.html` with loopback fixtures. **Any web-viewer change should run this** — it is the only check that loads the real page. Not in `package.json`; needs `env -u ELECTRON_RUN_AS_NODE`. |
 | 5 | `npm run check:images`, `check:render`, `check:client-server` | Electron probes. **This shell exports `ELECTRON_RUN_AS_NODE=1` globally**, so GUI probes need `env -u ELECTRON_RUN_AS_NODE npx electron …` or they behave as Node and fail. |
 | 6 | `env -u ELECTRON_RUN_AS_NODE npx electron . --remote-debugging-port=9333 --user-data-dir=/tmp/mskh-ui/userdata` | Launch for the crawl. **Footgun:** with no `config.json` in that user-data dir the app uses the owner's real data folder. Write `/tmp/mskh-ui/userdata/config.json` first: `{"dataDir":"/tmp/mskh-ui/data","firstLaunchHandled":true}`. |
@@ -77,6 +77,8 @@ Each of these has already burned a session. They are instructions, not backgroun
 - **A review handed to another agent is not a review it will keep to.** The 0.1.74 pass was asked for findings and edited the worktree instead; the edits were kept only because each claim was re-derived against the code, and one of them (a layout "defect") did not survive that. Ask for findings, then verify every one before taking it (v0.1.74).
 - **Name the menu the user's platform actually has.** "Press and hold, then tap Save Image" is iOS; Android says **Download image**, and a desktop browser says Save image as…. An instruction pointing at a menu item that is not there is worse than no instruction — this shipped for two releases before a screenshot showed it on a Samsung phone (`IS_ANDROID`, `DEVICE_SAVE_MENU` in `webclient/index.html`, v0.1.75).
 - **Do not assume the owner's devices are Apple.** The brother's phone is Android. Anything written for "the iPad" needs checking against that, including anything about Photos/Files/Downloads and share sheets (v0.1.75).
+- **A price is read through `priceEntry` / `formatPriceEntry`, never off the column or the map.** The stored shapes are three: `priceRetail`/`priceWholesale` with their own currency columns, `prices[key]` as `{ amount, currency }`, and `prices[key]` as a bare number (rows written before v0.1.55). Reading the map as a scalar printed "$NaN" on a catalog once; the 0.1.79 audit found the same class of mistake in the label field list, the label canvas, the phone viewer, the catalog CSV and the bulk edit table. The rule lives in `main/util/prices.js`, is mirrored in `renderer/lib/prices.js` and in `webclient/index.html`, and `test/priceMirror.test.js` / `test/devicePriceMirror.test.js` / `test/pricePaths.test.js` fail when a copy drifts (v0.1.79).
+- **A price token on an image is a bare number.** `{price_retail}`, `{price_wholesale}` and `{price_<group>}` all print the amount alone; the currency is the template's own text. A formatted group token beside a raw retail one on the same image was the inconsistency that started the audit (v0.1.79).
 - **A new native test file is invisible until it is in the `test:native` list.** That script names its files one by one, so a fresh DB-backed test reports `skip` under `npm test` and looks green forever. 0.1.78 caught its own new file that way; check `package.json` whenever one is added.
 - **Anything the phone downloads has to be under a served root.** The batch zip goes to `processed/overlay-zips/` precisely because `app-image://` and the server's asset route already cover `processed/` — a file written anywhere else is invisible to the device even though the desktop can read it (v0.1.78, pinned by `test/serverAssetTransport.test.js`).
 - **A preview has to follow the choice it previews.** The phone's overlay preview composed onto the main image while the apply could be aimed at photo 2, so it showed the wrong picture with no hint that it had (fixed in v0.1.77 by giving `templates:renderPreview` a `position`). Whenever an action gains "which input", the preview needs the same argument in the same change.
@@ -95,7 +97,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 
 ## OPEN / IN FLIGHT
 
-At 0.1.78 nothing is mid-implementation. The honest gaps:
+At 0.1.79 nothing is mid-implementation. The honest gaps:
 
 | Gap | State |
 |---|---|
