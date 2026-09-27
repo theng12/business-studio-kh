@@ -444,6 +444,23 @@ const VALIDATORS = {
     if (!isUuid(a.operationId)) return 'operationId must be a UUID';
     return true;
   },
+  // v0.1.78: package several overlay results into one zip for the phone.
+  'templates:renderZip': (a) => {
+    if (!isObject(a)) return 'expected object';
+    if (!isString(a.templateId)) return 'templateId required';
+    if (!isArray(a.items) || a.items.length === 0) return 'items must be a non-empty array';
+    if (a.items.length > 50) return 'items too large (max 50 per zip)';
+    for (const item of a.items) {
+      if (!isObject(item)) return 'each item must be an object';
+      if (!isString(item.productId)) return 'each item needs a productId';
+      if (item.position != null
+        && (!Number.isInteger(item.position) || item.position < 1 || item.position > 50)) {
+        return 'item.position must be an integer between 1 and 50';
+      }
+    }
+    if (a.label != null && !isString(a.label)) return 'label must be a string';
+    return true;
+  },
 
   // Global search --------------------------------------------------
   'search:global':         (a) => {

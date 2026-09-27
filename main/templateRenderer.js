@@ -39,7 +39,8 @@
  *
  * Tokens supported in text/barcode content: {sku} {name} {brand}
  * {barcode} {color} {category} {description} {price_retail}
- * {price_wholesale} {date} {date_short}.
+ * {price_wholesale} {date} {date_short}, plus {price_<group key>} for each
+ * price group the active company defines (v0.1.78).
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -57,6 +58,22 @@ function fmtDate(d, short = false) {
   return d.toLocaleDateString();
 }
 
+/**
+ * Tokens an element's text may contain. `{price_<key>}` resolves a company
+ * price group by its key (v0.1.78) — `{price_vip}` for a group keyed `vip` —
+ * and renders it the way the catalog and label renderers do (the product's own
+ * currency when it has one, otherwise the caller's fallback symbol). Retail and
+ * wholesale keep their long-standing bare-number output, because templates in
+ * the wild already size and prefix those by hand.
+ *
+ * A token naming a group the company does not have is LEFT ALONE rather than
+ * blanked, so a typo shows up as `{price_vip}` on the image instead of a
+ * silently empty space.
+ *
+ * The Overlay Studio editor draws its own preview and carries a mirror of this
+ * function (renderer/modules/OverlayStudio/EditorCanvas.jsx); the two are kept
+ * in step by test/overlayTokens.test.js.
+ */
 function fillTokens(template, ctx = {}) {
   if (template == null) return '';
   return String(template)
@@ -69,6 +86,10 @@ function fillTokens(template, ctx = {}) {
     .replace(/\{description\}/gi,     ctx.description ?? '')
     .replace(/\{price_retail\}/gi,    ctx.priceRetail != null ? String(ctx.priceRetail) : '')
     .replace(/\{price_wholesale\}/gi, ctx.priceWholesale != null ? String(ctx.priceWholesale) : '')
+    .replace(/\{price_([a-z0-9_-]+)\}/gi, (match, key) => {
+      const known = ctx.prices && Object.prototype.hasOwnProperty.call(ctx.prices, String(key).toLowerCase());
+      return known ? String(ctx.prices[String(key).toLowerCase()] ?? '') : match;
+    })
     .replace(/\{date\}/gi,            fmtDate(ctx.date))
     .replace(/\{date_short\}/gi,      fmtDate(ctx.date, true));
 }

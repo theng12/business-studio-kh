@@ -97,6 +97,7 @@ function loadBrowserHarness({
   companyData = {}, deferReorder = false, deferAssets = false,
   assetsOk = false, assetBlob = null, shareAvailable = false, shareDenied = false,
   overlayApply = null, renderPreview = null, userAgent = '', applyBulk = null, productList = null,
+  renderZip = null,
 } = {}) {
   const elements = new Map();
   const storage = new Map();
@@ -182,6 +183,9 @@ function loadBrowserHarness({
     if (body.channel === 'templates:applyBulk' && applyBulk) {
       return Promise.resolve(response(applyBulk));
     }
+    if (body.channel === 'templates:renderZip' && renderZip) {
+      return Promise.resolve(response(renderZip));
+    }
     if (body.channel === 'products:list' && productList) {
       return Promise.resolve(response(productList));
     }
@@ -224,10 +228,10 @@ function loadBrowserHarness({
     setListSelect: setListSelect,
     toggleListSelected: toggleListSelected,
     selectPageProducts: selectPageProducts,
-    startSaveQueue: startSaveQueue,
-    closeSaveQueue: closeSaveQueue,
-    nextQueueItem: nextQueueItem,
-    downloadAllQueue: downloadAllQueue,
+    offerOverlayResults: offerOverlayResults,
+    closeZipSheet: closeZipSheet,
+    downloadZip: downloadZip,
+    setOverlayPosition: setOverlayPosition,
     saveImageToDevice: saveImageToDevice,
     closeOverlayDoneSheet: closeOverlayDoneSheet,
     openImgPreview: openImgPreview,
@@ -606,7 +610,7 @@ test('overlay apply hands the result to the share sheet when the device toggle i
   // template, and offered to iOS — that is the only route into Photos.
   assert.deepEqual(harness.gets, ['http://server.test/assets/SKU-1/002--gold-frame.png']);
   assert.equal(harness.shares.length, 1, 'the share sheet is offered the result');
-  assert.equal(harness.shares[0].files[0].name, 'SKU-1-gold-frame.png');
+  assert.equal(harness.shares[0].files[0].name, 'SKU-1-Gold-Frame.png');
   assert.equal(harness.shares[0].files[0].type, 'image/png');
 
   // Share succeeded, so the fallback sheet must stay shut.
@@ -624,7 +628,7 @@ test('overlay apply over plain HTTP offers the press-and-hold route instead of t
 
   assert.equal(harness.shares.length, 0);
   assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), true);
-  assert.equal(harness.elements.get('overlayDoneName').textContent, 'SKU-1-gold-frame.png');
+  assert.equal(harness.elements.get('overlayDoneName').textContent, 'SKU-1-Gold-Frame.png');
   assert.equal(harness.elements.get('overlayDoneSaveBtn').textContent, 'Open image to save');
   assert.equal(harness.elements.get('overlayDoneFilesBtn').hidden, false);
   assert.match(harness.elements.get('overlayDoneHint').textContent, /press and hold/i);
@@ -847,15 +851,17 @@ test('save-only renders the overlay without touching the product', async () => {
   // The bytes arrive over the RPC, so there is no second fetch of anything.
   assert.deepEqual(harness.gets, []);
   assert.equal(harness.shares.length, 1, 'the render is handed to the share sheet');
-  assert.equal(harness.shares[0].files[0].name, 'SKU-1-gold-frame.png');
+  assert.equal(harness.shares[0].files[0].name, 'SKU-1-Gold-Frame.png');
   assert.equal(harness.shares[0].files[0].type, 'image/png');
   assert.equal(harness.shares[0].files[0].size, 'overlay-render-bytes'.length);
-  // One picture and a share sheet that works: the sheet is offered without a
-  // second tap, so the run is over and the queue closes itself.
-  assert.equal(harness.elements.get('saveQueueSheet').classList.contains('open'), false);
+  // One picture, a share sheet that works: nothing else is opened — no queue,
+  // no zip, no second tap.
+  assert.equal(harness.elements.get('zipSheet').classList.contains('open'), false);
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:renderZip').length, 0,
+    'a single result is never zipped');
 });
 
-test('a save-only result reaches the press-and-hold route without a library file', async () => {
+test('a single save-only result reaches the press-and-hold route without a library file', async () => {
   const harness = await overlayHarness({ renderPreview: { bytes: OVERLAY_BYTES } }); // plain HTTP
   const { hooks } = harness;
   hooks.state.overlay.destKind = 'saveOnly';
@@ -866,18 +872,18 @@ test('a save-only result reaches the press-and-hold route without a library file
   await harness.flush();
   await harness.flush();
 
-  // No share sheet over HTTP, so the queue takes over: the picture itself is
-  // the press target, and there is no library path to re-fetch.
-  assert.equal(harness.elements.get('saveQueueSheet').classList.contains('open'), true);
-  assert.equal(harness.elements.get('saveQueueProgress').textContent, '1 of 1 · SKU-1');
-  assert.equal(harness.elements.get('saveQueueSaveBtn').hidden, true, 'no share sheet over HTTP');
-  assert.match(harness.elements.get('saveQueueHint').textContent, /press and hold/i);
+  // No share sheet over HTTP, so the result sheet takes over: open the picture,
+  // press and hold it. There is no library path to re-fetch and nothing to zip.
+  assert.equal(harness.elements.get('overlayDoneSheet').classList.contains('open'), true);
+  assert.equal(harness.elements.get('overlayDoneName').textContent, 'SKU-1-Gold-Frame.png');
+  assert.equal(harness.elements.get('overlayDoneSaveBtn').textContent, 'Open image to save');
   assert.deepEqual(harness.gets, [], 'no asset fetch for an image that only exists in the browser');
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:renderZip').length, 0);
 
-  const shown = harness.elements.get('saveQueueThumb').src;
+  const shown = hooks.state.overlayDone.url;
   assert.match(shown, /^blob:test-/);
-  hooks.closeSaveQueue();
-  assert.ok(harness.revokedUrls.includes(shown), 'the queue releases the blob it was showing');
+  hooks.closeOverlayDoneSheet();
+  assert.ok(harness.revokedUrls.includes(shown), 'the sheet releases the blob it was showing');
 });
 
 test('the press-and-hold instruction names the menu the platform actually has', async () => {
@@ -991,42 +997,65 @@ test('selecting products feeds one batch apply, not one apply per product', asyn
   assert.equal(hooks.state.listSelect, false, 'select mode ends once the batch starts');
 });
 
-test('a save-only batch renders each product in turn and queues them to save', async () => {
-  const harness = batchHarness(); // plain HTTP: no share sheet
+test('several results are packaged into one zip instead of one reply each', async () => {
+  const harness = batchHarness({
+    renderZip: { filepath: 'processed/overlay-zips/Gold-Frame-2026-09-27.zip', count: 3, skipped: [] },
+  });
   const { hooks } = harness;
   hooks.setSession('http://server.test', 'token-a');
   hooks.state.companyId = 'C1';
   hooks.state.products = [{ id: 'p1', sku: 'SKU-1' }, { id: 'p2', sku: 'SKU-2' }];
 
-  hooks.startSaveQueue([
-    { productId: 'p1', sku: 'SKU-1', filepath: null, templateId: 't1', templateName: 'Gold Frame' },
-    { productId: 'p2', sku: 'SKU-2', filepath: null, templateId: 't1', templateName: 'Gold Frame' },
-  ]);
+  hooks.offerOverlayResults([
+    { productId: 'p1', sku: 'SKU-1', filepath: null, position: 1, templateId: 't1', templateName: 'Gold Frame' },
+    { productId: 'p2', sku: 'SKU-2', filepath: null, position: 2, templateId: 't1', templateName: 'Gold Frame' },
+  ], 't1', 'Gold Frame');
   await harness.flush();
   await harness.flush();
 
-  assert.equal(harness.elements.get('saveQueueSheet').classList.contains('open'), true);
-  assert.equal(harness.elements.get('saveQueueProgress').textContent, '1 of 2 · SKU-1');
-  assert.equal(harness.elements.get('saveQueueName').textContent, 'SKU-1-gold-frame.png');
-  assert.match(harness.elements.get('saveQueueHint').textContent, /press and hold/i);
-  assert.equal(harness.elements.get('saveQueueSaveBtn').hidden, true, 'no share sheet over HTTP');
-  assert.equal(harness.elements.get('saveQueueNextBtn').textContent, 'Next');
+  assert.equal(harness.elements.get('zipSheet').classList.contains('open'), true);
+  assert.match(harness.elements.get('zipProgress').textContent, /Ready — 3 images/);
+  assert.equal(harness.elements.get('zipName').textContent, 'Gold-Frame-2026-09-27.zip');
+  assert.equal(harness.elements.get('zipDownloadBtn').disabled, false);
 
-  // Only the picture on screen has been rendered — not the whole batch.
-  assert.equal(harness.calls.filter((c) => c.channel === 'templates:renderPreview').length, 1);
+  // ONE request for the whole batch, and none of the old per-image renders.
+  const zips = harness.calls.filter((c) => c.channel === 'templates:renderZip');
+  assert.equal(zips.length, 1);
+  assert.deepEqual(zips[0].args.items, [
+    { productId: 'p1', position: 1 },
+    { productId: 'p2', position: 2 },
+  ], 'each image is named by product AND position');
+  assert.equal(harness.calls.filter((c) => c.channel === 'templates:renderPreview').length, 0,
+    'the server composes them; the phone does not fetch them one at a time');
   assert.equal(harness.calls.filter((c) => c.channel === 'templates:applyBulk').length, 0,
-    'save-only writes nothing, so there is no batch to ask for');
+    'save-only writes nothing to the library');
+});
 
-  hooks.nextQueueItem();
+test('downloading the zip fetches it once and hands over a single file', async () => {
+  const harness = batchHarness({
+    renderZip: { filepath: 'processed/overlay-zips/Overlays-1.zip', count: 4, skipped: [{ reason: 'no 2nd image' }] },
+  });
+  const { hooks } = harness;
+  hooks.setSession('http://server.test', 'token-a');
+  hooks.state.companyId = 'C1';
+  hooks.state.products = [{ id: 'p1', sku: 'SKU-1' }, { id: 'p2', sku: 'SKU-2' }];
+
+  hooks.offerOverlayResults([
+    { productId: 'p1', sku: 'SKU-1', filepath: null, position: 1, templateId: 't1', templateName: 'Overlays' },
+    { productId: 'p2', sku: 'SKU-2', filepath: null, position: 1, templateId: 't1', templateName: 'Overlays' },
+  ], 't1', 'Overlays');
   await harness.flush();
   await harness.flush();
-  assert.equal(harness.elements.get('saveQueueProgress').textContent, '2 of 2 · SKU-2');
-  assert.equal(harness.elements.get('saveQueueNextBtn').textContent, 'Done');
-  assert.equal(harness.calls.filter((c) => c.channel === 'templates:renderPreview').length, 2);
+  assert.match(harness.elements.get('zipProgress').textContent, /1 skipped/);
 
-  hooks.nextQueueItem(); // past the end closes
-  assert.equal(harness.elements.get('saveQueueSheet').classList.contains('open'), false);
-  assert.equal(hooks.state.saveQueue, null);
+  harness.calls.length = 0;
+  harness.elements.get('zipDownloadBtn').dispatch('click');
+  await harness.flush();
+  await harness.flush();
+
+  assert.deepEqual(harness.gets, ['http://server.test/assets/processed/overlay-zips/Overlays-1.zip'],
+    'the archive is fetched from the served path, as one binary file');
+  assert.match(harness.elements.get('toast').textContent, /Files|Download/i);
 });
 
 test('the batch destination decides whether the products are touched', async () => {
@@ -1143,7 +1172,9 @@ test('the preview follows the photo the overlay is aimed at', async () => {
   harness.calls.length = 0;
   hooks.paintOverlaySheet();
   assert.match(harness.elements.get('overlayPreviewLabel').textContent, /photo #2/);
-  assert.equal(harness.elements.get('overlayPositionInput').hidden, false);
+  // v0.1.78: the position is a chip, not a field — no phone keypad over the sheet.
+  assert.equal(harness.elements.get('overlayPositionInput'), undefined,
+    'the numeric field is gone for good');
 
   // Compose on photo 2, not on the main image the preview used to be stuck on.
   await harness.flush();
@@ -1170,7 +1201,9 @@ test('a batch can hit the same photo number in every product', async () => {
   hooks.paintOverlaySheet();
 
   const chips = harness.elements.get('overlayScopeChips').children.map((c) => c.textContent);
-  assert.deepEqual(chips, ['Main image (each)', 'All images (each)', 'Photo #']);
+  assert.deepEqual(chips.slice(0, 3), ['Main image (each)', 'All images (each)', 'Photo #']);
+  assert.deepEqual(chips.slice(3), ['1', '2', '3', '4', '5', '6', '7', '8'],
+    'the numbers are tapped from chips — "2" is selected here');
   assert.match(harness.elements.get('overlayApplyBtn').textContent, /Apply to 1/);
 
   hooks.applyOverlaySheet();
@@ -1182,8 +1215,11 @@ test('a batch can hit the same photo number in every product', async () => {
   assert.deepEqual(bulk[0].args.positions, [2], 'the same position for every product');
 });
 
-test('saving several images of one product queues one entry each, with distinct names', async () => {
-  const harness = await overlayHarness({ renderPreview: { bytes: OVERLAY_BYTES } });
+test('two photos of one product are packaged as two entries in the zip', async () => {
+  const harness = await overlayHarness({
+    renderPreview: { bytes: OVERLAY_BYTES },
+    renderZip: { filepath: 'processed/overlay-zips/x.zip', count: 2, skipped: [] },
+  });
   const { hooks } = harness;
   hooks.state.overlay.imgs = [{ filepath: 'a' }, { filepath: 'b' }, { filepath: 'c' }];
   hooks.state.overlay.scope = 'selected';
@@ -1195,13 +1231,10 @@ test('saving several images of one product queues one entry each, with distinct 
   await harness.flush();
   await harness.flush();
 
-  assert.equal(harness.elements.get('saveQueueProgress').textContent, '1 of 2 · SKU-1');
-  assert.equal(harness.elements.get('saveQueueName').textContent, 'SKU-1-gold-frame.png',
-    'the main image keeps the plain name');
-  hooks.nextQueueItem();
-  await harness.flush();
-  await harness.flush();
-  assert.equal(harness.elements.get('saveQueueProgress').textContent, '2 of 2 · SKU-1');
-  assert.equal(harness.elements.get('saveQueueName').textContent, 'SKU-1-p3-gold-frame.png',
-    'a second picture from the same product cannot share the first name');
+  const zips = harness.calls.filter((c) => c.channel === 'templates:renderZip');
+  assert.equal(zips.length, 1);
+  assert.deepEqual(zips[0].args.items, [
+    { productId: 'p1', position: 1 },
+    { productId: 'p1', position: 3 },
+  ], 'both ticked photos, each with the position that names it inside the archive');
 });

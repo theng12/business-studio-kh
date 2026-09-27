@@ -1230,6 +1230,12 @@ function fillTokens(template, ctx) {
     .replace(/\{description\}/gi,      ctx.description ?? '')
     .replace(/\{price_retail\}/gi,     ctx.priceRetail != null ? String(ctx.priceRetail) : '')
     .replace(/\{price_wholesale\}/gi,  ctx.priceWholesale != null ? String(ctx.priceWholesale) : '')
+    // v0.1.78: {price_<key>} for the company's own price groups. Mirrors
+    // main/templateRenderer.js — an unknown group stays visible on purpose.
+    .replace(/\{price_([a-z0-9_-]+)\}/gi, (match, key) => {
+      const known = ctx.prices && Object.prototype.hasOwnProperty.call(ctx.prices, String(key).toLowerCase());
+      return known ? String(ctx.prices[String(key).toLowerCase()] ?? '') : match;
+    })
     .replace(/\{date\}/gi,             new Date().toLocaleDateString())
     .replace(/\{date_short\}/gi,       new Date().toISOString().slice(0, 10));
 }
