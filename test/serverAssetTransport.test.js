@@ -109,6 +109,19 @@ test('asset HTTP path conditionally revalidates private bytes and handles invali
     const directory = await get(port, 'directory');
     assert.equal(directory.status, 404);
 
+    /* v0.1.78: the overlay batch zip is written under `processed/overlay-zips/`
+       and the phone downloads it through THIS route. Nothing else on the phone
+       path serves from `processed/`, so pin it: a fourth served root, or a
+       change to the prefix rule, would break every batch download. */
+    await fsp.mkdir(path.join(dataDir, 'processed', 'overlay-zips'), { recursive: true });
+    await fsp.writeFile(path.join(dataDir, 'processed', 'overlay-zips', 'batch.zip'), 'zipped-bytes');
+    const zip = await get(port, 'processed/overlay-zips/batch.zip');
+    assert.equal(zip.status, 200);
+    assert.equal(await zip.text(), 'zipped-bytes');
+    // …and the prefix rule is not a way out of the roots.
+    const escapedProcessed = await get(port, 'processed/..%2Foutside.txt');
+    assert.equal(escapedProcessed.status, 403);
+
     const escaped = await get(port, '..%2Fassets-sibling%2Foutside.png');
     assert.equal(escaped.status, 403);
 
