@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.81',
+    date: '2026-09-27',
+    items: [
+      'NEW — the Social Grid can put text or a logo over the whole post, with real opacity control. "Watermark and overlays" in the post settings: add your handle as text or import a logo, then set how faint it is (a slider, 0–100%), how big, which corner or centre it sits in, and how far it is rotated — a faint diagonal mark across the picture is very hard for someone else to crop out and re-post as their own.',
+      'NEW — overlays are part of the saved post, so a preset carries its watermark: open it again and the marks are there, on every image of a multi-image series, at exactly the same place. The preview and the exported file are one render at two sizes, so what you approve is what gets posted.',
+      'Internal — config.overlays (max 12) is normalised in main/util/socialGridModel.js: an overlay with no text or no image is dropped rather than drawn invisibly, colours that are not hex are refused, every number is clamped, and a preset saved before overlays existed simply renders with none. The markup is drawn by overlayHtml() in main/socialGridRenderer.js as one absolutely-positioned layer over the grid; sizes and nudges are scaled by scaledConfig() so a preview matches the export. The logo import reuses the existing watermarks channel, which already works in client mode (the file is read on the Mac you are sitting at and uploaded to the server). renderer/modules/SocialGrid/OverlayControls.jsx is the editor; GridControls gained the section.',
+      'Internal — tests: test/socialGridOverlays.test.js (nine cases — dropped empty overlays, clamping, the anti-theft opacity surviving, an old preset rendering unchanged, opacity/rotation/anchor alignment in the markup, escaped text, a missing logo file leaving no empty layer, the cap, and every anchor the editor offers being one the model accepts). One of them caught a real bug before release: the corner anchors were translating by -100% on top of right/bottom positioning, which would have drawn every corner mark off the canvas. test/socialGridRenderer.test.js also had its canvas-size assertion loosened from an exact CSS property order to the size it actually cares about.',
+    ],
+  },
+  {
     version: '0.1.80',
     date: '2026-09-27',
     items: [

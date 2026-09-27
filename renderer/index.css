@@ -10970,3 +10970,49 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   padding: 2px 8px; border-radius: 999px;
   background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3);
 }
+
+/* ── v0.1.81: Social Grid overlays (watermark editor) ──────────────
+   One collapsed row per mark, opening into its controls. The row has to
+   read at a glance (what it says, how faint) because a post can carry
+   several and the panel is narrow. */
+.overlay-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+.overlay-row {
+  border: 1px solid var(--c-border); border-radius: 10px;
+  margin-bottom: 8px; overflow: hidden; background: var(--c-surface);
+}
+.overlay-row__head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+.overlay-row__badge {
+  font-size: 10px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--c-text-muted); background: var(--c-hover-bg);
+  border-radius: 5px; padding: 2px 6px; flex: none;
+}
+.overlay-row__summary {
+  flex: 1; min-width: 0; text-align: left; background: none; border: 0; padding: 0;
+  font: inherit; color: var(--c-text); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.overlay-row__opacity { font-size: 11px; color: var(--c-text-muted); flex: none; font-variant-numeric: tabular-nums; }
+.overlay-row__remove {
+  flex: none; background: none; border: 0; cursor: pointer; padding: 2px 4px;
+  color: var(--c-text-muted); font-size: 13px; line-height: 1;
+}
+.overlay-row__remove:hover { color: var(--c-danger, #dc2626); }
+.overlay-row__body { padding: 4px 10px 12px; border-top: 1px solid var(--c-border); }
+.overlay-row__image { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; }
+.overlay-row__image-name { flex: 1; min-width: 0; font-size: 12px; color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 3x3 anchor picker — the same shape as the canvas, so "top right" is a
+   position on screen rather than a word to decode. */
+.overlay-anchor-grid {
+  display: grid; grid-template-columns: repeat(3, 34px); gap: 4px;
+  width: max-content; margin: 4px 0 2px;
+}
+.overlay-anchor {
+  width: 34px; height: 30px; border-radius: 7px; cursor: pointer;
+  border: 1px solid var(--c-border); background: var(--c-surface);
+  color: var(--c-text-muted); font-size: 14px; line-height: 1;
+}
+.overlay-anchor:hover { background: var(--c-hover-bg); }
+.overlay-anchor.is-active {
+  border-color: var(--c-accent); background: var(--c-accent-soft, var(--c-hover-bg));
+  color: var(--c-accent); font-weight: 700;
+}

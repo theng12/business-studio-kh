@@ -76,10 +76,69 @@ const DEFAULTS = {
   subtitleSize: 28,
   footerSize: 24,
 
+  /* ── overlays (v0.1.81) ──────────────────────────────────────────
+   * Free-standing text or image marks drawn OVER the grid — a handle, a
+   * logo, a faint diagonal "@shop". The point is anti-theft: a semi
+   * transparent mark across a post is very hard to crop out without
+   * destroying it, and the Overlay Studio has had per-element opacity for a
+   * while, so the request was "why can't the Social Grid do that?".
+   *
+   * Positions are anchored (a 3x3 grid) rather than free x/y: the overlay
+   * has to survive being previewed at 1/6 scale and exported at full size,
+   * and an anchor does that with no maths. Offsets are a px nudge from the
+   * anchor, `size` is px (font size for text, width for an image), and
+   * `opacity` is 0..1 — all scaled together for a preview. */
+  overlays: [],
   // ── output ──────────────────────────────────────────────────────
   format: 'png',          // png | jpeg
   quality: 92,
 };
+
+/** The 3x3 anchor grid an overlay can sit on. */
+const OVERLAY_ANCHORS = ['tl', 'tc', 'tr', 'cl', 'cc', 'cr', 'bl', 'bc', 'br'];
+const OVERLAY_TYPES = ['text', 'image'];
+/** Twelve is already a lot of marks on one post; beyond that it reads as noise
+ *  (and a preset could otherwise carry hundreds into a render). */
+const MAX_OVERLAYS = 12;
+const OVERLAY_DEFAULTS = {
+  type: 'text', text: '', src: '', anchor: 'br',
+  offsetX: 0, offsetY: 0, size: 28, color: '#0f172a', weight: 800,
+  opacity: 0.35, rotation: 0,
+};
+
+/**
+ * Normalize the overlay list. An overlay with no text (text type) or no image
+ * (image type) is DROPPED rather than kept as an invisible row — a preset with
+ * an empty watermark in it is just confusing. Everything else is clamped to
+ * something the renderer can draw.
+ */
+function normalizeOverlays(list, fallbackId = 'ov') {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const raw of list.slice(0, MAX_OVERLAYS)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const type = pickEnum(raw.type, OVERLAY_TYPES, OVERLAY_DEFAULTS.type);
+    const text = typeof raw.text === 'string' ? raw.text.slice(0, 200) : '';
+    const src = typeof raw.src === 'string' ? raw.src.slice(0, 400) : '';
+    if (type === 'text' && !text.trim()) continue;
+    if (type === 'image' && !src.trim()) continue;
+    out.push({
+      id: (typeof raw.id === 'string' && raw.id) ? raw.id : `${fallbackId}-${out.length + 1}`,
+      type,
+      text,
+      src,
+      anchor: pickEnum(raw.anchor, OVERLAY_ANCHORS, OVERLAY_DEFAULTS.anchor),
+      offsetX: clampInt(raw.offsetX, -4000, 4000, OVERLAY_DEFAULTS.offsetX),
+      offsetY: clampInt(raw.offsetY, -4000, 4000, OVERLAY_DEFAULTS.offsetY),
+      size: clampInt(raw.size, 6, 3000, OVERLAY_DEFAULTS.size),
+      color: (typeof raw.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(raw.color)) ? raw.color : OVERLAY_DEFAULTS.color,
+      weight: clampInt(raw.weight, 100, 900, OVERLAY_DEFAULTS.weight),
+      opacity: clampFloat(raw.opacity, 0, 1, OVERLAY_DEFAULTS.opacity),
+      rotation: clampInt(raw.rotation, -180, 180, OVERLAY_DEFAULTS.rotation),
+    });
+  }
+  return out;
+}
 
 /* 'asSelected' keeps the order the products arrived in. In the editor that is
  * the catalogue order; when a template is applied to a hand-picked selection in
@@ -182,6 +241,7 @@ function normalizeConfig(raw) {
   out.showSku = c.showSku === true;
 
   out.productIds = Array.isArray(c.productIds) ? c.productIds.filter((x) => typeof x === 'string') : [];
+  out.overlays = normalizeOverlays(c.overlays);
   out.priceSource = typeof c.priceSource === 'string' && c.priceSource.trim() ? c.priceSource.trim() : 'retail';
   out.currencySymbol = typeof c.currencySymbol === 'string' ? c.currencySymbol : DEFAULTS.currencySymbol;
   for (const key of ['background', 'tileBackground']) {
@@ -420,6 +480,7 @@ function summarize(products, rawConfig, brandNames) {
 }
 
 module.exports = {
+  OVERLAY_ANCHORS, OVERLAY_TYPES, MAX_OVERLAYS, OVERLAY_DEFAULTS, normalizeOverlays,
   DEFAULTS, SORT_KEYS, STOCK_SCOPES, SOURCES, UI_DESIGN_KEYS, SELECTION_KEYS,
   normalizeConfig, designOnly, applyDesign, resolvePrice, resolvePriceEntry, formatPrice, formatPriceWithEntry,
   describeStock, matchesStock, matchesSource, selectProducts, paginate, itemsPerPage, summarize,
