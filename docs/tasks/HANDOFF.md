@@ -1,7 +1,7 @@
 # HANDOFF — Business Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.80, commit `dfa1be4`, 2026-09-27**. If it disagrees with the
+that produced it. It was true at **v0.1.81, commit `39f7611`, 2026-09-27**. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,7 +9,7 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Business Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.80**, merged to `main` at `dfa1be4` (PR #76) and installed at `/Applications/Business Studio KH.app`. Replaced apps are in `_trash/Business Studio KH-0.1.7{2,…,9}.app`. |
+| Current release | **0.1.81**, merged to `main` at `39f7611` (PR #78) and installed at `/Applications/Business Studio KH.app`. Replaced apps are in `_trash/Business Studio KH-0.1.7{2,…,0}.app` and `-0.1.80.app`. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into `_trash/README.md`. |
@@ -25,8 +25,8 @@ Replace `<wt>` with a worktree that has `node_modules` installed — this projec
 |---|---|---|
 | 1 | `cd <wt> && git switch main && git pull --ff-only` | Start from merged `main`. |
 | 2 | `git switch -c codex/<topic>` | One branch per change or release. |
-| 3 | `npm run check` | `npm run lint && npm test`. **976 pass** at 0.1.80. Three eslint warnings are pre-existing (unused disable directives in three unrelated test files); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flake:** 0–2 tests can fail on a run — several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output). Seen once on 2026-09-26, clean in four follow-up runs; re-run before believing a failure. |
-| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **146 pass** at 0.1.80. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
+| 3 | `npm run check` | `npm run lint && npm test`. **988 pass** at 0.1.81. Three eslint warnings are pre-existing (unused disable directives in three unrelated test files); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flake:** 0–2 tests can fail on a run — several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output). Seen once on 2026-09-26, clean in four follow-up runs; re-run before believing a failure. |
+| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **146 pass** at 0.1.81. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
 | 4b | `node scripts/probe-webclient-context.js` | Real Chromium against `webclient/index.html` with loopback fixtures. **Any web-viewer change should run this** — it is the only check that loads the real page. Not in `package.json`; needs `env -u ELECTRON_RUN_AS_NODE`. |
 | 5 | `npm run check:images`, `check:render`, `check:client-server` | Electron probes. **This shell exports `ELECTRON_RUN_AS_NODE=1` globally**, so GUI probes need `env -u ELECTRON_RUN_AS_NODE npx electron …` or they behave as Node and fail. |
 | 6 | `env -u ELECTRON_RUN_AS_NODE npx electron . --remote-debugging-port=9333 --user-data-dir=/tmp/mskh-ui/userdata` | Launch for the crawl. **Footgun:** with no `config.json` in that user-data dir the app uses the owner's real data folder. Write `/tmp/mskh-ui/userdata/config.json` first: `{"dataDir":"/tmp/mskh-ui/data","firstLaunchHandled":true}`. |
@@ -97,11 +97,11 @@ Each of these has already burned a session. They are instructions, not backgroun
 
 ## OPEN / IN FLIGHT
 
-At 0.1.80 nothing is mid-implementation. The honest gaps:
+At 0.1.81 nothing is mid-implementation. The honest gaps:
 
 | Gap | State |
 |---|---|
-| Web-viewer HTTPS | **Not set up.** This Mac runs the **Mac App Store** Tailscale build, whose CLI never returns for `tailscale serve` — tried with `--https=443` and plain, both hung until killed. HTTPS in front of the server therefore needs the **standalone** variant (delete the App Store app, reboot, install from tailscale.com/download/mac) *and* HTTPS certificates enabled for the tailnet; then `tailscale serve --bg --https=443 http://127.0.0.1:13180` makes `https://mac-studio-m1-max-32.example-tailnet.ts.net/m` a secure context and the viewer's save becomes a one-tap share sheet. |
+| Web-viewer HTTPS | **Not set up, and now a one-command job once two things are true.** Run `node scripts/setup-web-https.js` (v0.1.81): it reads the app's serverPort, prints the exact `https://<machine>.<tailnet>.ts.net/m`, and calls `tailscale serve --bg --https=443 http://127.0.0.1:<port>`. It refuses with a named reason when it cannot: (1) this Mac runs the **Mac App Store** Tailscale build, whose sandboxed extension never answers `set-serve-config` — the CLI hangs instead of failing, re-confirmed 2026-09-27, so the fix is the **standalone** variant (quit Tailscale, delete the app, empty the Trash, **reboot**, install from tailscale.com/download/mac; never keep both); (2) HTTPS certificates must be enabled once for the tailnet in the admin console (DNS → HTTPS Certificates → Enable) — a browser login as the owner. The variant swap was deliberately NOT done by the agent: it deletes the owner's VPN and needs a reboot. |
 | **Blob press-and-hold is unproven, and the whole HTTP save path leans on it** | On plain HTTP the viewer saves by opening the picture full-screen and asking the user to press and hold. Every part of that is verifiable in code except the one that matters: whether the mobile browser offers its save/download item for an `<img>` whose `src` is a `blob:` URL. Neither the iPhone/iPad nor the brother's Android phone has been watched doing it (he sent a screenshot of the sheet, not of the save). If it fails, the fix is to serve the asset with a short-lived signed URL so the lightbox holds a real URL. |
 | The brother is on **Android**, not iOS | His screenshot (2026-09-26) is a Samsung phone. Everything device-facing was written and reviewed as if it were iOS: the wording is now platform-aware (`IS_ANDROID` in `webclient/index.html`), but no save has been watched on his actual phone, and Chrome-Android behaviour differs from Safari in ways this file does not yet record — e.g. `navigator.share` exists there only over HTTPS too, and `<a download>` lands in Downloads (which his gallery app does pick up). Update this file with what actually happens on his phone. |
 | The batch zip has never been downloaded on a phone | 0.1.78 replaced the picture-by-picture queue with one zip (`templates:renderZip` → `processed/overlay-zips/*.zip` → one `<a download>`). The writer is tested against the system `unzip`, the handler is tested with a real database, and the served root is pinned by `test/serverAssetTransport.test.js` — but no phone has tapped Download on one yet. First thing to try on his next batch; if Files refuses it, the fallbacks are the share sheet over HTTPS or the `.tar` path `serverBundle` already uses. |
