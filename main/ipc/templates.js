@@ -790,16 +790,19 @@ function buildTemplateContext(product) {
   const brand = product.brandId ? brands.get(product.brandId) : null;
   const category = product.categoryId ? categories.get(product.categoryId) : null;
   /* v0.1.78: the company's own price groups, ready for `{price_<key>}` tokens.
-   * Keyed lowercase because tokens are matched case-insensitively; the value is
-   * the formatted price ('' when this product has none for that group), which
-   * is the same formatter the catalog and label renderers use. */
+   * Keyed lowercase because tokens are matched case-insensitively. v0.1.79: the
+   * value is the bare AMOUNT, matching what {price_retail} / {price_wholesale}
+   * have always put on an image — a formatted group price next to a raw retail
+   * price in the same template was the inconsistency. '' when this product has
+   * no price for that group. */
   const company = companies.getActiveId() ? companies.get(companies.getActiveId()) : null;
   const prices = {};
   for (const group of (company?.priceGroups ?? [])) {
     const key = String(group?.key ?? '').toLowerCase();
     if (!key) continue;
-    const { priceEntry, formatPriceEntry } = require('../util/prices');
-    prices[key] = formatPriceEntry(priceEntry(product, group.key));
+    const { priceEntry } = require('../util/prices');
+    const amount = priceEntry(product, group.key).amount;
+    prices[key] = amount == null ? '' : String(amount);
   }
   return {
     sku: product.sku,

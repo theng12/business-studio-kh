@@ -1233,6 +1233,7 @@ function fillTokens(template, ctx) {
     // v0.1.78: {price_<key>} for the company's own price groups. Mirrors
     // main/templateRenderer.js — an unknown group stays visible on purpose.
     .replace(/\{price_([a-z0-9_-]+)\}/gi, (match, key) => {
+      // Bare amount, like {price_retail} — see main/templateRenderer.js.
       const known = ctx.prices && Object.prototype.hasOwnProperty.call(ctx.prices, String(key).toLowerCase());
       return known ? String(ctx.prices[String(key).toLowerCase()] ?? '') : match;
     })

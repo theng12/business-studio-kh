@@ -190,3 +190,25 @@ test('the last-used selection is stored separately from the widths', async () =>
     assert.equal(loadColumnSelection(), null);
   });
 });
+
+test('a group price is read from either stored shape', async () => {
+  // v0.1.79: prices[group] is `{ amount, currency }` normally, but rows written
+  // before v0.1.55 hold a bare number. Reading `.amount` off those showed an
+  // empty cell for a price the product actually has — and the bulk table is
+  // where prices get edited, so a blank cell there reads as "no price set".
+  const { productValue } = await R;
+  const mixed = {
+    prices: {
+      vip: { amount: 1234.5, currency: 'USD' },
+      dealer: 55,
+      empty: { amount: null, currency: 'USD' },
+    },
+  };
+  assert.equal(productValue(mixed, 'price:vip'), 1234.5);
+  assert.equal(productValue(mixed, 'price:dealer'), 55, 'the legacy bare number is not blank');
+  assert.equal(productValue(mixed, 'price:empty'), '');
+  assert.equal(productValue(mixed, 'price:missing'), '');
+
+  assert.equal(productValue(mixed, 'priceCurrency:vip'), 'USD');
+  assert.equal(productValue(mixed, 'priceCurrency:dealer'), 'USD', 'a bare number has no currency: the default');
+});
