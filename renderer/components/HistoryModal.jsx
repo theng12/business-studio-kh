@@ -18,7 +18,7 @@
  * non-client-RPC mutation. Client-mode users get proper names via the
  * `attributionUsers` map.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal } from './ui.jsx';
 import { useAppStore } from '../store/index.js';
 
@@ -69,6 +69,10 @@ function fieldLabel(key) {
     colorFinish: 'Color / Finish',
     priceRetail: 'Retail price',
     priceWholesale: 'Wholesale price',
+    // v0.1.80: a change to any custom price group is recorded as one `prices`
+    // map (main/db/products.js), so without this the drawer said "Prices" and
+    // printed a JSON blob — useless for "who changed the VIP price?".
+    prices: 'Price groups',
     processStatus: 'Process status',
     secondaryCode: 'Secondary code',
   };
@@ -76,6 +80,22 @@ function fieldLabel(key) {
   return key
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (c) => c.toUpperCase());
+}
+
+/* v0.1.80: a price-group map, readable. `prices` arrives as
+ * `{ vip: { amount, currency } }` (or a bare number on rows written before
+ * v0.1.55), so render "VIP 1,234.50 USD" per group instead of JSON. Labels come
+ * from the company's own groups when they are loaded, falling back to the key. */
+function priceGroupsText(map, labelFor) {
+  if (!map || typeof map !== 'object') return null;
+  const parts = [];
+  for (const [key, raw] of Object.entries(map)) {
+    const amount = (raw && typeof raw === 'object') ? raw.amount : raw;
+    const currency = (raw && typeof raw === 'object') ? raw.currency : null;
+    if (amount == null || amount === '') continue;
+    parts.push(`${labelFor(key)} ${amount}${currency ? ` ${currency}` : ''}`);
+  }
+  return parts.length ? parts.join(', ') : null;
 }
 
 // Compact JSON-ish display of a single field value. Strings stay as-is;
@@ -94,7 +114,15 @@ function displayValue(v) {
   } catch { return String(v); }
 }
 
-function UpdateDiff({ before, after }) {
+function displayField(key, value, groupLabel) {
+  if (key === 'prices') {
+    const text = priceGroupsText(value, groupLabel || ((k) => k));
+    if (text) return text;
+  }
+  return displayValue(value);
+}
+
+function UpdateDiff({ before, after, groupLabel }) {
   const keys = Array.from(new Set([
     ...Object.keys(before ?? {}),
     ...Object.keys(after ?? {}),
@@ -105,16 +133,16 @@ function UpdateDiff({ before, after }) {
       {keys.map((key) => (
         <li key={key} className="history-row__diff-row">
           <span className="history-row__diff-field">{fieldLabel(key)}:</span>
-          <span className="history-row__diff-before">{displayValue(before?.[key])}</span>
+          <span className="history-row__diff-before">{displayField(key, before?.[key], groupLabel)}</span>
           <span className="history-row__diff-arrow" aria-hidden>→</span>
-          <span className="history-row__diff-after">{displayValue(after?.[key])}</span>
+          <span className="history-row__diff-after">{displayField(key, after?.[key], groupLabel)}</span>
         </li>
       ))}
     </ul>
   );
 }
 
-function CreateOrDeleteSnapshot({ payload, mode }) {
+function CreateOrDeleteSnapshot({ payload, mode, groupLabel }) {
   // For creates: show the after-snapshot as a small key/value list.
   // For deletes: same but with the before-snapshot. Both are best-effort
   // — the underlying db modules only store a handful of fields to keep
@@ -127,7 +155,7 @@ function CreateOrDeleteSnapshot({ payload, mode }) {
       {keys.map((key) => (
         <li key={key}>
           <span className="history-row__snapshot-field">{fieldLabel(key)}:</span>
-          <span>{displayValue(payload[key])}</span>
+          <span>{displayField(key, payload[key], groupLabel)}</span>
         </li>
       ))}
     </ul>
@@ -149,6 +177,14 @@ function ImageEventBody({ action, after }) {
 
 function HistoryRow({ entry }) {
   const attributionUsers = useAppStore((s) => s.attributionUsers);
+  const companies = useAppStore((s) => s.companies);
+  const activeCompanyId = useAppStore((s) => s.activeCompanyId);
+  // v0.1.80: a price-group change reads as the group's own label when we can
+  // find it, so the drawer answers "who changed the VIP price?" in words.
+  const groupLabel = useCallback((key) => {
+    const groups = (companies ?? []).find((c) => c.id === activeCompanyId)?.priceGroups ?? [];
+    return groups.find((g) => g.key === key)?.label || key;
+  }, [companies, activeCompanyId]);
   const name = entry.userId
     ? (attributionUsers?.[entry.userId] ?? 'Unknown user')
     : 'Server admin';
@@ -162,11 +198,11 @@ function HistoryRow({ entry }) {
         <span className="history-row__when" title={tip}>{relativeTime(entry.createdAt)}</span>
       </div>
       {entry.action === 'update' ? (
-        <UpdateDiff before={entry.before} after={entry.after} />
+        <UpdateDiff before={entry.before} after={entry.after} groupLabel={groupLabel} />
       ) : entry.action === 'create' ? (
-        <CreateOrDeleteSnapshot payload={entry.after} mode="create" />
+        <CreateOrDeleteSnapshot payload={entry.after} mode="create" groupLabel={groupLabel} />
       ) : entry.action === 'delete' ? (
-        <CreateOrDeleteSnapshot payload={entry.before} mode="delete" />
+        <CreateOrDeleteSnapshot payload={entry.before} mode="delete" groupLabel={groupLabel} />
       ) : isImage ? (
         <ImageEventBody action={entry.action} after={entry.after} />
       ) : null}
