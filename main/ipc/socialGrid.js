@@ -74,6 +74,15 @@ function scaledConfig(config, factor) {
     titleSize: f(config.titleSize),
     subtitleSize: f(config.subtitleSize),
     footerSize: f(config.footerSize),
+    // v0.1.81: overlay text/image sizes and their px nudges are pixel values
+    // too. Scaling them keeps a watermark the same relative size in the preview
+    // render as in the exported file — the whole point of `scaledConfig`.
+    overlays: (config.overlays || []).map((o) => ({
+      ...o,
+      size: f(o.size),
+      offsetX: f(o.offsetX),
+      offsetY: f(o.offsetY),
+    })),
   });
 }
 
