@@ -11,7 +11,10 @@
  */
 
 const { embeddedFontCss, esc } = require('./studioRenderer');
-const { resolvePrice, resolvePriceEntry, formatPrice, formatPriceWithEntry, describeStock, normalizeConfig } = require('./util/socialGridModel');
+// v0.1.80: resolvePrice and formatPrice were left behind when v0.1.55 moved
+// price resolution onto the entry-aware helpers — dead imports, and two of the
+// five long-standing lint warnings. The canonical pair is the one kept.
+const { resolvePriceEntry, formatPriceWithEntry, describeStock, normalizeConfig } = require('./util/socialGridModel');
 
 /* The render window loads this document from a file:// URL, so anything the
  * page needs — fonts and every product photo — has to be inlined. An
