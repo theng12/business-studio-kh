@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.82',
+    date: '2026-09-27',
+    items: [
+      'NEW — backups made by the previous app (Image Studio KH) can be restored here. When this app was renamed, the backup marker and the filename prefix changed with it, so an old backup was refused twice over: it did not appear in the restore list, and renaming it only produced "Not a Media Studio KH backup". Both names are recognised now. The archive layout and the database schema never changed, so the data itself was always compatible — the old backup shows the version that wrote it, so you can see what you are restoring.',
+      'Internal — LEGACY_BACKUP_KINDS in main/util/backupSafety.js is recognised rather than rewritten: the manifest keeps its original marker and version, and every structural check (format version, contents list, SQLite integrity, exact schema version, path safety) runs exactly as before. isBackupFilename accepts the `image-studio-kh-backup-…` prefix so old files list. The schema check is deliberately NOT loosened: a backup whose database is not schema v2 is still refused, because that check is what stops a structurally different database from replacing a live one.',
+      'Internal — tests: test/legacyBackupImport.test.js builds real archives in both shapes and drives the real code (old name lists, old manifest previews, a foreign marker is still refused, and the bundle route needs no allowance at all), and a new case in test/archiveRestore.test.js restores an `image-studio-kh-backup` end to end — data lands, previous data folder kept aside. Registered in test:native (150 pass).',
+    ],
+  },
+  {
     version: '0.1.81',
     date: '2026-09-27',
     items: [
