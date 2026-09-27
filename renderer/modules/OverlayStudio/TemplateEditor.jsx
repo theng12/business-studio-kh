@@ -22,6 +22,7 @@ import { defaultElement } from './elementDefaults.js';
 import { EditorCanvas } from './EditorCanvas.jsx';
 import { Inspector } from './Inspector.jsx';
 import { BulkOverlayRunModal } from '../ProductLibrary/BulkOverlayRunModal.jsx';
+import { formatPrice } from '../../lib/currencies.js';
 
 /**
  * Template editor — the heart of Overlay Studio.
@@ -42,11 +43,31 @@ import { BulkOverlayRunModal } from '../ProductLibrary/BulkOverlayRunModal.jsx';
  * behind the elements so they can design in context. With nothing picked,
  * a transparent checkerboard backdrop appears.
  */
+/**
+ * v0.1.78: one price group's value for a product, formatted the way the
+ * main-process context builder formats it (main/util/prices.js
+ * `formatPriceEntry` + the renderer's currency mirror). Kept next to the
+ * editor's other token helpers so the preview and the export agree.
+ */
+function formatGroupPrice(product, key) {
+  const raw = product?.prices?.[key];
+  const amount = (raw && typeof raw === 'object') ? raw.amount : raw;
+  if (amount === '' || amount == null) return '';
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return '';
+  const currency = (raw && typeof raw === 'object') ? raw.currency : null;
+  return currency ? formatPrice(n, currency) : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
 export function TemplateEditor({ templateId, onClose, onChanged }) {
   const addToast = useAppStore((s) => s.addToast);
   const products = useAppStore((s) => s.products);
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
+  // v0.1.78: the active company's price groups, so `{price_<key>}` tokens
+  // resolve in the editor exactly as they will in the exported image.
+  const companies = useAppStore((s) => s.companies);
+  const activeCompanyId = useAppStore((s) => s.activeCompanyId);
 
   // Local state owns the in-progress template. Loaded from IPC on mount;
   // every change debounces back to disk via `templates:update`.
@@ -134,10 +155,19 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
 
   // Build the product context for token-filling in the live preview.
   const backdropProduct = products.find((p) => p.id === backdropProductId) ?? null;
+  const priceGroups = (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [];
   const productContext = useMemo(() => {
     if (!backdropProduct) return null;
     const brand = backdropProduct.brandId ? brands.find((b) => b.id === backdropProduct.brandId) : null;
     const category = backdropProduct.categoryId ? categories.find((c) => c.id === backdropProduct.categoryId) : null;
+    // Price-group tokens, filled the way main/ipc/templates.js does it: the
+    // product's own currency when it has one, otherwise the fallback symbol.
+    const prices = {};
+    for (const group of priceGroups) {
+      const key = String(group?.key ?? '').toLowerCase();
+      if (!key) continue;
+      prices[key] = formatGroupPrice(backdropProduct, group.key);
+    }
     return {
       sku: backdropProduct.sku,
       name: backdropProduct.name,
@@ -149,9 +179,10 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
       description: backdropProduct.description,
       priceRetail: backdropProduct.priceRetail,
       priceWholesale: backdropProduct.priceWholesale,
+      prices,
       productImages,
     };
-  }, [backdropProduct, brands, categories, productImages]);
+  }, [backdropProduct, brands, categories, productImages, priceGroups]);
 
   const backdropSrc = useMemo(() => {
     if (!productImages.length) return null;

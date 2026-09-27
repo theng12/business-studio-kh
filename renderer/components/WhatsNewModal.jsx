@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.78',
+    date: '2026-09-27',
+    items: [
+      'NEW — a batch of overlaid photos now arrives as ONE zip instead of one picture at a time. Apply to several products with "Save copy only" (or with the save toggle on) and the sheet says "Ready — 5 images", with a single Download that puts one file in Files/Downloads. Open it and every finished picture is inside, named per product and per photo. The picture-by-picture queue, and the "Download all" button that did the same thing as Save to Files, are gone.',
+      'NEW — {price_vip} works. Price groups you create yourself (Settings → Price groups) are now available as overlay tokens: {price_<key>} for any group, so a group keyed "vip" is written {price_vip} and prints that product’s VIP price. A token naming a group that does not exist is left visible on the image rather than silently blanking, so a typo shows up instead of disappearing. Retail and wholesale keep behaving exactly as before.',
+      'FIX — the batch photo picker no longer opens the phone’s keypad. "Photo #" now offers 1–8 as chips to tap, which is what the keypad was covering the sheet for.',
+      'FIX — saved files keep the SKU and template’s own capitalisation (SKU-Gold-Frame.png, not sku-gold-frame.png), matching what the desktop writes and making a file easier to match against its SKU in Files.',
+      'Internal — new main/util/zip.js, a store-only ZIP writer (no new dependency; the images are already-compressed PNG/JPEG) with its own tests that unpack the output using the system unzip rather than trusting our own reader. New templates:renderZip channel composes the batch on the server and writes the archive under processed/overlay-zips/, which both app-image:// and the server asset route already serve — no new route, no new served root, and the phone fetches one binary file instead of N base64 payloads inside JSON (the "Load failed" reports). Validated, proxied in client mode, and covered by test/overlayPriceTokens.test.js under test:native. buildTemplateContext now carries the company’s price groups (exported for that test); main/templateRenderer.js and the Overlay Studio editor’s mirror in EditorCanvas.jsx both learned the token; TemplateEditor.jsx feeds the groups into its preview context so the editor and the exported file agree.',
+      'Internal — tests: test/zipWriter.test.js (crc32 check value, system unzip round trip, Khmer filenames, path traversal refused, oversized batches refused), test/overlayPriceTokens.test.js (a created price group reaching the token, an unknown token staying visible, and a three-image zip with per-position names), plus the rewritten viewer cases for the zip flow and the position chips.',
+    ],
+  },
+  {
     version: '0.1.77',
     date: '2026-09-26',
     items: [

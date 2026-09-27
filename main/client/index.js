@@ -784,6 +784,10 @@ const PROXIED_CHANNELS = [
   'ai:favoriteGallery','ai:removeGallery','ai:promoteGalleryToProduct',
   'exports:createProfile','exports:updateProfile','exports:removeProfile','exports:duplicateProfile',
   'templates:create','templates:update','templates:remove','templates:duplicate','templates:renderPreview',
+  // v0.1.78: the zip is composed and written on the SERVER (that is where the
+  // images live); the client then fetches it from the server's asset route like
+  // any other file, so this channel is proxied verbatim.
+  'templates:renderZip',
   // v0.1.27: templates:applyToProduct / applyBulk / applyByFilter are NO LONGER
   // proxied verbatim — they have a local bridge below (see
   // registerOverlayApplyBridges). Leaving them here as well would register
