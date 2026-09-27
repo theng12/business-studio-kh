@@ -112,7 +112,7 @@ Use an Apple Silicon Mac running macOS 12 or newer, Node 24 (the version the che
 ```bash
 npm ci
 npm run dev    # Vite + Electron with HMR
-npm run dist   # build the macOS arm64 and x64 DMGs into dist/
+npm run dist   # build the macOS arm64 DMG into dist/ (npm run dist:x64 for Intel, on request)
 ```
 
 The packaged build skips code signing (`identity: null` in package.json) so any team member can rebuild without an Apple Developer account. Once you have a Developer ID cert, see `SIGNING.md` for the wire-up.

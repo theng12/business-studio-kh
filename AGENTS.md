@@ -382,33 +382,33 @@ Every Electron app must:
 - Mirror those events to stdout too so they're visible in `npm run dev`.
 - Set `ELECTRON_ENABLE_LOGGING=1` in the dev script so Chromium logs are not swallowed.
 
-## 20. Every release ships arm64 AND x64 DMGs (Apple Silicon + Intel)
+## 20. Every release ships ONE arm64 DMG — Intel only on request
 
-**Standing rule (2026-09-22):** every stable release must produce **two**
-DMGs — `Business Studio KH-X.Y.Z-arm64.dmg` and `Business Studio KH-X.Y.Z-x64.dmg`.
-Theng runs a new (Apple Silicon) Mac and an old (Intel) Mac, so a release that
-only builds one is not a release. Do not ship a single-arch DMG unless he says
-so for that specific build.
+**Standing rule (2026-09-27, Theng):** *"from now on, you only need to build 1
+dmg. the arm64 until i tell you otherwise."* So every stable release produces
+**one** DMG — `Business Studio KH-X.Y.Z-arm64.dmg` — and `npm run dist` emits
+exactly that.
 
-Configured in `package.json` under
-`build.mac.target[].arch: ["arm64", "x64"]`, and pinned by
-`test/releaseScripts.test.js` — if someone trims the array, that test fails.
+Configured in `package.json` under `build.mac.target[].arch: ["arm64"]`, and
+pinned by `test/releaseScripts.test.js` — if someone changes the array without
+changing the rule, that test fails.
 
-> History: v0.1.9 dropped x64 when the Intel Macs left the test fleet; on
-> 2026-09-22 he asked for an Intel DMG again, so both are built. The old
-> reasoning is preserved here only so the reversal isn't re-litigated.
+> History, so this is not re-litigated in either direction: v0.1.9 dropped x64
+> when the Intel Macs left the test fleet; on 2026-09-22 he asked for an Intel
+> DMG again and both were built until 0.1.83; on 2026-09-27 he asked for arm64
+> only. The default follows his last instruction — do not "restore" the second
+> DMG on your own initiative, and do not drop the Intel path either.
 
-- Every `npm run dist` emits both DMGs (no extra flag needed).
-- Per-arch scripts exist for a single-arch build: `npm run dist:arm64` and
-  `npm run dist:x64` (each overrides the config arch on the CLI).
-- `predist` installs BOTH arches' `sharp` / `@img` binaries (`install:sharp`),
-  so either target can be packaged without a re-install.
+- `npm run dist` emits the arm64 DMG only.
+- An Intel build is still one command — `npm run dist:x64` (it overrides the
+  config arch on the CLI) — and `predist` keeps installing BOTH arches'
+  `sharp` / `@img` binaries (`install:sharp`) so that command works without a
+  re-install. Ask before running it; he has not wanted one since 0.1.83.
 - `postdist` runs `native:host` (arm64) so the dev checkout keeps working
   after a release build.
-- Electron 44 requires macOS 12 or newer, reflected in `build.mac.minimumSystemVersion` (verified 2026-09-20). An Intel Mac older than macOS 12 cannot run the x64 DMG — check the target Mac's macOS version before promising an Intel build will run.
+- Electron 44 requires macOS 12 or newer, reflected in `build.mac.minimumSystemVersion` (verified 2026-09-20). If he ever asks for an Intel DMG, check the target Mac's macOS version first — an Intel Mac older than macOS 12 cannot run it.
 - Do NOT use `arch: ["universal"]` — a universal binary bundles both slices into
-  one app, roughly doubling the file size. Two separate DMGs are the house
-  choice.
+  one app, roughly doubling the file size.
 
 **Keep only the newest two releases (added 2026-09-26, Theng's ask).** When a build is
 finished, `dist/` holds the release just made plus the one before it, and anything two or
@@ -420,7 +420,8 @@ the no-delete property are pinned by `test/dmgRetention.test.js`.
 
 **`dist/` means the owner's checkout** — `$HOME/Developer/media-studio-kh/dist`,
 which is where he looks for a release. `npm run dist` writes into the build worktree
-instead, so copy the current two DMGs across as the last step of a release.
+instead, so copy the release's DMG across as the last step of a release (one file since
+2026-09-27 — AGENTS.md §20).
 
 ## 21. Packaging-safe paths — dev layout ≠ packaged layout
 
@@ -494,9 +495,9 @@ carried over unchanged; only the numbers moved. Don't retro-renumber.
 ## 25. Closed decisions — do not re-propose
 
 Three things were raised, looked at, and **deliberately dropped by Theng** (the
-first two on 2026-09-20, the third on 2026-09-23). They are settled, not backlog.
-Do not propose them again, do not "helpfully" fix them in passing, and do not
-list them as remaining work.
+first two on 2026-09-20, the third on 2026-09-23, the fourth on 2026-09-27).
+They are settled, not backlog. Do not propose them again, do not "helpfully"
+fix them in passing, and do not list them as remaining work.
 
 **1. The three remaining bulk modals stay as they are.** `renderer/modules/ProductLibrary/`
 has a shared `BulkOpModal.jsx` + `useBulkPreview.js`, used by five modals:
@@ -523,6 +524,22 @@ prerequisites" are **not** work items. Do not raise them again, and do not list 
 This closes the licensing question only: security and data-safety defects keep their normal
 weight, and the unsigned-DMG + `xattr -cr` install step still stands as the intended workflow for
 installing on the owner's Macs and his brother's.
+
+**4. HTTPS for the phone viewer is declined — plain HTTP over Tailscale is the setup.**
+Asked on 2026-09-27 ("can i just not use the https?"), after the HTTPS helper
+(`scripts/setup-web-https.js`, v0.1.81) turned out to need two things only he could do: swap the
+Mac App Store Tailscale build for the standalone one (delete + reboot) and enable HTTPS
+certificates for the tailnet in the admin console. **Answer: yes, and nothing is broken by it.**
+What HTTPS would have bought is one thing — `navigator.share`, i.e. the iOS share sheet, i.e. the
+one-tap "Save to Photos" after an overlay is applied. Everything else works over HTTP, and the
+viewer already detects the missing API: the button says "Open image to save" instead of "Save to
+Photos", and the result opens full-screen with "press and hold the picture, then tap Save Image"
+(iOS) / "Download image" (Android), which lands the picture in Photos / the gallery anyway. Over
+Tailscale the transport is already encrypted by WireGuard, so this is not a plaintext-on-the-wire
+decision; over a shared Wi-Fi LAN the traffic is visible to that network, which is the one real
+trade-off and his to accept. Keep the script and its tests — it is the shortest path back if he
+ever wants the share sheet — but do not raise it as a gap, do not re-run it, and do not list
+"HTTPS not set up" as remaining work.
 
 ## 26. Git workflow — a fix lands when it is merged
 
