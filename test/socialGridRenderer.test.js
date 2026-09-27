@@ -56,7 +56,9 @@ function markup(document) {
 test('the document is exactly the configured canvas size', () => {
   const out = html([product()], { width: 1080, height: 1080 });
   assert.match(out, /html,body\{width:1080px;height:1080px/);
-  assert.match(out, /\.post\{width:1080px;height:1080px/);
+  // Property ORDER is not the contract here (v0.1.81 added position:relative
+  // for the overlay layer) — the size is.
+  assert.match(out, /\.post\{[^}]*width:1080px;height:1080px/);
 });
 
 test('a portrait canvas keeps its own height rather than being forced square', () => {
