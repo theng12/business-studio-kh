@@ -18,7 +18,7 @@ Replace `mac.identity: null` with the cert name, and add notarization config:
 ```json
 "build": {
   "mac": {
-    "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }],
+    "target": [{ "target": "dmg", "arch": ["arm64"] }],
     "category": "public.app-category.graphics-design",
     "darkModeSupport": true,
     "minimumSystemVersion": "12.0.0",
