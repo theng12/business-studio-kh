@@ -26,15 +26,19 @@ const companies = require('../db/companies');
 const imageTemplates = require('../db/imageTemplates');
 const imageTemplateRuns = require('../db/imageTemplateRuns');
 const templateRenderer = require('../templateRenderer');
+const { createZip } = require('../util/zip');
+const { slugify } = require('../util/slug');
 const { writeUniqueFile } = require('../util/exclusiveFile');
 const { applyTemplateToFiles, validateExternalRequest } = require('../util/externalOverlay');
 const {
-  normalizePositions, selectImages,
+  normalizePositions, selectImages, ordinal,
 } = require('../util/imageScope');
 const { getDataDir } = require('../db');
 
 const APPLY_OPERATION_LIMIT = 100;
 const APPLY_FAILURE_TTL_MS = 15 * 60 * 1000;
+/** One zip per request; past this the phone is better off with the desktop. */
+const MAX_ZIP_ITEMS = 50;
 const applyOperations = new Map();
 
 function pruneApplyOperations(now = Date.now()) {
@@ -148,6 +152,17 @@ function imageBaseAbs(image) {
     : path.join(getDataDir(), 'assets', rel);
 }
 
+/** v0.1.78: the name an image carries inside a zip. Same convention the phone
+ *  viewer uses for single saves — `<sku>-<template>.png`, and
+ *  `<sku>-p3-<template>.png` when the picture is not the main one, so two
+ *  images of one product cannot collide in the archive. */
+function zipEntryName(product, template, position) {
+  const sku = slugify(product.sku || 'product', 'product');
+  const tpl = slugify(template.name || 'overlay', 'overlay');
+  const mid = Number.isInteger(position) && position > 1 ? `p${position}-` : '';
+  return `${sku}-${mid}${tpl}.png`;
+}
+
 /** Stamp composed bytes onto an image's RAW file in place (re-encoded to
  *  the source format), atomic-rename, refresh content_hash. Mirrors the
  *  flipSource overwrite pattern. Returns the updated row. */
@@ -191,7 +206,6 @@ async function overwriteImageInPlace(productId, image, bytes) {
  */
 async function applyOverlayToProductImages({ template, product, scope, destination, positions }) {
   const imageManager = require('../imageManager');
-  const { slugify } = require('../util/slug');
   const imageList = productImages.listByProduct(product.id);
   // v0.1.69: the "which images / why skipped" rule lives once, in
   // main/util/imageScope.js, so every image operation can share it.
@@ -532,6 +546,82 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
   });
 
   /**
+   * v0.1.78: render several overlay results and hand them back as ONE zip.
+   *
+   * Why: the phone viewer used to save a batch by asking for each picture in
+   * turn — one full-size PNG per reply, base64 inside the JSON. Five of those
+   * in a row is several megabytes each and produced "Load failed" on a real
+   * phone. One archive is one request and one download.
+   *
+   *  - `items`: [{ productId, position? }]. A position is 1-based (1 = the
+   *    main image, the same numbering every other overlay path uses); omit it
+   *    and the composed image is the main one, processed variant preferred.
+   *  - Results are composed fresh and are byte-identical to what an apply
+   *    would have produced — nothing here touches the library.
+   *  - The archive is written under `processed/overlay-zips/`, which both the
+   *    `app-image://` protocol and the server's /assets route already serve,
+   *    so the phone downloads it as an ordinary file (no new route, no new
+   *    root). Files accumulate there by design: nothing is deleted behind the
+   *    owner's back.
+   */
+  expose('templates:renderZip', async ({ templateId, items, label } = {}) => {
+    if (!templateId) throw new Error('templateId required');
+    if (!Array.isArray(items) || items.length === 0) throw new Error('items required');
+    if (items.length > MAX_ZIP_ITEMS) {
+      throw new Error(`Too many images for one zip (max ${MAX_ZIP_ITEMS}). Split the selection.`);
+    }
+    const template = imageTemplates.get(templateId);
+    if (!template) throw new Error('Template not found');
+    const companyId = companies.getActiveId();
+
+    const entries = [];
+    const skipped = [];
+    for (const item of items) {
+      const product = item && item.productId ? products.get(item.productId) : null;
+      if (!product) { skipped.push({ productId: item?.productId ?? null, reason: 'not found' }); continue; }
+      if (product.companyId !== companyId) {
+        skipped.push({ productId: product.id, sku: product.sku, reason: 'cross-company' });
+        continue;
+      }
+      const images = productImages.listByProduct(product.id);
+      const position = Number.isInteger(item.position) && item.position >= 1 ? item.position : null;
+      const chosen = position
+        ? images[position - 1]
+        : (images.find((i) => i.isProcessed && i.processedFilepath) || images[0]);
+      if (!chosen) {
+        skipped.push({ productId: product.id, sku: product.sku, reason: position ? `no ${ordinal(position)} image` : 'no images' });
+        continue;
+      }
+      const abs = imageBaseAbs(chosen);
+      if (!fs.existsSync(abs)) {
+        skipped.push({ productId: product.id, sku: product.sku, reason: 'image file missing' });
+        continue;
+      }
+      const bytes = await templateRenderer.compose({
+        inputImage: abs, template, context: buildTemplateContext(product),
+      });
+      entries.push({ name: zipEntryName(product, template, position), data: bytes });
+    }
+    if (entries.length === 0) {
+      throw new Error(skipped.length ? `Nothing to package (${skipped[0].reason})` : 'Nothing to package');
+    }
+
+    const zip = createZip(entries);
+    const relDir = path.join('processed', 'overlay-zips');
+    const absDir = path.join(getDataDir(), relDir);
+    await fs.promises.mkdir(absDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fileName = `${slugify(label || template.name || 'overlays', 'overlays')}-${stamp}.zip`;
+    const absOut = path.join(absDir, fileName);
+    await fs.promises.writeFile(absOut, zip);
+    return {
+      filepath: path.posix.join('processed', 'overlay-zips', fileName),
+      count: entries.length,
+      skipped,
+    };
+  });
+
+  /**
    * v0.26.15: bulk-by-filter. Resolves the filter against the
    * active company's products, then funnels into applyBulk. With
    * `dryRun: true` it returns just `{ matchedCount, sampleSkus }`
@@ -699,6 +789,18 @@ async function applyBulkInternal({ operationId = crypto.randomUUID(), templateId
 function buildTemplateContext(product) {
   const brand = product.brandId ? brands.get(product.brandId) : null;
   const category = product.categoryId ? categories.get(product.categoryId) : null;
+  /* v0.1.78: the company's own price groups, ready for `{price_<key>}` tokens.
+   * Keyed lowercase because tokens are matched case-insensitively; the value is
+   * the formatted price ('' when this product has none for that group), which
+   * is the same formatter the catalog and label renderers use. */
+  const company = companies.getActiveId() ? companies.get(companies.getActiveId()) : null;
+  const prices = {};
+  for (const group of (company?.priceGroups ?? [])) {
+    const key = String(group?.key ?? '').toLowerCase();
+    if (!key) continue;
+    const { priceEntry, formatPriceEntry } = require('../util/prices');
+    prices[key] = formatPriceEntry(priceEntry(product, group.key));
+  }
   return {
     sku: product.sku,
     name: product.name,
@@ -710,9 +812,13 @@ function buildTemplateContext(product) {
     description: product.description,
     priceRetail: product.priceRetail,
     priceWholesale: product.priceWholesale,
+    prices,
     productImages: productImages.listByProduct(product.id),
     date: new Date(),
   };
 }
 
-module.exports = { register };
+// buildTemplateContext is exported for tests: the price-group tokens depend on
+// the company's groups reaching the token filler, and that wiring is only
+// checkable where a database exists (see test/overlayPriceTokens.test.js).
+module.exports = { register, buildTemplateContext };

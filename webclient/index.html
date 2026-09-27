@@ -242,10 +242,6 @@
   [data-theme="dark"] .overlay-done-thumb { background: repeating-conic-gradient(#262626 0% 25%, #1e1e1e 0% 50%) 0 0 / 20px 20px; }
   .overlay-done-line { font-size: 12px; color: var(--muted); text-align: center; line-height: 1.4; }
   .overlay-done-line.is-name { font-weight: 600; color: var(--text); word-break: break-all; }
-  /* v0.1.76: in the save queue the picture IS the button — the press-and-hold
-     happens on it directly, so it gets more height than the single-result
-     thumbnail, which sends the user to the fullscreen viewer instead. */
-  .overlay-done-thumb--tall { max-height: 52vh; }
   /* v0.49.11: preview is now BIG. The 42vh cap squashed it to ~140px on a
      phone and ~310px on iPad, so the user couldn\'t actually evaluate the
      result before applying. Now it\'s width-driven (square) up to 75vh —
@@ -1067,12 +1063,11 @@
       <!-- v0.1.77: which images the overlay lands on. Position 1 is the main
            image, the same numbering the desktop's "Apply to which images"
            control uses. One product offers the gallery selection; a batch
-           offers a single position number applied to every product. -->
+           offers position chips — the numbers are tapped, never typed, so the
+           phone's keypad cannot cover the sheet (v0.1.78). -->
       <div class="reframe-row" id="overlayScopeRow">
         <div class="reframe-row-label">Apply to</div>
         <div class="reframe-chips" id="overlayScopeChips"></div>
-        <input id="overlayPositionInput" type="number" min="1" max="50" step="1" inputmode="numeric"
-               aria-label="Image position" hidden />
       </div>
 
       <div class="reframe-row">
@@ -1124,33 +1119,26 @@
   </div>
 </div>
 
-<!-- v0.1.76: saving several overlay results in a row. Same body as the single
-     result sheet — picture, name, the platform's save route — plus where you
-     are in the batch and a way to move on. Over plain HTTP each picture really
-     is saved on its own (press and hold), so this is the honest shape of
-     "apply to 8 products and put them on my phone": one at a time, with a
-     count so it does not feel endless. "Download all" exists for the browsers
-     that accept a run of downloads (Chrome asks once and then obliges). -->
-<div class="sheet-overlay" id="saveQueueSheet" role="dialog" aria-modal="true" aria-label="Save overlay results">
+<!-- v0.1.78: more than one result becomes ONE zip instead of a picture-by-
+     picture queue. The phone was asked for one full-size image per reply
+     before, which is where "Load failed" came from on a real device; an
+     archive is one request and one download, and it lands in Files/Downloads
+     where a batch belongs. A single result still goes through the sheet above,
+     because one tap into the share sheet beats zipping one picture. -->
+<div class="sheet-overlay" id="zipSheet" role="dialog" aria-modal="true" aria-label="Save overlay results">
   <div class="sheet-box">
     <div class="sheet-head">
       <h3>Save results</h3>
-      <button class="icon-btn" id="saveQueueClose" type="button" aria-label="Close">
+      <button class="icon-btn" id="zipClose" type="button" aria-label="Close">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
     <div class="overlay-done-body">
-      <div class="queue-progress" id="saveQueueProgress"></div>
-      <img class="overlay-done-thumb overlay-done-thumb--tall" id="saveQueueThumb" alt="Overlay result" hidden />
-      <div class="overlay-done-line is-name" id="saveQueueName"></div>
-      <div class="overlay-done-line" id="saveQueueHint"></div>
+      <div class="queue-progress" id="zipProgress">Packaging…</div>
+      <div class="overlay-done-line is-name" id="zipName"></div>
+      <div class="overlay-done-line" id="zipHint"></div>
       <div class="reframe-actions">
-        <button class="btn" id="saveQueueFilesBtn" type="button">Save to Files</button>
-        <button class="btn btn--primary" id="saveQueueSaveBtn" type="button">Save to Photos</button>
-      </div>
-      <div class="reframe-actions">
-        <button class="btn" id="saveQueueAllBtn" type="button">Download all</button>
-        <button class="btn" id="saveQueueNextBtn" type="button">Next</button>
+        <button class="btn btn--primary" id="zipDownloadBtn" type="button" disabled>Download</button>
       </div>
     </div>
   </div>
@@ -1395,11 +1383,10 @@
     // photos inside one product and is cleared when a detail sheet closes.
     listSelect: false,
     listSelected: new Set(),
-    // v0.1.76 — the save-results queue. `items` is a list of
-    // { productId, sku, filepath?, templateId, templateName }; filepath is set
-    // when the result already exists in the library, absent when the picture
-    // has to be rendered (the save-only destination).
-    saveQueue: null,
+    // v0.1.78 — the save-results job. One image is handed over on its own;
+    // more than one is packaged by the server into a zip and downloaded as a
+    // single file (see offerOverlayResults).
+    zipJob: null,
   };
 
   // v0.47.0: built-in prompt library mirrored from renderer/lib/promptLibrary.js
@@ -1509,7 +1496,7 @@
     // made them, just like the image selection above.
     state.listSelected.clear();
     state.listSelect = false;
-    if (state.saveQueue) closeSaveQueue();
+    if (state.zipJob) closeZipSheet();
     paintBulkBar();
     var detail = document.getElementById('detail');
     if (detail) detail.classList.remove('open');
@@ -1651,7 +1638,7 @@
     // selection cannot survive the switch.
     state.listSelected.clear();
     state.listSelect = false;
-    if (state.saveQueue) closeSaveQueue();
+    if (state.zipJob) closeZipSheet();
     paintBulkBar();
     var detail = document.getElementById('detail');
     if (detail) detail.classList.remove('open');
@@ -3912,14 +3899,26 @@
     }
     // v0.1.77 — "Apply to": which images the overlay lands on. A single
     // product gets the gallery selection as a third option (the same chip the
-    // Reframe sheet offers); a batch gets a position number instead, because
-    // "which photos" has no single answer across several products.
+    // Reframe sheet offers); a batch gets a photo NUMBER applied to each
+    // product, because "which photos" has no single answer across several.
+    // v0.1.78: the number is tapped from chips, not typed — the phone keypad
+    // covered the sheet, which is what the owner's brother hit.
     var scopeEl = document.getElementById('overlayScopeChips');
     scopeEl.innerHTML = '';
     if (o.batch) {
       scopeEl.appendChild(reframeChip('Main image (each)', o.scope === 'main',  function () { setOverlayScope('main'); }));
       scopeEl.appendChild(reframeChip('All images (each)', o.scope === 'all',   function () { setOverlayScope('all'); }));
       scopeEl.appendChild(reframeChip('Photo #',           o.scope === 'position', function () { setOverlayScope('position'); }));
+      if (o.scope === 'position') {
+        // 1..8 covers what a phone batch ever needs; the server takes up to 50,
+        // and a product with fewer images simply skips (reported in the toast).
+        var current = overlayPositionNumber(o);
+        for (var n = 1; n <= 8; n += 1) {
+          scopeEl.appendChild(reframeChip(String(n), n === current, (function (pick) {
+            return function () { setOverlayPosition(pick); };
+          })(n)));
+        }
+      }
     } else {
       scopeEl.appendChild(reframeChip('Main image',        o.scope === 'main',  function () { setOverlayScope('main'); }));
       scopeEl.appendChild(reframeChip('All images',        o.scope === 'all',   function () { setOverlayScope('all'); }));
@@ -3931,12 +3930,6 @@
         o.scope = 'main';
       }
     }
-    var posInput = document.getElementById('overlayPositionInput');
-    posInput.hidden = o.scope !== 'position';
-    // Leave the field alone while it is being typed into, or a half-typed
-    // number gets overwritten by the clamp on every keystroke.
-    var typing = typeof document.activeElement !== 'undefined' && document.activeElement === posInput;
-    if (!posInput.hidden && !typing) posInput.value = String(overlayPositionNumber(o));
     // Destination chips
     var destEl = document.getElementById('overlayDestChips');
     destEl.innerHTML = '';
@@ -4010,6 +4003,12 @@
     // The scope decides WHICH image is shown, so unlike the destination this
     // does change the preview — rerender it.
     if (!o.batch && o.templateId) scheduleOverlayPreview(150);
+  }
+  /* v0.1.78: the batch photo number, picked from chips instead of typed. */
+  function setOverlayPosition(n) {
+    var o = state.overlay; if (!o) return;
+    o.position = overlayPositionNumber({ position: n });
+    paintOverlaySheet();
   }
   /* The 1-based positions a single product's overlay should target, or null
      when `scope` already says it ('main' / 'all'). The gallery selection is a
@@ -4149,12 +4148,12 @@
       var everyTarget = (o.scope === 'all')
         ? (o.imgs || []).map(function (im, i) { return i + 1; })
         : (targets && targets.length ? targets : [1]);
-      startSaveQueue(everyTarget.map(function (pos) {
+      offerOverlayResults(everyTarget.map(function (pos) {
         return {
           productId: pid, sku: skuForProduct(pid), filepath: null, position: pos,
           templateId: tid, templateName: templateName,
         };
-      }), true);   // one picture: offer the share sheet the moment it exists
+      }), tid, templateName);
       return;
     }
     var scopeArgs = overlayScopeArgs(o);
@@ -4194,8 +4193,13 @@
     var prod = state.products.filter(function (p) { return p.id === pid; })[0];
     return (prod && prod.sku) || '';
   }
+  /* v0.1.78: case is PRESERVED, matching main/util/slug.js — the rule the
+     desktop, the exported files and the server-side zip all follow, so one
+     overlay is called the same thing however it was saved. Lowercasing here
+     turned "BF-R5232-GD" into "bf-r5232-gd", which is harder to match against
+     the SKU when browsing in Files. */
   function slugForFilename(text, fallback) {
-    var slug = String(text || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+    var slug = String(text || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
     return slug || fallback;
   }
   /* v0.1.75: the name a saved overlay carries, matching the desktop's
@@ -4363,7 +4367,7 @@
           });
         });
       });
-      startSaveQueue(entries);
+      offerOverlayResults(entries, templateId, templateName);
       return;
     }
 
@@ -4387,12 +4391,12 @@
               ? ('Applied to ' + applied + ', ' + failed.length + ' failed')
               : ('Applied to ' + applied + ' product' + (applied === 1 ? '' : 's')));
             if (job.saveToDevice && done.length) {
-              startSaveQueue(done.map(function (d) {
+              offerOverlayResults(done.map(function (d) {
                 return {
                   productId: d.productId, sku: d.sku || '', filepath: d.outputFilepath || null,
                   templateId: templateId, templateName: templateName,
                 };
-              }).filter(function (item) { return item.filepath; }));
+              }).filter(function (item) { return item.filepath; }), templateId, templateName);
             }
           });
       })
@@ -4405,40 +4409,32 @@
      press-and-hold, which is right for one picture. Here that would double
      the gestures for every picture in the batch, so the queue shows the
      picture at full width and the press happens right on it. */
-  /* `autoShare` keeps the v0.1.73 promise for the one-picture case: tap Apply
-     and the share sheet comes to you, without a second tap. It can only be
-     tried once the bytes exist, so it happens when the first (and only) item
-     lands — and if the platform refuses it (activation long expired), the
-     queue is simply left on screen with its Save button. Multi-picture runs
-     never auto-share: popping a share sheet per picture would be worse than
-     the queue. */
-  function startSaveQueue(items, autoShare) {
-    if (!items || !items.length) return;
-    if (state.saveQueue) closeSaveQueue();
-    state.saveQueue = {
-      items: items, index: 0, out: null, url: null,
-      autoShare: !!autoShare && items.length === 1,
-    };
-    openSheet('saveQueueSheet');
-    paintSaveQueue();
+  /* ── v0.1.78: one result saves directly, several become one zip ──────
+     A single picture still goes through the sheet above: share sheet when the
+     platform has one, press-and-hold otherwise, one tap into Files/Photos.
+
+     More than one becomes an archive on the server and ONE download here.
+     That replaces the picture-by-picture queue: each of those was a separate
+     full-size PNG (base64 inside a JSON reply), which is what produced "Load
+     failed" on a real phone with five images, and it left the user tapping
+     save once per picture for a batch he had asked for in one go. */
+  function offerOverlayResults(items, templateId, templateName) {
+    var targets = (items || []).filter(function (i) { return i && i.productId; });
+    if (!targets.length) return;
+    if (targets.length === 1) {
+      // The long-standing single-picture flow: render now, hand it over.
+      deliverSingleResult(targets[0]);
+      return;
+    }
+    startZipFlow(targets, templateId, templateName);
   }
-  function closeSaveQueue() {
-    if (!state.saveQueue) return;
-    releaseQueueBlob();
-    state.saveQueue = null;
-    closeSheet('saveQueueSheet');
-  }
-  function releaseQueueBlob() {
-    var q = state.saveQueue;
-    if (q && q.url) { try { URL.revokeObjectURL(q.url); } catch (_) {} q.url = null; }
-  }
-  /* The bytes for one queue entry: fetched from the library when the overlay
-     was applied, rendered on demand when it was save-only. */
-  function queueEntryBytes(item) {
+  /* The bytes for one result: fetched from the library when the overlay was
+     applied, composed on demand when it was save-only. */
+  function resultBytesFor(item) {
     if (item.filepath) {
-      // Library entries are named after the image they came from. The stored
+      // Library results are named after the image they came from. The stored
       // basename is the position number (001.png, 002.png …), which is what
-      // keeps two results from the same product apart.
+      // keeps two results from one product apart.
       var stored = String(item.filepath).split('/').pop() || '';
       var storedPos = parseInt(stored.replace(/\D+$/, ''), 10);
       return imageFileFor({
@@ -4459,119 +4455,89 @@
     var pos = Number(position);
     return (Number.isInteger(pos) && pos > 1) ? ('p' + pos + '-' + slug) : slug;
   }
-  function paintSaveQueue() {
-    var q = state.saveQueue; if (!q) return;
-    var item = q.items[q.index];
-    var progress = document.getElementById('saveQueueProgress');
-    var name = document.getElementById('saveQueueName');
-    var hint = document.getElementById('saveQueueHint');
-    var img = document.getElementById('saveQueueThumb');
-    var saveBtn = document.getElementById('saveQueueSaveBtn');
-    var nextBtn = document.getElementById('saveQueueNextBtn');
-    progress.textContent = (q.index + 1) + ' of ' + q.items.length + (item.sku ? ' · ' + item.sku : '');
-    name.textContent = 'Preparing…';
-    hint.textContent = '';
-    saveBtn.disabled = true;
-    nextBtn.textContent = q.index + 1 >= q.items.length ? 'Done' : 'Next';
-    releaseQueueBlob();
-    q.out = null;
-    img.hidden = true;
-    img.src = '';
-    queueEntryBytes(item).then(function (out) {
-      // Moved on, closed, or superseded while the bytes were in flight.
-      if (!state.saveQueue || state.saveQueue !== q || q.items[q.index] !== item) return;
-      if (!out) { name.textContent = 'Could not prepare this picture'; return; }
-      q.out = out;
-      q.url = URL.createObjectURL(out.blob);
-      img.src = q.url;
-      img.hidden = false;
-      name.textContent = out.filename;
-      // Same platform rule as everywhere else: the share sheet is the route
-      // into Photos/gallery, and it only exists over a secure context.
-      var shareable = canShareImage(out.file);
-      saveBtn.hidden = !shareable;
-      saveBtn.disabled = false;
-      saveBtn.textContent = 'Save to Photos';
-      document.getElementById('saveQueueFilesBtn').textContent = DEVICE_FILES_LABEL;
-      hint.textContent = shareable
-        ? 'Tap ' + DEVICE_SAVE_MENU + ' in the share sheet, then Next.'
-        : 'Press and hold the picture above, tap ' + DEVICE_SAVE_MENU + ', then Next.';
-      // One picture, and the platform can share: offer it straight away rather
-      // than making him find the button (v0.1.77; the 0.1.73 flow did this).
-      if (q.autoShare) {
-        q.autoShare = false;
-        shareImage(out.file).then(function (status) {
-          if (!state.saveQueue || state.saveQueue !== q) return;
-          if (status === 'shared' || status === 'cancelled') closeSaveQueue();
-        });
-      }
-    }).catch(function (e) {
-      if (!state.saveQueue || state.saveQueue !== q) return;
-      name.textContent = 'Failed: ' + e.message;
-    });
+  function deliverSingleResult(item) {
+    resultBytesFor(item).then(function (out) {
+      if (!out) { toast('Could not prepare the picture'); return; }
+      // deliverOverlaySave tries the share sheet first and only falls back to
+      // the on-screen sheet, which is the 0.1.75 behaviour for one picture.
+      deliverOverlaySave(item.productId, item.filepath || null, out);
+    }).catch(function (e) { toast('Save failed: ' + e.message); });
   }
-  function saveQueueCurrent() {
-    var q = state.saveQueue; if (!q || !q.out) return;
-    if (!canShareImage(q.out.file)) return;
-    shareImage(q.out.file).then(function (status) {
-      if (status === 'shared' || status === 'cancelled') return;
-      if (status.indexOf('failed: ') === 0) toast('Share failed: ' + status.slice(8));
-    });
+  function baseName(filepath) {
+    return String(filepath || '').split('/').pop() || 'overlays.zip';
   }
-  function downloadQueueCurrent() {
-    var q = state.saveQueue; if (!q || !q.out) return;
-    downloadBlobToDevice(q.out.blob, q.out.filename);
+  function startZipFlow(items, templateId, templateName) {
+    state.zipJob = { items: items, templateId: templateId, templateName: templateName, filepath: null, busy: false };
+    openSheet('zipSheet');
+    paintZipSheet('Packaging ' + items.length + ' images…');
+    runZipRender();
   }
-  /* "Download all" renders/fetches each result in turn and triggers a
-     download for it — Chrome asks once to allow multiple files and then
-     obliges; Safari may take only the first, which is why the per-picture
-     route above still exists. */
-  function downloadAllQueue() {
-    var q = state.saveQueue; if (!q) return;
-    var progress = document.getElementById('saveQueueProgress');
-    var items = q.items.slice();
-    var ok = 0;
-    var step = function (i) {
-      if (!state.saveQueue || state.saveQueue !== q) return;    // cancelled
-      if (i >= items.length) {
-        toast('Downloaded ' + ok + ' of ' + items.length);
-        q.index = items.length - 1;
-        paintSaveQueue();
-        return;
-      }
-      progress.textContent = 'Downloading ' + (i + 1) + ' of ' + items.length + '…';
-      queueEntryBytes(items[i]).then(function (out) {
-        if (!state.saveQueue || state.saveQueue !== q) return;
-        if (out) { downloadBlobToDevice(out.blob, out.filename); ok += 1; }
-        // A gap between triggers: browsers drop downloads fired in one burst.
-        setTimeout(function () { step(i + 1); }, 500);
-      }).catch(function () { setTimeout(function () { step(i + 1); }, 500); });
-    };
-    step(0);
+  function runZipRender() {
+    var job = state.zipJob; if (!job || job.busy) return;
+    job.busy = true;
+    job.filepath = null;
+    paintZipSheet('Packaging ' + job.items.length + ' images…');
+    rpc('templates:renderZip', {
+      templateId: job.templateId,
+      label: job.templateName,
+      items: job.items.map(function (i) {
+        return { productId: i.productId, position: i.position || undefined };
+      }),
+    })
+      .then(function (res) {
+        if (state.zipJob !== job) return;
+        job.busy = false;
+        job.filepath = res && res.filepath;
+        if (!job.filepath) { paintZipSheet('The server did not return a file'); return; }
+        var missed = (res.skipped || []).length;
+        paintZipSheet('Ready — ' + res.count + ' image' + (res.count === 1 ? '' : 's')
+          + (missed ? (', ' + missed + ' skipped') : ''));
+      })
+      .catch(function (e) {
+        if (state.zipJob !== job) return;
+        job.busy = false;
+        paintZipSheet('Failed: ' + e.message);
+      });
   }
-  function nextQueueItem() {
-    var q = state.saveQueue; if (!q) return;
-    if (q.index + 1 >= q.items.length) { closeSaveQueue(); return; }
-    q.index += 1;
-    paintSaveQueue();
+  function paintZipSheet(status) {
+    var job = state.zipJob;
+    document.getElementById('zipProgress').textContent = status;
+    var nameEl = document.getElementById('zipName');
+    var hintEl = document.getElementById('zipHint');
+    var btn = document.getElementById('zipDownloadBtn');
+    if (job && job.filepath) {
+      nameEl.textContent = baseName(job.filepath);
+      hintEl.textContent = 'One file with every image inside. Tap Download, then open it from Files.';
+      btn.textContent = 'Download';
+      btn.disabled = false;
+    } else {
+      nameEl.textContent = '';
+      hintEl.textContent = job && !job.busy ? 'Tap to try again.' : 'Working on the server — this can take a moment.';
+      btn.textContent = job && !job.busy ? 'Try again' : 'Download';
+      btn.disabled = !job || job.busy;
+    }
   }
-  document.getElementById('saveQueueSaveBtn').addEventListener('click', saveQueueCurrent);
-  document.getElementById('saveQueueFilesBtn').addEventListener('click', downloadQueueCurrent);
-  document.getElementById('saveQueueAllBtn').addEventListener('click', downloadAllQueue);
-  document.getElementById('saveQueueNextBtn').addEventListener('click', nextQueueItem);
-  document.getElementById('saveQueueClose').addEventListener('click', closeSaveQueue);
-  document.getElementById('saveQueueSheet').addEventListener('click', function (e) { if (e.target === this) closeSaveQueue(); });
+  function downloadZip() {
+    var job = state.zipJob; if (!job) return;
+    if (!job.filepath) { runZipRender(); return; }
+    var enc = job.filepath.split('/').map(encodeURIComponent).join('/');
+    toast('Preparing the download…');
+    fetch(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } })
+      .then(function (res) {
+        if (!res.ok) throw new Error('Server returned ' + res.status);
+        return res.blob();
+      })
+      .then(function (blob) { downloadBlobToDevice(blob, baseName(job.filepath)); })
+      .catch(function (e) { toast('Download failed: ' + e.message); });
+  }
+  function closeZipSheet() {
+    state.zipJob = null;
+    closeSheet('zipSheet');
+  }
+  document.getElementById('zipDownloadBtn').addEventListener('click', downloadZip);
+  document.getElementById('zipClose').addEventListener('click', closeZipSheet);
+  document.getElementById('zipSheet').addEventListener('click', function (e) { if (e.target === this) closeZipSheet(); });
   document.getElementById('overlayDoneSheet').addEventListener('click', function (e) { if (e.target === this) closeOverlayDoneSheet(); });
-  // v0.1.77 — the batch "Photo #" number. Clamped on the way in so a stray 0
-  // or 99 cannot reach the server; the label and (for one product) the preview
-  // follow the number that was typed.
-  document.getElementById('overlayPositionInput').addEventListener('input', function () {
-    var o = state.overlay; if (!o) return;
-    var before = overlayPositionNumber(o);
-    o.position = overlayPositionNumber({ position: this.value });
-    paintOverlaySheet();
-    if (!o.batch && o.templateId && o.position !== before) scheduleOverlayPreview(250);
-  });
   document.getElementById('overlayBtn').addEventListener('click', function () {
     if (!currentDetail) return;
     var pid = currentDetail.id;
