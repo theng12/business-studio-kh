@@ -19,6 +19,10 @@
  *   - backups:openFolder → open the backups folder in Finder.
  *   - backups:pickFolder → choose a custom backups folder (persists
  *                          config.backupsDir).
+ *   - backups:pickFile   → choose one .iskhbackup from anywhere on this
+ *                          Mac (v0.1.83) — for a backup that lives outside
+ *                          the backups folder, such as the ones the old
+ *                          Image Studio KH app wrote.
  *   - backups:restore    → REPLACE the data folder from a backup. The
  *                          owning process restarts after remote restores;
  *                          local renderers relaunch after the response.
@@ -115,6 +119,38 @@ function register({ expose, exposeLocal }) {
     const next = res.filePaths[0];
     config.updateConfig({ backupsDir: next });
     return next;
+  });
+
+  /**
+   * v0.1.83: pick a backup file from anywhere on this Mac.
+   *
+   * The folder list is the normal route, but it cannot reach a backup written
+   * somewhere else — most importantly the ones the old Image Studio KH app
+   * left outside this app's backups folder, which is the "I have the old
+   * backup, can I bring it in?" case. Requiring a Finder copy first, and then
+   * a trip out of this panel and back for the list to notice it, was
+   * unnecessary friction.
+   *
+   * `exposeLocal()` for the same reason as `backups:pickFolder`: the dialog
+   * and the file are on the Mac the user is looking at. The panel hides the
+   * button in client mode, where the picked file would be on the client's
+   * disk while the restore runs against the server's data folder.
+   *
+   * Nothing is validated here beyond a cancelled dialog: the path goes to the
+   * same `backups:preview` + `backups:restore` pair the list uses, and both
+   * verify the manifest before anything is replaced.
+   */
+  exposeLocal('backups:pickFile', async () => {
+    const res = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      title: 'Choose a backup to restore',
+      filters: [
+        { name: 'Media Studio KH backup', extensions: ['iskhbackup'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    if (res.canceled || !res.filePaths[0]) return null;
+    return res.filePaths[0];
   });
 
   expose('backups:restore', async (args) => {

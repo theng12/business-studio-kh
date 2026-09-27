@@ -895,9 +895,13 @@ const NOT_YET_PORTABLE = [
   // Provider keys live in the client's local config (per-Mac), so
   // these reads must stay local.
   'ai:testOpenai',
-  // Users / server controls — admin runs these on the server's own
-  // Settings page, not on a client.'users:create','users:update','users:remove','users:regenerateToken','users:ensureOwner',
-  // v0.49.51: roles + permission matrix (admin manages on the server).'roles:get','roles:capabilities','roles:create','roles:update','roles:remove',
+  // Users / roles / server controls are NOT here: the account and permission
+  // channels are proxied to the server (see PROXIED_CHANNELS above, v0.1.22) and
+  // the server's capability gate decides who may use them, so a client Mac can
+  // manage users. The array below only holds channels nothing can serve yet.
+  // (The names used to sit inside this comment, which made it look as though
+  // they were stubbed here when they had already become proxyable.)
+  // v0.49.51: roles + permission matrix (admin manages on the server).
   'server:status','server:addresses','server:start','server:stop',
   // Settings — data folder lives locally.
   'settings:pickAndSetDataFolder','settings:changeDataFolder',
@@ -914,10 +918,12 @@ const NOT_YET_PORTABLE = [
   'servers:exportBundle','servers:importBundle','servers:previewBundle','servers:applyImportedDataDir',
   // v0.1.22: creating, listing, previewing and restoring a backup now WORK on a
   // client — they act on the server's data folder, so they are proxied (see
-  // PROXIED_CHANNELS above). The three below are the exceptions, because they
-  // open a Finder window or a folder picker: those must appear on the Mac the
-  // user is looking at, and the folder they would open is on the other one.
-  'backups:reveal','backups:openFolder','backups:pickFolder',
+  // PROXIED_CHANNELS above). The four below are the exceptions, because they
+  // open a Finder window, a folder picker or a file picker: those must appear on
+  // the Mac the user is looking at, and the folder or file they name is on the
+  // other one. (v0.1.83 added the file picker to this list; the Backups panel
+  // hides that button in client mode, and this stub is the belt to that brace.)
+  'backups:reveal','backups:openFolder','backups:pickFolder','backups:pickFile',
 ];
 
 /**

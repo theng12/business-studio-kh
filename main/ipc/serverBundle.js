@@ -5,9 +5,13 @@
  * the RPC dispatcher. The whole flow involves OS file dialogs (Save
  * panel, Open panel) and disk I/O on the running Mac's local filesystem.
  * A client Mac shouldn't be reaching into the server's disk over HTTP
- * to pick a bundle path. So these handlers go through `ipcMain.handle`
- * directly (NOT through `expose()`) and do not appear in
- * `main/server/validators.js`.
+ * to pick a bundle path. So these handlers go through `exposeLocal()`
+ * (NOT `expose()`), which also means each one needs an entry in
+ * `main/server/validators.js` — the file that holds the argument checks
+ * for both paths. (Older text here said these were bare `ipcMain.handle`
+ * channels that the validator map never sees; that stopped being true
+ * when `exposeLocal()` was introduced, and AGENTS.md §15 forbids the
+ * bare form outright.)
  *
  * Channels:
  *   - servers:exportBundle  → Save dialog → write .iskhbundle from
