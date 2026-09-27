@@ -9,6 +9,7 @@
  */
 import { useState } from 'react';
 import { Button, Input, Select } from '../../components/ui.jsx';
+import { OverlayControls } from './OverlayControls.jsx';
 
 /** Sizes that Facebook and Instagram actually accept. Square is first and is
  *  the default: the customer asked for square posts. */
@@ -314,6 +315,13 @@ export function GridControls({ config, onChange, brands, categories, products, p
           <label className="field"><span className="field__label">Title size</span><Input type="number" value={c.titleSize} onChange={(e) => set({ titleSize: e.target.value })} /></label>
           <label className="field"><span className="field__label">Footer size</span><Input type="number" value={c.footerSize} onChange={(e) => set({ footerSize: e.target.value })} /></label>
         </div>
+      </Section>
+
+      <Section
+        title="Watermark and overlays"
+        hint="Faint text or a logo drawn over the whole post. A semi-transparent mark is very hard for someone else to crop out and pass off as their own."
+      >
+        <OverlayControls overlays={c.overlays || []} onChange={(overlays) => set({ overlays })} />
       </Section>
 
       <Section title="Output file">

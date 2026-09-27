@@ -16,6 +16,59 @@ const { embeddedFontCss, esc } = require('./studioRenderer');
 // five long-standing lint warnings. The canonical pair is the one kept.
 const { resolvePriceEntry, formatPriceWithEntry, describeStock, normalizeConfig } = require('./util/socialGridModel');
 
+/* ── v0.1.81: overlays ───────────────────────────────────────────────
+ * Text or image marks drawn over the whole post — a handle, a logo, a faint
+ * diagonal "@shop". Everything is inline-styled from the config so a preview
+ * at 1/6 scale and the exported file are the same markup at different sizes
+ * (main/ipc/socialGrid.js scales the numbers, nothing else changes).
+ */
+const ANCHOR_CSS = {
+  tl: 'left:0;top:0',            tc: 'left:50%;top:0',        tr: 'right:0;top:0',
+  cl: 'left:0;top:50%',          cc: 'left:50%;top:50%',      cr: 'right:0;top:50%',
+  bl: 'left:0;bottom:0',         bc: 'left:50%;bottom:0',     br: 'right:0;bottom:0',
+};
+/**
+ * The anchor CSS already pins the element's own edge to the canvas edge
+ * (`right:0` puts its RIGHT edge there), so only a centred axis needs pulling
+ * back by half the element. Getting this wrong shifts a corner mark entirely
+ * off the picture — which is exactly what the first version of this did.
+ */
+function anchorTranslate(anchor, rotation) {
+  const v = anchor[0];
+  const h = anchor[1];
+  const x = h === 'c' ? '-50%' : '0';
+  const y = v === 'c' ? '-50%' : '0';
+  return `translate(${x}, ${y}) rotate(${rotation}deg)`;
+}
+
+function overlayHtml(config, resolveImage) {
+  const overlays = config.overlays || [];
+  if (!overlays.length) return '';
+  // Corner and edge marks hang inside the artwork by half the post padding, so
+  // a watermark never sits half off the canvas or on the very trim edge.
+  const inset = Math.round(config.padding * 0.5);
+  const items = overlays.map((o) => {
+    const pos = ANCHOR_CSS[o.anchor] || ANCHOR_CSS.br;
+    const centred = o.anchor === 'cc';
+    const style = [
+      'position:absolute',
+      pos,
+      centred ? '' : `margin:${inset}px`,
+      `opacity:${o.opacity}`,
+      // Offsets first so they nudge the anchored position, then the anchor's
+      // own alignment, then the rotation about the element's own centre.
+      `transform:translate(${o.offsetX}px, ${o.offsetY}px) ${anchorTranslate(o.anchor, o.rotation)}`,
+    ].filter(Boolean).join(';');
+    if (o.type === 'image') {
+      const src = resolveImage(o.src);
+      if (!src) return '';
+      return `<img class="ov ov--image" alt="" src="${src}" style="${style};width:${o.size}px;height:auto;display:block">`;
+    }
+    return `<div class="ov ov--text" style="${style};font-size:${o.size}px;font-weight:${o.weight};color:${esc(o.color)};white-space:nowrap;line-height:1.1">${esc(o.text)}</div>`;
+  }).filter(Boolean).join('');
+  return items ? `<div class="overlay-layer">${items}</div>` : '';
+}
+
 /* The render window loads this document from a file:// URL, so anything the
  * page needs — fonts and every product photo — has to be inlined. An
  * app-image:// URL would work in the app's own renderer but NOT in this
@@ -116,7 +169,9 @@ ${fonts}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{width:${W}px;height:${H}px;overflow:hidden;background:${esc(config.background)}}
 body{font-family:-apple-system,BlinkMacSystemFont,"MS Noto Khmer","MS Noto Thai","MS Noto SC","MS Noto JP","MS Noto KR","MS Noto",Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.post{width:${W}px;height:${H}px;padding:${config.padding}px;display:flex;flex-direction:column;gap:${config.gap}px;background:${esc(config.background)}}
+.post{position:relative;width:${W}px;height:${H}px;padding:${config.padding}px;display:flex;flex-direction:column;gap:${config.gap}px;background:${esc(config.background)}}
+.overlay-layer{position:absolute;inset:0;pointer-events:none;z-index:5}
+.ov{pointer-events:none}
 header{flex:none;display:flex;flex-direction:column;gap:${Math.round(config.gap / 2)}px}
 header h1{font-size:${config.titleSize}px;font-weight:800;line-height:1.06;letter-spacing:-0.02em;color:#0f172a}
 header p{font-size:${config.subtitleSize}px;font-weight:500;color:#64748b}
@@ -135,7 +190,7 @@ footer .pager{font-variant-numeric:tabular-nums;color:#94a3b8}
 .price{font-size:${Math.round(config.priceSize * scale)}px;font-weight:800;color:#0f172a;font-variant-numeric:tabular-nums}
 .stock{font-size:${Math.round(config.metaSize * scale)}px;font-weight:600;color:#059669}
 .stock--out{color:#dc2626}
-  </style></head><body><div class="post">${header}<main class="grid">${tiles}</main>${footer}</div></body></html>`;
+  </style></head><body><div class="post">${header}<main class="grid">${tiles}</main>${footer}${overlayHtml(config, resolveImage)}</div></body></html>`;
 }
 
 /** A stable, filesystem-safe base name for the series, e.g. "nike-grid". */
@@ -159,4 +214,4 @@ function fileNameFor(slug, index, pageCount, ext) {
   return `${slug}-${String(index + 1).padStart(width, '0')}.${ext}`;
 }
 
-module.exports = { buildPageHtml, seriesSlug, scaleForDensity, fileNameFor };
+module.exports = { buildPageHtml, seriesSlug, scaleForDensity, fileNameFor, overlayHtml };
