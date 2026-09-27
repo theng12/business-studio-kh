@@ -26,6 +26,17 @@ const BACKUP_FORMAT_VERSION = 1;
 // from an arbitrary .tar.gz the user renamed.
 const BACKUP_KIND = 'media-studio-kh-backup';
 
+/* v0.1.82: this app was renamed from **Business Studio KH**, and the old app wrote
+ * `business-studio-kh-backup` into the same manifest field. The data itself did not
+ * change — same archive layout, and the database schema was already version 2,
+ * which is what it still is (later columns arrive through addColumnIfMissing) —
+ * so an old backup restores perfectly well. It was only ever the marker that
+ * refused it, which is a rename, not an incompatibility.
+ *
+ * Recognised rather than rewritten: a restored archive keeps saying which app
+ * made it, and the restore screen shows that version. */
+const LEGACY_BACKUP_KINDS = ['business-studio-kh-backup'];
+
 // Custom extension (a gzipped tar underneath). Custom so double-click
 // in Finder doesn't auto-expand it and it's obviously ours.
 const BACKUP_EXT = 'iskhbackup';
@@ -293,7 +304,10 @@ function backupFilename(stamp, appVersion) {
  */
 function isBackupFilename(name) {
   if (typeof name !== 'string') return false;
-  return new RegExp(`^media-studio-kh-backup-.+\\.${BACKUP_EXT}$`).test(name);
+  // v0.1.82: `business-studio-kh-backup-…` is what the app wrote before the rename
+  // — the old files have to LIST in the restore picker, or the user cannot pick
+  // the very backup they are trying to restore.
+  return new RegExp(`^(?:media|image)-studio-kh-backup-.+\\.${BACKUP_EXT}$`).test(name);
 }
 
 /**
@@ -317,8 +331,8 @@ function validateManifest(obj) {
   if (!obj || typeof obj !== 'object') {
     return { ok: false, error: 'Backup manifest is missing or not an object' };
   }
-  if (obj.kind !== BACKUP_KIND) {
-    return { ok: false, error: 'Not an Business Studio KH backup (wrong or missing kind marker)' };
+  if (obj.kind !== BACKUP_KIND && !LEGACY_BACKUP_KINDS.includes(obj.kind)) {
+    return { ok: false, error: 'Not a Business Studio KH backup (wrong or missing kind marker)' };
   }
   if (!Number.isInteger(obj.backupFormatVersion)) {
     return { ok: false, error: 'Backup manifest has no valid format version' };
@@ -341,6 +355,7 @@ function validateManifest(obj) {
 module.exports = {
   BACKUP_FORMAT_VERSION,
   BACKUP_KIND,
+  LEGACY_BACKUP_KINDS,
   BACKUP_EXT,
   BACKUP_DIR_NAME,
   BACKUP_DATA_ENTRIES,
