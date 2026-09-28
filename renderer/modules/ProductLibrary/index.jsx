@@ -342,15 +342,31 @@ export function ProductLibrary() {
    * normal ON DELETE CASCADE chain, on-disk asset folders are
    * rm-rf'd, and ai-gallery files are unlinked. No undo.
    */
+  /**
+   * v0.22.0: bulk delete with a clear danger confirm. Same
+   * cascade behavior as single-row delete — DB rows go via the
+   * normal ON DELETE CASCADE chain, on-disk asset folders are
+   * rm-rf'd, and ai-gallery files are unlinked. No undo.
+   *
+   * v0.1.85: two changes after the owner reported an accidental product
+   * delete. The button is no longer in the toolbar row next to "Image
+   * operations" — it is the only item in a "⋯ More ▾" menu — and the confirm
+   * now requires the word DELETE to be typed. The asset folders go to the
+   * Trash rather than being erased (main/util/fileTrash.js), so the pictures
+   * can be put back; the product entries still cannot.
+   */
   async function handleBulkDelete() {
     const ids = Array.from(selectedIds);
     if (ids.length === 0) return;
     const ok = await confirmWithBackup({
       title: `Delete ${ids.length} product${ids.length === 1 ? '' : 's'}?`,
-      message: 'All images, AI generations, and metadata for these products will be removed from disk.',
-      detail: 'This cannot be undone.',
+      message: 'The products, their images, their AI generations and their metadata are removed.',
+      detail:
+        'The image files are moved to the Trash, so you can put them back from Finder until you empty it. '
+        + 'The product entries themselves do not come back.',
       danger: true,
       confirmLabel: `Delete ${ids.length}`,
+      requireText: 'DELETE',
     });
     if (!ok) return;
     setBulkDeleting(true);
@@ -915,9 +931,31 @@ export function ProductLibrary() {
                   />
                   <Button onClick={() => setBulkEditOpen(true)} disabled={bulkDeleting} title="Bulk-update metadata fields (brand, category, status, etc.) — doesn’t touch the image bytes.">
                     Edit fields ({selectedIds.size})
-                  </Button>                  <Button variant="danger" onClick={handleBulkDelete} disabled={bulkDeleting}>
-                    {bulkDeleting ? 'Deleting…' : `Delete ${selectedIds.size}`}
                   </Button>
+                  {/* v0.1.85: Delete used to sit right here, a red button beside
+                      "Image operations" — which is how a product got deleted by
+                      someone reaching for an image action. It is now the only
+                      item behind this menu, twice removed from anything else,
+                      and the confirm needs DELETE typed. */}
+                  <BulkActionsMenu
+                    variant="default"
+                    searchable={false}
+                    label="⋯ More ▾"
+                    disabled={bulkDeleting}
+                    sections={[
+                      {
+                        label: 'Danger',
+                        items: [
+                          {
+                            label: `Delete ${selectedIds.size} product${selectedIds.size === 1 ? '' : 's'}…`,
+                            hint: 'Removes the products with their images and AI generations. The image files go to the Trash; the product entries do not come back. You will be asked to type DELETE to confirm.',
+                            danger: true,
+                            onClick: handleBulkDelete,
+                          },
+                        ],
+                      },
+                    ]}
+                  />
                   <Button onClick={clearSelection} disabled={bulkDeleting}>Clear</Button>
                 </div>
               ) : null}
@@ -1288,7 +1326,16 @@ const MENU_EDGE = 8;
 // never waits. Short enough that "stop on a trigger" still feels immediate.
 const HOVER_OPEN_DELAY_MS = 120;
 
-function BulkActionsMenu({ label, count, disabled, sections }) {
+/**
+ * The Library's two-level action menu. Used for "Image operations" and, since
+ * v0.1.85, for the single-item "⋯ More" menu that holds Delete.
+ *
+ * `variant` and `searchable` exist for that second caller: a destructive item
+ * behind a menu should not be dressed as the primary action (blue), and one
+ * row does not need a filter field above it. Defaults keep the image-operations
+ * menu exactly as it was.
+ */
+function BulkActionsMenu({ label, count, disabled, sections, variant = 'primary', searchable = true }) {
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState('down'); // main panel: 'down' | 'up'
   const [maxHeight, setMaxHeight] = useState(null);
@@ -1573,7 +1620,7 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
       onMouseLeave={onPointerLeave}
     >
       <Button
-        variant="primary"
+        variant={variant}
         onClick={toggle}
         onKeyDown={(e) => { if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setOpen(true); } }}
         disabled={disabled}
@@ -1592,19 +1639,22 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
             ...(placement === 'up' ? { top: 'auto', bottom: 'calc(100% + 4px)' } : null),
           }}
         >
-          {/* v0.1.72: always present — it is one compact row, and searching a
-              long tree is exactly where the field earns its space. */}
-          <div className="lib-bulk-menu__search">
-            <input
-              ref={searchRef}
-              className="input lib-bulk-menu__search-input"
-              type="search"
-              value={query}
-              placeholder="Filter operations…"
-              aria-label="Filter operations"
-              onChange={(e) => setQuery(e.target.value)}
-            />
-          </div>
+          {/* v0.1.72: present for the long tree, where searching earns its
+              space. v0.1.85: `searchable={false}` for the one-item "⋯ More"
+              menu, where a filter box above a single row is just noise. */}
+          {searchable ? (
+            <div className="lib-bulk-menu__search">
+              <input
+                ref={searchRef}
+                className="input lib-bulk-menu__search-input"
+                type="search"
+                value={query}
+                placeholder="Filter operations…"
+                aria-label="Filter operations"
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+          ) : null}
           {searching ? (
             flatItems.length === 0 ? (
               <div className="lib-bulk-menu__empty">No matching operations</div>
@@ -1664,7 +1714,7 @@ function BulkActionsMenu({ label, count, disabled, sections }) {
             <button
               key={it.label}
               type="button"
-              className="lib-bulk-menu__item"
+              className={`lib-bulk-menu__item${it.danger ? ' lib-bulk-menu__item--danger' : ''}`}
               onClick={() => { closeAll(); it.onClick(); }}
               role="menuitem"
             >

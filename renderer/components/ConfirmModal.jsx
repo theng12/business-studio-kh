@@ -45,7 +45,18 @@ export function ConfirmModal({
   // `matchHotkey` below. When set, we append a `⇧D` hint to the
   // confirm button label so the shortcut is discoverable.
   hotkey,
+  // v0.1.85: type-to-confirm. When set, the dialog will not let the user
+  // confirm until they have typed this exact text (case-insensitive, trimmed).
+  // Added for product deletion, after the owner reported an accidental one: a
+  // click that lands on the wrong button is a slip, but typing a SKU is a
+  // decision, and the two should not be one Enter apart. The confirm button
+  // stays disabled rather than hidden, so the requirement is visible.
+  requireText = null,
 }) {
+  const [typed, setTyped] = useState('');
+  useEffect(() => { if (open) setTyped(''); }, [open]);
+  const typeTarget = requireText ? String(requireText).trim() : '';
+  const typeSatisfied = !typeTarget || typed.trim().toLowerCase() === typeTarget.toLowerCase();
   // The safe-action label. One rule, so the component default and the
   // imperative `confirm()` helper cannot drift apart: destructive → "Keep",
   // otherwise → "Cancel".
@@ -85,7 +96,7 @@ export function ConfirmModal({
           <Button
             variant={danger ? 'danger' : 'primary'}
             onClick={onConfirm}
-            disabled={busy}
+            disabled={busy || !typeSatisfied}
           >
             {busy ? 'Working…' : (
               <>
@@ -100,6 +111,29 @@ export function ConfirmModal({
       <div className="confirm-modal__body">
         {message ? <p className="confirm-modal__message">{message}</p> : null}
         {detail ? <p className="confirm-modal__detail">{detail}</p> : null}
+        {typeTarget ? (
+          /* v0.1.85: the second gate. Not a form — the button above is the
+             submit — so Enter in this field does nothing until the text
+             matches, and the hint says exactly what to type. */
+          <label className="confirm-modal__typecheck">
+            <span className="confirm-modal__typecheck-label">
+              Type <code>{typeTarget}</code> to confirm
+            </span>
+            <input
+              className="input"
+              type="text"
+              value={typed}
+              autoComplete="off"
+              spellCheck={false}
+              aria-label={`Type ${typeTarget} to confirm`}
+              placeholder={typeTarget}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && typeSatisfied) { e.preventDefault(); onConfirm?.(); }
+              }}
+            />
+          </label>
+        ) : null}
         {extra}
       </div>
     </Modal>
@@ -219,6 +253,7 @@ export function confirm(opts) {
           closeOnBackdrop={!!opts.closeOnBackdrop}
           extra={opts.extra ?? null}
           hotkey={opts.hotkey}
+          requireText={opts.requireText ?? null}
           onCancel={cancelRef.current}
           onConfirm={confirmRef.current}
         />
