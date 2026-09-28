@@ -2150,6 +2150,53 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .user-token:hover {
   background: var(--c-hover-bg);
 }
+/* v0.1.84: the name cell is an input so a name can be corrected in place.
+   It has to look like text until it is touched — a table of permanent input
+   boxes reads as a form to fill in, not a list to fix. */
+.user-name-input {
+  width: 100%;
+  min-width: 120px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px 6px;
+  margin-left: -6px;
+}
+.user-name-input:hover { border-color: var(--c-border); }
+.user-name-input:focus {
+  outline: none;
+  border-color: var(--c-accent);
+  background: var(--c-surface);
+}
+/* An account whose access has been stopped. Dimmed rather than hidden: it is
+   still the name that answers "who did this?" in History. */
+.users-row--stopped td { opacity: 0.62; }
+.users-row--stopped .user-name-input { text-decoration: line-through; }
+.user-stopped-chip {
+  display: inline-block;
+  margin-top: 3px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-text-subtle);
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+/* Three actions on one row (regenerate, stop/allow, delete). Left to the
+   table's default wrapping they stack into three lines and the row grows to
+   twice the height of the others, which reads as if something went wrong. */
+/* The role dropdown must not be squeezed by the editable name beside it —
+   a clipped "Adr"/"Edi" is a role the admin cannot read. */
+.users-table select { min-width: 104px; }
+.user-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
 
 /* v0.14.1: inline form for adding a user. Replaces a broken
    window.prompt() with proper React-controlled inputs.

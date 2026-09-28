@@ -970,6 +970,12 @@ const VALIDATORS = {
   'users:create':                requireFields('name'),
   'users:update':                requireFields('id', 'patch'),
   'users:remove':                requireNonEmptyStringArg('user id'),
+  'users:setDeactivated':        (a) => {
+    if (!isObject(a)) return 'expected an object argument';
+    if (!isString(a.id) || !a.id) return 'id must be a non-empty string';
+    if (a.deactivated !== undefined && typeof a.deactivated !== 'boolean') return 'deactivated must be a boolean';
+    return true;
+  },
   'users:regenerateToken':       requireNonEmptyStringArg('user id'),
 
   /* AI helpers that act on local files, plus key checks */
