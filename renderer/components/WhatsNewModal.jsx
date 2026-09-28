@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.85',
+    date: '2026-09-28',
+    items: [
+      'FIX — deleting a product is much harder to do by accident, and it is no longer final for the pictures. The red Delete button used to sit in a row of everyday buttons — next to Duplicate and Cancel in the product panel, and next to "Image operations" in the toolbar — so a click that landed one button off deleted a whole product. It now lives inside a "⋯ More" menu in both places, and the confirmation will not go through until you type the SKU (in the panel) or the word DELETE (for several products at once).',
+      'FIX — the images of a deleted product go to the Trash instead of being erased. Before, the whole image folder was deleted from disk the moment you confirmed, so putting a product back meant restoring a backup. Now the files are in the Trash and Finder\'s "Put Back" works until you empty it. The product entry itself still does not come back — re-adding it means creating the product again with the same SKU — so the confirmation says so, and it still shows the backup reminder.',
+      'The same care applies to several products at once: select them, open "⋯ More ▾" in the toolbar, and choose Delete — the confirmation names the count and asks you to type DELETE.',
+      'Internal — main/util/fileTrash.js hands a path to Electron\'s shell.trashItem and returns a word rather than throwing; products.remove calls it in the background (the row is already committed) instead of fs.rmSync. If the Trash refuses a folder the files are LEFT where they are, deliberately: an orphaned folder is recoverable, erased bytes are not. Outside Electron (node --test, ELECTRON_RUN_AS_NODE) there is no Trash, so it removes the path for real — otherwise a leak would go unnoticed by the suite. ConfirmModal gained requireText (button disabled until the text matches; Enter only fires once it does). test/fileTrash.test.js (native) pins the three outcomes including the refusal branch; test/productDeleteWiring.test.js pins that no bare delete button remains, that both paths pass requireText, and that the copy matches what the code does.',
+    ],
+  },
+  {
     version: '0.1.84',
     date: '2026-09-27',
     items: [

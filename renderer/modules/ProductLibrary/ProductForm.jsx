@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Field, Input, Select, Textarea } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
+import { confirmWithBackup } from '../../components/BackupReminder.jsx';
 import { Attribution } from '../../components/Attribution.jsx';
 import { HistoryModal } from '../../components/HistoryModal.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
@@ -202,6 +203,8 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
   // v0.49.39: side-panel "Copy ▾" dropdown visibility. Closes on
   // outside-click via a window-level handler installed when open.
   const [copyMenuOpen, setCopyMenuOpen] = useState(false);
+  // v0.1.85: the footer's "⋯" menu — home of Delete product. See handleDelete.
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   // v0.49.40: drag-prep state. In client mode the drag pill needs to
   // download bytes from the server first; the dragstart handler
   // awaits the download before calling startDrag. Shows a "Preparing
@@ -298,17 +301,20 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
   // own toggle) reaches us first and we don't re-close right after the
   // open. Bail when the menu is closed to keep the listener cost zero
   // in the common case.
+  //
+  // v0.1.85: the same rule now covers the footer's "⋯" menu. Both are
+  // tagged with a data attribute rather than sharing one flag, so opening
+  // one does not leave the other's panel mounted behind it.
   useEffect(() => {
-    if (!copyMenuOpen) return undefined;
+    if (!copyMenuOpen && !moreMenuOpen) return undefined;
     function onDocClick(e) {
-      // Anything tagged with [data-copy-menu] is part of the trigger
-      // or the menu itself — let the trigger toggle handle it.
-      if (e.target.closest && e.target.closest('[data-copy-menu]')) return;
+      if (e.target.closest && e.target.closest('[data-copy-menu], [data-product-more-menu]')) return;
       setCopyMenuOpen(false);
+      setMoreMenuOpen(false);
     }
     document.addEventListener('mousedown', onDocClick);
     return () => document.removeEventListener('mousedown', onDocClick);
-  }, [copyMenuOpen]);
+  }, [copyMenuOpen, moreMenuOpen]);
 
   // v0.26.18: live-refresh the panel's image grid whenever ANY image
   // mutation hits the currently-displayed product. Previously the
@@ -526,14 +532,35 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
       .catch(() => { /* the panel is closing; a toast here would be noise */ });
   }, []);
 
+  /**
+   * v0.1.85: delete moved off the footer into the "⋯" menu, and now needs the
+   * SKU typed to confirm.
+   *
+   * The owner's report: "someone accidentally deleted a product... product
+   * deletion and image deletion is so close together they can easily make a
+   * mistake." The old layout put a red `Delete` in the footer beside
+   * Duplicate/Cancel — one click, one Enter, product gone, and (before this
+   * release) its images erased from disk with no way back.
+   *
+   * Two things changed, and they are independent:
+   *   - the button is behind a menu, so it cannot be hit by aiming at
+   *     something else in the same row;
+   *   - the confirm will not fire until the SKU is typed, so a slip of the
+   *     mouse plus a stray Enter is no longer enough.
+   * The image files also go to the Trash now (main/util/fileTrash.js).
+   */
   async function handleDelete() {
     if (!activeProductId) return;
-    const ok = await confirm({
-      title: `Delete ${form.sku || 'this product'}?`,
-      message: 'All images, AI generations, and metadata for this product will be removed.',
-      detail: 'This cannot be undone.',
+    const sku = (form.sku || '').trim();
+    const ok = await confirmWithBackup({
+      title: `Delete ${sku || 'this product'}?`,
+      message: 'The product, its images, its AI generations and its metadata are removed.',
+      detail:
+        'The image files are moved to the Trash, so you can put them back from Finder until you empty it. '
+        + `The product entry itself does not come back — restoring it means adding the product again with SKU ${sku || '(this SKU)'}.`,
       danger: true,
       confirmLabel: 'Delete product',
+      requireText: sku || form.name || 'DELETE',
     });
     if (!ok) return;
     try {
@@ -1377,7 +1404,36 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
       <footer className="lib-panel__footer">
         {!isCreate ? (
           <>
-            <Button variant="danger" onClick={handleDelete}>Delete</Button>
+            {/* v0.1.85: Delete used to be a red button right here, one slip away
+                from Duplicate and Cancel. It now lives in this "⋯" menu, which
+                is also where anything else destructive should go. */}
+            <div className="copy-menu" data-product-more-menu>
+              <Button
+                onClick={() => setMoreMenuOpen((v) => !v)}
+                title="More actions"
+                aria-expanded={moreMenuOpen}
+                aria-haspopup="menu"
+                aria-label="More actions"
+              >
+                ⋯
+              </Button>
+              {moreMenuOpen ? (
+                <div className="copy-menu__panel copy-menu__panel--up" role="menu">
+                  <button
+                    type="button"
+                    className="copy-menu__item copy-menu__item--danger"
+                    role="menuitem"
+                    onClick={() => { setMoreMenuOpen(false); handleDelete(); }}
+                  >
+                    <span className="copy-menu__label">Delete product…</span>
+                    <span className="copy-menu__hint">
+                      Removes this product, its images and its AI generations. The image files go to the
+                      Trash; you will be asked to type {form.sku ? `“${form.sku}”` : 'the name'} to confirm.
+                    </span>
+                  </button>
+                </div>
+              ) : null}
+            </div>
             <Button onClick={handleDuplicate} disabled={duplicating}>
               {duplicating ? 'Duplicating…' : 'Duplicate'}
             </Button>
