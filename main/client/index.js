@@ -875,7 +875,7 @@ const PROXIED_CHANNELS = [
   // an editor on a client Mac is still refused, by the server, with a clear
   // message. What it removes is the need to walk to the data Mac to add a user
   // or take a backup.
-  'users:list','users:create','users:update','users:remove','users:regenerateToken','users:ensureOwner',
+  'users:list','users:create','users:update','users:remove','users:setDeactivated','users:regenerateToken','users:ensureOwner',
   'roles:list','roles:get','roles:capabilities','roles:create','roles:update','roles:remove',
   'backups:create','backups:list','backups:last','backups:preview','backups:restore',
 ];

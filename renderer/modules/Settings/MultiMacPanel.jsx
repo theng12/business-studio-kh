@@ -119,6 +119,11 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
   // v0.14.1: inline add-user form replaces a broken window.prompt() that
   // Electron's BrowserWindow silently no-ops on.
   const [addForm, setAddForm] = useState(null); // null | { name, role }
+  // v0.1.84: the name cell is editable in place. A draft lives here only while
+  // a row is being edited (`{ id, name }`), so the table still shows the
+  // server's value everywhere else — and Escape abandons the edit rather than
+  // saving a half-typed name.
+  const [nameDraft, setNameDraft] = useState(null); // null | { id, name }
   // v0.49.51: role list for the user dropdowns (built-in + custom).
   const [roles, setRoles] = useState([]);
   useEffect(() => {
@@ -216,15 +221,69 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
   }
   async function handleRemove(id, name) {
     const ok = await confirm({
-      title: `Revoke ${name}?`,
+      title: `Delete ${name}?`,
       message: 'Their clients lose access immediately.',
-      confirmLabel: 'Revoke',
+      detail:
+        'The account is removed for good, and it takes the name with it: everything this account '
+        + 'did keeps its place in History, but it will read "Unknown user" from then on, because a '
+        + 'record stores the account it belongs to rather than a copy of the name.\n\n'
+        + 'If you only want to cut off access, use Stop access instead — the account stops being '
+        + 'able to sign in and the name stays on the record. Deleting is for accounts that never '
+        + 'did anything you need to read later, such as your own test accounts.',
+      confirmLabel: 'Delete account',
       danger: true,
     });
     if (!ok) return;
     try {
       await window.api.users.remove(id);
       setUsers((curr) => curr.filter((u) => u.id !== id));
+      addToast?.(`Deleted ${name}. Any History entries by that account now read "Unknown user".`, 'info');
+    } catch (err) { addToast?.(err.message, 'error'); }
+  }
+  /* v0.1.84: stop or restore access. The account survives either way, which is
+     the point — see main/db/users.js setDeactivated. */
+  async function handleToggleAccess(u) {
+    const stopping = !u.deactivatedAt;
+    if (stopping) {
+      const ok = await confirm({
+        title: `Stop access for ${u.name}?`,
+        message: 'They are signed out now, and their token stops working on the next request.',
+        detail:
+          'The account stays in this list, so everything it did keeps showing the real name. '
+          + 'Nothing else changes: no products, images or history are touched, and you can put '
+          + 'them back with Allow access.',
+        confirmLabel: 'Stop access',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    try {
+      const updated = await window.api.users.setDeactivated(u.id, stopping);
+      setUsers((curr) => curr.map((x) => (x.id === u.id ? updated : x)));
+      if (showTokenFor === u.id) setShowTokenFor(null);
+      addToast?.(
+        stopping
+          ? `${u.name} can no longer sign in. The name stays on their past edits.`
+          : `${u.name} can sign in again with the token they had.`,
+        'info',
+      );
+    } catch (err) { addToast?.(err.message, 'error'); }
+  }
+  /* v0.1.84: rename in place. The record stores the account, not the name, so
+     this rewrites the name shown against every past edit at once — which is
+     exactly what you want when the original name was a test or a guess.
+     `typed` comes from the input element itself rather than from the draft
+     state: a blur can arrive in the same tick as the keystroke that preceded
+     it, and reading state there commits the value from the PREVIOUS render —
+     the box would then show a name the database never received. */
+  async function commitName(user, typed) {
+    const next = String(typed ?? '').trim();
+    setNameDraft(null);
+    if (!next || next === user.name) return;
+    try {
+      const updated = await window.api.users.update(user.id, { name: next });
+      setUsers((curr) => curr.map((x) => (x.id === user.id ? updated : x)));
+      addToast?.(`Renamed to ${updated.name}. Past edits by this account now show that name.`, 'success');
     } catch (err) { addToast?.(err.message, 'error'); }
   }
   async function handleRoleChange(id, role) {
@@ -375,8 +434,8 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
     <SettingRow
       label="Users"
       hint={clientMode
-            ? "Each connecting Mac authenticates with a user token. These accounts live on the Mac holding your data — adding or changing one here updates that Mac. Tokens are long random strings; regenerate if one leaks."
-            : "Each connecting Mac authenticates with a user token. Add one per person who'll use the app. Tokens are long random strings — show them to the admin once, then they're stored in the DB. Anyone with the token has the user's role; regenerate if a token leaks."}
+            ? "Each connecting Mac authenticates with a user token. These accounts live on the Mac holding your data — adding or changing one here updates that Mac. Click a name to change it; Stop access keeps the account (and the name on everything it did) but refuses its token; Delete removes the account and its name from past records."
+            : "Each connecting Mac authenticates with a user token. Add one per person who'll use the app. Click a name to change it — past records follow the account, so a rename fixes the name everywhere at once. Stop access is for someone who has left: their token stops working and the account stays, so History keeps the real name. Delete removes the account for good, which also removes its name from past records."}
     >
       <div className="server-mode-users">
         <table className="users-table">
@@ -387,8 +446,27 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
             {users.length === 0 ? (
               <tr><td colSpan="5" className="muted">No users yet.</td></tr>
             ) : users.map((u) => (
-              <tr key={u.id}>
-                <td>{u.name}</td>
+              <tr key={u.id} className={u.deactivatedAt ? 'users-row--stopped' : undefined}>
+                <td>
+                  {/* v0.1.84: rename in place. Enter or clicking away saves,
+                      Escape abandons. The name is not copied onto records —
+                      they point at the account — so a rename fixes the name
+                      shown against everything this account ever did. */}
+                  <input
+                    className="user-name-input"
+                    value={nameDraft?.id === u.id ? nameDraft.name : u.name}
+                    onChange={(e) => setNameDraft({ id: u.id, name: e.target.value })}
+                    onFocus={() => setNameDraft({ id: u.id, name: u.name })}
+                    onBlur={(e) => commitName(u, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); }
+                      else if (e.key === 'Escape') { e.preventDefault(); setNameDraft(null); e.currentTarget.blur(); }
+                    }}
+                    aria-label={`Name for ${u.name}`}
+                    title="Click to rename. Past records show the new name."
+                  />
+                  {u.deactivatedAt ? <span className="user-stopped-chip">Access stopped</span> : null}
+                </td>
                 <td>
                   <Select value={u.role} onChange={(e) => handleRoleChange(u.id, e.target.value)}>
                     {roles.length === 0
@@ -397,7 +475,9 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
                   </Select>
                 </td>
                 <td>
-                  {showTokenFor === u.id ? (
+                  {u.deactivatedAt ? (
+                    <span className="muted" title="Access is stopped, so there is no working token">—</span>
+                  ) : showTokenFor === u.id ? (
                     <code className="user-token" onClick={() => {
                       navigator.clipboard?.writeText(u.token);
                       addToast?.('Token copied to clipboard', 'success');
@@ -408,8 +488,16 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
                 </td>
                 <td className="muted">{u.lastSeenAt ? new Date(u.lastSeenAt).toLocaleString() : '—'}</td>
                 <td>
-                  <button type="button" className="row-action" onClick={() => handleRegenerate(u.id)} title="Regenerate token">↻</button>
-                  <button type="button" className="row-action" onClick={() => handleRemove(u.id, u.name)} title="Revoke user">×</button>
+                  <div className="user-row-actions">
+                    <button type="button" className="row-action" onClick={() => handleRegenerate(u.id)} title="Regenerate token (use if a token leaked)">↻</button>
+                    <button
+                      type="button"
+                      className="row-action"
+                      onClick={() => handleToggleAccess(u)}
+                      title={u.deactivatedAt ? 'Allow access again' : 'Stop access — keep the account and its name on past records'}
+                    >{u.deactivatedAt ? '✓' : '⊘'}</button>
+                    <button type="button" className="row-action" onClick={() => handleRemove(u.id, u.name)} title="Delete account (past records lose the name)">×</button>
+                  </div>
                 </td>
               </tr>
             ))}

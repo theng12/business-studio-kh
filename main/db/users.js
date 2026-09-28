@@ -23,6 +23,11 @@ function rowToUser(row) {
     // switched explicitly (in which case the renderer falls back to
     // the server's app_state.activeCompanyId, the shared default).
     activeCompanyId: row.active_company_id ?? null,
+    // v0.1.84: null = the account can sign in; a timestamp = access was
+    // stopped (someone left, or the account was only ever a test) and the
+    // token is refused. The row itself is kept so the name still resolves
+    // against everything that account did.
+    deactivatedAt: row.deactivated_at ?? null,
   };
 }
 
@@ -46,9 +51,24 @@ function get(id) {
   return rowToUser(getDb().prepare(`SELECT * FROM users WHERE id = ?`).get(id));
 }
 
+/**
+ * The ONE authentication gate. Both the HTTP API (`main/server/index.js`
+ * `authenticate`) and the phone viewer's WebSocket handshake resolve a bearer
+ * token through here, so refusing a stopped account in this single query is
+ * what makes "Stop access" mean it — there is no second place where a token
+ * is looked up.
+ *
+ * Still returns the row for an active account only; a stopped one is
+ * indistinguishable from an unknown token, which is deliberate: the holder of
+ * a stopped account's token learns nothing about why it stopped working.
+ */
 function getByToken(token) {
   if (!token) return null;
-  return rowToUser(getDb().prepare(`SELECT * FROM users WHERE token = ?`).get(token));
+  return rowToUser(
+    getDb()
+      .prepare(`SELECT * FROM users WHERE token = ? AND deactivated_at IS NULL`)
+      .get(token),
+  );
 }
 
 function getByName(name) {
@@ -160,6 +180,35 @@ function remove(id) {
 }
 
 /**
+ * v0.1.84: stop or restore an account's access without deleting it.
+ *
+ * The two options an owner actually has when someone leaves are not
+ * interchangeable, and this is the one that keeps the record straight:
+ *
+ *   - `setDeactivated(id, true)`  — token refused from the next request on
+ *     (`getByToken` filters), the account still lists, and every audit entry
+ *     and "edited by" attribution that points at it keeps the real name.
+ *   - `remove(id)`               — the row is gone, so those attributions
+ *     resolve to nothing and the History drawer reads "Unknown user"
+ *     (`renderer/components/HistoryModal.jsx` falls back to that string when
+ *     the id is not in the live user list). Right for an account that never
+ *     did anything, wrong for a person whose edits you want to be able to
+ *     read later.
+ *
+ * Reversible: restoring clears the timestamp and the ORIGINAL token works
+ * again — which is why stopping access is not a substitute for regenerating a
+ * token that leaked.
+ */
+function setDeactivated(id, deactivated) {
+  if (!id) throw new Error('user id required');
+  if (!get(id)) throw new Error('User not found');
+  getDb()
+    .prepare(`UPDATE users SET deactivated_at = ? WHERE id = ?`)
+    .run(deactivated ? Date.now() : null, id);
+  return get(id);
+}
+
+/**
  * Bootstrap: if no users exist, create a default "Owner" with admin
  * role. Returns the owner so the caller can surface the token to the
  * admin one time. Idempotent — if any users exist, returns null.
@@ -180,6 +229,7 @@ module.exports = {
   regenerateToken,
   touchLastSeen,
   setActiveCompany,
+  setDeactivated,
   remove,
   ensureOwner,
 };
