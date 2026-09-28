@@ -1133,6 +1133,9 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   outline: none;
 }
 .lib-bulk-menu__item-label { font-size: 13px; font-weight: 500; }
+/* v0.1.85: the destructive row of the "⋯ More" menu (Delete products).
+   House red, matching .btn--danger and the panel's menu item. */
+.lib-bulk-menu__item--danger .lib-bulk-menu__item-label { color: var(--c-rose); }
 .lib-bulk-menu__item-hint {
   font-size: 11px;
   color: var(--c-text-subtle);
@@ -3918,6 +3921,27 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   opacity: 0.85;
 }
 
+/* v0.1.85: type-to-confirm gate. Deliberately looks like a small form row
+   rather than another paragraph, so "type the SKU" reads as a step the user
+   has to take and not as more text to skim past. */
+.confirm-modal__typecheck {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.confirm-modal__typecheck-label {
+  font-size: 12.5px;
+  color: var(--c-text-muted);
+}
+.confirm-modal__typecheck-label code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--c-active-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--c-text);
+}
+
 /* v0.26.24: export collision modal copy. Three short paragraphs
    each describing one of the three resolution modes — replace,
    skip, keep both. Slightly muted so the lead "X of Y files…" line
@@ -5371,6 +5395,18 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   background: var(--c-border, #d4d4d8);
   margin: 4px 0;
 }
+/* v0.1.85: the footer's "⋯" menu sits at the bottom of the side panel, so its
+   panel opens upwards; the default drops it below the footer and off-screen. */
+.copy-menu__panel--up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+/* v0.1.85: destructive item. Red enough to read as "this is the dangerous one"
+   without the solid danger fill a button gets — the warning belongs to the
+   confirmation that follows, not to a menu row the user is still reading. */
+/* .btn--danger is the house red (--c-rose), so the menu row matches it. */
+.copy-menu__item--danger .copy-menu__label { color: var(--c-rose); }
+.copy-menu__item--danger:hover:not(:disabled) { background: #fff5f5; }
 
 .image-tile__nav {
   position: absolute;
