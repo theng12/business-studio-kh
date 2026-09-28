@@ -12,6 +12,7 @@ import { ModeSegment, ServerModePanel, ClientModePanel, RestartBanner, Migration
 // CrashLogPanel is used INSIDE AboutCard — no need to re-import it here.
 import { AboutCard } from './AboutPanel.jsx';
 import { BackupsPanel } from './BackupsPanel.jsx';
+import { DeletedItemsPanel } from './DeletedItemsPanel.jsx';
 import { PriceGroupsPanel } from './PriceGroupsPanel.jsx';
 import { RolesPanel } from './RolesPanel.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
@@ -36,6 +37,9 @@ const SETTINGS_TABS = [
   // (search for `t.key !== 'backups'`), not in a separate list; an earlier
   // comment here referred to a `visibleTabs` that was never written.
   { key: 'backups',     label: 'Backups' },
+  // v0.1.86: the recycle bin. Sits next to Backups because it is the same
+  // kind of thing — the place you go when something has gone wrong.
+  { key: 'deleted',     label: 'Recently deleted' },
   { key: 'multi-mac',   label: 'Multi-Mac' },
   // v0.49.51: custom roles + permission matrix.
   { key: 'roles',       label: 'Roles & permissions' },
@@ -245,7 +249,10 @@ export function Settings() {
             .filter((t) => {
               if (!isClient) return true;                       // the host Mac owns everything
               if (t.key === 'roles') return canManageUsers;
-              if (t.key === 'backups') return canManageSystem;
+              // v0.1.86: the recycle bin is a data-folder operation like
+              // backups — a client Mac may restore or purge, the server holds
+              // the files. Same capability gate, for the same reason.
+              if (t.key === 'backups' || t.key === 'deleted') return canManageSystem;
               return true;
             })
             .map((t) => (
@@ -603,6 +610,10 @@ export function Settings() {
             client staring at a highlighted tab and an empty pane. */}
         {tab === 'backups' && (
           <BackupsPanel config={config} />
+        )}
+
+        {tab === 'deleted' && (
+          <DeletedItemsPanel config={config} addToast={addToast} />
         )}
 
         {tab === 'roles' && (

@@ -554,10 +554,11 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
     const sku = (form.sku || '').trim();
     const ok = await confirmWithBackup({
       title: `Delete ${sku || 'this product'}?`,
-      message: 'The product, its images, its AI generations and its metadata are removed.',
+      message: 'The product, its images, its AI generations and its metadata are removed from the library.',
       detail:
-        'The image files are moved to the Trash, so you can put them back from Finder until you empty it. '
-        + `The product entry itself does not come back — restoring it means adding the product again with SKU ${sku || '(this SKU)'}.`,
+        'It is not gone yet: it waits in Settings → Recently deleted, with its photos, and one click '
+        + 'puts it back exactly as it was. After the keep window it leaves that list and its files go '
+        + 'to the Mac\'s Trash.',
       danger: true,
       confirmLabel: 'Delete product',
       requireText: sku || form.name || 'DELETE',
@@ -565,7 +566,7 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
     if (!ok) return;
     try {
       await removeProduct(activeProductId);
-      addToast('Deleted', 'success');
+      addToast(`Deleted ${sku || 'product'} — restore it from Settings → Recently deleted if that was a mistake.`, 'success');
       onClose();
     } catch (err) {
       addToast(err.message, 'error');
@@ -1427,8 +1428,9 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
                   >
                     <span className="copy-menu__label">Delete product…</span>
                     <span className="copy-menu__hint">
-                      Removes this product, its images and its AI generations. The image files go to the
-                      Trash; you will be asked to type {form.sku ? `“${form.sku}”` : 'the name'} to confirm.
+                      Removes this product, its images and its AI generations. It waits in Settings →
+                      Recently deleted so you can put it back; you will be asked to type
+                      {form.sku ? ` “${form.sku}”` : ' the name'} to confirm.
                     </span>
                   </button>
                 </div>

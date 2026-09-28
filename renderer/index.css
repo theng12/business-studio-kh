@@ -2201,6 +2201,13 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   white-space: nowrap;
 }
 
+/* v0.1.86: Settings → Recently deleted. Reuses the backups list styling on
+   purpose — it is the same shape (a row per item, actions on the right), and
+   one look for "things I can undo" is better than two. */
+.deleted-list {
+  width: 100%;
+}
+
 /* v0.14.1: inline form for adding a user. Replaces a broken
    window.prompt() with proper React-controlled inputs.
    v0.21.3: fix collapsed name field. The previous `> :first-child`
