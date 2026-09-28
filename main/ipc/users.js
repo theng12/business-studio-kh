@@ -10,6 +10,10 @@
  *   - users:listForAttribution → id + name + role (no tokens)
  *   - users:presence → currently-connected WebSocket users
  *
+ * v0.1.84 added users:setDeactivated — "Stop access" for an account whose
+ * person has left. It is NOT a delete: the row survives so the name keeps
+ * resolving in History. See main/db/users.js setDeactivated.
+ *
  * Tokens are returned to authorized user managers by the management
  * list and create/regenerate operations. Attribution reads omit them.
  */
@@ -39,6 +43,17 @@ function register({ expose, exposeLocal }) {
     const removed = users.remove(id);
     if (removed) disconnectUser(id);
     return removed;
+  });
+  /* v0.1.84: stop or restore an account's access, keeping the account so the
+     name still resolves against everything it did. Live sessions are dropped
+     for the same reason `remove` drops them — a stopped person must not keep
+     the WebSocket they already hold — and a restored one simply signs in
+     again with the token they had. */
+  expose('users:setDeactivated', ({ id, deactivated }) => {
+    const users = require('../db/users');
+    const updated = users.setDeactivated(id, deactivated !== false);
+    if (updated.deactivatedAt) disconnectUser(id);
+    return updated;
   });
   expose('users:regenerateToken', (id) => {
     const users = require('../db/users');

@@ -154,6 +154,16 @@ function initDb(dataDir) {
      shared default until they explicitly switch. */
   addColumnIfMissing(db, 'users', 'active_company_id', 'TEXT');
 
+  /* v0.1.84: "Stop access" — an account belonging to someone who has left.
+     Additive and NULL for every account that exists today, so nothing changes
+     for an existing install (no SCHEMA_VERSION bump: that would wipe the
+     catalog). A non-NULL value means the token no longer authenticates —
+     `users.getByToken` filters on it, and that is the single gate both the
+     HTTP API and the phone viewer's WebSocket pass through — while the row,
+     and therefore the name shown against everything that person ever did,
+     stays exactly where it is. */
+  addColumnIfMissing(db, 'users', 'deactivated_at', 'INTEGER');
+
   /* v0.15.3: edit attribution. updated_by_user_id is the users.id of
      the caller who last touched the row, or NULL for "the server admin
      / standalone". The renderer joins on this for "Edited 2 min ago by
