@@ -878,6 +878,9 @@ const PROXIED_CHANNELS = [
   'users:list','users:create','users:update','users:remove','users:setDeactivated','users:regenerateToken','users:ensureOwner',
   'roles:list','roles:get','roles:capabilities','roles:create','roles:update','roles:remove',
   'backups:create','backups:list','backups:last','backups:preview','backups:restore',
+  // v0.1.86: the recycle bin acts on the data folder, so a client Mac can
+  // list, restore and purge just like the backups it sits beside.
+  'deleted:list','deleted:restore','deleted:purge','deleted:empty',
 ];
 
 /**

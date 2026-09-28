@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.86',
+    date: '2026-09-28',
+    items: [
+      'NEW — deleted products and photos can now be put back. Settings → Recently deleted lists everything deleted in this company, newest first, with a Restore button that returns it exactly as it was — same SKU, same photos, same order. This is the answer to the accident: a product deleted by mistake used to need a backup to recover, and the entry itself simply could not be brought back.',
+      'You choose how long things wait there: 7 days, 15, 30 (the default), 90, or "Until I clear it". When the window passes, the item leaves the list and its files go to the Mac\'s Trash — so even then Finder can put them back until you empty the Trash. "Delete everything now" is there if you would rather clear it by hand, and it asks you to type DELETE.',
+      'The delete screens say where things go now: deleting a product (or several) tells you it is waiting in Recently deleted, so a mistake is one click to undo rather than a restore-a-backup decision. A photo deleted on its own is restorable the same way, and comes back at the end of the gallery.',
+      'Two honest limits, both said in the panel: Recently deleted is not part of a backup file (restoring a backup replaces the whole data folder, and this list with it), and if you have since re-created a product with the same SKU, the restore stops and tells you to rename or delete that one first rather than merging the two.',
+      'Internal — new additive table deleted_items (no SCHEMA_VERSION bump) plus main/deletedItems.js: the product or image rows are snapshotted as JSON before the delete, and the files are RENAMED into <dataDir>/.recycle/<id>/ (a rename, so a 2 GB product folder moves instantly). products.remove holds instead of trashing as of this version; productImages.remove holds the file BEFORE the renumber pass, which is what makes the single-photo case safe — the survivors get promoted into the freed slot immediately, so a delayed move could take the wrong bytes. Purge goes through main/util/fileTrash.js, so "permanently delete" still lands in the Mac\'s Trash. Retention is swept at boot (config.deletedRetentionDays, 0 = keep). Channels deleted:list/restore/purge/empty are exposed, validated, bridged and proxied for client mode. test/deletedItems.test.js (native) covers hold/restore/refuse/expire/purge/per-company; test/deletedItemsWiring.test.js covers the wiring, the ordering and the copy.',
+    ],
+  },
+  {
     version: '0.1.85',
     date: '2026-09-28',
     items: [

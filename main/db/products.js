@@ -624,6 +624,28 @@ function remove(id) {
   let preDeleteRow = null;
   try { preDeleteRow = get(id); } catch (_) {}
 
+  /* v0.1.86: the raw rows, taken before the DELETE, are what makes a restore
+   * faithful — `payload_json` in `deleted_items` is a copy of these, so putting
+   * a product back re-inserts it exactly as it was instead of rebuilding it
+   * from a summary. `get(id)` above returns the camelCase mapped object, which
+   * is not what an INSERT needs. */
+  let rawProductRow = null;
+  let rawImageRows = [];
+  let aiGalleryRelPaths = [];
+  try { rawProductRow = getDb().prepare('SELECT * FROM products WHERE id = ?').get(id); } catch (_) {}
+  try {
+    rawImageRows = getDb()
+      .prepare('SELECT * FROM product_images WHERE product_id = ? ORDER BY order_index ASC')
+      .all(id);
+  } catch (_) {}
+  try {
+    aiGalleryRelPaths = getDb()
+      .prepare('SELECT filepath FROM ai_gallery WHERE product_id = ?')
+      .all(id)
+      .map((r) => r.filepath)
+      .filter(Boolean);
+  } catch (_) {}
+
   const info = getDb().prepare('DELETE FROM products WHERE id = ?').run(id);
   const deleted = info.changes > 0;
 
@@ -649,76 +671,61 @@ function remove(id) {
     } catch (_) {/* audit failures shouldn't break delete */}
   }
 
-  if (deleted && dirToClean) {
-    try {
-      // dirToClean is relative to <dataDir>/assets/ (e.g.
-      // `KT-Ceramic/ROYAL/BF-R5232-GD`). Prepend the assets segment.
-      const abs = path.join(getDataDir(), 'assets', dirToClean);
-      if (fs.existsSync(abs)) {
-        /* v0.1.27: never delete a folder another product also owns.
-         *
-         * The on-disk directory is derived from the company + brand + a SLUG of
-         * the SKU, and slugify collapses every run of non-alphanumerics to a
-         * single `-`. So `A-1`, `A 1`, `A/1`, `A_1` and `A.1` all map to the
-         * same folder — while UNIQUE(company_id, sku) is on the RAW sku, so all
-         * five can legitimately coexist. Deleting one of them used to
-         * `rmSync(..., { recursive: true })` the shared folder and destroy the
-         * others' images, leaving their product_images rows pointing at files
-         * that no longer existed.
-         *
-         * When the folder is shared, remove only THIS product's files (its
-         * basename prefix) and leave the directory and everything else in it
-         * alone. */
+  if (deleted) {
+    /* v0.1.86: hold the whole thing — rows and files — in the recycle bin so
+     * the owner can put it back. This replaces the v0.1.85 "move the folder to
+     * the macOS Trash" step, which was recoverable but not restorable: the
+     * pictures came back to disk while the product entry stayed gone, so the
+     * only real recovery was a backup. Holding is a rename into
+     * `<dataDir>/.recycle/<id>/`, instant even for a large folder, and the
+     * Trash is used later — when the item is purged (main/deletedItems.js).
+     *
+     * The shared-folder rule from v0.1.27 is preserved: when the folder is
+     * shared with another product we move NOTHING (their files cannot be told
+     * apart from ours), and the held item records that so a restore only
+     * re-inserts the rows over the files that are still there.
+     *
+     * If holding fails, fall back to the previous behaviour — files to the
+     * Trash, item not restorable — rather than leaving the files behind with
+     * no record at all. */
+    let sharedWithCount = 0;
+    if (dirToClean && removedCompany) {
+      try {
         const siblings = getDb()
           .prepare('SELECT * FROM products WHERE company_id = ? AND id <> ?')
           .all(removedCompany.id, id)
           .map(rowToProduct);
-        const sharedWith = siblings.filter((other) => {
+        sharedWithCount = siblings.filter((other) => {
           const otherBrand = other.brandId ? getBrands().get(other.brandId) : null;
           return productAssetDir(removedCompany, otherBrand, other) === dirToClean;
-        });
-        if (sharedWith.length > 0) {
-          /* Delete NOTHING when the folder is shared.
-           *
-           * A slug collision produces the same `<slug>-NNN` basename too, so
-           * there is no reliable way to tell this product's files from the
-           * other's — `A-1-001.jpg` is simultaneously both. Removing "our own"
-           * files would therefore delete the other product's only copy as well.
-           * Leaving a few orphaned files behind is strictly better than
-           * destroying a product's images, and the boot sweep already treats
-           * unreferenced asset files as recoverable rather than fatal. */
-          process.stderr.write(
-            `[products.remove] ${dirToClean} is shared with ${sharedWith.length} other product(s), `
-            + `which all slug to the same folder name (e.g. "A-1" and "A 1"). Nothing was deleted — `
-            + `their files cannot be told apart from ${removedProduct.sku}'s. `
-            + 'Rename one of the SKUs (add a distinguishing character) to separate them.\n',
-          );
-        } else {
-          /* v0.1.85: to the Trash, not into the void. This used to be
-           * `fs.rmSync(dir, { recursive: true, force: true })`, which is why an
-           * accidental delete was final — the owner's report was exactly that.
-           * The DB row is already gone at this point, so this is a file-level
-           * safety net (Finder → Put Back) rather than an undo for the product
-           * entry. If the Trash refuses the folder, `trashPath` leaves it where
-           * it is: an orphaned folder is recoverable, erased bytes are not. */
-          trashPathInBackground(abs);
-        }
+        }).length;
+      } catch (_) { /* treat as unshared */ }
+    }
+
+    try {
+      require('../deletedItems').holdProduct({
+        productRow: rawProductRow,
+        imageRows: rawImageRows,
+        assetDirRel: dirToClean,
+        aiGalleryRel: aiGalleryRelPaths,
+        companyId: removedCompany?.id ?? rawProductRow?.company_id ?? null,
+        userId: getCallerUserId(),
+        moveAssets: sharedWithCount === 0,
+      });
+      if (sharedWithCount > 0) {
+        process.stderr.write(
+          `[products.remove] ${dirToClean} is shared with ${sharedWithCount} other product(s), `
+          + `which all slug to the same folder name (e.g. "A-1" and "A 1"). No files were moved — `
+          + `they cannot be told apart from ${removedProduct?.sku}'s. `
+          + 'Rename one of the SKUs (add a distinguishing character) to separate them.\n',
+        );
       }
     } catch (err) {
-      process.stderr.write(`[products.remove] cleanup ${dirToClean}: ${err.message}\n`);
-    }
-  }
-  if (deleted && aiGalleryAbsPaths.length > 0) {
-    // v0.22.0: unlink ai-gallery image bytes for this product.
-    // Best-effort; a missing file is fine (already cleaned up or
-    // never written). We don't try to remove the parent <sku> dir
-    // because other product runs may share the directory.
-    for (const abs of aiGalleryAbsPaths) {
-      try {
-        if (fs.existsSync(abs)) fs.unlinkSync(abs);
-      } catch (err) {
-        process.stderr.write(`[products.remove] ai-gallery cleanup ${abs}: ${err.message}\n`);
+      process.stderr.write(`[products.remove] could not hold ${id} for restore: ${err.message}\n`);
+      if (sharedWithCount === 0 && dirToClean) {
+        trashPathInBackground(path.join(getDataDir(), 'assets', dirToClean));
       }
+      for (const abs of aiGalleryAbsPaths) trashPathInBackground(abs);
     }
   }
   return deleted;

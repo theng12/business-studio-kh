@@ -516,6 +516,19 @@ app.whenReady().then(() => {
     logEvent('db:error', err.stack || err.message);
   }
 
+  /* v0.1.86: the recycle bin's retention window is enforced here, once per
+   * boot — that is what makes "restorable for 30 days" true instead of a
+   * promise. `deletedRetentionDays: 0` means keep everything until the user
+   * clears it, and purging is skipped entirely. Best-effort: a failure must
+   * never stop the app from starting. */
+  try {
+    const retentionDays = Number(config.deletedRetentionDays ?? 30);
+    const swept = require('./deletedItems').purgeExpired({ retentionDays });
+    if (swept.removed > 0) logEvent('recycle:swept', `removed=${swept.removed} kept=${swept.kept}`);
+  } catch (err) {
+    logEvent('recycle:sweep-failed', err.message);
+  }
+
   registerImageProtocol(config.dataDir);
   registerRendererProtocol(path.join(__dirname, '..', '..', 'dist-renderer'));
   registerIpc({ getMainWindow: () => mainWindow });
