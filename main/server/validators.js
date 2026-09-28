@@ -964,6 +964,12 @@ const VALIDATORS = {
   'client:diagnoseServer':       (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
   'client:testConnection':       (a) => isObject(a) ? true : 'expected an object argument',
 
+  /* v0.1.86: recycle bin — list / restore / purge / empty */
+  'deleted:list':                (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
+  'deleted:restore':             requireNonEmptyStringArg('deleted item id'),
+  'deleted:purge':               requireNonEmptyStringArg('deleted item id'),
+  'deleted:empty':               (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
+
   /* users / roles — local account list on this Mac */
   'users:list':                  () => true,
   'users:ensureOwner':           () => true,

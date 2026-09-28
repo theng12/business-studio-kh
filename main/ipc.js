@@ -40,6 +40,7 @@ const dashboardDomain  = require('./ipc/dashboard');
 const auditDomain      = require('./ipc/audit');         // v0.22.6: history feed
 const serverBundleDom  = require('./ipc/serverBundle');  // v0.26.32: export/import server bundle
 const backupsDomain    = require('./ipc/backups');       // v0.49.31: local backup/restore
+const deletedDomain     = require('./ipc/deletedItems');   // v0.1.86: the recycle bin
 const suppliersDomain  = require('./ipc/suppliers');     // v0.49.46: OPERATIONS — Phase 1
 const purchaseOrdersDomain = require('./ipc/purchaseOrders'); // v0.49.47: OPERATIONS — Phase 2+3+4
 const labelsDomain     = require('./ipc/labels');
@@ -75,6 +76,7 @@ function registerIpc(_ctx) {
   auditDomain.register(helpers);
   serverBundleDom.register(helpers);
   backupsDomain.register(helpers);
+  deletedDomain.register(helpers);
   suppliersDomain.register(helpers);
   purchaseOrdersDomain.register(helpers);   // v0.49.47
   labelsDomain.register(helpers);

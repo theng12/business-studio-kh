@@ -84,6 +84,13 @@ function defaultConfig() {
     // web viewer at GET /m (view + search + add-photo). Default on; the
     // server checks this per-request so toggling takes effect immediately.
     webViewerEnabled: true,
+
+    /* v0.1.86: how long a deleted product or image stays restorable in
+     * Settings → Recently deleted. Days; 0 = keep until the user clears it.
+     * Enforced by a sweep at boot (main/index.js) plus the "Empty now"
+     * button — the sweep is what makes "gone in 30 days" true rather than
+     * aspirational. */
+    deletedRetentionDays: 30,
     clientServerUrl: '',                // client mode: e.g. 'http://100.64.0.5:13180'
     clientToken: '',                    // client mode: user token from server admin
     clientUserName: '',                 // client mode: cached display name

@@ -126,7 +126,7 @@ test('an Electron main process with no usable Trash leaves the files alone', asy
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('deleting a product hands its folder to the Trash, and keeps the shared-folder rule', { skip: skipReason }, () => {
+test('deleting a product takes its folder out of the assets tree, and keeps the shared-folder rule', { skip: skipReason }, () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'msk-trash-product-'));
   db.initDb(dataDir);
 
@@ -146,9 +146,9 @@ test('deleting a product hands its folder to the Trash, and keeps the shared-fol
   assert.equal(products.get(product.id), null);
   assert.equal(fs.existsSync(absDir), false, 'the images folder must not stay in assets/');
 
-  // The whole point: on a real Mac that folder is in the Trash, because
-  // `products.remove` calls the helper rather than rm-rf'ing it. Pinned at the
-  // source level in test/productDeleteWiring.test.js, because this process has
-  // no Electron shell to observe.
+  // Since v0.1.86 the folder is held in the recycle bin rather than trashed, so
+  // this case only asserts it left the assets tree; test/deletedItems.test.js
+  // owns the restorable behaviour and the Trash is exercised by the purge case
+  // there.
   fs.rmSync(dataDir, { recursive: true, force: true });
 });

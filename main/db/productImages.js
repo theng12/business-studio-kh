@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { getDb, getDataDir } = require('./index');
-const { parseJson } = require('./_util');
+const { parseJson, getCallerUserId } = require('./_util');
 const { productAssetDir, productImageBasename, TMP_PREFIX } = require('../util/assetPath');
 
 // Late-required to avoid module-load circularity (products → productImages → products).
@@ -266,15 +266,28 @@ async function addFromBytes(productId, buffer, ext, { originalFilepath } = {}) {
 }
 
 /**
- * Remove an image. Deletes the file from disk (best-effort) and the DB
- * row, then renumbers remaining images so order_index + filename slots
- * stay contiguous (001, 002, 003 with no gaps).
+ * Remove an image. The file goes into the recycle bin and the DB row is
+ * deleted, then the remaining images are renumbered so order_index + filename
+ * slots stay contiguous (001, 002, 003 with no gaps).
+ *
+ * v0.1.86: it used to `unlinkSync` the file, which made a mis-clicked photo
+ * unrecoverable — and it was the *other* half of the owner's complaint that
+ * product and image deletion sit too close together. The file is now moved
+ * (renamed) into `<dataDir>/.recycle/<id>/` by `deletedItems.holdImage` BEFORE
+ * the renumber pass. That order matters and is why this is not a Trash move:
+ * renumbering immediately promotes `003` into the freed `002` slot, so a
+ * delayed move would race it and could take the wrong bytes.
  */
 function remove(productId, filepath) {
   const db = getDb();
   const dataDir = getDataDir();
   // filepath is relative to <dataDir>/assets/ — prepend that segment.
   const abs = path.join(dataDir, 'assets', filepath);
+
+  let rawRow = null;
+  try {
+    rawRow = db.prepare('SELECT * FROM product_images WHERE product_id = ? AND filepath = ?').get(productId, filepath);
+  } catch (_) { /* best-effort */ }
 
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM product_images WHERE product_id = ? AND filepath = ?').run(productId, filepath);
@@ -287,11 +300,29 @@ function remove(productId, filepath) {
   });
   tx();
 
-  // Delete the actual file outside the tx so DB stays the truth-of-record
-  // (file deletion is irreversible; we want the row gone first).
-  try {
-    if (fs.existsSync(abs)) fs.unlinkSync(abs);
-  } catch (_) {/* best-effort */}
+  // Hold it for restore, outside the tx so the DB stays the truth-of-record.
+  // If holding fails, fall back to the old behaviour (delete the file) rather
+  // than leaving it on disk unreferenced with no record of why.
+  if (rawRow) {
+    try {
+      const product = db.prepare('SELECT company_id FROM products WHERE id = ?').get(productId);
+      require('../deletedItems').holdImage({
+        imageRow: rawRow,
+        fileRelpath: filepath,
+        companyId: product?.company_id ?? null,
+        userId: getCallerUserId(),
+      });
+    } catch (err) {
+      process.stderr.write(`[images.remove] could not hold ${filepath} for restore: ${err.message}\n`);
+      try {
+        if (fs.existsSync(abs)) fs.unlinkSync(abs);
+      } catch (_) { /* best-effort */ }
+    }
+  } else {
+    try {
+      if (fs.existsSync(abs)) fs.unlinkSync(abs);
+    } catch (_) { /* best-effort */ }
+  }
 
   // Renumber surviving files to close the gap. If the deleted file was
   // 002, then 003 → 002, 004 → 003, etc.

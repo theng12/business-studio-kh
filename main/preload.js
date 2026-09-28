@@ -66,6 +66,15 @@ contextBridge.exposeInMainWorld('api', {
     pickFolder: ()              => invoke('backups:pickFolder'),
     restore:    (backupPath)    => invoke('backups:restore', { backupPath }),
   },
+  /** v0.1.86: the recycle bin. `list` returns items with daysLeft; `restore`
+   *  puts rows + files back; `purge`/`empty` clear them (the held files go to
+   *  the macOS Trash first, so even that is recoverable in Finder). */
+  deleted: {
+    list:    (companyId) => invoke('deleted:list', { companyId }),
+    restore: (id)        => invoke('deleted:restore', id),
+    purge:   (id)        => invoke('deleted:purge', id),
+    empty:   (companyId) => invoke('deleted:empty', { companyId }),
+  },
   client: {
     testConnection:    (url, token) => invoke('client:testConnection', { url, token }),
     /** v0.26.34: step-by-step network diagnostic. Returns
