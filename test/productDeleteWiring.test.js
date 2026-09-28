@@ -63,21 +63,26 @@ test('both delete paths require the name to be typed', () => {
     'the imperative confirm() helper must forward it, or callers silently lose the gate');
 });
 
-test('the copy says the files go to the Trash, and the code does that', () => {
-  // The user-facing promise…
-  assert.match(FORM, /The image files are moved to the Trash/);
-  assert.match(LIBRARY, /The image files are moved to the Trash/);
-  // …and the mechanism, which is one call in the delete path.
-  assert.match(PRODUCTS_DB, /trashPathInBackground\(abs\)/);
-  assert.match(PRODUCTS_DB, /require\('\.\.\/util\/fileTrash'\)/);
+test('the copy promises recovery, and the code provides it', () => {
+  // v0.1.86 moved the promise on: the files are not merely trashed, the whole
+  // item is restorable from the app. The copy has to say where.
+  assert.match(FORM, /Settings →\s*Recently deleted/);
+  assert.match(LIBRARY, /Settings → Recently deleted/);
+  // …and the mechanism is one call in the delete path.
+  assert.match(PRODUCTS_DB, /require\('\.\.\/deletedItems'\)\.holdProduct\(/);
   assert.doesNotMatch(PRODUCTS_DB, /fs\.rmSync\(abs, \{ recursive: true, force: true \}\)/,
-    'the rm-rf this release replaced must not come back');
+    'the rm-rf of v0.1.84 and earlier must not come back');
   assert.match(TRASH, /const shell = explicit \? opts\.shell : electronShell\(\)/,
     'the Trash comes from Electron (or a test), never from a hard-coded path');
 
-  // The helper must not quietly fall back to erasing when the Trash refuses —
-  // that is the difference between "recoverable" and "gone".
+  // The Trash helper is now the PURGE path (the recycle bin calls it when an
+  // item is removed for good), and it must never quietly erase when the Trash
+  // refuses — that is the difference between "recoverable" and "gone".
   const refusedBranch = TRASH.slice(TRASH.indexOf("return 'trashed'"));
   assert.doesNotMatch(refusedBranch, /rmSync/,
     'a refused Trash must leave the files, not delete them as a consolation prize');
+
+  // The single-image path holds its file too, so the pin above is not the only
+  // one — see test/deletedItemsWiring.test.js for the ordering check.
+  assert.match(read('main/db/productImages.js'), /holdImage\(/);
 });

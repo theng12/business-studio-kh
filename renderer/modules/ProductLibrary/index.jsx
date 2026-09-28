@@ -360,10 +360,11 @@ export function ProductLibrary() {
     if (ids.length === 0) return;
     const ok = await confirmWithBackup({
       title: `Delete ${ids.length} product${ids.length === 1 ? '' : 's'}?`,
-      message: 'The products, their images, their AI generations and their metadata are removed.',
+      message: 'The products, their images, their AI generations and their metadata are removed from the library.',
       detail:
-        'The image files are moved to the Trash, so you can put them back from Finder until you empty it. '
-        + 'The product entries themselves do not come back.',
+        'They are not gone yet: they wait in Settings → Recently deleted, with their photos, and one click '
+        + 'puts each one back exactly as it was. After the keep window they leave that list and their files '
+        + "go to the Mac's Trash.", 
       danger: true,
       confirmLabel: `Delete ${ids.length}`,
       requireText: 'DELETE',
@@ -374,7 +375,7 @@ export function ProductLibrary() {
       const res = await window.api.products.bulkRemove(ids);
       const failedCount = res?.failed?.length ?? 0;
       if (failedCount === 0) {
-        useAppStore.getState().addToast(`Deleted ${res.deleted} product${res.deleted === 1 ? '' : 's'}.`, 'success');
+        useAppStore.getState().addToast(`Deleted ${res.deleted} product${res.deleted === 1 ? '' : 's'} — restore from Settings → Recently deleted if that was a mistake.`, 'success');
       } else {
         useAppStore.getState().addToast(
           `Deleted ${res.deleted} of ${ids.length} — ${failedCount} failed.`,
@@ -948,7 +949,7 @@ export function ProductLibrary() {
                         items: [
                           {
                             label: `Delete ${selectedIds.size} product${selectedIds.size === 1 ? '' : 's'}…`,
-                            hint: 'Removes the products with their images and AI generations. The image files go to the Trash; the product entries do not come back. You will be asked to type DELETE to confirm.',
+                            hint: 'Removes the products with their images and AI generations. They wait in Settings → Recently deleted so you can put them back. You will be asked to type DELETE to confirm.',
                             danger: true,
                             onClick: handleBulkDelete,
                           },

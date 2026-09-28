@@ -339,6 +339,30 @@ function initDb(dataDir) {
       ON audit_log(created_at DESC);
   `);
 
+  /* v0.1.86: deleted_items — the recycle bin. One row per deleted product or
+     image, holding enough to put it back: the snapshot in payload_json and the
+     files moved under <dataDir>/.recycle/<id>/ (see main/deletedItems.js).
+     Rows are dropped when the item is restored, purged, or ages past the
+     retention window. CREATE IF NOT EXISTS is idempotent → safe every boot,
+     and no SCHEMA_VERSION bump is needed (AGENTS.md §14: bumping wipes the
+     catalog). */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deleted_items (
+      id                 TEXT PRIMARY KEY,
+      kind               TEXT NOT NULL,          -- 'product' | 'image'
+      company_id         TEXT,
+      product_id         TEXT,
+      label              TEXT,
+      detail             TEXT,
+      payload_json       TEXT NOT NULL,
+      held_dir           TEXT,
+      deleted_at         INTEGER NOT NULL,
+      deleted_by_user_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_deleted_items_at ON deleted_items(deleted_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_deleted_items_company ON deleted_items(company_id, deleted_at DESC);
+  `);
+
   /* v0.12.0: one-shot migration of `assets/products/<file>` and
      `assets/brands/<file>` into the nested layout
      `assets/<company>/<brand>/<sku>/NNN.<ext>` and
