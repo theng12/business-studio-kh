@@ -4,6 +4,7 @@ const path = require('node:path');
 const { getDb, getDataDir } = require('./index');
 const { parseJson, getCallerUserId } = require('./_util');
 const { productAssetDir } = require('../util/assetPath');
+const { trashPathInBackground } = require('../util/fileTrash');
 const { normalizeCurrency } = require('../util/currencies');
 
 // Late-required to break circular dependencies.
@@ -693,7 +694,14 @@ function remove(id) {
             + 'Rename one of the SKUs (add a distinguishing character) to separate them.\n',
           );
         } else {
-          fs.rmSync(abs, { recursive: true, force: true });
+          /* v0.1.85: to the Trash, not into the void. This used to be
+           * `fs.rmSync(dir, { recursive: true, force: true })`, which is why an
+           * accidental delete was final — the owner's report was exactly that.
+           * The DB row is already gone at this point, so this is a file-level
+           * safety net (Finder → Put Back) rather than an undo for the product
+           * entry. If the Trash refuses the folder, `trashPath` leaves it where
+           * it is: an orphaned folder is recoverable, erased bytes are not. */
+          trashPathInBackground(abs);
         }
       }
     } catch (err) {
