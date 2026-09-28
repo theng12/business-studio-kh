@@ -141,6 +141,9 @@ contextBridge.exposeInMainWorld('api', {
     create:             (name, role)           => invoke('users:create', { name, role }),
     update:             (id, patch)            => invoke('users:update', { id, patch }),
     remove:             (id)                   => invoke('users:remove', id),
+    /** v0.1.84: stop (or restore) an account's access without deleting it, so
+     *  the name still resolves against everything that account did. */
+    setDeactivated:     (id, deactivated)      => invoke('users:setDeactivated', { id, deactivated }),
     regenerateToken:    (id)                   => invoke('users:regenerateToken', id),
     ensureOwner:        ()                     => invoke('users:ensureOwner'),
     /** v0.15.3: safe subset (id + name + role only — no tokens).

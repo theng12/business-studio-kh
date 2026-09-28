@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.84',
+    date: '2026-09-27',
+    items: [
+      'NEW — Settings → Multi-Mac → Users: you can now click a name and change it. This matters when accounts arrived from the old app or were made while testing under names you have since changed your mind about. The name is looked up from the account every time a record is shown, so one rename fixes the name on every past edit at once — nothing keeps the old spelling.',
+      'NEW — "Stop access" for an account whose person has left: it stays in the list, cannot sign in any more, and everything it did keeps showing the real name. Reversible with Allow access. This is the option to use for a departed employee, because the token stops working immediately while History still says who did what.',
+      'The delete button (×) is now labelled honestly: it removes the account for good, and past records by that account will read "Unknown user" afterwards, because a record stores which account did it rather than a copy of the name. Right for your own test accounts, wrong for someone whose work you may want to read later. The confirmation says so before you commit.',
+      'Internal — additive `users.deactivated_at` column (no SCHEMA_VERSION bump, so no catalog wipe) plus `users.setDeactivated`; the refusal lives in `users.getByToken`, which is the single gate both the HTTP API and the phone viewer\'s WebSocket pass through, so a stopped token is refused everywhere at once. Live sessions are dropped on stop. test/userAccessControl.test.js (native) pins rename-follows-the-account, stop-keeps-the-name, delete-drops-it; test/userAccessWiring.test.js pins the panel, the validator, the preload bridge and the client-mode proxy.',
+    ],
+  },
+  {
     version: '0.1.83',
     date: '2026-09-27',
     items: [
