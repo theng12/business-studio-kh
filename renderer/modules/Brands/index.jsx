@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { parseConflictError, showConflict } from '../../components/ConflictModal.jsx';
 import { BrandForm } from './BrandForm.jsx';
@@ -229,11 +230,7 @@ export function Brands() {
     return (
       <div className="page">
         <PageHeader title="Brands" />
-        <EmptyState
-          title="No company selected"
-          body="Create or select a company before managing brands."
-          action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
-        />
+        <NoCompanyState purpose="manage its brands" />
       </div>
     );
   }
@@ -259,7 +256,7 @@ export function Brands() {
         />
       ) : (
         <>
-        <div className="list-tools">
+        <div className="toolbar">
           <div className="search-wrap">
             <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
               <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
@@ -290,7 +287,7 @@ export function Brands() {
             />
             <span>Select all visible</span>
           </label>
-          <div className="list-tools__spacer" />
+          <div className="toolbar__spacer" />
           {/* v0.1.67: a summary chip, not a selectable row. Choosing it opens
               the Product Library with its own unassigned filter applied, where
               the products can be fixed in bulk. It is deliberately NOT part of
@@ -323,7 +320,8 @@ export function Brands() {
             const initials = b.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
             const isSelected = selected.includes(b.id);
             return (
-              <div key={b.id} className={`entity-card${isSelected ? ' is-selected' : ''}`}>
+              <article key={b.id} className={`card${isSelected ? ' is-selected' : ''}`}>
+                <div className="card__body">
                 <div className="entity-card__head">
                   <input
                     type="checkbox"
@@ -339,16 +337,17 @@ export function Brands() {
                     {iconSrc ? <img src={iconSrc} alt="" /> : <span>{initials}</span>}
                   </div>
                   <div className="entity-card__head-text">
-                    <div className="entity-card__title">{b.name}</div>
-                    <div className="entity-card__sub">
+                    <h3 className="card__title">{b.name}</h3>
+                    <p className="card__meta">
                       {b.productCount} product{b.productCount === 1 ? '' : 's'}
-                    </div>
+                    </p>
                   </div>
                 </div>
-                <div className="entity-card__actions">
-                  <Button onClick={() => setEditing(b)}>Edit</Button>
                 </div>
-              </div>
+                <div className="card__actions">
+                  <Button size="sm" onClick={() => setEditing(b)}>Edit</Button>
+                </div>
+              </article>
             );
           })}
         </div>

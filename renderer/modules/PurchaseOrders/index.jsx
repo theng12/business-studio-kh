@@ -27,6 +27,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Pagination, paginate, Badge, Select, Input, Modal } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
+import { formatDate } from '../../lib/format.js';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PODetail, PAYMENT_STATUS_TONE, PAYMENT_STATUS_LABEL } from './PODetail.jsx';
 import { useCostingCaps } from './costingCaps.js';
@@ -66,6 +68,7 @@ export function STATUS_LABEL(status) {
 export function PurchaseOrders() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
+  const setActiveModule = useAppStore((s) => s.setActiveModule);
   // v0.49.48: pending cross-module navigation (from Library Cost column
   // or Suppliers "Orders" button). Consumed once on mount.
   const pendingPoId = useAppStore((s) => s.pendingPoId);
@@ -240,36 +243,45 @@ export function PurchaseOrders() {
           <Button
             variant="primary"
             disabled={!activeCompanyId || suppliers.length === 0}
+            title={!activeCompanyId
+              ? 'Choose a company first'
+              : suppliers.length === 0 ? 'Add a supplier first. Every purchase order belongs to one.' : undefined}
             onClick={() => setCreating(true)}
           >
-            New purchase order
+            + New purchase order
           </Button>
         ) : null}
       />
 
-      {!activeCompanyId && (
-        <EmptyState
-          title="No company selected"
-          body="Pick a company from the sidebar to start tracking purchase orders."
-        />
-      )}
+      {!activeCompanyId && <NoCompanyState purpose="track its purchase orders" />}
       {activeCompanyId && suppliers.length === 0 && (
         <EmptyState
           title="Add a supplier first"
           body={canManage
-            ? 'POs are tied to a supplier — head to the Suppliers page and create one before recording a purchase order.'
+            ? 'Every purchase order belongs to a supplier. Add one, then come back to record the order.'
             : 'No suppliers have been added for this company yet.'}
+          action={<Button variant="primary" onClick={() => setActiveModule('suppliers')}>Go to Suppliers</Button>}
         />
       )}
       {activeCompanyId && suppliers.length > 0 && (
         <>
-          <div className="pos-toolbar">
-            <Input
-              placeholder="Search by PO number or supplier name…"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-            />
+          <div className="toolbar">
+            <div className="search-wrap">
+              <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M9 9l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+              <Input
+                type="search"
+                className="search-input"
+                aria-label="Search purchase orders"
+                placeholder="Search by PO number or supplier name…"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+              />
+            </div>
             <Select
+              aria-label="Filter by supplier"
               value={supplierFilter}
               onChange={(e) => { setSupplierFilter(e.target.value); setPage(0); }}
             >
@@ -277,6 +289,7 @@ export function PurchaseOrders() {
               {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </Select>
             <Select
+              aria-label="Filter by status"
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
             >
@@ -294,12 +307,13 @@ export function PurchaseOrders() {
           ) : (
             <EmptyState
               title="No purchase orders yet"
-              body={canManage ? "Click 'New purchase order' to record your first one." : 'Purchase orders recorded for this company will be listed here.'}
+              body={canManage ? 'Record your first order to start tracking landed cost.' : 'Purchase orders recorded for this company will be listed here.'}
+              action={canManage ? <Button variant="primary" onClick={() => setCreating(true)}>+ New purchase order</Button> : null}
             />
           ))}
           {!loading && rows.length > 0 && (
-            <div className="pos-table-wrap">
-              <table className="pos-table">
+            <div className="data-table-wrap">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th>PO #</th>
@@ -308,20 +322,19 @@ export function PurchaseOrders() {
                     <th>Payment</th>
                     <th>Incoterm</th>
                     <th>Currency</th>
-                    <th className="ralign">Lines</th>
-                    <th className="ralign">Total USD</th>
+                    <th className="is-num">Lines</th>
+                    <th className="is-num">Total USD</th>
                     <th>Ordered</th>
                     <th>Received</th>
-                    {canManage ? <th></th> : null}
+                    {canManage ? <th className="is-actions" aria-label="Actions" /> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {visibleRows.map((po) => (
                     <tr
                       key={po.id}
-                      className="pos-row"
+                      className="is-clickable"
                       onClick={() => setOpenPoId(po.id)}
-                      style={{ cursor: 'pointer' }}
                     >
                       <td><strong>{po.poNumber || '(no number)'}</strong></td>
                       <td>{po.supplierName || '—'}</td>
@@ -333,13 +346,13 @@ export function PurchaseOrders() {
                       </td>
                       <td>{po.incoterm || '—'}</td>
                       <td>{po.currency || '—'}</td>
-                      <td className="ralign">{po.linesCount || 0}</td>
-                      <td className="ralign">{fmtUsd(po.totalValueUsd + (po.totalComponentsUsd || 0))}</td>
-                      <td>{fmtDate(po.orderedAt)}</td>
-                      <td>{fmtDate(po.receivedAt)}</td>
+                      <td className="is-num">{po.linesCount || 0}</td>
+                      <td className="is-num">{fmtUsd(po.totalValueUsd + (po.totalComponentsUsd || 0))}</td>
+                      <td>{formatDate(po.orderedAt)}</td>
+                      <td>{formatDate(po.receivedAt)}</td>
                       {canManage ? (
-                        <td className="ralign" onClick={(e) => e.stopPropagation()}>
-                          <Button variant="ghost" onClick={() => handleRemove(po)}>Delete</Button>
+                        <td className="is-actions" onClick={(e) => e.stopPropagation()}>
+                          <Button variant="danger" size="sm" onClick={() => handleRemove(po)}>Delete</Button>
                         </td>
                       ) : null}
                     </tr>
@@ -445,8 +458,15 @@ function NewPOModal({ companyId, suppliers, onCancel, onCreate }) {
       size="md"
       footer={
         <>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
-          <Button variant="primary" onClick={submit} disabled={!canSubmit}>Create</Button>
+          <Button onClick={onCancel}>Cancel</Button>
+          <Button
+            variant="primary"
+            onClick={submit}
+            disabled={!canSubmit}
+            title={canSubmit ? undefined : !supplierId ? 'Choose a supplier first' : `Enter the exchange rate for ${currency} first`}
+          >
+            Create purchase order
+          </Button>
         </>
       }
     >
@@ -530,10 +550,4 @@ function NewPOModal({ companyId, suppliers, onCancel, onCreate }) {
 function fmtUsd(n) {
   const v = Number(n) || 0;
   return `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-function fmtDate(ts) {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString();
 }

@@ -30,6 +30,18 @@ const { emitCatalogChange } = require('./helpers');
  */
 const activeRuns = new Map();
 
+/**
+ * The renderer picks the run id up front so its Cancel button targets exactly
+ * its own run (never another Mac's). A supplied id is used only when it is a
+ * short [A-Za-z0-9_-] string; anything else (or nothing, from an older
+ * client) falls back to a server-generated id.
+ */
+const RUN_ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
+function pickRunId(runId) {
+  if (typeof runId === 'string' && RUN_ID_RE.test(runId)) return runId;
+  return `export-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
 function startRun(opId) {
   const run = { cancelled: false };
   activeRuns.set(opId, run);
@@ -47,7 +59,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
   /**
    * v0.1.89: stop a running export after the image in progress. Exposed (not
    * local) because in client mode the run happens on the server, inside
-   * `exports:runForClient`; the id comes from that run's progress events.
+   * `exports:runForClient`; the id is the one the renderer chose when it started the run.
    */
   expose('exports:cancel', (runId) => cancelRun(String(runId || '')));
 
@@ -147,7 +159,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     return exportRunner.expectedOutputs({ profile, productIds });
   });
 
-  exposeLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary }) => {
+  exposeLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId }) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     // Block any productId that doesn't belong to the active company.
     for (const pid of (productIds ?? [])) {
@@ -164,7 +176,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     // forward those through the broadcast bus. Wrapped in
     // try/finally so a thrown export doesn't leave a stale row in
     // the progress overlay.
-    const opId = `export-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const opId = pickRunId(runId);
     let done = 0;
     let result;
     const run = startRun(opId);
@@ -228,7 +240,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
    * out with a clear message ("Use the server Mac for very large
    * exports, or split the selection").
    */
-  expose('exports:runForClient', async ({ profileId, productIds, saveToLibrary } = {}) => {
+  expose('exports:runForClient', async ({ profileId, productIds, saveToLibrary, runId } = {}) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) {
       assertProductInActiveCompany(pid);
@@ -242,7 +254,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     // client) via the broadcast bus — both the local renderer
     // and any WS client see them. Each connected client filters
     // by id on their side.
-    const opId = `export-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const opId = pickRunId(runId);
     let done = 0;
     const run = startRun(opId);
     broadcast('progress:event', { id: opId, kind: 'export-run', done: 0, total: null, phase: 'processing', label: null, cancellable: true });
@@ -334,4 +346,4 @@ function runNotes(result) {
   return lines.length ? lines.join('\n') : null;
 }
 
-module.exports = { register, cancelRun, startRun };
+module.exports = { register, cancelRun, startRun, pickRunId };

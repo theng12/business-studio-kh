@@ -34,6 +34,7 @@ import { HistoryModal } from '../../components/HistoryModal.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { useUserCaps } from '../../components/Sidebar.jsx';
 import { hasCap } from '../../lib/capabilities.js';
+import { formatDateTime, timeAgo } from '../../lib/format.js';
 
 /** v0.1.89: the "Who" filter's value for rows written with no account —
  *  this Mac itself (standalone / server admin). Mirrors NO_USER in
@@ -94,22 +95,8 @@ const ACTION_LABELS = {
 };
 function actionLabel(action) { return ACTION_LABELS[action] ?? action; }
 
-function relativeTime(ts) {
-  if (!ts) return '';
-  const diff = Date.now() - Number(ts);
-  if (diff < 0) return 'just now';
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60)  return 'just now';
-  const min = Math.floor(sec / 60);
-  if (min < 60)  return `${min} min ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24)   return `${hr} hr ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30)  return `${day} day${day === 1 ? '' : 's'} ago`;
-  const mo = Math.floor(day / 30);
-  if (mo < 12)   return `${mo} mo ago`;
-  return `${Math.floor(mo / 12)} yr ago`;
-}
+// Sentence-case names for the entity chip (it used to read PROD / IMG).
+const KIND_LABELS = { product: 'Product', image: 'Image', brand: 'Brand', category: 'Category' };
 
 export function History() {
   const attributionUsers = useAppStore((s) => s.attributionUsers);
@@ -268,6 +255,10 @@ export function History() {
     }
   }
 
+  function clearFilters() {
+    setEntityType(''); setUserFilter(''); setFromDate(''); setToDate(''); setSearch(''); setDebouncedSearch('');
+  }
+
   const lastPage = Math.max(0, Math.ceil(total / pageSize) - 1);
   const pageStart = total === 0 ? 0 : page * pageSize + 1;
   const pageEnd = Math.min(total, (page + 1) * pageSize);
@@ -279,12 +270,7 @@ export function History() {
         subtitle="Every edit anyone made, across all companies. Entries can't be edited; an admin can clear old ones."
         actions={
           <>
-            <Button onClick={() => {
-              // Soft refresh — just bump the load by re-setting page.
-              const cur = page;
-              setPage(-1);
-              setTimeout(() => setPage(cur), 0);
-            }}>Refresh</Button>
+            <Button onClick={() => setReloadNonce((n) => n + 1)}>Refresh</Button>
             {/* v0.33.0: retention / clear. Picking an option confirms then
                 deletes; the Select snaps back to its placeholder so the
                 same option can be re-picked. */}
@@ -312,7 +298,7 @@ export function History() {
       />
 
       {/* v0.1.89: what, who, when, and free text. */}
-      <div className="history-page__filters">
+      <div className="toolbar history-page__filters">
         <Select
           value={entityType}
           onChange={(e) => setEntityType(e.target.value)}
@@ -346,10 +332,7 @@ export function History() {
           aria-label="Search history"
         />
         {anyFilter || search ? (
-          <Button
-            variant="ghost"
-            onClick={() => { setEntityType(''); setUserFilter(''); setFromDate(''); setToDate(''); setSearch(''); setDebouncedSearch(''); }}
-          >Clear filters</Button>
+          <Button variant="ghost" onClick={clearFilters}>Clear filters</Button>
         ) : null}
       </div>
 
@@ -361,6 +344,7 @@ export function History() {
         <EmptyState
           title={anyFilter ? 'Nothing matches these filters' : 'No history yet'}
           body={anyFilter ? 'Widen the dates, pick everyone, or clear the search.' : "Make an edit anywhere in the app — products, brands, categories, images — and it'll show up here."}
+          action={anyFilter ? <Button onClick={clearFilters}>Clear filters</Button> : null}
         />
       ) : (
         <>
@@ -372,8 +356,8 @@ export function History() {
                 : `Showing ${pageStart}–${pageEnd} of ${total.toLocaleString()} event${total === 1 ? '' : 's'}`}
           </div>
 
-          <div className="history-page__table-wrap">
-            <table className="history-page__table">
+          <div className="data-table-wrap">
+            <table className="data-table history-page__table">
               <thead>
                 <tr>
                   <th>When</th>
@@ -388,8 +372,8 @@ export function History() {
                   const drillable = lbl.kind === 'product' || lbl.kind === 'image' || lbl.kind === 'brand' || lbl.kind === 'category';
                   return (
                     <tr key={entry.id}>
-                      <td title={new Date(Number(entry.createdAt)).toLocaleString()}>
-                        {relativeTime(entry.createdAt)}
+                      <td className="history-page__when" title={formatDateTime(entry.createdAt)}>
+                        {timeAgo(entry.createdAt)}
                       </td>
                       <td>{userLabel(entry)}</td>
                       <td>
@@ -401,7 +385,7 @@ export function History() {
                             title={`Open full history for ${lbl.text}`}
                           >
                             <span className={`history-page__entity-kind history-page__entity-kind--${lbl.kind}`}>
-                              {lbl.kind === 'image' ? 'IMG' : lbl.kind.slice(0, 4).toUpperCase()}
+                              {KIND_LABELS[lbl.kind] || lbl.kind}
                             </span>
                             <span className="history-page__entity-text">
                               {lbl.text}

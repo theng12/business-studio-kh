@@ -157,8 +157,7 @@ const LETTERBOX_TOLERANCE = 0.005;
  * letterboxed into that aspect on white — `contain`, never cropped, never
  * squashed — and every element is placed against that canvas, which is exactly
  * what the editor shows (a template-shaped canvas with the photo contained in
- * it). renderer/modules/OverlayStudio/overlayCanvas.js mirrors this function;
- * test/overlayPreview.test.js keeps the two in step.
+ * it — the backdrop <img> is `object-fit: contain` on the canvas's white).
  *
  * The canvas keeps the photo's own pixel density: it is the smallest rectangle
  * of the template's aspect that holds the photo at 1:1, so the photo is never
@@ -166,11 +165,23 @@ const LETTERBOX_TOLERANCE = 0.005;
  * what reframeImage has always produced). A template with no design size (an
  * inline legacy shape) keeps the old rule: the photo's own size.
  *
+ * `canvas: 'photo'` opts out of all of that (owner decision 2026-10-02): the
+ * "Watermark external photos" tool keeps every photo's own size and shape —
+ * no bands, no inset — and only adds the artwork. Product overlays use the
+ * default, `'template'`.
+ *
  * @returns {{ width:number, height:number, mode:'inset'|'letterbox'|'photo' }}
  */
-function outputCanvasSize(template, photoW, photoH) {
+function outputCanvasSize(template, photoW, photoH, canvas = 'template') {
   const tW = Number(template?.canvasWidth);
   const tH = Number(template?.canvasHeight);
+  if (canvas === 'photo') {
+    return {
+      width: Math.max(1, Math.round(Number(photoW) || 0)),
+      height: Math.max(1, Math.round(Number(photoH) || 0)),
+      mode: 'photo',
+    };
+  }
   if (template?.inset?.enabled) {
     return {
       width: Math.max(16, Math.round(tW || 2000)),
@@ -186,6 +197,32 @@ function outputCanvasSize(template, photoW, photoH) {
   if (Math.abs(have / want - 1) <= LETTERBOX_TOLERANCE) return { width: pW, height: pH, mode: 'photo' };
   if (have > want) return { width: pW, height: Math.max(pH, Math.round(pW / want)), mode: 'letterbox' };
   return { width: Math.max(pW, Math.round(pH * want)), height: pH, mode: 'letterbox' };
+}
+
+/**
+ * How big one DESIGN pixel is on this canvas.
+ *
+ * Owner decision (2026-10-02): font size, padding, radius and every other
+ * pixel-sized property are pixels of the template's DESIGN canvas, so a
+ * template looks the same on every photo whatever its resolution — exactly as
+ * laid out in the editor, which draws them at `canvasW / designW` too
+ * (elementDefaults.js elementBox, EditorCanvas ElementContent). A 96 px font on
+ * a 2000 px design is 4.8% of the width on a 800 px photo and on a 4000 px one.
+ *
+ * On a template-shaped canvas both axes give the same factor. On a canvas of
+ * another shape (`canvas: 'photo'`, the external watermark) the smaller one is
+ * used — the template contained in the photo — so text cannot outgrow the
+ * picture's short side.
+ *
+ * A legacy template with no design size keeps the old meaning, pixels of the
+ * full-size output: `fallback` (1 for an export, the preview's own scale for a
+ * preview).
+ */
+function designPixelScale(template, imgW, imgH, fallback = 1) {
+  const dW = Number(template?.canvasWidth);
+  const dH = Number(template?.canvasHeight);
+  if (!(dW > 0 && dH > 0)) return fallback;
+  return Math.min(imgW / dW, imgH / dH);
 }
 
 /* ── Element → SVG/PNG buffer ───────────────────────────────────── */
@@ -217,13 +254,32 @@ function approxTextWidth(text, fontSize) {
  * inked. The final render places the origin on a whole pixel, as this one does,
  * so the ink lands exactly where it was measured.
  */
+/**
+ * librsvg refuses a canvas wider than 32767 px, and a refused text element used
+ * to vanish from the picture without a word (300 characters at 96 px bold, or a
+ * long `{description}`). Every SVG this file draws for text stays under this.
+ */
+const MAX_TEXT_SVG_PX = 16000;
+
 async function measureTextInk(content, attrs, fontSize) {
   const len = Math.max(1, String(content).length);
+  const needed = Math.ceil(len * fontSize * 1.3) + Math.ceil(fontSize) * 2;
+  if (needed > MAX_TEXT_SVG_PX) {
+    // Too long to measure at size: measure at a smaller size that fits and
+    // scale the extent back up (text width is linear in font size, to within
+    // hinting — a pixel or two on a line this long).
+    const f = MAX_TEXT_SVG_PX / needed;
+    const small = Math.max(1, fontSize * f);
+    const ink = await measureTextInk(content, attrs.replace(/font-size="[^"]*"/, `font-size="${small}"`), small);
+    if (!ink) return null;
+    const k = fontSize / small;
+    return { left: Math.floor(ink.left * k), right: Math.ceil(ink.right * k) };
+  }
   const margin = Math.ceil(fontSize);
   const h = Math.ceil(fontSize * 1.8);
   const baseline = Math.round(fontSize * 1.2);
-  let w = Math.ceil(len * fontSize * 1.3) + margin * 2;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  let w = needed;
+  for (let attempt = 0; attempt < 3 && w <= MAX_TEXT_SVG_PX * 2; attempt += 1) {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`
       + `<text x="${margin}" y="${baseline}" ${attrs} fill="#000">${escapeXml(content)}</text></svg>`;
     const { data, info } = await sharp(Buffer.from(svg)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -247,9 +303,9 @@ async function measureTextInk(content, attrs, fontSize) {
 }
 
 /**
- * @param {number} px — pixel scale: this canvas's width over the FULL-size
- *   output's width. 1 for every export; < 1 for a downscaled preview, so a
- *   96 px font is drawn at 96 × px and keeps the same share of the picture.
+ * @param {number} px — the size of one design pixel on this canvas (see
+ *   designPixelScale). A 96 px font is drawn at 96 × px, so it keeps the same
+ *   share of the picture on any photo and at any preview size.
  */
 async function renderTextElement(el, ctx, imgW, imgH, px = 1) {
   const content = fillTokens(el.content ?? '', ctx);
@@ -292,9 +348,11 @@ async function renderTextElement(el, ctx, imgW, imgH, px = 1) {
   // Text wider than an explicit box still shows in full: the buffer grows past
   // the box and `offsetX` tells compose() where the box starts inside it. (The
   // editor draws the overflow too — its text node is not clipped.)
-  const extraL = Math.max(0, -(originX + inkLeft));
+  // Capped (MAX_TEXT_SVG_PX): beyond that the text is clipped, never dropped.
+  // Nothing past ~16000 px from the box could be on a photo anyway.
+  const extraL = Math.min(MAX_TEXT_SVG_PX, Math.max(0, -(originX + inkLeft)));
   const extraR = Math.max(0, originX + inkLeft + inkW - w);
-  const svgW = w + extraL + extraR;
+  const svgW = Math.min(MAX_TEXT_SVG_PX, w + extraL + extraR);
 
   const bg = bgColor
     ? `<rect x="${extraL}" y="0" width="${w}" height="${h}" rx="${radius}" ry="${radius}" fill="${escapeXml(bgColor)}" fill-opacity="${bgOpacity}" />`
@@ -566,26 +624,37 @@ async function renderImageElement(el, ctx, imgW, imgH, resolveAsset, strictImage
 /* ── Top-level compose ──────────────────────────────────────────── */
 
 const WHITE = { r: 255, g: 255, b: 255, alpha: 1 };
+const CLEAR = { r: 255, g: 255, b: 255, alpha: 0 };
 
 /**
  * Build the picture the elements are composed onto: `outW × outH`, in the
- * template's shape (see outputCanvasSize). Returns something sharp() can read.
+ * template's shape (see outputCanvasSize). Returns `{ input, raw }` — `raw` is
+ * the raw-pixel description when `input` is an uncompressed pixel buffer
+ * (letterbox, preview, blank), null when it is something sharp can open as is.
+ * Raw, not PNG: encoding a 6000×6000 letterboxed photo to PNG only to decode it
+ * again for the composite was most of the export time.
  *
  *   - inset    — reframeImage at the (possibly scaled) design size, as before.
- *   - letterbox — the photo, scaled by `s`, centred on opaque white.
+ *   - letterbox — the photo, scaled by `s`, centred; the bands are white, or
+ *                transparent when the photo itself has an alpha channel (a
+ *                cut-out product on transparency must not come out sitting in
+ *                an opaque white box; a JPG output flattens to white anyway).
  *   - photo    — the photo itself; untouched at full size (s = 1), so an export
  *                whose photo already has the template's shape is the same
  *                input it always was.
  *   - no photo — a white canvas of the design size.
  */
-async function buildBase({ inputImage, template, full, photoW, photoH, s, outW, outH }) {
+async function buildBase({ inputImage, template, full, photoW, photoH, hasAlpha, s, outW, outH }) {
   if (inputImage == null) {
-    return sharp({ create: { width: outW, height: outH, channels: 4, background: WHITE } }).png().toBuffer();
+    return {
+      input: Buffer.alloc(outW * outH * 4, 255),
+      raw: { width: outW, height: outH, channels: 4 },
+    };
   }
   if (full.mode === 'inset') {
     const inset = template.inset;
     try {
-      return await reframeImage({
+      const input = await reframeImage({
         inputImage,
         canvasW: s === 1 ? (template.canvasWidth || 2000) : outW,
         canvasH: s === 1 ? (template.canvasHeight || 2000) : outH,
@@ -596,6 +665,7 @@ async function buildBase({ inputImage, template, full, photoW, photoH, s, outW, 
         // the same share of the picture.
         ...(s === 1 ? {} : { blurSigma: Math.max(0.3, 28 * s) }),
       });
+      return { input, raw: null };
     } catch (err) {
       // Inset is an enhancement — if it fails, fall back to the plain
       // template-shaped canvas rather than aborting the whole overlay render.
@@ -603,7 +673,7 @@ async function buildBase({ inputImage, template, full, photoW, photoH, s, outW, 
       const fb = outputCanvasSize({ canvasWidth: template.canvasWidth || 2000, canvasHeight: template.canvasHeight || 2000 }, photoW, photoH);
       const fs2 = outW / fb.width;
       return buildBase({
-        inputImage, template, full: fb, photoW, photoH, s: fs2, outW, outH: Math.max(1, Math.round(fb.height * fs2)),
+        inputImage, template, full: fb, photoW, photoH, hasAlpha, s: fs2, outW, outH: Math.max(1, Math.round(fb.height * fs2)),
       });
     }
   }
@@ -614,13 +684,26 @@ async function buildBase({ inputImage, template, full, photoW, photoH, s, outW, 
     const top = Math.floor((outH - ph) / 2);
     let pipe = sharp(inputImage, { failOn: 'none' });
     if (pw !== photoW || ph !== photoH) pipe = pipe.resize(pw, ph, { fit: 'fill' });
-    return pipe
-      .extend({ left, right: outW - pw - left, top, bottom: outH - ph - top, background: WHITE })
-      .png()
-      .toBuffer();
+    const { data, info } = await pipe
+      .extend({
+        left, right: outW - pw - left, top, bottom: outH - ph - top,
+        background: hasAlpha ? CLEAR : WHITE,
+      })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    return { input: data, raw: { width: info.width, height: info.height, channels: info.channels } };
   }
-  if (s === 1) return inputImage;
-  return sharp(inputImage, { failOn: 'none' }).resize(outW, outH, { fit: 'fill' }).png().toBuffer();
+  if (s === 1) return { input: inputImage, raw: null };
+  const { data, info } = await sharp(inputImage, { failOn: 'none' })
+    .resize(outW, outH, { fit: 'fill' })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return { input: data, raw: { width: info.width, height: info.height, channels: info.channels } };
+}
+
+/** Open a base from buildBase with sharp. */
+function openBase(base) {
+  return base.raw ? sharp(base.input, { raw: base.raw }) : sharp(base.input, { failOn: 'none' });
 }
 
 /**
@@ -718,6 +801,10 @@ async function fitLayerToCanvas(composite, W, H) {
  *   pixel-sized measurement (font size, padding, radius, minimum sizes) — so
  *   the preview is the export, smaller. Omit it (every export does) and
  *   nothing is scaled.
+ * @param {'template'|'photo'} [args.canvas='template'] — `'template'`: the
+ *   output takes the template's shape (letterbox / inset, see
+ *   outputCanvasSize). `'photo'`: keep the photo's own size and shape and only
+ *   add the elements — the external watermark tool.
  * @returns {Promise<{ bytes: Buffer, width: number, height: number,
  *   fullWidth: number, fullHeight: number, pxScale: number, mode: string }>}
  *   `fullWidth × fullHeight` is the size the export of this photo has.
@@ -729,6 +816,7 @@ async function composeDetailed({
   resolveAsset = defaultResolveAsset,
   strictImageAssets = false,
   maxPx = null,
+  canvas = 'template',
 }) {
   if (!template || !Array.isArray(template.elements)) {
     throw new Error('Template missing or has no elements');
@@ -737,6 +825,7 @@ async function composeDetailed({
   // The photo's own size, then the full-resolution canvas it becomes.
   let photoW;
   let photoH;
+  let hasAlpha = false;
   if (inputImage == null) {
     photoW = Math.max(16, Math.round(Number(template.canvasWidth) || 2000));
     photoH = Math.max(16, Math.round(Number(template.canvasHeight) || 2000));
@@ -744,11 +833,12 @@ async function composeDetailed({
     const meta = await sharp(inputImage, { failOn: 'none' }).metadata();
     photoW = meta.width ?? template.canvasWidth ?? 2000;
     photoH = meta.height ?? template.canvasHeight ?? 2000;
+    hasAlpha = !!meta.hasAlpha;
   }
   // v0.27.0: with the inset on, reframeImage shrinks the photo to a fill % of
   // the design canvas and fills the margin, so the elements always get a safe
   // zone. Otherwise the photo is letterboxed into the template's shape.
-  const full = outputCanvasSize(template, photoW, photoH);
+  const full = outputCanvasSize(template, photoW, photoH, canvas === 'photo' ? 'photo' : 'template');
 
   // Preview scale. 1 for every export.
   const cap = Number(maxPx);
@@ -758,14 +848,14 @@ async function composeDetailed({
   const outW = s === 1 ? full.width : Math.max(1, Math.round(full.width * s));
   const outH = s === 1 ? full.height : Math.max(1, Math.round(full.height * s));
 
-  const base = await buildBase({ inputImage, template, full, photoW, photoH, s, outW, outH });
+  const base = await buildBase({ inputImage, template, full, photoW, photoH, hasAlpha, s, outW, outH });
   // Read the base's real size rather than trusting the arithmetic (reframe
   // rounds on its own).
-  const baseMeta = await sharp(base, { failOn: 'none' }).metadata();
+  const baseMeta = base.raw ?? await openBase(base).metadata();
   const imgW = baseMeta.width ?? outW;
   const imgH = baseMeta.height ?? outH;
-  // Pixel-sized measurements scale with the canvas against the full-size output.
-  const px = s === 1 ? 1 : imgW / full.width;
+  // Pixel-sized measurements are design pixels (legacy: output pixels).
+  const px = designPixelScale(template, imgW, imgH, s === 1 ? 1 : imgW / full.width);
 
   const composites = [];
   for (const el of template.elements) {
@@ -802,8 +892,8 @@ async function composeDetailed({
   const bytes = composites.length === 0
     // Nothing rendered — return the (possibly reframed) base unchanged,
     // still as PNG so the caller has a uniform output format.
-    ? await sharp(base, { failOn: 'none' }).png().toBuffer()
-    : await sharp(base, { failOn: 'none' })
+    ? await openBase(base).png().toBuffer()
+    : await openBase(base)
       .composite(composites)
       .png({ compressionLevel: 7 })
       .toBuffer();
@@ -851,7 +941,7 @@ function outputPathFor(template, productSku, originalFilename) {
 }
 
 module.exports = {
-  defaultResolveAsset, compose, composeDetailed, fillTokens, outputPathFor, outputCanvasSize,
+  defaultResolveAsset, compose, composeDetailed, fillTokens, outputPathFor, outputCanvasSize, designPixelScale,
   // Exported for tests: the editor's elementBox mirrors this, and a parity
   // test is the only thing that keeps the two from drifting apart.
   resolveBox };

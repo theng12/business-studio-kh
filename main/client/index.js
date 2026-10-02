@@ -1403,7 +1403,23 @@ function registerClientFileHandlers() {
     // print dialog for a PDF document, so the file opens in Preview, where
     // the user prints it; the renderer says so.
     const res = await rpc('catalogStudio:exportBytes', { id });
-    const dir = await fsp.mkdtemp(path.join(require('node:os').tmpdir(), 'msk-catalog-print-'));
+    const tmpRoot = require('node:os').tmpdir();
+    // These PDFs embed every photo (tens of MB each). They cannot be removed
+    // right after opening — Preview is still reading them — so each print
+    // clears this handler's own temp folders from earlier prints (> 1 day).
+    // Only `msk-catalog-print-*` folders under the OS temp dir, never user files.
+    try {
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      for (const name of await fsp.readdir(tmpRoot)) {
+        if (!name.startsWith('msk-catalog-print-')) continue;
+        const abs = path.join(tmpRoot, name);
+        const st = await fsp.lstat(abs).catch(() => null);
+        if (st && st.isDirectory() && !st.isSymbolicLink() && st.mtimeMs < cutoff) {
+          await fsp.rm(abs, { recursive: true, force: true }).catch(() => {});
+        }
+      }
+    } catch (_) { /* best-effort housekeeping */ }
+    const dir = await fsp.mkdtemp(path.join(tmpRoot, 'msk-catalog-print-'));
     const target = path.join(dir, res.fileName);
     await fsp.writeFile(target, Buffer.from(res.bytes));
     const { openPathOrThrow } = require('../util/openPath');
@@ -1844,13 +1860,13 @@ function registerClientImageImportBridges() {
    * is preserved — same `{ exported, skipped, products, outputPath,
    * skips }` so the Export Center's result modal Just Works.
    */
-  handleLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary } = {}) => {
+  handleLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId } = {}) => {
     if (!profileId) throw new Error('profileId required');
     if (!outputRoot) throw new Error('outputRoot required');
     // v0.31.0: forward saveToLibrary — the server appends the exports to
     // ITS library (the shared source of truth) + broadcasts a catalog
     // change, which this client picks up like any other remote edit.
-    const result = await rpc('exports:runForClient', { profileId, productIds, saveToLibrary });
+    const result = await rpc('exports:runForClient', { profileId, productIds, saveToLibrary, runId });
     const files = Array.isArray(result?.files) ? result.files : [];
 
     /* v0.1.27: honour the collision choice the user already made.

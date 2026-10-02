@@ -22,7 +22,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Button, Input, Modal, Field, Select, EmptyState, Pagination, paginate, Textarea } from '../../components/ui.jsx';
+import { Button, Input, Modal, Field, Select, EmptyState, Pagination, paginate, Textarea, cx } from '../../components/ui.jsx';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { allIds, nextSelection, sortRows } from '../../lib/listTools.js';
@@ -377,8 +378,8 @@ export function Suppliers() {
   if (!activeCompanyId) {
     return (
       <div className="page">
-        <PageHeader title="Suppliers" subtitle="Pick a company to manage its suppliers." />
-        <EmptyState title="No company selected" body="Choose one from the sidebar above to see its suppliers." />
+        <PageHeader title="Suppliers" />
+        <NoCompanyState purpose="manage its suppliers" />
       </div>
     );
   }
@@ -393,7 +394,7 @@ export function Suppliers() {
         ) : null}
       />
 
-      <div className="suppliers-toolbar">
+      <div className="toolbar">
         <div className="search-wrap">
           <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
             <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
@@ -420,8 +421,8 @@ export function Suppliers() {
           <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
           <span>Select all visible</span>
         </label>
-        <div className="list-tools__spacer" />
-        <div className="ws-toolbar__group" role="tablist" aria-label="Filter by status">
+        <div className="toolbar__spacer" />
+        <div className="segments" role="tablist" aria-label="Filter by status">
           {['active', 'archived', 'all'].map((s) => (
             <button
               key={s}
@@ -447,7 +448,7 @@ export function Suppliers() {
       ) : null}
 
       {loading ? (
-        <div className="muted" style={{ padding: 'var(--s-5)' }}>Loading…</div>
+        <div className="muted">Loading…</div>
       ) : sorted.length === 0 ? (
         <EmptyState
           title={search ? 'No matches' : statusFilter === 'archived' ? 'No archived suppliers' : 'No suppliers yet'}
@@ -455,15 +456,18 @@ export function Suppliers() {
             ? `Nothing matches "${search}". Try a shorter search.`
             : statusFilter === 'archived'
               ? 'Suppliers you archive will be listed here.'
-              : canManage ? 'Add your first supplier to attach Purchase Orders to it.' : 'Suppliers added for this company will be listed here.'}
+              : canManage ? 'Add your first supplier to attach purchase orders to it.' : 'Suppliers added for this company will be listed here.'}
+          action={!search && statusFilter !== 'archived' && canManage
+            ? <Button variant="primary" onClick={() => setEditing('new')}>+ New supplier</Button>
+            : null}
         />
       ) : (
         <>
-          <div className="suppliers-table-wrap">
-            <table className="suppliers-table">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
-                  <th className="suppliers-check">
+                  <th className="is-check">
                     <input
                       type="checkbox"
                       checked={allVisibleSelected}
@@ -488,9 +492,9 @@ export function Suppliers() {
                   <tr
                     key={s.id}
                     onClick={canManage ? () => setEditing(s) : undefined}
-                    className={`suppliers-row${s.status === 'archived' ? ' is-archived' : ''}${isSelected ? ' is-selected' : ''}${canManage ? '' : ' is-readonly'}`}
+                    className={cx('suppliers-row', canManage && 'is-clickable', s.status === 'archived' && 'is-muted is-archived', isSelected && 'is-selected')}
                   >
-                    <td className="suppliers-check" onClick={(e) => e.stopPropagation()}>
+                    <td className="is-check" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         checked={isSelected}

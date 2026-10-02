@@ -104,7 +104,10 @@ export function BulkGallery({ refreshKey, addToast }) {
 
   return (
     <section className="ai-card ai-card--gallery">
-      <h3 className="ai-card__title">Bulk gallery <span className="ai-card__title-count">{total}</span></h3>
+      <div className="section-head">
+        <h2 className="section-title">Bulk gallery</h2>
+        <p className="section-hint">{total} result{total === 1 ? '' : 's'}</p>
+      </div>
       {loading && rows.length === 0 ? (
         <p className="muted">Loading…</p>
       ) : total === 0 ? (

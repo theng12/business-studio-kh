@@ -104,6 +104,13 @@ function requireNonEmptyStringFields(...names) {
   };
 }
 
+/** Optional export run id chosen by the renderer (see main/ipc/exports.js). */
+function optionalRunId(v) {
+  if (v == null) return true;
+  if (!isString(v) || !/^[A-Za-z0-9_-]{1,100}$/.test(v)) return 'runId must be 1-100 letters, digits, - or _';
+  return true;
+}
+
 /** Combinator: args must be a string id OR an object with the field. */
 function requireScalarOrField(name) {
   return (args) => {
@@ -324,7 +331,7 @@ const VALIDATORS = {
     if (!isObject(a)) return 'expected object';
     if (!isString(a.profileId)) return 'profileId required';
     if (!isArray(a.productIds)) return 'productIds must be an array';
-    return true;
+    return optionalRunId(a.runId);
   },
   // v0.26.40: added during the audit. Collisions check takes a
   // user-controlled outputRoot string — validating shape so a
@@ -1011,7 +1018,10 @@ const VALIDATORS = {
   'images:autoMatchBySku':       requireNonEmptyStringFields('companyId', 'folderPath'),
 
   /* export — runs in-process and writes to a local folder */
-  'exports:run':                 requireNonEmptyStringFields('profileId'),
+  'exports:run': (a) => {
+    const base = requireNonEmptyStringFields('profileId')(a);
+    return base === true ? optionalRunId(a.runId) : base;
+  },
 };
 
 function getValidator(channel) {

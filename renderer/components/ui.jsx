@@ -170,7 +170,9 @@ export function Modal({
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      if (e.key === 'Escape') {
+      // A control inside the dialog that already used this Esc (a popover,
+      // a picker's list) marks it defaultPrevented; that Esc is not ours.
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         e.stopPropagation();
         onClose?.();
       }

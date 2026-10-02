@@ -21,6 +21,7 @@ import { useAppStore } from '../../store/index.js';
 import { Button, Input, Select } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
+import { formatDateTime } from '../../lib/format.js';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx). See the
 // file docblock for why this is duplicated rather than imported.
@@ -486,7 +487,7 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
                     <button type="button" className="row-action" onClick={() => setShowTokenFor(u.id)}>Show token</button>
                   )}
                 </td>
-                <td className="muted">{u.lastSeenAt ? new Date(u.lastSeenAt).toLocaleString() : '—'}</td>
+                <td className="muted">{formatDateTime(u.lastSeenAt)}</td>
                 <td>
                   <div className="user-row-actions">
                     <button type="button" className="row-action" onClick={() => handleRegenerate(u.id)} title="Regenerate token (use if a token leaked)">↻</button>
@@ -724,7 +725,9 @@ export function ClientModePanel({ config, patch }) {
       >
         <div className="setting-control-row" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
           <div className="setting-control-row">
-            <Button variant="primary" onClick={testConnection} disabled={testing || diagnosing}>
+            {/* UI pass, 2026-10: outlined, like the AI tab's Test connection —
+                a check is a secondary action, not the page's primary. */}
+            <Button onClick={testConnection} disabled={testing || diagnosing}>
               {testing ? 'Testing…' : 'Test connection'}
             </Button>
             {/* v0.26.34: step-by-step diagnostic. Sits next to Test
@@ -923,11 +926,6 @@ export function MigrationPanel({ config, addToast }) {
     return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
   }
 
-  function formatDate(ts) {
-    if (!ts) return '—';
-    try { return new Date(Number(ts)).toLocaleString(); } catch { return '—'; }
-  }
-
   async function handleExport() {
     if (busy) return;
     setBusy(true);
@@ -975,7 +973,7 @@ export function MigrationPanel({ config, addToast }) {
         'or delete it later to reclaim disk space.\n\n' +
         'The app will restart automatically after the import completes.',
       detail: `Bundle: ${preview.bundlePath.split('/').pop()}\n` +
-              `Created: ${formatDate(preview.createdAt)} from app v${preview.appVersion}\n` +
+              `Created: ${formatDateTime(preview.createdAt)} from app v${preview.appVersion}\n` +
               `Includes: ${(preview.includes ?? []).join(', ')}\n\n` +
               `Target data folder (on this Mac):\n${config.dataDir}`,
       confirmLabel: 'Replace and restart',
@@ -1034,7 +1032,7 @@ export function MigrationPanel({ config, addToast }) {
               <dl className="bundle-preview__meta">
                 <div>
                   <dt>Created</dt>
-                  <dd>{formatDate(preview.createdAt)}</dd>
+                  <dd>{formatDateTime(preview.createdAt)}</dd>
                 </div>
                 <div>
                   <dt>From version</dt>

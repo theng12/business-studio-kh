@@ -19,6 +19,7 @@ import { Button, EmptyState, Input, Modal, Select } from '../../components/ui.js
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
+import { formatDate } from '../../lib/format.js';
 import { GenerationExperience } from '../../components/GenerationExperience.jsx';
 import { useAppStore } from '../../store/index.js';
 import { CANVAS_PRESETS, GridControls } from './GridControls.jsx';
@@ -74,76 +75,80 @@ function describeRecipe(config, brands, categories) {
   }
 }
 
+/* UI pass, 2026-10: posts and templates are the same house card
+ * (docs/UI_GUIDE.md) — they used to be a solid card and a dashed one. The
+ * eyebrow says which is which ("3 × 3 grid" / "Template"); the actions follow
+ * the card pattern: primary first, outlined next, Delete (danger) last. */
+function GridThumb({ config, onClick, label }) {
+  return (
+    <button type="button" className="card__media social-card__visual" onClick={onClick} aria-label={label}>
+      <span className="social-card__frame" data-square={config.width === config.height ? 'yes' : 'no'}>
+        {Array.from({ length: Math.min(config.columns * config.rows, 25) }, (_, i) => <i key={i} />)}
+      </span>
+    </button>
+  );
+}
+
 function PresetCard({ preset, brands, categories, onOpen, onDuplicate, onDelete }) {
   const c = preset.config;
   return (
-    <article className="social-card">
-      <button type="button" className="social-card__visual" onClick={onOpen} aria-label={`Open ${preset.name}`}>
-        <span className="social-card__badge">{c.columns} × {c.rows}</span>
-        <span className="social-card__frame" data-square={c.width === c.height ? 'yes' : 'no'}>
-          {Array.from({ length: Math.min(c.columns * c.rows, 25) }, (_, i) => <i key={i} />)}
-        </span>
-      </button>
-      <div className="social-card__meta">
-        <div>
-          <strong>{preset.name}</strong>
-          <span>{describeSize(c)} · {describeRecipe(c, brands, categories)}</span>
-          <span className="social-card__status">
-            {preset.lastExportedAt ? `Last exported ${new Date(preset.lastExportedAt).toLocaleDateString()}` : 'Not exported yet'}
-          </span>
-        </div>
-        <div className="social-card__actions">
-          <Button variant="ghost" onClick={onDuplicate}>Duplicate</Button>
-          <Button variant="ghost" onClick={onDelete}>Delete</Button>
-          <Button onClick={onOpen}>Open</Button>
-        </div>
+    <article className="card social-card">
+      <GridThumb config={c} onClick={onOpen} label={`Open ${preset.name}`} />
+      <div className="card__body">
+        <span className="card__eyebrow">{c.columns} × {c.rows} grid</span>
+        <h3 className="card__title">{preset.name}</h3>
+        <p className="card__meta">{describeSize(c)} · {describeRecipe(c, brands, categories)}</p>
+        <p className="card__meta social-card__status">
+          {preset.lastExportedAt ? `Last exported ${formatDate(preset.lastExportedAt)}` : 'Not exported yet'}
+        </p>
+      </div>
+      <div className="card__actions">
+        <Button variant="primary" size="sm" onClick={onOpen}>Open</Button>
+        <Button size="sm" onClick={onDuplicate}>Duplicate</Button>
+        <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>
       </div>
     </article>
   );
 }
 
 /**
- * v0.1.62: a reusable look. Deliberately NOT a post card — a template has no
- * products of its own, so the card shows the layout and the text it will draw,
- * and its main action is "use this in a new post". The other way to use one is
- * from the Product Library, where it is applied to whatever is selected.
+ * v0.1.62: a reusable look. A template has no products of its own, so the card
+ * shows the layout and the text it will draw, and its main action is "use this
+ * in a new post". The other way to use one is from the Product Library, where
+ * it is applied to whatever is selected.
  */
 function TemplateCard({ template, onUse, onEdit, onDuplicate, onDelete }) {
   const c = template.config;
   return (
-    <article className="social-card social-card--template">
-      <button type="button" className="social-card__visual" onClick={onUse} aria-label={`Start a post from ${template.name}`}>
-        <span className="social-card__badge social-card__badge--template">Template</span>
-        <span className="social-card__frame" data-square={c.width === c.height ? 'yes' : 'no'}>
-          {Array.from({ length: Math.min(c.columns * c.rows, 25) }, (_, i) => <i key={i} />)}
-        </span>
-      </button>
-      <div className="social-card__meta">
-        <div>
-          <strong>{template.name}</strong>
-          <span>{describeSize(c)} · {c.columns} × {c.rows} grid</span>
-          <span className="muted social-card__traits">
-            {[
-              c.showPhoto ? 'photos' : 'no photos',
-              c.showName ? 'names' : null,
-              c.showPrice ? 'prices' : null,
-              c.showBrand ? 'brands' : null,
-              c.title ? `title “${c.title}”` : null,
-            ].filter(Boolean).join(' · ')}
-          </span>
-        </div>
-        <div className="social-card__actions">
-          <Button variant="ghost" onClick={onEdit}>Rename</Button>
-          <Button variant="ghost" onClick={onDuplicate}>Duplicate</Button>
-          <Button variant="ghost" onClick={onDelete}>Delete</Button>
-          <Button onClick={onUse}>Use in a new post</Button>
-        </div>
+    <article className="card social-card">
+      <GridThumb config={c} onClick={onUse} label={`Start a post from ${template.name}`} />
+      <div className="card__body">
+        <span className="card__eyebrow">Template</span>
+        <h3 className="card__title">{template.name}</h3>
+        <p className="card__meta">{describeSize(c)} · {c.columns} × {c.rows} grid</p>
+        <p className="card__meta social-card__traits">
+          {[
+            c.showPhoto ? 'photos' : 'no photos',
+            c.showName ? 'names' : null,
+            c.showPrice ? 'prices' : null,
+            c.showBrand ? 'brands' : null,
+            c.title ? `title “${c.title}”` : null,
+          ].filter(Boolean).join(' · ')}
+        </p>
+      </div>
+      <div className="card__actions">
+        <Button variant="primary" size="sm" onClick={onUse} title="Start a new post with this look">Use template</Button>
+        <Button size="sm" onClick={onEdit}>Rename</Button>
+        <Button size="sm" onClick={onDuplicate}>Duplicate</Button>
+        <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>
       </div>
     </article>
   );
 }
 
-function PreviewPane({ preview, loading, error, config, onPage, onExport, exporting }) {
+/* UI pass, 2026-10: the pane no longer carries its own "Export images" — that
+ * was the second copy of the header's primary action on one screen. */
+function PreviewPane({ preview, loading, error, config, onPage }) {
   const summary = preview?.summary;
   const pageCount = preview?.pageCount ?? 0;
   const pageIndex = preview?.pageIndex ?? 0;
@@ -155,11 +160,10 @@ function PreviewPane({ preview, loading, error, config, onPage, onExport, export
         <div className="social-preview__nav">
           {pageCount > 1 ? (
             <>
-              <Button variant="ghost" disabled={pageIndex <= 0} onClick={() => onPage(pageIndex - 1)}>←</Button>
-              <Button variant="ghost" disabled={pageIndex >= pageCount - 1} onClick={() => onPage(pageIndex + 1)}>→</Button>
+              <Button size="sm" disabled={pageIndex <= 0} onClick={() => onPage(pageIndex - 1)} aria-label="Previous image" title="Previous image"><PagerIcon dir="left" /></Button>
+              <Button size="sm" disabled={pageIndex >= pageCount - 1} onClick={() => onPage(pageIndex + 1)} aria-label="Next image" title="Next image"><PagerIcon dir="right" /></Button>
             </>
           ) : null}
-          <Button onClick={onExport} disabled={exporting || !summary?.total}>{exporting ? 'Exporting…' : 'Export images'}</Button>
         </div>
       </div>
 
@@ -183,6 +187,14 @@ function PreviewPane({ preview, loading, error, config, onPage, onExport, export
         </div>
       ) : null}
     </main>
+  );
+}
+
+function PagerIcon({ dir }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path d={dir === 'left' ? 'M7.5 2.5L4 6l3.5 3.5' : 'M4.5 2.5L8 6l-3.5 3.5'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -498,13 +510,10 @@ export function PresetEditor({ presetId, onBack }) {
 
   return (
     <section className="page social-editor-page">
-      <div className="social-editor-back">
-        <Button variant="ghost" onClick={leaveEditor}>← Social Grid</Button>
-        <span>Editing post</span>
-      </div>
       <PageHeader
         title={preset.name}
-        subtitle="Social Grid"
+        subtitle="Social Grid post"
+        backTo={{ label: 'Social Grid', onClick: leaveEditor }}
         actions={(
           <>
             <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
@@ -514,7 +523,14 @@ export function PresetEditor({ presetId, onBack }) {
             >
               Save as template
             </Button>
-            <Button onClick={exportImages} disabled={exporting}>{exporting ? 'Exporting…' : 'Export images'}</Button>
+            <Button
+              variant="primary"
+              onClick={exportImages}
+              disabled={exporting || preview?.summary?.total === 0}
+              title={preview?.summary?.total === 0 ? 'No products match these filters yet' : undefined}
+            >
+              {exporting ? 'Exporting…' : 'Export images'}
+            </Button>
           </>
         )}
       />
@@ -540,8 +556,6 @@ export function PresetEditor({ presetId, onBack }) {
           error={error}
           config={config}
           onPage={setPageIndex}
-          onExport={exportImages}
-          exporting={exporting}
         />
       </div>
       <GenerationExperience
@@ -558,14 +572,14 @@ export function PresetEditor({ presetId, onBack }) {
         title="Save as template"
         footer={(
           <>
-            <Button variant="ghost" onClick={() => setTemplating(false)}>Cancel</Button>
+            <Button onClick={() => setTemplating(false)}>Cancel</Button>
             <Button variant="primary" onClick={saveAsTemplate} disabled={savingTemplate || !templateName.trim()}>
               {savingTemplate ? 'Saving…' : templateTarget ? 'Update template' : 'Save template'}
             </Button>
           </>
         )}
       >
-        <p className="muted" style={{ marginTop: 0 }}>
+        <p className="muted social-modal-intro">
           A template keeps the look — size, grid, text, what each tile shows — and
           nothing about which products are in it. Apply it to any selection from the
           Product Library, or start a new post from it here.
@@ -743,33 +757,23 @@ export function SocialGrid() {
 
   return (
     <section className="page">
+      {/* UI pass, 2026-10: the "One post, many products" intro banner is gone;
+          its one useful sentence is the subtitle. */}
       <PageHeader
         title="Social Grid"
-        subtitle="Pick products and turn them into a square image you can post."
-        actions={<Button onClick={() => setCreating(true)} disabled={!companyId}>+ New post</Button>}
+        subtitle="Turn a brand, category or stock level into grid images for Facebook or Instagram. Extra products continue as a numbered series."
+        actions={<Button variant="primary" onClick={() => setCreating(true)} disabled={!companyId}>+ New post</Button>}
       />
 
-      <div className="studio-intro studio-intro--social">
-        <div>
-          <span className="studio-intro__icon">▦</span>
-          <div>
-            <strong>One post, many products</strong>
-            <p>Choose a brand, a category or a stock level, pick the order, and get a grid image sized for Facebook or Instagram. More products than fit become a numbered series.</p>
-          </div>
-        </div>
-        <span className="studio-intro__badge">{presets.length} saved post{presets.length === 1 ? '' : 's'}</span>
-      </div>
-
-      <section className="social-templates">
-        <div className="social-templates__head">
-          <h2 className="social-templates__title">Templates</h2>
-          <span className="muted">
-            A reusable look — size, grid, text, what each tile shows. Nothing about which products.
-            Apply one from the Product Library to whatever you have selected, or start a post from it here.
-          </span>
+      <section className="social-section">
+        <div className="section-head">
+          <h2 className="section-title">Templates</h2>
+          <p className="section-hint">
+            A reusable look with no products in it. Apply one from the Product Library, or start a post from it here.
+          </p>
         </div>
         {templates.length ? (
-          <div className="social-card-grid">
+          <div className="card-grid social-card-grid">
             {templates.map((t) => (
               <TemplateCard
                 key={t.id}
@@ -785,12 +789,12 @@ export function SocialGrid() {
             ))}
           </div>
         ) : (
-          <p className="social-templates__empty">
-            No templates yet. Open a post and choose <strong>Save as template</strong> to reuse its look.
+          <p className="social-section__empty">
+            No templates yet. Open a post and choose Save as template to reuse its look.
           </p>
         )}
         {templates.length ? (
-          <p className="muted social-templates__tip">
+          <p className="section-hint social-section__tip">
             To change a template’s look, open a post, set it up the way you want, then choose Save as template and pick the template to replace.
           </p>
         ) : null}
@@ -802,7 +806,7 @@ export function SocialGrid() {
         title="Rename template"
         footer={(
           <>
-            <Button variant="ghost" onClick={() => setRenaming(null)}>Cancel</Button>
+            <Button onClick={() => setRenaming(null)}>Cancel</Button>
             <Button variant="primary" onClick={saveRename} disabled={renameBusy || !renaming?.name?.trim()}>
               {renameBusy ? 'Saving…' : 'Rename'}
             </Button>
@@ -820,28 +824,36 @@ export function SocialGrid() {
         </label>
       </Modal>
 
-      <div className="social-card-grid">
-        {presets.length ? presets.map((p) => (
-          <PresetCard
-            key={p.id}
-            preset={p}
-            brands={brands}
-            categories={categories}
-            onOpen={() => setEditing(p.id)}
-            onDuplicate={async () => {
-              try { await window.api.socialGrid.duplicate(p.id); await load(); }
-              catch (e) { addToast(e.message, 'error'); }
-            }}
-            onDelete={() => { void deletePost(p); }}
-          />
-        )) : (
+      <section className="social-section">
+        <div className="section-head">
+          <h2 className="section-title">Posts</h2>
+          {presets.length ? <p className="section-hint">{presets.length} saved</p> : null}
+        </div>
+        {presets.length ? (
+          <div className="card-grid social-card-grid">
+            {presets.map((p) => (
+              <PresetCard
+                key={p.id}
+                preset={p}
+                brands={brands}
+                categories={categories}
+                onOpen={() => setEditing(p.id)}
+                onDuplicate={async () => {
+                  try { await window.api.socialGrid.duplicate(p.id); await load(); }
+                  catch (e) { addToast(e.message, 'error'); }
+                }}
+                onDelete={() => { void deletePost(p); }}
+              />
+            ))}
+          </div>
+        ) : (
           <EmptyState
             title="No saved posts yet"
             body="Create one, choose which products belong in it, and reuse it every time you post."
-            action={<Button onClick={() => setCreating(true)} disabled={!companyId}>+ New post</Button>}
+            action={<Button variant="primary" onClick={() => setCreating(true)} disabled={!companyId}>+ New post</Button>}
           />
         )}
-      </div>
+      </section>
 
       <Modal
         open={creating}
@@ -849,8 +861,8 @@ export function SocialGrid() {
         title="New social post"
         footer={(
           <>
-            <Button variant="ghost" onClick={() => setCreating(false)}>Cancel</Button>
-            <Button onClick={create} disabled={busy}>{busy ? 'Creating…' : 'Create post'}</Button>
+            <Button onClick={() => setCreating(false)}>Cancel</Button>
+            <Button variant="primary" onClick={create} disabled={busy}>{busy ? 'Creating…' : 'Create post'}</Button>
           </>
         )}
       >

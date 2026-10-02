@@ -227,7 +227,7 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
   calls[0].gate.resolve();
   await Promise.resolve();
   await hook.settle(Component);
-  const bStatus = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+  const bStatus = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus');
   assert.equal(bStatus.props.status.state, 'idle', 'late A completion must not mark B saved');
 
   settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
@@ -244,7 +244,7 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
   calls[1].gate.resolve();
   await Promise.resolve();
   await hook.settle(Component);
-  const cStatus = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+  const cStatus = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus');
   assert.equal(cStatus.props.status.state, 'idle', 'late B completion must not mark C saved');
 
   settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
@@ -256,7 +256,7 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
   assert.equal(calls[2].imageId, 'c');
   assert.equal(calls[2].expectedContentHash, 'hash-c');
   assert.equal(calls[2].settings.brightness, 33);
-  settingsPanel.props.onSave();
+  findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus').props.onSave();
   await Promise.resolve();
   assert.equal(calls.length, 3, 'explicit Save does not duplicate an identical in-flight autosave');
 
@@ -265,7 +265,7 @@ test('ImageWorkspace keeps debounced saves attached to the image that owns the s
   calls[2].gate.resolve();
   await Promise.resolve();
   await hook.settle(Component);
-  const dStatus = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+  const dStatus = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus');
   assert.equal(dStatus.props.status.state, 'idle', 'late C saves must not mark D saved');
 
   } finally {
@@ -321,7 +321,7 @@ test('ImageWorkspace serializes a newer manual save behind an in-flight autosave
     settingsPanel.props.onChange({ ...settingsPanel.props.settings, brightness: 3 });
     await hook.settle(Component);
     settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
-    settingsPanel.props.onSave();
+    findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus').props.onSave();
     await Promise.resolve();
     assert.equal(calls.length, 1, 'manual Save queues the newer draft behind A');
 
@@ -373,7 +373,7 @@ test('ImageWorkspace does not mark a newer editor errored when an older autosave
     await delay(0);
     await hook.settle(Component);
 
-    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus');
     assert.equal(status.props.status.state, 'idle');
     assert.deepEqual(store.getState().toasts, [], 'the old failure must not toast in the newer editor');
   } finally {
@@ -413,7 +413,7 @@ test('ImageWorkspace does not toast when an older manual save rejects after swit
     settingsPanel.props.onChange({ ...settingsPanel.props.settings, brightness: 11 });
     await hook.settle(Component);
     settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
-    const manualSave = settingsPanel.props.onSave();
+    const manualSave = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus').props.onSave();
     await delay(0);
     assert.equal(calls.length, 1, 'manual Save starts a deferred write for image A');
 
@@ -423,7 +423,7 @@ test('ImageWorkspace does not toast when an older manual save rejects after swit
     await manualSave;
     await hook.settle(Component);
 
-    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus');
     assert.equal(status.props.status.state, 'idle');
     assert.deepEqual(store.getState().toasts, [], 'the stale manual-save failure must not toast in the newer editor');
   } finally {
@@ -458,13 +458,13 @@ test('ImageWorkspace surfaces a current manual save failure', async () => {
     settingsPanel.props.onChange({ ...settingsPanel.props.settings, brightness: 11 });
     await hook.settle(Component);
     settingsPanel = findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
-    const manualSave = settingsPanel.props.onSave();
+    const manualSave = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus').props.onSave();
     await delay(0);
     gate.reject(new Error('current save unavailable'));
     await manualSave;
     await hook.settle(Component);
 
-    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus');
     assert.equal(status.props.status.state, 'error');
     assert.deepEqual(
       store.getState().toasts.map(({ message, variant }) => ({ message, variant })),
@@ -529,7 +529,7 @@ test('ImageWorkspace flushes a pending save for the old context without updating
     await delay(0);
     await hook.settle(Component);
 
-    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    const status = findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus');
     assert.equal(status.props.status.state, 'idle');
     assert.deepEqual(store.getState().toasts, [], 'old-context failure stays out of the new context UI');
   } finally {
@@ -589,7 +589,7 @@ test('ImageWorkspace unmount flushes its pending save without affecting a remoun
     await delay(0);
     await newHook.settle(newWorkspace.Component);
 
-    const status = findNode(newHook.getOutput(), (node) => node.type?.name === 'SaveIndicator');
+    const status = findNode(newHook.getOutput(), (node) => node.type?.name === 'SaveStatus');
     assert.equal(status.props.status.state, 'idle');
     assert.deepEqual(newWorkspace.store.getState().toasts, []);
   } finally {

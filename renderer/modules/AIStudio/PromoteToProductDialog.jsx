@@ -134,7 +134,7 @@ export function PromoteToProductDialog({ entry, onClose, onPromoted, onError }) 
             alt=""
           />
         </div>
-        <div className="ai-promote__tabs ws-toolbar__group">
+        <div className="ai-promote__tabs segments">
           <button
             type="button"
             className={`segment${tab === 'existing' ? ' is-active' : ''}`}

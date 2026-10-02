@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Badge, Button, EmptyState, Field, Input, Modal, Pagination, paginate, Select, Textarea } from '../../components/ui.jsx';
+import { Badge, Button, Field, Input, Modal, Pagination, paginate, Select, Textarea } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { BulkSourcePanel } from './BulkSourcePanel.jsx';
@@ -82,7 +83,6 @@ export function AIStudio() {
   // rather than offering a control that cannot work.
   const isClientMode = useAppStore((s) => s.appMode) === 'client';
   const addToast = useAppStore((s) => s.addToast);
-  const setActiveModule = useAppStore((s) => s.setActiveModule);
   // v0.11.1: lets the user jump from AI Studio's Source picker straight
   // into Image Workspace for the selected product — mirrors the Library's
   // table row "Process →" action so users don't have to navigate back.
@@ -482,11 +482,7 @@ export function AIStudio() {
     noCompanySelected ? (
       <div className="page">
         <PageHeader title="AI Studio" />
-        <EmptyState
-          title="No company selected"
-          body="Create or select a company before queueing generations."
-          action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
-        />
+        <NoCompanyState purpose="generate images for its products" />
       </div>
     ) : (
       <>
@@ -498,7 +494,7 @@ export function AIStudio() {
           : 'Edit product photos or generate new images with OpenAI.'}
         actions={
           <>
-            <div className="ws-toolbar__group" role="tablist" aria-label="AI Studio mode">
+            <div className="segments" role="tablist" aria-label="AI Studio mode">
               <button
                 type="button"
                 className={`segment${mode === 'product' ? ' is-active' : ''}`}
@@ -530,7 +526,7 @@ export function AIStudio() {
         {/* ─── Source picker ─── */}
         {mode === 'bulk' ? (
           <section className="ai-card">
-            <h3 className="ai-card__title">1. Source</h3>
+            <h2 className="section-title">1. Source</h2>
             <BulkSourcePanel
               files={bulkFiles}
               onFilesChange={setBulkFiles}
@@ -542,13 +538,16 @@ export function AIStudio() {
           </section>
         ) : (
         <section className="ai-card">
-          <div className="ai-card__title-row">
-            <h3 className="ai-card__title">1. Source</h3>
+          <div className="section-head">
+            <h2 className="section-title">1. Source</h2>
             {sourceProductId ? (
-              <Button
-                onClick={() => openProductInWorkspace(sourceProductId)}
-                title="Open this product in the Image Workspace (crop, watermark, bg removal, etc.)"
-              >Process →</Button>
+              <div className="section-head__actions">
+                <Button
+                  size="sm"
+                  onClick={() => openProductInWorkspace(sourceProductId)}
+                  title="Open this product in the Image Workspace (crop, watermark, bg removal, etc.)"
+                >Open in Workspace</Button>
+              </div>
             ) : null}
           </div>
           <Field label="Product" hint="Generated images attach to this product's gallery.">
@@ -614,15 +613,15 @@ export function AIStudio() {
 
         {/* ─── Prompt builder ─── */}
         <section className="ai-card">
-          <h3 className="ai-card__title">2. Prompt</h3>
+          <h2 className="section-title">2. Prompt</h2>
 
           <div className="ai-prompt-templates">
-            <div className="filter-group__head">
-              <span className="filter-group__label">Templates</span>
-              <span className="ai-template-head-actions">
-                <button type="button" className="filter-group__clear" onClick={() => setPromptLibraryOpen(true)}>Browse library</button>
-                <button type="button" className="filter-group__clear" onClick={openNewPrompt}>+ New</button>
-              </span>
+            <div className="section-head ai-prompt-templates__head">
+              <h3 className="section-title">Templates</h3>
+              <div className="section-head__actions">
+                <Button variant="ghost" size="sm" onClick={() => setPromptLibraryOpen(true)}>Browse library</Button>
+                <Button variant="ghost" size="sm" onClick={openNewPrompt}>+ New template</Button>
+              </div>
             </div>
             {prompts.length === 0 ? (
               <p className="muted setting-row__inline-empty">No templates yet. Save your favorite prompts as templates and pick them with one click.</p>
@@ -639,8 +638,8 @@ export function AIStudio() {
                       <span className="ai-template-row__name">{p.name}</span>
                       <span className="ai-template-row__preview">{p.body.slice(0, 80)}{p.body.length > 80 ? '…' : ''}</span>
                     </button>
-                    <button type="button" className="row-action" onClick={() => openEditPrompt(p)}>Edit</button>
-                    <button type="button" className="row-action" onClick={() => handleDeletePrompt(p.id)}>×</button>
+                    <Button variant="ghost" size="sm" onClick={() => openEditPrompt(p)}>Edit</Button>
+                    <Button variant="ghost" size="sm" aria-label={`Delete template ${p.name}`} title="Delete template" onClick={() => handleDeletePrompt(p.id)}>×</Button>
                   </li>
                 ))}
               </ul>
@@ -661,7 +660,7 @@ export function AIStudio() {
 
           {sourceProduct && /\{(sku|name|brand|color|category|description)\}/i.test(promptText) ? (
             <div className="ai-prompt-preview">
-              <span className="filter-group__label">After filling</span>
+              <span className="section-hint">After filling</span>
               <div className="ai-prompt-preview__body">{filledPrompt}</div>
             </div>
           ) : null}
@@ -680,7 +679,7 @@ export function AIStudio() {
 
         {/* ─── Model + options ─── */}
         <section className="ai-card">
-          <h3 className="ai-card__title">3. Model</h3>
+          <h2 className="section-title">3. Model</h2>
           <Field label="Model">
             {({ id }) => (
               <Select id={id} value={selectedModelKey ?? ''} onChange={(e) => setAiSelectedModel(e.target.value)}>
@@ -811,6 +810,13 @@ export function AIStudio() {
               (mode === 'product' && !sourceProductId) ||
               (mode === 'bulk' && bulkFiles.length === 0)
             }
+            title={!selectedModel
+              ? 'Pick a model first'
+              : mode === 'product' && !sourceProductId
+                ? 'Pick a product in 1. Source first'
+                : mode === 'bulk' && bulkFiles.length === 0
+                  ? 'Add source images in 1. Source first'
+                  : undefined}
           >
             {mode === 'bulk'
               ? `Review & queue ${bulkFiles.length || ''} task${bulkFiles.length === 1 ? '' : 's'} →`
@@ -830,22 +836,22 @@ export function AIStudio() {
           />
         ) : sourceProductId ? (
           <section className="ai-card ai-card--gallery">
-            <div className="filter-group__head">
-              <h3 className="ai-card__title">
+            <div className="section-head">
+              <h2 className="section-title">
                 Gallery {sourceProduct ? `· ${sourceProduct.sku}` : ''}
-              </h3>
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                <span className="filter-group__label">{gallery.length} generation{gallery.length === 1 ? '' : 's'}</span>
-                <button
-                  type="button"
-                  className="filter-group__clear"
+              </h2>
+              <p className="section-hint">{gallery.length} generation{gallery.length === 1 ? '' : 's'}</p>
+              <div className="section-head__actions">
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => refreshAiGalleryFor(sourceProductId)}
                   title="Refresh gallery"
-                >Refresh</button>
+                >Refresh</Button>
               </div>
             </div>
             {gallery.length === 0 ? (
-              <p className="muted">No generations for this product yet.</p>
+              <p className="section-hint">No generations for this product yet.</p>
             ) : (
               <div className="ai-gallery">
                 {gallery.map((g) => {
@@ -867,44 +873,44 @@ export function AIStudio() {
                         {g.prompt ? g.prompt.slice(0, 60) : '(no prompt)'}{g.prompt && g.prompt.length > 60 ? '…' : ''}
                       </div>
                       <div className="ai-gallery__actions">
-                        <button
-                          type="button"
-                          className="row-action"
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={g.isFavorite ? 'Unfavorite' : 'Favorite'}
                           title={g.isFavorite ? 'Unfavorite' : 'Favorite'}
                           onClick={() => handleFavoriteGallery(g.id, !g.isFavorite)}
-                        >{g.isFavorite ? '★' : '☆'}</button>
+                        >{g.isFavorite ? '★' : '☆'}</Button>
                         {!g.promotedToProduct ? (
                           <>
-                            <button
-                              type="button"
-                              className="row-action"
-                              title="Add to product images (appended to the end)"
-                              onClick={() => handlePromoteGallery(g.id)}
-                            >Promote</button>
-                            <button
-                              type="button"
-                              className="row-action row-action--primary"
+                            <Button
+                              variant="primary"
+                              size="sm"
                               title="Add to product images AND set as the main image (position 0)"
                               onClick={() => handlePromoteGallery(g.id, { asMain: true })}
-                            >Set as main</button>
+                            >Set as main</Button>
+                            <Button
+                              size="sm"
+                              title="Add to product images (appended to the end)"
+                              onClick={() => handlePromoteGallery(g.id)}
+                            >Promote</Button>
                           </>
                         ) : (
                           <>
                             <span className="muted">In product</span>
-                            <button
-                              type="button"
-                              className="row-action"
+                            <Button
+                              size="sm"
                               title="Re-import and set as the main image (handy if the product already has this generation but you want it on top)"
                               onClick={() => handlePromoteGallery(g.id, { asMain: true })}
-                            >Set as main</button>
+                            >Set as main</Button>
                           </>
                         )}
-                        <button
-                          type="button"
-                          className="row-action"
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          aria-label="Delete generation"
                           title="Delete"
                           onClick={() => handleRemoveGallery(g.id)}
-                        >×</button>
+                        >×</Button>
                       </div>
                     </div>
                   );
@@ -916,16 +922,29 @@ export function AIStudio() {
 
         {/* ─── Queue (below gallery, capped height) ─── */}
         <section className="ai-card ai-card--queue">
-          <div className="filter-group__head">
-            <h3 className="ai-card__title">Queue</h3>
+          <div className="section-head">
+            <h2 className="section-title">Queue</h2>
             {tasks.length > 0 ? (
-              <span className="filter-group__label">{queueLen} active · {tasks.length} total</span>
+              <p className="section-hint">{queueLen} active · {tasks.length} total</p>
             ) : null}
           </div>
           {tasks.length === 0 ? (
-            <p className="muted">No tasks yet. Queue your first generation above.</p>
+            <p className="section-hint">No tasks yet. Queue your first generation above.</p>
           ) : (
-            <ul className="ai-queue">
+            <div className="data-table-wrap">
+            <table className="data-table ai-queue">
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Prompt</th>
+                  <th>Status</th>
+                  <th>On product</th>
+                  <th className="is-num">Cost</th>
+                  <th className="is-num">Progress</th>
+                  <th className="is-actions" aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
               {visibleTasks.map((t) => {
                 // Resolver also checks extraProducts (lazy-fetched cache) so
                 // SKUs surface even when the store's products list doesn't
@@ -954,7 +973,8 @@ export function AIStudio() {
                       || 'Provider reported success but no images landed in the gallery. Click Repair to re-fetch.')
                   : null;
                 return (
-                  <li key={t.id} className="ai-queue__row">
+                  <tr key={t.id}>
+                    <td className="ai-queue__product">
                     <div className="ai-queue__col">
                       {product ? (
                         <button
@@ -975,18 +995,21 @@ export function AIStudio() {
                       )}
                       <span className="muted">{t.model}</span>
                     </div>
+                    </td>
+                    <td className="ai-queue__prompt">
                     {errorOrPrompt ? (
                       <span className="ai-queue__error" title={errorOrPrompt}>{errorOrPrompt}</span>
                     ) : (
-                      <span className="muted">{t.prompt.slice(0, 50)}{t.prompt.length > 50 ? '…' : ''}</span>
+                      <span className="muted" title={t.prompt}>{t.prompt.slice(0, 50)}{t.prompt.length > 50 ? '…' : ''}</span>
                     )}
-                    <Badge tone={status.tone}>{status.label}</Badge>
+                    </td>
+                    <td><Badge tone={status.tone}>{status.label}</Badge></td>
                     {/* Promotion indicator. Lives in a dedicated grid column
                         (.ai-queue__promo) so it can't be visually clipped by
                         the progress column. We always render the wrapper so
                         column placement stays stable across rows; only the
                         badge itself is conditional. */}
-                    <span className="ai-queue__promo">
+                    <td className="ai-queue__promo">
                       {(t.galleryCount ?? 0) > 0 ? (
                         <Badge tone={t.promotedCount >= t.galleryCount ? 'emerald'
                                   : t.promotedCount > 0                ? 'amber'
@@ -998,7 +1021,8 @@ export function AIStudio() {
                               : `${t.galleryCount} awaiting review`}
                         </Badge>
                       ) : null}
-                    </span>
+                    </td>
+                    <td className="is-num">
                     {t.costActual != null || t.costEstimate != null ? (
                       <span
                         className="ai-queue__cost"
@@ -1011,39 +1035,40 @@ export function AIStudio() {
                           : `≈$${Number(t.costEstimate).toFixed(4)}`}
                       </span>
                     ) : null}
-                    {t.status === 'running' ? (
-                      <span className="ai-queue__progress">{Math.round((t.progress ?? 0) * 100)}%</span>
-                    ) : <span className="ai-queue__progress" />}
-                    <div className="ai-queue__actions">
+                    </td>
+                    <td className="is-num ai-queue__progress">
+                      {t.status === 'running' ? `${Math.round((t.progress ?? 0) * 100)}%` : null}
+                    </td>
+                    <td className="is-actions">
                       {needsRecovery ? (
                         <>
-                          <button
-                            type="button"
-                            className="row-action"
+                          <Button
+                            size="sm"
                             title="Re-submit this task to OpenAI (charged again)"
                             onClick={() => Promise.resolve(repairAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}
-                          >Repair</button>
-                          <button
-                            type="button"
-                            className="row-action"
+                          >Repair</Button>
+                          <Button
+                            size="sm"
                             title="Submit a brand-new task with the same parameters"
                             onClick={() => Promise.resolve(queueFreshAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}
-                          >Queue fresh</button>
+                          >Queue fresh</Button>
                         </>
                       ) : null}
                       {t.status === 'running' || t.status === 'queued' ? (
-                        <button type="button" className="row-action" onClick={() => Promise.resolve(cancelAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>Cancel</button>
+                        <Button size="sm" onClick={() => Promise.resolve(cancelAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>Cancel</Button>
                       ) : null}
                       {/* v0.1.25: these four were uncaught. The store actions do not
                           catch either, so a rejection (e.g. "Task belongs to a
                           different company" after switching company) was completely
                           silent — the button just did nothing. */}
-                      <button type="button" className="row-action" onClick={() => Promise.resolve(removeAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>×</button>
-                    </div>
-                  </li>
+                      <Button variant="danger" size="sm" title="Remove from the queue" onClick={() => Promise.resolve(removeAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>Remove</Button>
+                    </td>
+                  </tr>
                 );
               })}
-            </ul>
+              </tbody>
+            </table>
+            </div>
           )}
           {tasks.length > queuePageSize ? (
             <Pagination

@@ -10,9 +10,14 @@
  *      value, so the selection outline no longer matched the element.
  *
  *   2. The canvas preview multiplied font size by `canvasW / 2000`, while
- *      the server renderer (main/templateRenderer.js) has always used the
- *      font size verbatim — so preview and export disagreed on any canvas
- *      that was not 2000 wide.
+ *      the server renderer (main/templateRenderer.js) used the font size
+ *      verbatim — so preview and export disagreed on any canvas that was not
+ *      2000 wide.
+ *
+ * Since 2026-10-02 (owner decision) font size and padding are DESIGN pixels on
+ * both sides: the editor draws them at `canvasW / designW` and the renderer at
+ * `outputW / designW` (designPixelScale), so a template looks the same on any
+ * photo. The last tests below pin the renderer to elementBox.
  *
  * The invariant is NOT "same fraction at every design size" — a 48px font
  * genuinely is a smaller share of a 3000px canvas than of a 2000px one.
@@ -34,7 +39,10 @@ async function box(el, canvasW, canvasH, previewText, designW, designH) {
 
 /** Design-space size of the fallback box for an 8-char SKU at 48px / 12px. */
 const DESIGN_W = Math.max(80, 'DEMO-001'.length * 48 * 0.55 + 12 * 2);
-const DESIGN_H = Math.max(48 * 1.15, 48 + 12 * 2);
+// One line (1.15 em) + padding top and bottom, like the renderer's
+// `lineHeight + padding * 2` (it used to be max(1.15 em, 1 em + 2 × padding),
+// which was shorter than the render whenever there was padding).
+const DESIGN_H = 48 * 1.15 + 12 * 2;
 
 function textEl(overrides = {}) {
   return {
@@ -108,4 +116,62 @@ test('elementBox — anchor placement stays centred', async () => {
   const b = await box(textEl(), 600, 600, 'DEMO-001', 3000, 2000);
   assert.ok(Math.abs((b.left + b.width / 2) - 0.5 * 600) < 1e-6, 'centre x drifted');
   assert.ok(Math.abs((b.top + b.height / 2) - 0.5 * 600) < 1e-6, 'centre y drifted');
+});
+
+/* ── renderer ↔ editor: same box, any photo size ───────────────────── */
+
+function rendererWithStubbedDb() {
+  const path = require('node:path');
+  require.cache[require.resolve('../main/db')] = {
+    exports: { getDataDir: () => path.join('/tmp', 'msk-overlay-sizing-test-data') },
+  };
+  return require('../main/templateRenderer');
+}
+
+async function pillBox(buf) {
+  const sharp = require('sharp');
+  const { data, info } = await sharp(buf).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let x0 = Infinity; let y0 = Infinity; let x1 = -1; let y1 = -1;
+  for (let y = 0; y < info.height; y += 1) {
+    for (let x = 0; x < info.width; x += 1) {
+      const i = (y * info.width + x) * 4;
+      if (data[i] > 230 && data[i + 1] > 210 && data[i + 2] < 90) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+  }
+  return { w: x1 - x0 + 1, h: y1 - y0 + 1, imgW: info.width, imgH: info.height };
+}
+
+test('renderer — the text box height equals elementBox height, in design pixels, on any photo', async () => {
+  const sharp = require('sharp');
+  const templateRenderer = rendererWithStubbedDb();
+  const el = textEl({ x: 0.1, y: 0.1, anchor: 'tl', bg: { color: '#ffeb3b', padding: 12 } });
+  for (const photoPx of [1000, 2000, 3000]) {
+    const input = await sharp({ create: { width: photoPx, height: photoPx, channels: 3, background: '#808080' } }).png().toBuffer();
+    const out = await templateRenderer.compose({
+      inputImage: input, template: { canvasWidth: 2000, canvasHeight: 2000, elements: [el] }, context: { sku: 'DEMO-001' },
+    });
+    const pill = await pillBox(out);
+    const editor = await box(el, photoPx, photoPx, 'DEMO-001', 2000, 2000);
+    // Whole-pixel rounding of the scaled font / padding: within 2 px.
+    assert.ok(Math.abs(pill.h - editor.height) <= 2,
+      `${photoPx}px photo: render ${pill.h}px tall, editor box ${editor.height.toFixed(1)}px`);
+  }
+});
+
+test('renderer — the same template gives the same relative text size on an 800 px and a 1600 px photo', async () => {
+  const sharp = require('sharp');
+  const templateRenderer = rendererWithStubbedDb();
+  const template = {
+    canvasWidth: 2000, canvasHeight: 2000,
+    elements: [textEl({ x: 0.1, y: 0.1, anchor: 'tl', font: { size: 96, weight: 'bold' }, bg: { color: '#ffeb3b', padding: 12 } })],
+  };
+  const fracs = [];
+  for (const photoPx of [800, 1600]) {
+    const input = await sharp({ create: { width: photoPx, height: photoPx, channels: 3, background: '#808080' } }).png().toBuffer();
+    const pill = await pillBox(await templateRenderer.compose({ inputImage: input, template, context: { sku: 'SKU-12345' } }));
+    fracs.push(pill.w / pill.imgW);
+  }
+  assert.ok(Math.abs(fracs[0] / fracs[1] - 1) < 0.03, `800px: ${(fracs[0] * 100).toFixed(2)}%, 1600px: ${(fracs[1] * 100).toFixed(2)}%`);
 });

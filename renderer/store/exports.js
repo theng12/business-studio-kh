@@ -2,6 +2,17 @@
 
 let refreshSeq = 0;
 
+// randomUUID() only exists in secure contexts; the phone viewer is plain HTTP
+// (CLAUDE.md §25.4), so fall back to getRandomValues, then Math.random.
+export function newExportRunId() {
+  const c = globalThis.crypto;
+  if (c?.randomUUID) return `export-${c.randomUUID()}`;
+  const bytes = new Uint8Array(16);
+  if (c?.getRandomValues) c.getRandomValues(bytes);
+  else for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return `export-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
 export function createExportsSlice(set, get) {
   return {
     // — Export center
@@ -10,6 +21,8 @@ export function createExportsSlice(set, get) {
     exportQueueIds: [],
     exportOutputRoot: null,
     exportRunning: false,
+    // Id of the run in flight, chosen here so Cancel targets exactly this run.
+    exportRunId: null,
     exportLastResult: null,
     // v0.31.0: also append exported images back onto their products (as the
     // new main image), flagged dedup-exempt. Session-local default off.
@@ -77,7 +90,8 @@ export function createExportsSlice(set, get) {
       if (!selectedExportProfileId) throw new Error('Pick a profile first');
       if (!exportQueueIds.length) throw new Error('Add at least one product to the queue');
       if (!exportOutputRoot) throw new Error('Pick an output folder');
-      set({ exportRunning: true, exportLastResult: null });
+      const runId = newExportRunId();
+      set({ exportRunning: true, exportRunId: runId, exportLastResult: null });
       try {
         // v0.26.24: thread onExisting through. Caller (Export Center)
         // has already shown the collision modal if needed.
@@ -87,12 +101,13 @@ export function createExportsSlice(set, get) {
           exportOutputRoot,
           onExisting,
           exportSaveToLibrary,
+          runId,
         );
-        set({ exportLastResult: result, exportRunning: false });
+        set({ exportLastResult: result, exportRunning: false, exportRunId: null });
         get().refreshProducts();
         return result;
       } catch (err) {
-        set({ exportRunning: false });
+        set({ exportRunning: false, exportRunId: null });
         get().addToast(err.message, 'error');
         throw err;
       }

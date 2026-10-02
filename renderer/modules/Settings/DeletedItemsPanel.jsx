@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { useAppStore } from '../../store/index.js';
-import { relativeTime } from '../../components/BackupReminder.jsx';
+import { timeAgo } from '../../lib/format.js';
 import { useUserCaps } from '../../components/Sidebar.jsx';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx and
@@ -142,9 +142,9 @@ export function DeletedItemsPanel({ config, addToast }) {
 
   return (
     <div className="settings-page">
-      <h2 className="settings-section-heading">Recently deleted</h2>
+      <h2 className="section-title">Recently deleted</h2>
 
-      <p className="setting-row__hint" style={{ marginTop: 0, maxWidth: 640 }}>
+      <p className="setting-row__hint settings-intro">
         Every product and photo deleted in this company is kept here, with its images, so a mistake
         can be undone. Restore puts it back exactly as it was — same SKU, same photo order.
       </p>
@@ -201,7 +201,7 @@ export function DeletedItemsPanel({ config, addToast }) {
                     <span className="backups-row__when">
                       {item.kind === 'image' ? 'Photo' : 'Product'} · {item.label}
                     </span>
-                    <span className="muted backups-row__rel"> · {relativeTime(item.deletedAt)}</span>
+                    <span className="muted backups-row__rel"> · {timeAgo(item.deletedAt)}</span>
                     <div className="muted backups-row__file">
                       {item.detail ? `${item.detail} · ` : ''}
                       {item.daysLeft == null

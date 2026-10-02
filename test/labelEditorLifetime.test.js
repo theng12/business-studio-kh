@@ -87,13 +87,6 @@ function findAll(node, predicate, found = []) {
   return found;
 }
 
-function textOf(node) {
-  if (node == null || typeof node === 'boolean') return '';
-  if (typeof node === 'string' || typeof node === 'number') return String(node);
-  if (Array.isArray(node)) return node.map(textOf).join('');
-  return textOf(node.props?.children);
-}
-
 function installBrowser(api) {
   const noop = () => {};
   global.window = { api, addEventListener: noop, removeEventListener: noop, matchMedia: () => ({ matches: false }) };
@@ -148,12 +141,6 @@ function row(id, companyId, name) {
 function input(output, value) {
   const node = findAll(output, (item) => item.type?.name === 'Input' && item.props.value === value)[0];
   assert.ok(node, `expected input with ${value}`);
-  return node;
-}
-
-function action(output, label) {
-  const node = findAll(output, (item) => item.type?.name === 'Button' && textOf(item) === label)[0];
-  assert.ok(node, `expected ${label} action`);
   return node;
 }
 
@@ -330,7 +317,11 @@ test('LabelTemplates Back waits for a successful latest-draft flush', async () =
     await open(harness, LabelTemplates, 'label-a');
     input(harness.getOutput(), 'Original').props.onChange({ target: { value: 'Saved before Back' } });
     await harness.settle(LabelTemplates);
-    const leaving = action(harness.getOutput(), 'Back to templates').props.onClick();
+    // UI pass, 2026-10: Back is the PageHeader's `backTo` (docs/UI_GUIDE.md),
+    // no longer a "Back to templates" button among the actions.
+    const header = findAll(harness.getOutput(), (item) => item.type?.name === 'PageHeader')[0];
+    assert.ok(header?.props.backTo?.onClick, 'expected the header back link');
+    const leaving = header.props.backTo.onClick();
     await harness.settle(LabelTemplates);
     assert.ok(input(harness.getOutput(), 'Saved before Back'));
     assert.equal(fixture.calls.length, 1);
