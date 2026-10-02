@@ -47,6 +47,10 @@ const CAPABILITIES = [
 
 const CAPABILITY_KEYS = new Set(CAPABILITIES.map((c) => c.key));
 
+/** A channel rule value meaning "only the admin role ('*')": not a capability
+ *  key, so no custom role can be granted it. */
+const ADMIN_ONLY = 'admin-only';
+
 /**
  * Channels every authenticated user may call. Boot + browse + presence.
  * Deliberately NOT including the OPERATIONS reads or the audit reads —
@@ -102,9 +106,11 @@ const CHANNEL_RULES = [
   [/^images:removeFromProduct$/,                        'products.delete'],
   // — Recently deleted. Seeing and restoring the bin goes with the right to
   //   delete. Purging/emptying it is the irreversible step (the files leave
-  //   the data folder for the Mac's Trash), so it needs the strictest key.
+  //   the data folder for the Mac's Trash), so it is ADMIN ONLY — no
+  //   grantable capability covers it, not even system.manage (owner's call,
+  //   2026-10-02: "for the permanent, only admin").
   [/^deleted:(list|restore)$/,                          'products.delete'],
-  [/^deleted:(purge|empty)$/,                           'system.manage'],
+  [/^deleted:(purge|empty)$/,                           ADMIN_ONLY],
   [/^images:(importFromBytes|importForProduct)$/,       'images.add'],
   [/^files:(pickImageFile|pickFolder|readImageThumb)$/, 'images.add'],
   [/^images:/,                                          'images.manage'],
@@ -171,4 +177,5 @@ module.exports = {
   BASELINE_READS,
   CHANNEL_RULES,
   channelCapability,
+  ADMIN_ONLY,
 };

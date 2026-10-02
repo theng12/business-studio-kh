@@ -19,7 +19,7 @@
  *     on the RPC layer that remote desktop / iPad clients hit.
  */
 
-const { channelCapability } = require('./capabilities');
+const { channelCapability, ADMIN_ONLY } = require('./capabilities');
 
 // Lazy require — permissions.js is pulled in by the server bootstrap; the
 // roles module pulls in the DB. Requiring it lazily avoids any load-order
@@ -113,6 +113,7 @@ function allowedByCaps(caps, channel) {
   if (caps.has('*')) return true;    // admin superuser
   const cap = channelCapability(channel);
   if (cap === 'baseline') return true;
+  if (cap === ADMIN_ONLY) return false; // admin returned true above; nobody else
   if (cap) return caps.has(cap);     // gated → authoritative for a known role
   return null;                       // unmapped channel → legacy fallback
 }
