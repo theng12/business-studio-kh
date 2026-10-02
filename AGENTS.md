@@ -521,13 +521,24 @@ They are settled, not backlog. Do not propose them again, do not "helpfully"
 fix them in passing, and do not list them as remaining work.
 
 **1. The three remaining bulk modals stay as they are.** `renderer/modules/ProductLibrary/`
-has a shared `BulkOpModal.jsx` + `useBulkPreview.js`, used by five modals:
-`BulkCompressModal`, `BulkConvertModal`, `BulkResizeModal`, `AutoCropRunModal`,
-`AutoEnhanceRunModal`. Three do not use it and will not be migrated:
-`BulkBgRemovalModal.jsx` (Remove background), `BulkOverlayRunModal.jsx`
-(Apply overlay), `BulkProductsAIRunModal.jsx` (Bulk AI). They work. Migrating
-them is churn for consistency's own sake, not a fix, and it risks breaking
-working screens to make the code tidier.
+has a shared `BulkOpModal.jsx` (the whole modal shell) and `useBulkPreview.js` (the
+before/after preview hook) (verified 2026-10-03):
+- `BulkOpModal` is used by `BulkCompressModal`, `BulkConvertModal` and `BulkResizeModal`;
+- `AutoCropRunModal` and `AutoEnhanceRunModal` use only `useBulkPreview`, inside their
+  own `Modal`.
+
+Three image operations use neither and **will not be migrated**: `BulkBgRemovalModal.jsx`
+(Remove background), `BulkOverlayRunModal.jsx` (Apply overlay) and
+`BulkProductsAIRunModal.jsx` (Bulk AI). They work. Migrating them is churn for
+consistency's own sake, not a fix, and it risks breaking working screens to make the
+code tidier.
+
+Three later bulk modals also have their own design, because they are not "run one image
+operation with a preview" jobs and `BulkOpModal` does not fit them: `BulkSocialRunModal.jsx`
+(apply a Social Grid template), `BulkEditModal.jsx` (Edit fields) and `BulkTableModal.jsx`
+(Edit in table). They are not migration candidates either. Correctness fixes inside any of
+these modals are always fine — the decision is about restructuring them, not about leaving
+bugs in place.
 
 **2. The `watermarks` asset folder is not being renamed.** Watermark artwork is
 imported under the asset kind `watermarks` — `imageManager.importAsset('watermarks', …)`
