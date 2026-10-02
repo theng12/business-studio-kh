@@ -5,31 +5,74 @@
  * modern Mac app uses for help. Lists every shortcut grouped by area
  * so users can discover features without hunting through menus.
  *
- * The list is hand-curated here rather than auto-derived from
- * `SHORTCUTS` in App.jsx, because some shortcuts are deeper than
- * top-level navigation (Workspace arrow keys, Library search /
- * focus, etc.) — and the grouping reads more naturally for humans
- * than the flat map the keydown handler uses.
+ * The Navigation group is derived from the sidebar's NAV (v0.1.89) and
+ * filtered by the account's capabilities; the other groups are
+ * hand-curated, because they are deeper than top-level navigation
+ * (Workspace arrow keys, Library paste, etc.).
  */
 
 import { Modal } from './ui.jsx';
 import { useAppStore } from '../store/index.js';
+import { NAV, useUserCaps } from './Sidebar.jsx';
+import { hasAnyCap } from '../lib/capabilities.js';
+
+/**
+ * v0.1.89: may a global ⌘-shortcut act right now?
+ *
+ * Not while a modal dialog is open: ⌘1–⌘9 / ⌘, switch the page, which
+ * unmounts whatever form the dialog belongs to and throws the typing away.
+ * And not while focus is in a text field, for the same reason — a slip of the
+ * ⌘ key mid-sentence must not navigate. Checkboxes, radios and buttons are
+ * not text fields; a shortcut from one of those is fine.
+ */
+const NON_TEXT_INPUTS = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file', 'image']);
+
+export function modalDialogOpen(doc) {
+  try { return !!doc?.querySelector?.('[role="dialog"][aria-modal="true"]'); }
+  catch { return false; }
+}
+
+export function isTextEntry(el) {
+  if (!el || typeof el !== 'object') return false;
+  if (el.isContentEditable) return true;
+  const tag = String(el.tagName || '').toUpperCase();
+  if (tag === 'TEXTAREA') return true;
+  if (tag === 'INPUT') return !NON_TEXT_INPUTS.has(String(el.type || 'text').toLowerCase());
+  return false;
+}
+
+export function shortcutBlocked(target, doc) {
+  return modalDialogOpen(doc) || isTextEntry(target);
+}
+
+/**
+ * v0.1.89: the Navigation rows, built from the sidebar's own NAV (the same
+ * source App.jsx's key handler uses) and filtered by what this account may
+ * open. The hand-written list stopped at ⌘6 while ⌘7–⌘9 worked, and listed
+ * modules a role could not reach.
+ */
+export function navShortcutRows(nav, caps, mod) {
+  const order = (k) => (k === ',' ? 100 : Number(k) || 99);
+  const rows = [];
+  for (const section of nav || []) {
+    for (const item of section.items || []) {
+      if (!item.shortcut || !hasAnyCap(caps, item.caps)) continue;
+      rows.push({ shortcut: item.shortcut, keys: [`${mod}${item.shortcut}`], action: item.name });
+    }
+  }
+  rows.sort((a, b) => order(a.shortcut) - order(b.shortcut));
+  return rows.map(({ keys, action }) => ({ keys, action }));
+}
 
 function Key({ children }) {
   return <kbd className="shortcut-key">{children}</kbd>;
 }
 
-const GROUPS = (mod) => [
+const GROUPS = (mod, caps) => [
   {
     title: 'Navigation',
     rows: [
-      { keys: [`${mod}1`], action: 'Dashboard' },
-      { keys: [`${mod}2`], action: 'Product Library' },
-      { keys: [`${mod}3`], action: 'Image Workspace' },
-      { keys: [`${mod}4`], action: 'AI Studio' },
-      { keys: [`${mod}5`], action: 'Overlay Studio' },
-      { keys: [`${mod}6`], action: 'Export Center' },
-      { keys: [`${mod},`], action: 'Settings' },
+      ...navShortcutRows(NAV, caps, mod),
       { keys: [`${mod}K`], action: 'Global search palette' },
       { keys: [`${mod}?`], action: 'Show this shortcuts list' },
     ],
@@ -47,6 +90,7 @@ const GROUPS = (mod) => [
     rows: [
       { keys: ['Esc'], action: 'Close any modal' },
       { keys: ['Click backdrop'], action: 'Close most modals (except destructive ones)' },
+      { keys: [`${mod}1–9`, `${mod},`], action: 'Do nothing while a dialog is open or you are typing in a field' },
     ],
   },
   {
@@ -62,8 +106,9 @@ const GROUPS = (mod) => [
 export function ShortcutsModal({ open, onClose }) {
   const platform = useAppStore((s) => s.platform);
   const mod = platform === 'darwin' ? '⌘' : 'Ctrl+';
+  const caps = useUserCaps();
   if (!open) return null;
-  const groups = GROUPS(mod);
+  const groups = GROUPS(mod, caps);
   return (
     <Modal open={open} title="Keyboard shortcuts" onClose={onClose}>
       <div className="shortcuts-modal">

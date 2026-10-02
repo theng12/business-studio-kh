@@ -96,6 +96,8 @@ test('every surface that prints a price agrees about custom groups', { skip: ski
         elements: [
           { id: 'e1', type: 'text', field: 'sku', x: 2, y: 2, width: 40, height: 6, fontSize: 9 },
           { id: 'e2', type: 'price', field: 'price.vip', x: 2, y: 10, width: 40, height: 8, fontSize: 14 },
+          { id: 'e3', type: 'price', field: 'priceRetail', prefix: '$', x: 2, y: 18, width: 40, height: 8, fontSize: 14 },
+          { id: 'e4', type: 'price', field: 'price.dealer', suffix: ' USD', x: 2, y: 24, width: 40, height: 5, fontSize: 9 },
         ],
       },
       products: [row],
@@ -103,6 +105,12 @@ test('every surface that prints a price agrees about custom groups', { skip: ski
       layout: {},
     });
     assert.match(labelsHtml, /1,234\.50/, 'the label prints the VIP price too');
+    // Owner's decision (2026-10-02): a label price is a bare formatted number,
+    // and the currency is the element's own prefix/suffix — applied once.
+    assert.doesNotMatch(labelsHtml, /\$1,234\.50/, 'a group price on a label carries no currency of its own');
+    assert.match(labelsHtml, />\$100\.00</, 'retail prints as 100.00 with the template prefix once');
+    assert.doesNotMatch(labelsHtml, /\$\$/, 'never a doubled symbol');
+    assert.match(labelsHtml, />55\.00 USD</, 'a legacy bare-number group formats the same way, with the suffix');
 
     // ── the generic catalog sheet ───────────────────────────────────────
     const generic = buildCatalogCsv({

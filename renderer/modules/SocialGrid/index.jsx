@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, EmptyState, Input, Modal, Select } from '../../components/ui.jsx';
+import { confirm } from '../../components/ConfirmModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { GenerationExperience } from '../../components/GenerationExperience.jsx';
@@ -44,7 +45,18 @@ function editablePreset(preset, expectedUpdatedAt) {
  * server a second time (and flashed "Updating…") after every edit. */
 function withLocalConfig(row, local) {
   if (!row || !local?.config) return row;
-  return JSON.stringify(row.config) === JSON.stringify(local.config) ? { ...row, config: local.config } : row;
+  const kept = JSON.stringify(row.config) === JSON.stringify(local.config) ? { ...row, config: local.config } : row;
+  return withLocalName(kept, local);
+}
+
+/* v0.1.89: the server trims the name it stores, so a save that lands while the
+ * user is mid-word ("Summer " → "Summer") used to put the trimmed name back in
+ * the field and eat the space just typed — the next letter then joined the
+ * previous word. When the only difference is that trim, the field keeps what
+ * the user typed. */
+export function withLocalName(row, local) {
+  if (!row || typeof local?.name !== 'string') return row;
+  return local.name !== row.name && local.name.trim() === row.name ? { ...row, name: local.name } : row;
 }
 
 function describeSize(config) {
@@ -96,7 +108,7 @@ function PresetCard({ preset, brands, categories, onOpen, onDuplicate, onDelete 
  * and its main action is "use this in a new post". The other way to use one is
  * from the Product Library, where it is applied to whatever is selected.
  */
-function TemplateCard({ template, onUse, onDuplicate, onDelete }) {
+function TemplateCard({ template, onUse, onEdit, onDuplicate, onDelete }) {
   const c = template.config;
   return (
     <article className="social-card social-card--template">
@@ -121,6 +133,7 @@ function TemplateCard({ template, onUse, onDuplicate, onDelete }) {
           </span>
         </div>
         <div className="social-card__actions">
+          <Button variant="ghost" onClick={onEdit}>Rename</Button>
           <Button variant="ghost" onClick={onDuplicate}>Duplicate</Button>
           <Button variant="ghost" onClick={onDelete}>Delete</Button>
           <Button onClick={onUse}>Use in a new post</Button>
@@ -201,6 +214,10 @@ export function PresetEditor({ presetId, onBack }) {
   const [templating, setTemplating] = useState(false);
   const [templateName, setTemplateName] = useState('');
   const [savingTemplate, setSavingTemplate] = useState(false);
+  // v0.1.89: '' = a new template; otherwise the id of the template whose look
+  // this post replaces — the way to EDIT a template's design.
+  const [templateTarget, setTemplateTarget] = useState('');
+  const [templateChoices, setTemplateChoices] = useState([]);
   const saveTimer = useRef(null);
   const previewTimer = useRef(null);
   const latest = useRef(null);
@@ -402,17 +419,35 @@ export function PresetEditor({ presetId, onBack }) {
    * the user has been dragging sliders and immediately saves a template, the
    * template must capture what they are looking at. The server strips the
    * product selection either way (see main/db/socialGridTemplates.js). */
+  async function openTemplating() {
+    setTemplateName(`${preset.name} template`);
+    setTemplateTarget('');
+    setTemplating(true);
+    try { setTemplateChoices(await window.api.socialGrid.listTemplates(companyId)); }
+    catch { setTemplateChoices([]); }
+  }
+
   async function saveAsTemplate() {
     const name = templateName.trim();
     if (!name) { addToast('Give the template a name', 'error'); return; }
     setSavingTemplate(true);
     try {
-      await window.api.socialGrid.saveTemplate({ companyId, name, config: preset.config });
+      if (templateTarget) {
+        const target = templateChoices.find((t) => t.id === templateTarget);
+        await window.api.socialGrid.updateTemplate(templateTarget, {
+          name,
+          config: preset.config,
+          ...(target?.updatedAt != null ? { expectedUpdatedAt: Number(target.updatedAt) } : {}),
+        });
+      } else {
+        await window.api.socialGrid.saveTemplate({ companyId, name, config: preset.config });
+      }
       setTemplating(false);
       setTemplateName('');
-      addToast(`Template “${name}” saved`, 'success');
+      setTemplateTarget('');
+      addToast(templateTarget ? `Template “${name}” updated with this look` : `Template “${name}” saved`, 'success');
     } catch (e) {
-      addToast(e.message, 'error');
+      addToast(parseConflictError(e) ? 'That template changed elsewhere. Close this and try again.' : e.message, 'error');
     } finally {
       setSavingTemplate(false);
     }
@@ -474,7 +509,7 @@ export function PresetEditor({ presetId, onBack }) {
           <>
             <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
             <Button
-              onClick={() => { setTemplateName(`${preset.name} template`); setTemplating(true); }}
+              onClick={() => { void openTemplating(); }}
               title="Save this look as a reusable template — the products it happens to be showing are not saved with it."
             >
               Save as template
@@ -525,7 +560,7 @@ export function PresetEditor({ presetId, onBack }) {
           <>
             <Button variant="ghost" onClick={() => setTemplating(false)}>Cancel</Button>
             <Button variant="primary" onClick={saveAsTemplate} disabled={savingTemplate || !templateName.trim()}>
-              {savingTemplate ? 'Saving…' : 'Save template'}
+              {savingTemplate ? 'Saving…' : templateTarget ? 'Update template' : 'Save template'}
             </Button>
           </>
         )}
@@ -535,6 +570,28 @@ export function PresetEditor({ presetId, onBack }) {
           nothing about which products are in it. Apply it to any selection from the
           Product Library, or start a new post from it here.
         </p>
+        {templateChoices.length ? (
+          <label className="field">
+            <span className="field__label">Save to</span>
+            <Select
+              value={templateTarget}
+              onChange={(e) => {
+                const id = e.target.value;
+                setTemplateTarget(id);
+                const t = templateChoices.find((x) => x.id === id);
+                setTemplateName(t ? t.name : `${preset.name} template`);
+              }}
+            >
+              <option value="">A new template</option>
+              {templateChoices.map((t) => <option key={t.id} value={t.id}>Replace the look of “{t.name}”</option>)}
+            </Select>
+            <span className="field__hint">
+              {templateTarget
+                ? 'That template takes this post’s look. Posts already made from it do not change.'
+                : 'Keeps every existing template as it is.'}
+            </span>
+          </label>
+        ) : null}
         <label className="field">
           <span className="field__label">Template name</span>
           <Input
@@ -566,6 +623,9 @@ export function SocialGrid() {
   // '' = blank post, otherwise the template id to seed it from.
   const [startFrom, setStartFrom] = useState('');
   const [busy, setBusy] = useState(false);
+  // v0.1.89: renaming a template — { id, name, updatedAt } while the dialog is open.
+  const [renaming, setRenaming] = useState(null);
+  const [renameBusy, setRenameBusy] = useState(false);
 
   const requestSeq = useRef(0);
   const load = useCallback(async () => {
@@ -625,6 +685,51 @@ export function SocialGrid() {
     }
   }
 
+  async function saveRename() {
+    const nextName = renaming?.name?.trim();
+    if (!renaming || !nextName) return;
+    setRenameBusy(true);
+    try {
+      await window.api.socialGrid.updateTemplate(renaming.id, {
+        name: nextName,
+        ...(renaming.updatedAt != null ? { expectedUpdatedAt: Number(renaming.updatedAt) } : {}),
+      });
+      setRenaming(null);
+      addToast(`Renamed to “${nextName}”`, 'success');
+      await load();
+    } catch (e) {
+      addToast(parseConflictError(e) ? 'That template changed elsewhere. Close this and try again.' : e.message, 'error');
+    } finally {
+      setRenameBusy(false);
+    }
+  }
+
+  async function deleteTemplate(t) {
+    const ok = await confirm({
+      title: `Delete the template “${t.name}”?`,
+      message: 'Posts made from it and images you already exported are not affected.',
+      detail: 'A deleted template does not go to Recently deleted — to keep its look, start a post from it first.',
+      danger: true,
+      confirmLabel: 'Delete template',
+    });
+    if (!ok) return;
+    try { await window.api.socialGrid.removeTemplate(t.id); await load(); }
+    catch (e) { addToast(e.message, 'error'); }
+  }
+
+  async function deletePost(p) {
+    const ok = await confirm({
+      title: `Delete “${p.name}”?`,
+      message: 'The saved post (its products, layout and text) is removed. Images you already exported are not affected.',
+      detail: 'A deleted post does not go to Recently deleted.',
+      danger: true,
+      confirmLabel: 'Delete post',
+    });
+    if (!ok) return;
+    try { await window.api.socialGrid.remove(p.id); await load(); }
+    catch (e) { addToast(e.message, 'error'); }
+  }
+
   /** "Use in a new post" from a template card: same modal, pre-seeded. */
   function startPostFromTemplate(template) {
     setStartFrom(template.id);
@@ -670,15 +775,12 @@ export function SocialGrid() {
                 key={t.id}
                 template={t}
                 onUse={() => startPostFromTemplate(t)}
+                onEdit={() => setRenaming({ id: t.id, name: t.name, updatedAt: t.updatedAt })}
                 onDuplicate={async () => {
                   try { await window.api.socialGrid.duplicateTemplate(t.id); await load(); }
                   catch (e) { addToast(e.message, 'error'); }
                 }}
-                onDelete={async () => {
-                  if (!confirm(`Delete the template “${t.name}”? Posts made from it and images you already exported are not affected.`)) return;
-                  try { await window.api.socialGrid.removeTemplate(t.id); await load(); }
-                  catch (e) { addToast(e.message, 'error'); }
-                }}
+                onDelete={() => { void deleteTemplate(t); }}
               />
             ))}
           </div>
@@ -687,7 +789,36 @@ export function SocialGrid() {
             No templates yet. Open a post and choose <strong>Save as template</strong> to reuse its look.
           </p>
         )}
+        {templates.length ? (
+          <p className="muted social-templates__tip">
+            To change a template’s look, open a post, set it up the way you want, then choose Save as template and pick the template to replace.
+          </p>
+        ) : null}
       </section>
+
+      <Modal
+        open={renaming !== null}
+        onClose={() => setRenaming(null)}
+        title="Rename template"
+        footer={(
+          <>
+            <Button variant="ghost" onClick={() => setRenaming(null)}>Cancel</Button>
+            <Button variant="primary" onClick={saveRename} disabled={renameBusy || !renaming?.name?.trim()}>
+              {renameBusy ? 'Saving…' : 'Rename'}
+            </Button>
+          </>
+        )}
+      >
+        <label className="field">
+          <span className="field__label">Template name</span>
+          <Input
+            autoFocus
+            value={renaming?.name ?? ''}
+            onChange={(e) => setRenaming((r) => (r ? { ...r, name: e.target.value } : r))}
+            onKeyDown={(e) => { if (e.key === 'Enter') void saveRename(); }}
+          />
+        </label>
+      </Modal>
 
       <div className="social-card-grid">
         {presets.length ? presets.map((p) => (
@@ -701,11 +832,7 @@ export function SocialGrid() {
               try { await window.api.socialGrid.duplicate(p.id); await load(); }
               catch (e) { addToast(e.message, 'error'); }
             }}
-            onDelete={async () => {
-              if (!confirm(`Delete “${p.name}”? The images you already exported are not affected.`)) return;
-              try { await window.api.socialGrid.remove(p.id); await load(); }
-              catch (e) { addToast(e.message, 'error'); }
-            }}
+            onDelete={() => { void deletePost(p); }}
           />
         )) : (
           <EmptyState

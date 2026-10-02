@@ -373,6 +373,9 @@ contextBridge.exposeInMainWorld('api', {
     checkCollisions: (profileId, productIds, outputRoot) =>
       invoke('exports:checkCollisions', { profileId, productIds, outputRoot }),
     listRuns: (limit) => invoke('exports:listRuns', limit),
+    // v0.1.89: stop a running export after the image in progress. `runId`
+    // is the id on its `progress:event` (kind 'export-run').
+    cancel: (runId) => invoke('exports:cancel', runId),
     // v0.36.0: catalog CSV/feed export. Returns { csv, count, filename }.
     catalogCsv: (companyId, format) => invoke('exports:catalogCsv', { companyId, format }),
   },
@@ -478,6 +481,7 @@ contextBridge.exposeInMainWorld('api', {
     duplicateTemplate: (id) => invoke('catalogStudio:duplicateTemplate', { id }),
     previewTemplate: (config, name, sampleLimit) => invoke('catalogStudio:previewTemplate', { config, name, sampleLimit }),
     exportPdf: (id, outputFolder) => invoke('catalogStudio:export', { id, outputFolder }),
+    print: (id) => invoke('catalogStudio:print', { id }),
   },
   /* v0.1.25: Social Grid — square product-grid images for social posts.
    * These channel names are what the server-mode reachability test reads out

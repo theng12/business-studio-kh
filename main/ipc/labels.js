@@ -151,7 +151,13 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       // The caller names the Mac that wrote the files (a client passes its own
       // hostname); fall back to this Mac so a run recorded without one is still
       // attributable.
-      settings: { ...(settings || {}), originHost: originHost || os.hostname() },
+      // productIds come from the items a client sends, so "Run again" works for
+      // a client-made run too.
+      settings: {
+        ...(settings || {}),
+        productIds: (Array.isArray(items) ? items : []).map((item) => item?.productId).filter((id) => typeof id === 'string' && id),
+        originHost: originHost || os.hostname(),
+      },
     });
     runs.addItems(run.id, Array.isArray(items) ? items : []);
     emitCatalogChange('labels', 'run', templateId);
@@ -201,8 +207,11 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
         // renders the whole batch (renderer.toImages) instead of one window —
         // one renderer process — per label.
         const ext = format === 'jpeg' ? 'jpg' : 'png';
-        const scale = Math.max(1, Number(layout.dpi) || 203) / 25.4;
+        // One dpi for both the pixel size and the zoom (and the same maths as
+        // client mode), so the file is exactly mm × dpi / 25.4 pixels; the
+        // capture is resized to that in renderWindow.captureImage.
         const dpi = Math.max(72, Number(layout.dpi) || 203);
+        const scale = dpi / 25.4;
         await renderer.toImages(products.length, async (i) => {
           const product = products[i];
           return {
@@ -221,7 +230,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
         // v0.1.22: which Mac wrote these files. The history lives here with the
         // data, but the files land on whichever Mac ran the job — so a reader on
         // the other Mac needs to be told where they are.
-        settings: { ...layout, originHost: os.hostname() } });
+        // productIds: what Label History's "Run again" re-selects.
+        settings: { ...layout, productIds: products.map((p) => p.id), originHost: os.hostname() } });
       runs.addItems(run.id, products.map((product, i) => ({ productId: product.id, sku: product.sku,
         filePath: format === 'pdf' ? made[0] : made[i], productSnapshot: product, templateSnapshot: template })));
       emitCatalogChange('labels', 'run', templateId);
@@ -237,7 +247,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     const products = productRows(productIds); if (!products.length) throw new Error('Select at least one product');
     const html = await labelsDocument({ template, products, brands: brandsDb.list(companyId), layout });
     const result = await renderer.printHtml(html, printOptions);
-    runs.create({ companyId, templateId, templateName: template.name, format: 'print', layoutMode: layout.mode || 'single', productCount: products.length, settings: { layout, printOptions, originHost: os.hostname() } });
+    runs.create({ companyId, templateId, templateName: template.name, format: 'print', layoutMode: layout.mode || 'single', productCount: products.length, settings: { layout, printOptions, productIds: products.map((p) => p.id), originHost: os.hostname() } });
     emitCatalogChange('labels', 'run', templateId);
     return result;
   });

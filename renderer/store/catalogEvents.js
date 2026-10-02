@@ -105,6 +105,12 @@ export function applyCatalogEvent(get, evt) {
       scheduleSliceRefresh('categories', () => get().refreshCategories());
       scheduleProductsRefresh(get);
       break;
+    case 'purchaseOrder':
+    case 'supplier':
+      // A received/edited PO changes landed costs; the Library's Cost column
+      // keys its refetch on poRevision.
+      scheduleSliceRefresh('poRevision', () => get().bumpPoRevision?.());
+      break;
     case 'company':
       scheduleSliceRefresh('companies', () => get().refreshCompanies());
       break;

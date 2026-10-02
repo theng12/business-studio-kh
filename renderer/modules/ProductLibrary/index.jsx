@@ -339,6 +339,7 @@ export function ProductLibrary() {
   // otherwise). Re-fetched when the product set changes, since a PO
   // received elsewhere updates these numbers.
   const [productCosts, setProductCosts] = useState(() => new Map());
+  const poRevision = useAppStore((s) => s.poRevision);
   const costColumnVisible = visibleCols.has('cost');
 
   /**
@@ -459,9 +460,9 @@ export function ProductLibrary() {
 
   // v0.49.48: pull the bulk landed-cost map for the Cost column. Gated on
   // the column being visible + a company being active. `products.length`
-  // in the deps means it refreshes after imports / deletes; a PO received
-  // on another Mac won't auto-push here, but switching modules or toggling
-  // the column re-fetches, which is enough for a cost-reference column.
+  // in the deps means it refreshes after imports / deletes, and poRevision
+  // (bumped by a purchaseOrder / supplier catalog event) after a PO changes
+  // here or on another Mac.
   useEffect(() => {
     if (!activeCompanyId || !costColumnVisible) return;
     let cancelled = false;
@@ -474,7 +475,7 @@ export function ProductLibrary() {
       })
       .catch(() => { if (!cancelled) setProductCosts(new Map()); });
     return () => { cancelled = true; };
-  }, [activeCompanyId, costColumnVisible, products.length]);
+  }, [activeCompanyId, costColumnVisible, products.length, poRevision]);
 
   const openPurchaseOrder = useAppStore((s) => s.openPurchaseOrder);
 

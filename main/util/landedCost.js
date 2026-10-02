@@ -68,6 +68,26 @@ function lineValueUsd(line) {
 }
 
 /**
+ * The signed USD amount a component contributes to landed cost.
+ *
+ * A 'discount' always LOWERS cost, whatever sign it was stored with. The PO
+ * form used to force every amount to ≥ 0, so discounts saved before the fix
+ * are positive in the database; new ones are stored negative. Reading the
+ * sign from the kind here means both kinds of row come out right without a
+ * data migration. Every other kind keeps the sign it was stored with.
+ */
+function componentUsd(component) {
+  const amount = Number(component?.amountUsd) || 0;
+  return String(component?.kind || '').toLowerCase() === 'discount' ? -Math.abs(amount) : amount;
+}
+
+/** The sign a component's amounts are STORED with: discounts negative, the rest as entered. */
+function signedComponentAmount(kind, amount) {
+  const n = Number(amount) || 0;
+  return String(kind || '').toLowerCase() === 'discount' ? -Math.abs(n) : Math.abs(n);
+}
+
+/**
  * Run a single allocation pass for one cost component.
  * Returns a Map<lineId, share-amount-USD> summing to component.amountUsd
  * (within float rounding). When the basis can't be applied because the
@@ -78,7 +98,7 @@ function lineValueUsd(line) {
  * Returns { shares: Map, basisUsed }.
  */
 function allocateOne(component, linesWithTotals) {
-  const amount = Number(component.amountUsd) || 0;
+  const amount = componentUsd(component);
   const lineIds = linesWithTotals.map((l) => l.id);
 
   function shareBy(key) {
@@ -148,7 +168,7 @@ function calculateLanded({ lines, components }) {
     totalValueUsd:    sum(linesWithTotals.map((l) => l.valueUsd)),
     totalVolumeCbm:   sum(linesWithTotals.map((l) => l.volumeCbm)),
     totalWeightKg:    sum(linesWithTotals.map((l) => l.weightKg)),
-    totalComponentsUsd: sum((components || []).map((c) => Number(c.amountUsd) || 0)),
+    totalComponentsUsd: sum((components || []).map(componentUsd)),
   };
 
   const allocatedByLine = new Map(linesWithTotals.map((l) => [l.id, 0]));
@@ -369,6 +389,8 @@ module.exports = {
   realizedMargin,
   incotermComponentWarnings,
   summarizePayments,
+  componentUsd,
+  signedComponentAmount,
   // exported for tests / advanced callers
   _internals: {
     cartonCbm, cartonsForLine, lineVolumeCbm, lineWeightKg, lineValueUsd,

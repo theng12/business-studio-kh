@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Input, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { GenerationExperience } from '../../components/GenerationExperience.jsx';
+import { clearLabelRerun, peekLabelRerun } from './labelRerun.js';
 
 export function LabelGenerate() {
   const companyId = useAppStore((s) => s.activeCompanyId); const products = useAppStore((s) => s.products); const addToast = useAppStore((s) => s.addToast);
@@ -12,17 +13,38 @@ export function LabelGenerate() {
   const [marginMm, setMarginMm] = useState(8); const [gapMm, setGapMm] = useState(2); const [copies, setCopies] = useState(1); const [printers, setPrinters] = useState([]); const [printer, setPrinter] = useState('');
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [phase, setPhase] = useState(0); const [detail, setDetail] = useState(''); const [previewHtml, setPreviewHtml] = useState('');
   const templatesRequestRef = useRef(0); const previewRequestRef = useRef(0);
+  // "Run again" from Label History: the run's template wins once, when the
+  // template list arrives (see labelRerun.js).
+  const preferredTemplateRef = useRef(null);
+  const productsRef = useRef(products); productsRef.current = products;
   useEffect(() => {
     ++templatesRequestRef.current;
     ++previewRequestRef.current;
     setTemplates([]); setTemplateId(''); setSelected([]); setProductPage(0); setPreviewHtml('');
+    preferredTemplateRef.current = null;
     if (!companyId) return () => { templatesRequestRef.current += 1; };
+    const rerun = peekLabelRerun(companyId);
+    if (rerun) {
+      preferredTemplateRef.current = rerun.templateId || '';
+      // Products deleted since that run are left out of the selection.
+      const known = new Set((Array.isArray(productsRef.current) ? productsRef.current : []).map((p) => p.id));
+      setSelected(known.size ? rerun.productIds.filter((id) => known.has(id)) : rerun.productIds);
+      setFormat(rerun.format); setMode(rerun.layout.mode); setPageSize(rerun.layout.pageSize); setOrientation(rerun.layout.orientation);
+      setMarginMm(rerun.layout.marginMm); setGapMm(rerun.layout.gapMm); setCopies(rerun.layout.copies);
+      if (rerun.printer) setPrinter(rerun.printer);
+    }
     const loadTemplates = () => {
       const refreshId = ++templatesRequestRef.current;
       return window.api.labels.listTemplates(companyId)
         .then((rows) => {
           if (refreshId !== templatesRequestRef.current) return;
-          setTemplates(rows); setTemplateId((current) => rows.some((row) => row.id === current) ? current : (rows[0]?.id || ''));
+          const wanted = preferredTemplateRef.current;
+          if (wanted != null) {
+            preferredTemplateRef.current = null;
+            clearLabelRerun();
+            if (wanted && !rows.some((row) => row.id === wanted)) addToast('The template that run used has been deleted. Pick another one.', 'error');
+          }
+          setTemplates(rows); setTemplateId((current) => (wanted && rows.some((row) => row.id === wanted)) ? wanted : rows.some((row) => row.id === current) ? current : (rows[0]?.id || ''));
         })
         .catch((err) => { if (refreshId === templatesRequestRef.current) addToast(`Could not load label templates — ${err.message}`, 'error'); });
     };
@@ -78,8 +100,8 @@ export function LabelGenerate() {
   if (!productRows.length) return <section className="page"><PageHeader title="Generate & Print" subtitle="Create labels from Product Library data." /><EmptyState title="No products yet" body="Add products to the Product Library before generating labels." /></section>;
   return <section className="page"><PageHeader title="Generate & Print" subtitle="Turn selected products into print-ready labels." actions={<div className="selection-count">{selected.length} selected</div>} />
     <div className="production-layout"><div className="production-panel"><div className="production-step"><span>1</span><div><strong>Choose a template</strong><Select value={templateId} onChange={(e) => setTemplateId(e.target.value)}>{templateRows.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.widthMm}×{t.heightMm}mm</option>)}</Select></div></div>
-      <div className="production-step"><span>2</span><div><strong>Select products</strong><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search SKU or product name" /><div className="product-pick-actions"><button type="button" onClick={() => setSelected(visibleProducts.map((p) => p.id))}>Select visible</button><button type="button" onClick={() => setSelected([])}>Clear</button></div><div className="product-pick-list">{visibleProducts.map((p) => <label key={p.id} className={selected.includes(p.id) ? 'is-selected' : ''}><input type="checkbox" checked={selected.includes(p.id)} onChange={() => toggle(p.id)} /><span><strong>{p.sku}</strong>{p.name || 'Unnamed product'}</span><em>{p.barcode || 'No barcode'}</em></label>)}</div><Pagination total={filtered.length} pageStart={productPageInfo.pageStart} pageEnd={productPageInfo.pageEnd} currentPage={productPageInfo.currentPage} maxPage={productPageInfo.maxPage} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={setProductPageSize} /></div></div>
-      <div className="production-step"><span>3</span><div><strong>Output</strong><div className="segmented"><button type="button" className={format === 'pdf' ? 'is-active' : ''} onClick={() => setFormat('pdf')}>PDF</button><button type="button" className={format === 'png' ? 'is-active' : ''} onClick={() => setFormat('png')}>PNG</button><button type="button" className={format === 'jpeg' ? 'is-active' : ''} onClick={() => setFormat('jpeg')}>JPEG</button></div>{format === 'pdf' ? <><div className="segmented"><button type="button" className={mode === 'sheet' ? 'is-active' : ''} onClick={() => setMode('sheet')}>Sheet layout</button><button type="button" className={mode === 'single' ? 'is-active' : ''} onClick={() => setMode('single')}>One per page</button></div>{mode === 'sheet' ? <><div className="production-grid"><label>Paper<Select value={pageSize} onChange={(e) => setPageSize(e.target.value)}><option>A4</option><option>Letter</option></Select></label><label>Orientation<Select value={orientation} onChange={(e) => setOrientation(e.target.value)}><option>portrait</option><option>landscape</option></Select></label><label>Margin (mm)<Input type="number" value={marginMm} onChange={(e) => setMarginMm(Number(e.target.value))} /></label><label>Gap (mm)<Input type="number" value={gapMm} onChange={(e) => setGapMm(Number(e.target.value))} /></label></div>{sheetFit ? <div className="sheet-fit-note"><strong>{sheetFit.total} labels per page</strong><span>{sheetFit.cols} across × {sheetFit.rows} down</span></div> : null}</> : null}</> : null}<label>Copies per product<Input type="number" min="1" max="100" value={copies} onChange={(e) => setCopies(Number(e.target.value))} /></label><div className="folder-picker"><Button variant="ghost" onClick={pickFolder}>Choose output folder…</Button><span>{outputFolder || 'No folder chosen'}</span></div></div></div>
+      <div className="production-step"><span>2</span><div><strong>Select products</strong><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search SKU or product name" /><div className="product-pick-actions"><button type="button" onClick={() => setSelected((current) => { const have = new Set(current); return [...current, ...visibleProducts.map((p) => p.id).filter((id) => !have.has(id))]; })} title="Add every product on this page to the selection">Add visible</button><button type="button" disabled={!selected.length} onClick={() => setSelected([])}>Clear selection</button></div><div className="product-pick-list">{visibleProducts.map((p) => <label key={p.id} className={selected.includes(p.id) ? 'is-selected' : ''}><input type="checkbox" checked={selected.includes(p.id)} onChange={() => toggle(p.id)} /><span><strong>{p.sku}</strong>{p.name || 'Unnamed product'}</span><em>{p.barcode || 'No barcode'}</em></label>)}</div><Pagination total={filtered.length} pageStart={productPageInfo.pageStart} pageEnd={productPageInfo.pageEnd} currentPage={productPageInfo.currentPage} maxPage={productPageInfo.maxPage} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={setProductPageSize} /></div></div>
+      <div className="production-step"><span>3</span><div><strong>Output</strong><div className="segmented"><button type="button" className={format === 'pdf' ? 'is-active' : ''} onClick={() => setFormat('pdf')}>PDF</button><button type="button" className={format === 'png' ? 'is-active' : ''} onClick={() => setFormat('png')}>PNG</button><button type="button" className={format === 'jpeg' ? 'is-active' : ''} onClick={() => setFormat('jpeg')}>JPEG</button></div>{format === 'pdf' ? <><div className="segmented"><button type="button" className={mode === 'sheet' ? 'is-active' : ''} onClick={() => setMode('sheet')}>Sheet layout</button><button type="button" className={mode === 'single' ? 'is-active' : ''} onClick={() => setMode('single')}>One per page</button></div>{mode === 'sheet' ? <><div className="production-grid"><label>Paper<Select value={pageSize} onChange={(e) => setPageSize(e.target.value)}><option>A4</option><option>Letter</option></Select></label><label>Orientation<Select value={orientation} onChange={(e) => setOrientation(e.target.value)}><option>portrait</option><option>landscape</option></Select></label><label>Margin (mm)<Input type="number" value={marginMm} onChange={(e) => setMarginMm(Number(e.target.value))} /></label><label>Gap (mm)<Input type="number" value={gapMm} onChange={(e) => setGapMm(Number(e.target.value))} /></label></div>{sheetFit ? <div className="sheet-fit-note"><strong>{sheetFit.total} labels per page</strong><span>{sheetFit.cols} across × {sheetFit.rows} down</span></div> : null}</> : null}</> : null}{format === 'pdf' ? <label>Copies per product<Input type="number" min="1" max="100" value={copies} onChange={(e) => setCopies(Number(e.target.value))} /></label> : <p className="production-note">One image file per product.</p>}<div className="folder-picker"><Button variant="ghost" onClick={pickFolder}>Choose output folder…</Button><span>{outputFolder || 'No folder chosen'}</span></div></div></div>
       <div className="production-actions"><Button variant="primary" onClick={generate} disabled={working || !selected.length}>Generate files</Button><Select value={printer} onChange={(e) => setPrinter(e.target.value)}><option value="">Show printer dialog…</option>{printerRows.map((p) => <option key={p.name} value={p.name}>{p.displayName || p.name}</option>)}</Select><Button variant="ghost" onClick={print} disabled={working || !selected.length}>Print labels</Button></div>
     </div><aside className="live-preview-card"><div className="live-preview-card__head"><span>Live preview</span><button type="button" onClick={preview}>Refresh</button></div>{previewHtml ? <iframe title="Label preview" srcDoc={previewHtml} /> : <div className="preview-placeholder">Choose a template and product</div>}<div className="live-preview-card__hint">Preview uses the first selected product</div></aside></div>
     <GenerationExperience open={working} title={format === 'pdf' ? 'Making your labels' : 'Rendering label artwork'} progress={progress} phase={phase} detail={detail} />

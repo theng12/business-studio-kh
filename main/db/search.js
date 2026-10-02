@@ -32,7 +32,13 @@
 
 const { getDb } = require('./index');
 
-function globalSearch(companyId, query, limit = 30) {
+/**
+ * v0.1.89: `opts.includeCosting` adds suppliers (name, contact) and purchase
+ * orders (PO number). The caller decides it from the account's capabilities
+ * (costing.view), because search:global itself is a baseline read that every
+ * account may call — a photographer must not learn supplier names this way.
+ */
+function globalSearch(companyId, query, limit = 30, opts = {}) {
   if (!companyId) return [];
   const q = (query ?? '').trim();
   if (!q) return [];
@@ -95,11 +101,47 @@ function globalSearch(companyId, query, limit = 30) {
     results.push({ kind: 'category', id: c.id, label: c.name });
   }
 
+  if (opts.includeCosting) {
+    const supplierRows = db
+      .prepare(
+        `SELECT id, name, country FROM suppliers
+          WHERE company_id = ?
+            AND (name LIKE ? COLLATE NOCASE OR contact_name LIKE ? COLLATE NOCASE)
+          ORDER BY name COLLATE NOCASE LIMIT ?`,
+      )
+      .all(companyId, like, like, limit);
+    for (const r of supplierRows) {
+      results.push({ kind: 'supplier', id: r.id, label: r.name, sublabel: r.country || null, extra: 'Opens its orders' });
+    }
+    const poRows = db
+      .prepare(
+        `SELECT po.id, po.po_number, po.status, s.name AS supplier_name
+           FROM purchase_orders po
+           LEFT JOIN suppliers s ON s.id = po.supplier_id
+          WHERE po.company_id = ? AND po.po_number LIKE ? COLLATE NOCASE
+          ORDER BY po.created_at DESC LIMIT ?`,
+      )
+      .all(companyId, like, limit);
+    for (const r of poRows) {
+      results.push({
+        kind: 'po',
+        id: r.id,
+        label: r.po_number,
+        sublabel: r.supplier_name || null,
+        extra: r.status ? String(r.status).replace(/_/g, ' ') : null,
+      });
+    }
+  }
+
   // Cap the merged list. Products are listed first by design — they're
-  // the most-common target — so a 30-cap usually means "30 product
-  // matches plus brand / category hits". If product hits alone exceed
-  // 30, brands and categories don't appear; the user can refine.
-  return results.slice(0, limit);
+  // the most-common target. v0.1.89: but a long product list no longer
+  // pushes every other kind out — up to half the cap is kept for brand /
+  // category / supplier / PO hits, and products fill the rest.
+  const products = results.filter((r) => r.kind === 'product');
+  const others = results.filter((r) => r.kind !== 'product');
+  const keepOthers = others.slice(0, Math.max(0, Math.min(others.length, limit - Math.min(products.length, Math.ceil(limit / 2)))));
+  const keepProducts = products.slice(0, limit - keepOthers.length);
+  return [...keepProducts, ...keepOthers];
 }
 
 module.exports = { globalSearch };

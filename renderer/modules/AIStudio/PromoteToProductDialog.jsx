@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
+import { appImageSrc } from '../../lib/imageUrl.js';
 import { Button, Field, Input, Modal, Select } from '../../components/ui.jsx';
 
 /**
@@ -129,7 +130,7 @@ export function PromoteToProductDialog({ entry, onClose, onPromoted, onError }) 
       <div className="ai-promote">
         <div className="ai-promote__preview">
           <img
-            src={`app-image://local/${encodeURIComponent(entry.filepath)}`}
+            src={appImageSrc(entry.filepath, entry.id, { w: 640 })}
             alt=""
           />
         </div>

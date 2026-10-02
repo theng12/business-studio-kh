@@ -232,6 +232,41 @@ export function ExportCenter() {
   // null means "no decision pending". Run resumes via runWithMode().
   const [collisionPrompt, setCollisionPrompt] = useState(null);
 
+  // v0.1.89: Cancel for a running export. The run's id arrives on its first
+  // `progress:event` (kind 'export-run'), which the main process sends before
+  // the first image is encoded. Only ids seen while THIS screen's run is going
+  // are taken, so another Mac's export never gets this Cancel button.
+  const [runId, setRunId] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
+  // Subscribed for the screen's whole life, not only while `running`: the
+  // opening event can arrive before React has re-rendered with running=true,
+  // so the store is read directly at the moment the event lands.
+  useEffect(() => {
+    const off = window.api?.events?.onProgress?.((ev) => {
+      // `done === 0` is the run's opening event; an export another Mac
+      // already had going only ever sends higher counts.
+      if (ev?.kind === 'export-run' && ev.cancellable && !ev.complete && ev.done === 0
+        && useAppStore.getState().exportRunning) {
+        setRunId((cur) => cur ?? ev.id);
+      }
+    });
+    return () => { try { off?.(); } catch { /* listener already gone */ } };
+  }, []);
+  useEffect(() => {
+    if (!running) { setRunId(null); setCancelling(false); }
+  }, [running]);
+
+  async function handleCancelRun() {
+    if (!runId || cancelling) return;
+    setCancelling(true);
+    try {
+      await window.api.exports.cancel(runId);
+    } catch (err) {
+      setCancelling(false);
+      addToast(err.message, 'error');
+    }
+  }
+
   async function handleRun() {
     try {
       // v0.26.24: ask the backend whether the output folder already
@@ -253,6 +288,10 @@ export function ExportCenter() {
     try {
       const result = await runExport(onExisting);
       const parts = [];
+      if (result.cancelled) {
+        addToast(`Export cancelled — ${result.exported} image${result.exported === 1 ? '' : 's'} written before it stopped`, 'info');
+        return;
+      }
       parts.push(`Exported ${result.exported} image${result.exported === 1 ? '' : 's'}`);
       if (result.replaced > 0) parts.push(`replaced ${result.replaced}`);
       if (result.skippedExisting > 0) parts.push(`kept ${result.skippedExisting} existing`);
@@ -297,7 +336,7 @@ export function ExportCenter() {
     <div className="page page--export">
       <PageHeader
         title="Export Center"
-        subtitle="One profile per run. Unprocessed images are skipped and reported in the summary."
+        subtitle="One profile per run. Each photo uses its processed version when it has one, and the original otherwise."
       />
 
       <div className="export-layout">
@@ -388,6 +427,15 @@ export function ExportCenter() {
                 >
                   {running ? 'Exporting…' : 'Run export'}
                 </Button>
+                {running ? (
+                  <Button
+                    onClick={handleCancelRun}
+                    disabled={!runId || cancelling}
+                    title="Stop after the photo being written now. Files already written stay in the folder."
+                  >
+                    {cancelling ? 'Stopping…' : 'Cancel'}
+                  </Button>
+                ) : null}
               </div>
 
               <div className="export-queue">
@@ -482,7 +530,7 @@ export function ExportCenter() {
                   </div>
                 ) : filteredProducts.length === 0 ? (
                   <div className="export-queue__empty">
-                    No products match “{queueSearch}”.
+                    {emptyFilterMessage(queueSearch, categories.find((c) => c.id === categoryFilter)?.name)}
                   </div>
                 ) : (
                   <>
@@ -718,6 +766,16 @@ function fmtBytes(n) {
   return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
 }
 
+/** v0.1.89: the empty-list line names whichever filter emptied it. With only
+ *  a category chosen it used to read: No products match “”. */
+export function emptyFilterMessage(search, categoryName) {
+  const q = String(search || '').trim();
+  if (q && categoryName) return `No products in “${categoryName}” match “${q}”.`;
+  if (q) return `No products match “${q}”.`;
+  if (categoryName) return `No products in the category “${categoryName}”.`;
+  return 'No products match these filters.';
+}
+
 function ExportResultPanel({ result }) {
   const grouped = useMemo(() => {
     const m = new Map();
@@ -744,6 +802,18 @@ function ExportResultPanel({ result }) {
         Exported {result.exported} image{result.exported === 1 ? '' : 's'}
         {result.outputPath ? <> to <code>{result.outputPath}</code></> : null}.
       </strong>
+      {result.cancelled ? (
+        <div className="export-result__note">
+          Cancelled before the end. The files listed here were written and stay in the folder; the rest of the queue was not exported.
+        </div>
+      ) : null}
+      {result.renamedInRun > 0 ? (
+        <div className="export-result__note">
+          {result.renamedInRun} file name{result.renamedInRun === 1 ? ' was' : 's were'} used twice in this run, so the later
+          {result.renamedInRun === 1 ? ' copy was' : ' copies were'} saved with -2, -3 … rather than overwriting. Add {'{INDEX}'} to the
+          naming pattern to give each photo its own name.
+        </div>
+      ) : null}
       {total > 0 ? (
         <div className="export-result__size">
           <strong>{fmtBytes(total)}</strong> total

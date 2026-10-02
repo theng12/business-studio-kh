@@ -3,7 +3,34 @@ import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Badge } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
+import { BackupReminder } from '../../components/BackupReminder.jsx';
+import { useUserCaps } from '../../components/Sidebar.jsx';
+import { hasCap } from '../../lib/capabilities.js';
 import { CompanyForm } from './CompanyForm.jsx';
+
+/**
+ * v0.1.89: the delete confirmation, as plain data so a test can read it.
+ *
+ * What a company delete really does (main/db/companies.js `remove`): one
+ * DELETE whose ON DELETE CASCADE drops every product, brand, category, export
+ * profile, template, catalog, social post, supplier, purchase order and AI
+ * record under the company. It does NOT touch the photo files — they stay in
+ * the data folder — and nothing goes to Recently deleted. The old copy said
+ * the opposite on both counts ("image files on disk", "cannot be undone"
+ * alongside a recycle bin that does not cover this).
+ */
+export function companyDeleteCopy(company) {
+  const products = Number(company?.productCount) || 0;
+  const brands = Number(company?.brandCount) || 0;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  return {
+    title: `Delete the company “${company?.name ?? ''}”?`,
+    message: `This removes it from the app together with everything filed under it: ${plural(products, 'product')}, ${plural(brands, 'brand')}, its categories, export profiles, templates, catalogs, social posts, suppliers, purchase orders and AI history.`,
+    detail: 'It does not go to Recently deleted, so only a backup brings it back. The photo files are not deleted or moved to the Trash — they stay in the data folder on the Mac that holds the data, but the app will no longer show them.',
+    confirmLabel: 'Delete company',
+    requireText: company?.name ?? '',
+  };
+}
 
 export function Companies() {
   const companies = useAppStore((s) => s.companies);
@@ -13,6 +40,12 @@ export function Companies() {
   const removeCompany = useAppStore((s) => s.removeCompany);
   const setActiveCompany = useAppStore((s) => s.setActiveCompany);
   const addToast = useAppStore((s) => s.addToast);
+  // v0.1.89: the buttons follow what the server will allow. Create and edit
+  // need System & data settings; deleting a company is deleting for good,
+  // which is admin only (ADMIN_ONLY in main/util/capabilities.js).
+  const caps = useUserCaps();
+  const canManage = hasCap(caps, 'system.manage');
+  const canDelete = Array.isArray(caps) && caps.includes('*');
 
   const [editing, setEditing] = useState(null);
 
@@ -29,11 +62,10 @@ export function Companies() {
   async function handleDelete() {
     if (!editing?.id) return;
     const ok = await confirm({
-      title: `Delete "${editing.name}"?`,
-      message: 'This deletes everything inside this company — products, brands, categories, AI generations, image files on disk.',
-      detail: 'This cannot be undone.',
+      ...companyDeleteCopy(editing),
       danger: true,
-      confirmLabel: 'Delete company',
+      // A backup is the only way back, so offer one right here.
+      extra: <BackupReminder />,
     });
     if (!ok) return;
     try {
@@ -50,14 +82,14 @@ export function Companies() {
       <PageHeader
         title="Company"
         subtitle="A company is a retailer or vendor. Each company has its own brands, products, and images — fully isolated."
-        actions={<Button variant="primary" onClick={() => setEditing({})}>+ New company</Button>}
+        actions={canManage ? <Button variant="primary" onClick={() => setEditing({})}>+ New company</Button> : null}
       />
 
       {companies.length === 0 ? (
         <EmptyState
           title="No companies yet"
           body="Create your first company to start adding brands and products."
-          action={<Button variant="primary" onClick={() => setEditing({})}>+ New company</Button>}
+          action={canManage ? <Button variant="primary" onClick={() => setEditing({})}>+ New company</Button> : null}
         />
       ) : (
         <div className="card-grid">
@@ -87,7 +119,7 @@ export function Companies() {
                   <span>{c.brandCount} brand{c.brandCount === 1 ? '' : 's'}</span>
                 </div>
                 <div className="entity-card__actions">
-                  <Button onClick={() => setEditing(c)}>Edit</Button>
+                  {canManage ? <Button onClick={() => setEditing(c)}>Edit</Button> : null}
                   {isActive ? null : (
                     <Button onClick={() => setActiveCompany(c.id)}>Set active</Button>
                   )}
@@ -103,7 +135,7 @@ export function Companies() {
         company={editing && editing.id ? editing : null}
         onClose={() => setEditing(null)}
         onSubmit={handleSubmit}
-        onDelete={handleDelete}
+        onDelete={canDelete ? handleDelete : null}
       />
     </div>
   );

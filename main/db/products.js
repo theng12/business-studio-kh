@@ -655,6 +655,18 @@ function update(id, patch, opts = {}) {
 }
 
 function remove(id) {
+  /* po_lines.product_id is ON DELETE RESTRICT: a product on a purchase order
+   * cannot go, and the bare "FOREIGN KEY constraint failed" said nothing about
+   * why. Name the PO(s) before anything is touched. */
+  const onPos = getDb().prepare(`
+    SELECT DISTINCT p.sku, COALESCE(po.po_number, '(no number)') AS po
+      FROM po_lines l JOIN purchase_orders po ON po.id = l.po_id JOIN products p ON p.id = l.product_id
+     WHERE l.product_id = ?`).all(id);
+  if (onPos.length) {
+    const many = onPos.length > 1;
+    throw new Error(`SKU ${onPos[0].sku} is on purchase order${many ? 's' : ''} ${onPos.map((r) => r.po).join(', ')}. `
+      + `Remove it from ${many ? 'those POs' : 'that PO'} first.`);
+  }
   // Compute the asset dir before deletion so we can clean up after.
   // Safe to skip if the product doesn't exist (nothing to clean).
   let dirToClean = null;

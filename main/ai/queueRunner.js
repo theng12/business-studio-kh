@@ -240,13 +240,22 @@ async function onDone(task, outputUrls, billing = {}) {
         const ext = guessExt(url);
 
         // Pick a non-colliding filename inside galleryDir.
+        //
+        // The gallery name carries the task id, so it is never reused. It
+        // used to be the bare source name (`shoe.png`), and a disk-only
+        // collision check let a LATER generation take the path of one that
+        // had been deleted (its file moved to the Trash) — the browser's
+        // cache, keyed by URL, then showed the old picture for the new one.
+        // The user-facing copy in `exportDir` keeps the plain source name.
         let name;
+        let exportName = null;
         if (sourceBasename) {
           const suffix = outputUrls.length > 1 ? `-${i}` : '';
-          name = `${sourceBasename}${suffix}${ext}`;
+          exportName = `${sourceBasename}${suffix}${ext}`;
+          name = galleryFileName(sourceBasename, suffix, task.id, ext);
           let n = 2;
           while (fs.existsSync(path.join(galleryDir, name))) {
-            name = `${sourceBasename}${suffix}-${n}${ext}`;
+            name = galleryFileName(sourceBasename, `${suffix}-${n}`, task.id, ext);
             n += 1;
             if (n > 9999) break; // sanity bound
           }
@@ -307,10 +316,11 @@ async function onDone(task, outputUrls, billing = {}) {
         // rules as the gallery copy, with its own collision suffix.
         if (exportDir) {
           try {
-            let externalName = name;
+            const baseExternal = exportName || name;
+            let externalName = baseExternal;
             let n = 2;
             while (fs.existsSync(path.join(exportDir, externalName))) {
-              const parsed = path.parse(name);
+              const parsed = path.parse(baseExternal);
               externalName = `${parsed.name}-${n}${parsed.ext}`;
               n += 1;
               if (n > 9999) break;
@@ -382,6 +392,16 @@ async function readImageBytes(url) {
   const res = await fetchWithTimeout(url, {}, TIMEOUT_DOWNLOAD);
   if (!res.ok) throw new Error(`download ${url} failed (${res.status})`);
   return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * A bulk gallery file name: the source's own name, the variant suffix, and the
+ * first 8 characters of the task id, e.g. `shoe-1-3f2a9c1b.png`. The id part
+ * is what keeps a new generation from ever landing on a deleted one's path.
+ */
+function galleryFileName(sourceBasename, suffix, taskId, ext) {
+  const tag = String(taskId || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 8);
+  return `${sourceBasename}${suffix}${tag ? `-${tag}` : ''}${ext}`;
 }
 
 function guessExt(url) {
@@ -508,4 +528,4 @@ function cancel(taskId) {
   return aiTasks.get(taskId);
 }
 
-module.exports = { start, stop, nudge, repair, queueFresh, cancel };
+module.exports = { start, stop, nudge, repair, queueFresh, cancel, galleryFileName };

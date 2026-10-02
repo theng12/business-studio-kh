@@ -8,7 +8,7 @@
  * re-implement a rule — it only displays one.
  */
 import { useState } from 'react';
-import { Button, Input, Select } from '../../components/ui.jsx';
+import { Button, Input, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { OverlayControls } from './OverlayControls.jsx';
 
 /** Sizes that Facebook and Instagram actually accept. Square is first and is
@@ -72,11 +72,23 @@ function Section({ title, hint, children }) {
  *  one place that decides ordering instead of two that can disagree. */
 function ProductPicker({ products, selectedIds, onChange }) {
   const [query, setQuery] = useState('');
+  // v0.1.89: paged (§10). The list used to stop at the first 300 matches with
+  // no way to reach product 301 except by searching for it.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
+  const [pickedOnly, setPickedOnly] = useState(false);
   const selected = new Set(selectedIds);
   const q = query.trim().toLowerCase();
-  const shown = products
-    .filter((p) => !q || `${p.sku} ${p.name || ''} ${p.barcode || ''}`.toLowerCase().includes(q))
-    .slice(0, 300);
+  // Multi-word AND, the same way the Export Center's search works.
+  const terms = q.split(/\s+/).filter(Boolean);
+  const matches = products.filter((p) => {
+    if (pickedOnly && !selected.has(p.id)) return false;
+    if (!terms.length) return true;
+    const hay = `${p.sku} ${p.name || ''} ${p.barcode || ''}`.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
+  const pager = paginate(matches.length, page, pageSize);
+  const shown = matches.slice(pager.pageStart, pager.pageEnd);
 
   function toggle(id) {
     const next = new Set(selected);
@@ -89,12 +101,17 @@ function ProductPicker({ products, selectedIds, onChange }) {
   return (
     <div className="social-picker">
       <div className="social-picker__bar">
-        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search SKU, name or barcode" />
+        <Input value={query} onChange={(e) => { setQuery(e.target.value); setPage(0); }} placeholder="Search SKU, name or barcode" />
         <Button variant="ghost" onClick={() => onChange([])} disabled={!selectedIds.length}>Clear</Button>
       </div>
       <p className="social-picker__count">
         {selectedIds.length} picked
-        {shown.length < products.length ? ` · showing ${shown.length} of ${products.length}` : ''}
+        {matches.length < products.length ? ` · ${matches.length} of ${products.length} match` : ''}
+        {' '}
+        <label className="social-picker__picked-only">
+          <input type="checkbox" checked={pickedOnly} onChange={(e) => { setPickedOnly(e.target.checked); setPage(0); }} />
+          {' '}Show picked only
+        </label>
       </p>
       <div className="social-picker__list">
         {shown.length ? shown.map((p) => (
@@ -106,8 +123,23 @@ function ProductPicker({ products, selectedIds, onChange }) {
               {p.mainImagePath ? 'photo' : 'no photo'}
             </span>
           </label>
-        )) : <p className="social-picker__empty">No products match “{query}”.</p>}
+        )) : (
+          <p className="social-picker__empty">
+            {pickedOnly && !selectedIds.length ? 'Nothing picked yet.'
+              : q ? `No products match “${query.trim()}”.` : 'No products in this catalogue yet.'}
+          </p>
+        )}
       </div>
+      <Pagination
+        total={matches.length}
+        pageStart={pager.pageStart}
+        pageEnd={pager.pageEnd}
+        currentPage={pager.currentPage}
+        maxPage={pager.maxPage}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={(n) => { setPageSize(n); setPage(0); }}
+      />
     </div>
   );
 }

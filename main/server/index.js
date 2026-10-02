@@ -29,6 +29,8 @@ const fs = require('node:fs');
 const MAX_RPC_BODY_BYTES = 100 * 1024 * 1024;
 const RPC_BODY_TOO_LARGE_MESSAGE =
   'Request body exceeds 100 MiB. Binary RPC payloads are transfer-encoded; keep raw files or batches below 75 MiB.';
+// v0.1.89: what a refused RPC says to the person on the other Mac / phone.
+const FORBIDDEN_MESSAGE = "Your account doesn't have permission to do that. Ask the admin.";
 // v0.15.1: WebSocket support for live-update push to clients.
 // Loaded lazily inside bootServer() so dev workflows that don't run
 // the server (standalone mode) don't pay the import cost.
@@ -464,7 +466,11 @@ async function handleRequest(req, res, dataDir) {
     // Local IPC is bypassed entirely — this only fires for /api/rpc.
     const { isAllowed } = require('../util/permissions');
     if (!isAllowed(user.role, channel)) {
-      sendJson(res, 403, { error: `Forbidden: role "${user.role}" cannot use ${channel}` });
+      // v0.1.89: a plain sentence — this text is shown as-is in a toast on
+      // the other Mac and on the phone. The role and the channel name are
+      // in the server's own log instead.
+      process.stdout.write(`[server] 403 role "${user.role}" → ${channel}\n`);
+      sendJson(res, 403, { error: FORBIDDEN_MESSAGE });
       return;
     }
 

@@ -27,4 +27,29 @@ function slugify(str, fallback = '') {
   return s || fallback;
 }
 
-module.exports = { slugify };
+/**
+ * v0.1.89: the slug for names a PERSON reads — export filenames, Social Grid
+ * series names. Same shape as `slugify` (case kept, runs of anything else
+ * collapse to '-', trimmed, 60 characters) but letters, digits and combining
+ * marks from EVERY script survive, so a Khmer product name stays Khmer
+ * instead of collapsing to nothing. `slugify` above is deliberately left
+ * ASCII-only: asset folders and processed/<sku>/ paths depend on it.
+ *
+ * NFC first, so a name typed with decomposed vowels and the same name typed
+ * precomposed produce the same file name. The 60-character cap counts code
+ * points (not UTF-16 units) and never splits a base letter from its marks.
+ */
+function slugifyUnicode(str, fallback = '') {
+  const collapsed = String(str ?? '')
+    .normalize('NFC')
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, '-')
+    .replace(/^-+|-+$/g, '');
+  const chars = Array.from(collapsed);
+  let end = Math.min(chars.length, 60);
+  // Do not end on a base letter whose combining marks were cut off.
+  while (end > 0 && end < chars.length && /\p{M}/u.test(chars[end])) end -= 1;
+  const s = chars.slice(0, end).join('').replace(/-+$/g, '');
+  return s || fallback;
+}
+
+module.exports = { slugify, slugifyUnicode };
