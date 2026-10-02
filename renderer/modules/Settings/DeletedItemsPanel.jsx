@@ -4,7 +4,6 @@ import { confirm } from '../../components/ConfirmModal.jsx';
 import { useAppStore } from '../../store/index.js';
 import { relativeTime } from '../../components/BackupReminder.jsx';
 import { useUserCaps } from '../../components/Sidebar.jsx';
-import { hasCap } from '../../lib/capabilities.js';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx and
 // BackupsPanel.jsx). Kept in sync by hand — see the Settings docblock.
@@ -40,10 +39,11 @@ function SettingRow({ label, hint, children }) {
 export function DeletedItemsPanel({ config, addToast }) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const refreshProducts = useAppStore((s) => s.refreshProducts);
-  // Deleting for good needs system.manage (main/util/capabilities.js); an
-  // account without it can still restore, so only those buttons are hidden
-  // rather than shown and then refused with a permission error.
-  const canPurge = hasCap(useUserCaps(), 'system.manage');
+  // Deleting for good is admin only (main/util/capabilities.js, ADMIN_ONLY);
+  // anyone with delete rights can still restore, so only those buttons are
+  // hidden rather than shown and then refused with a permission error.
+  // On this Mac in standalone/server mode the caps are ['*'].
+  const canPurge = useUserCaps().includes('*');
   const [state, setState] = useState({ items: [], retentionDays: 30, loading: true });
   const [busyId, setBusyId] = useState(null);
 

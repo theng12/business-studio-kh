@@ -93,6 +93,17 @@ async function planFileName({ destDir, kind, slug, ext, hashFull, existingHashLo
  * v0.12.0: import a brand icon under the company-scoped path
  *   `assets/<company-slug>/_brand-icons/<brand-slug>.<ext>`
  *
+ * A new icon never overwrites an existing file (owner's call, 2026-10-02).
+ * It used to be written straight over `<brand-slug>.<ext>`, which meant two
+ * brands whose names slug the same ("Royal" / "Royal!") shared one file, and
+ * uploading an icon then cancelling the brand form still replaced the live
+ * icon. Now the finished file is encoded to a temp name and claimed into the
+ * first free slot — `<slug>.<ext>`, `<slug>-2.<ext>`, … — the same naming as
+ * every other asset (AGENTS.md section 9). A slot already holding identical
+ * bytes is reused instead, so re-uploading the same icon does not pile up
+ * copies. Replaced icons are left in place: an overlay template may still
+ * point at one.
+ *
  * Returns { relativePath, hash, skipped } in the same shape as
  * importProductImage so callers can swap between them.
  */
@@ -103,58 +114,60 @@ async function importBrandIcon(sourcePath, { destDirRel, baseName } = {}) {
   if (!destDirRel) throw new Error('destDirRel required');
   if (!baseName) throw new Error('baseName required');
   const ext = path.extname(sourcePath).toLowerCase();
-  const hashFull = await sha1Hex(sourcePath);
+  if (ext !== '.svg' && !IMAGE_EXTS.has(ext)) {
+    throw new Error(`Unsupported brand icon type: ${ext}`);
+  }
   // destDirRel is relative to `<dataDir>/assets/` — e.g. `KT-Ceramic/_brand-icons`.
   const destDirAbs = path.join(getDataDir(), 'assets', destDirRel);
   fs.mkdirSync(destDirAbs, { recursive: true });
 
-  if (ext === '.svg') {
-    const finalAbs = path.join(destDirAbs, `${baseName}.svg`);
-    // If a file with same hash is already there, reuse.
-    if (fs.existsSync(finalAbs)) {
-      try {
-        const existing = await sha1Hex(finalAbs);
-        if (existing === hashFull) {
-          return { relativePath: path.posix.join(destDirRel, `${baseName}.svg`), hash: hashFull, skipped: true };
-        }
-      } catch (_) {}
-    }
-    fs.copyFileSync(sourcePath, finalAbs);
-    return { relativePath: path.posix.join(destDirRel, `${baseName}.svg`), hash: hashFull, skipped: false };
-  }
-
-  if (!IMAGE_EXTS.has(ext)) {
-    throw new Error(`Unsupported brand icon type: ${ext}`);
-  }
-  const outExt = ext === '.png' ? '.png' : ext === '.webp' ? '.webp' : '.jpg';
-  const finalName = `${baseName}${outExt}`;
-  const finalAbs = path.join(destDirAbs, finalName);
-
-  // Dedup: if a same-named file is already there with same content, reuse.
-  if (fs.existsSync(finalAbs)) {
-    try {
-      const existing = await sha1Hex(finalAbs);
-      if (existing === hashFull) {
-        return { relativePath: path.posix.join(destDirRel, finalName), hash: hashFull, skipped: true };
+  const outExt = ext === '.svg' ? '.svg' : ext === '.png' ? '.png' : ext === '.webp' ? '.webp' : '.jpg';
+  // A dot-prefixed temp in the same folder, so the claim below is a link on
+  // one volume. It is this function's own file; it is removed once claimed.
+  const tmpAbs = path.join(destDirAbs, `.__icon-${crypto.randomUUID()}${outExt}`);
+  try {
+    if (outExt === '.svg') {
+      fs.copyFileSync(sourcePath, tmpAbs);
+    } else {
+      const max = KIND_MAX_DIMENSION.brands;
+      const pipeline = sharp(sourcePath).rotate().resize({
+        width: max,
+        height: max,
+        fit: 'inside',
+        withoutEnlargement: true,
+      });
+      if (outExt === '.png') {
+        await pipeline.png({ compressionLevel: 9 }).toFile(tmpAbs);
+      } else if (outExt === '.webp') {
+        await pipeline.webp({ quality: 88 }).toFile(tmpAbs);
+      } else {
+        await pipeline.jpeg({ quality: 88, mozjpeg: true }).toFile(tmpAbs);
       }
-    } catch (_) {}
-  }
+    }
+    const hash = await sha1Hex(tmpAbs);
 
-  const max = KIND_MAX_DIMENSION.brands;
-  const pipeline = sharp(sourcePath).rotate().resize({
-    width: max,
-    height: max,
-    fit: 'inside',
-    withoutEnlargement: true,
-  });
-  if (outExt === '.png') {
-    await pipeline.png({ compressionLevel: 9 }).toFile(finalAbs);
-  } else if (outExt === '.webp') {
-    await pipeline.webp({ quality: 88 }).toFile(finalAbs);
-  } else {
-    await pipeline.jpeg({ quality: 88, mozjpeg: true }).toFile(finalAbs);
+    for (let n = 1; n <= 9999; n += 1) {
+      const name = n === 1 ? `${baseName}${outExt}` : `${baseName}-${n}${outExt}`;
+      const finalAbs = path.join(destDirAbs, name);
+      const relativePath = path.posix.join(destDirRel, name);
+      if (fs.existsSync(finalAbs)) {
+        let same = false;
+        try { same = (await sha1Hex(finalAbs)) === hash; } catch (_) { /* unreadable: treat as taken */ }
+        if (same) return { relativePath, hash, skipped: true };
+        continue;
+      }
+      try {
+        fs.linkSync(tmpAbs, finalAbs);   // fails with EEXIST rather than overwrite
+      } catch (err) {
+        if (err.code === 'EEXIST') continue;   // someone took it a moment ago
+        throw err;
+      }
+      return { relativePath, hash, skipped: false };
+    }
+    throw new Error(`Couldn't find a free filename slot for ${baseName}${outExt}`);
+  } finally {
+    try { fs.unlinkSync(tmpAbs); } catch (_) { /* never written, or already gone */ }
   }
-  return { relativePath: path.posix.join(destDirRel, finalName), hash: hashFull, skipped: false };
 }
 
 async function importAsset(kind, sourcePath, slugHint, opts = {}) {
