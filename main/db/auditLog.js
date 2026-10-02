@@ -232,15 +232,57 @@ function countForEntity(entityType, entityId) {
  * fast even on a 100k-row table because every query is "DESC ORDER BY
  * indexed column".
  */
-function listRecent({ limit = 100, offset = 0, entityType = null, userId = null } = {}) {
+/** v0.1.89: the History page's "this Mac / server admin" choice — rows with
+ *  no user id. A real user id is a UUID, so it can never collide. */
+const NO_USER = '@local';
+
+/**
+ * v0.1.89: the shared WHERE for the global feed and its count.
+ *
+ *   entityType  exact entity_type ('image' rows are a product's photo events)
+ *   userId      a user id, or NO_USER for rows written with no caller
+ *   since/until epoch ms, inclusive / exclusive
+ *   q           text: matches the product's SKU or name, the brand's or
+ *               category's name, the action, or a changed value
+ *
+ * The text search looks the names up in the live tables (an entity's name is
+ * never copied onto an audit row — HANDOFF, "An account's name is looked up
+ * from the id"), so a deleted product is found by what changed, not its name.
+ */
+function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null } = {}) {
+  const wheres = [];
+  const params = {};
+  if (entityType) { wheres.push('entity_type = @entityType'); params.entityType = entityType; }
+  if (userId === NO_USER) wheres.push('user_id IS NULL');
+  else if (userId) { wheres.push('user_id = @userId'); params.userId = userId; }
+  const from = Number(since);
+  if (since != null && Number.isFinite(from)) { wheres.push('created_at >= @since'); params.since = from; }
+  const to = Number(until);
+  if (until != null && Number.isFinite(to)) { wheres.push('created_at < @until'); params.until = to; }
+  const text = typeof q === 'string' ? q.trim().slice(0, 200) : '';
+  if (text) {
+    // LIKE with the user's own % and _ escaped, so "50%" means fifty percent.
+    params.q = `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    wheres.push(`(
+      action LIKE @q ESCAPE '\\'
+      OR before_json LIKE @q ESCAPE '\\'
+      OR after_json LIKE @q ESCAPE '\\'
+      OR (entity_type IN ('product', 'image') AND entity_id IN (
+            SELECT id FROM products WHERE sku LIKE @q ESCAPE '\\' OR name LIKE @q ESCAPE '\\'))
+      OR (entity_type = 'brand' AND entity_id IN (SELECT id FROM brands WHERE name LIKE @q ESCAPE '\\'))
+      OR (entity_type = 'category' AND entity_id IN (SELECT id FROM categories WHERE name LIKE @q ESCAPE '\\'))
+    )`);
+  }
+  return { whereSql: wheres.length ? `WHERE ${wheres.join(' AND ')}` : '', params };
+}
+
+function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null } = {}) {
   const db = getDb();
   const cappedLimit  = Math.min(Math.max(1, Number(limit)  || 100), 500);
   const cappedOffset = Math.max(0, Number(offset) || 0);
-  const wheres = [];
-  const params = { limit: cappedLimit, offset: cappedOffset };
-  if (entityType) { wheres.push('entity_type = @entityType'); params.entityType = entityType; }
-  if (userId)     { wheres.push('user_id = @userId');         params.userId = userId; }
-  const whereSql = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+  const built = recentWhere({ entityType, userId, since, until, q });
+  const params = { ...built.params, limit: cappedLimit, offset: cappedOffset };
+  const whereSql = built.whereSql;
   const rows = db
     .prepare(`
       SELECT * FROM audit_log
@@ -256,13 +298,9 @@ function listRecent({ limit = 100, offset = 0, entityType = null, userId = null 
  * Total count for the global history feed. Used by the History page
  * to render "Showing 1–50 of 12,847" pagination labels.
  */
-function countRecent({ entityType = null, userId = null } = {}) {
+function countRecent({ entityType = null, userId = null, since = null, until = null, q = null } = {}) {
   const db = getDb();
-  const wheres = [];
-  const params = {};
-  if (entityType) { wheres.push('entity_type = @entityType'); params.entityType = entityType; }
-  if (userId)     { wheres.push('user_id = @userId');         params.userId = userId; }
-  const whereSql = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q });
   const row = db
     .prepare(`SELECT COUNT(*) AS n FROM audit_log ${whereSql}`)
     .get(params);
@@ -308,6 +346,8 @@ function clearOlderThan(days) {
 }
 
 module.exports = {
+  NO_USER,
+  recentWhere,
   log,
   logUpdate,
   diffPatch,

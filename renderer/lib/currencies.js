@@ -42,6 +42,15 @@ export function symbolFor(code) {
   return row ? row.symbol : '';
 }
 
+/** Mirror of main/util/currencies.js formatAmount: bare amount, currency's decimals. */
+export function formatAmount(amount, code) {
+  if (amount == null || amount === '') return '';
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return '';
+  const decimals = WHOLE_NUMBER.has(normalizeCurrency(code)) ? 0 : 2;
+  return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
 export function formatPrice(amount, code) {
   if (amount == null || amount === '') return '';
   const n = Number(amount);

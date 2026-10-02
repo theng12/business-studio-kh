@@ -63,8 +63,11 @@ test('the designer canvas resolves a group price from the sample product', () =>
   const canvas = fs.readFileSync(path.join(ROOT, 'renderer/modules/LabelStudio/DesignerCanvas.jsx'), 'utf8');
   // The bug: `sample?.[field]` — a flat lookup that is always undefined for
   // "price.vip", so the canvas fell through to its hardcoded sample price.
-  assert.match(canvas, /field\.startsWith\('price\.'\)/, 'the canvas special-cases group price fields');
-  assert.match(canvas, /formatPriceEntry\(priceEntry\(sample, field\.slice\(6\)\), '\$'\)/,
+  assert.match(canvas, /labelPriceSource\(field\)/, 'the canvas special-cases price fields (retail, wholesale, groups)');
+  // Since 2026-10-02 every label price (retail, wholesale, a group) is the bare
+  // amount, the currency being the element's prefix/suffix — see
+  // labelPriceAmount in main/studioRenderer.js and test/labelCatalog.test.js.
+  assert.match(canvas, /labelPriceAmount\(priceEntry\(sample, priceSource\)\)/,
     'and resolves them through the shared mirror, the way the renderer does');
   assert.match(canvas, /from '\.\.\/\.\.\/lib\/prices\.js'/, 'using the mirrored price rule');
 });

@@ -21,24 +21,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Modal } from './ui.jsx';
 import { useAppStore } from '../store/index.js';
-
-function relativeTime(ts) {
-  if (!ts) return '';
-  const diff = Date.now() - Number(ts);
-  if (diff < 0) return 'just now';
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return 'just now';
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} min ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} hr ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
-  const mo = Math.floor(day / 30);
-  if (mo < 12) return `${mo} mo ago`;
-  const yr = Math.floor(mo / 12);
-  return `${yr} yr ago`;
-}
+import { formatDateTime, timeAgo } from '../lib/format.js';
 
 // Human-readable label for an audit row's action. Falls back to the raw
 // action string if we don't have a friendlier name — keeps the modal
@@ -189,13 +172,13 @@ function HistoryRow({ entry }) {
     ? (attributionUsers?.[entry.userId] ?? 'Unknown user')
     : 'Server admin';
   const isImage = entry.action.startsWith('image:');
-  const tip = new Date(Number(entry.createdAt)).toLocaleString();
+  const tip = formatDateTime(entry.createdAt);
   return (
     <li className="history-row" data-action={entry.action}>
       <div className="history-row__head">
         <span className="history-row__action">{actionLabel(entry.action)}</span>
         <span className="history-row__by">by <strong>{name}</strong></span>
-        <span className="history-row__when" title={tip}>{relativeTime(entry.createdAt)}</span>
+        <span className="history-row__when" title={tip}>{timeAgo(entry.createdAt)}</span>
       </div>
       {entry.action === 'update' ? (
         <UpdateDiff before={entry.before} after={entry.after} groupLabel={groupLabel} />

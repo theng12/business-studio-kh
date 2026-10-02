@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Button } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { useAppStore } from '../../store/index.js';
-import { formatBytes, relativeTime } from '../../components/BackupReminder.jsx';
+import { formatBytes } from '../../components/BackupReminder.jsx';
+import { formatDateTime, timeAgo } from '../../lib/format.js';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx and
 // MultiMacPanel.jsx). Kept in sync by hand — see the Settings docblock.
@@ -165,9 +166,9 @@ export function BackupsPanel({ config }) {
 
   return (
     <div className="settings-page">
-      <h2 className="settings-section-heading">Backups</h2>
+      <h2 className="section-title">Backups</h2>
 
-      <p className="setting-row__hint" style={{ marginTop: 0, maxWidth: 640 }}>
+      <p className="setting-row__hint settings-intro">
         Local snapshots of your database, images, and preferences. Use one before any
         large delete, duplicate-merge purge, bulk re-encode, or data-folder change.
         {isClient
@@ -240,7 +241,7 @@ export function BackupsPanel({ config }) {
                 <li key={b.backupPath} className="backups-row">
                   <div className="backups-row__main">
                     <span className="backups-row__when">{formatDateTime(b.createdAt)}</span>
-                    <span className="muted backups-row__rel"> · {relativeTime(b.createdAt)}</span>
+                    <span className="muted backups-row__rel"> · {timeAgo(b.createdAt)}</span>
                     <span className="muted backups-row__size"> · {formatBytes(b.sizeBytes)}</span>
                     <div className="muted backups-row__file">{b.fileName}</div>
                   </div>
@@ -261,9 +262,4 @@ export function BackupsPanel({ config }) {
       </SettingRow>
     </div>
   );
-}
-
-function formatDateTime(ts) {
-  if (!ts) return '—';
-  try { return new Date(Number(ts)).toLocaleString(); } catch { return '—'; }
 }

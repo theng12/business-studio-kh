@@ -11,6 +11,7 @@
  */
 
 const { embeddedFontCss, esc } = require('./studioRenderer');
+const { slugifyUnicode } = require('./util/slug');
 // v0.1.80: resolvePrice and formatPrice were left behind when v0.1.55 moved
 // price resolution onto the entry-aware helpers — dead imports, and two of the
 // five long-standing lint warnings. The canonical pair is the one kept.
@@ -82,6 +83,25 @@ function scaleForDensity(config) {
   const base = 3;
   const actual = Math.max(1, config.columns);
   return Math.max(0.55, Math.min(1.6, base / actual));
+}
+
+/**
+ * v0.1.89: every string this page draws, for font detection. It used to scan
+ * only the title, subtitle, footer, names and SKUs — so a Khmer brand name,
+ * overlay text, a price or a stock line fell back to whatever the render
+ * window had, and Khmer drew as boxes. Builds the same lines tileHtml does.
+ */
+function renderedText(config, products, brandMap) {
+  const bits = [config.title, config.subtitle, config.footer];
+  for (const o of config.overlays || []) if (o?.type !== 'image') bits.push(o?.text);
+  for (const p of products || []) {
+    if (!p) continue;
+    bits.push(p.name, p.sku);
+    if (config.showBrand) bits.push(brandMap?.get(p.brandId)?.name);
+    if (config.showPrice) bits.push(formatPriceWithEntry(resolvePriceEntry(p, config), config));
+    if (config.showStock) bits.push(describeStock(p, config));
+  }
+  return bits.filter(Boolean).map(String).join(' ');
 }
 
 function tileHtml(product, config, resolveImage, brandMap, scale) {
@@ -157,9 +177,7 @@ function buildPageHtml(ctx) {
 
   // Font CSS is only worth embedding for text that actually needs it; an
   // ASCII-only post (the common case) pays nothing.
-  const allText = [config.title, config.subtitle, config.footer,
-    ...(ctx.products || []).flatMap((p) => [p?.name, p?.sku])].filter(Boolean).join(' ');
-  const fonts = embeddedFontCss(allText);
+  const fonts = embeddedFontCss(renderedText(config, products, brandMap));
 
   const W = config.width;
   const H = config.height;
@@ -193,11 +211,35 @@ footer .pager{font-variant-numeric:tabular-nums;color:#94a3b8}
   </style></head><body><div class="post">${header}<main class="grid">${tiles}</main>${footer}${overlayHtml(config, resolveImage)}</div></body></html>`;
 }
 
-/** A stable, filesystem-safe base name for the series, e.g. "nike-grid". */
+/** A stable, filesystem-safe base name for the series, e.g. "nike-grid".
+ *  v0.1.89: Unicode-aware — a Khmer title names the file in Khmer instead of
+ *  collapsing to "social-grid" for every post. */
 function seriesSlug(products, config) {
-  const raw = config.title || (products[0]?.name ?? '') || 'social-grid';
-  const slug = String(raw).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return slug || 'social-grid';
+  const raw = config.title || (products?.[0]?.name ?? '') || 'social-grid';
+  return slugifyUnicode(String(raw).toLowerCase(), 'social-grid');
+}
+
+/**
+ * v0.1.89: never overwrite. Returns the series base name to write under: the
+ * slug itself when none of its files exist in the folder, otherwise
+ * `slug-2`, `slug-3` … — whichever first leaves EVERY page of the series
+ * free, so a series is never split across two names. `exists(fileName)` is
+ * asked per file name; both export paths (this Mac, and a client Mac writing
+ * the server's bytes) call this one rule.
+ */
+function freeSeriesSlug(slug, pageCount, ext, exists) {
+  const clash = (base) => {
+    for (let i = 0; i < Math.max(1, pageCount); i += 1) {
+      if (exists(fileNameFor(base, i, pageCount, ext))) return true;
+    }
+    return false;
+  };
+  if (!clash(slug)) return slug;
+  for (let n = 2; n < 10000; n += 1) {
+    const candidate = `${slug}-${n}`;
+    if (!clash(candidate)) return candidate;
+  }
+  return `${slug}-${Date.now()}`;
 }
 
 /**
@@ -214,4 +256,4 @@ function fileNameFor(slug, index, pageCount, ext) {
   return `${slug}-${String(index + 1).padStart(width, '0')}.${ext}`;
 }
 
-module.exports = { buildPageHtml, seriesSlug, scaleForDensity, fileNameFor, overlayHtml };
+module.exports = { buildPageHtml, seriesSlug, freeSeriesSlug, scaleForDensity, fileNameFor, overlayHtml, renderedText };

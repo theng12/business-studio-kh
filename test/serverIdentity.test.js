@@ -120,7 +120,7 @@ test('credential-bearing user reads require user management while attribution st
     const denied = await rpc(port, 'viewer-token', 'users:list');
     assert.deepEqual(denied, {
       status: 403,
-      body: { error: 'Forbidden: role "viewer" cannot use users:list' },
+      body: { error: "Your account doesn't have permission to do that. Ask the admin." },
     });
 
     const attribution = await rpc(port, 'viewer-token', 'users:listForAttribution');

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, EmptyState, Input, Modal } from '../../components/ui.jsx';
+import { Button, EmptyState, Field, Input, Modal, Pagination, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
@@ -10,6 +10,10 @@ import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { DesignControls } from './DesignControls.jsx';
 import { CatalogTemplateBuilder } from './TemplateBuilder.jsx';
+import { catalogIdLists, idsInSortOrder, mergeCatalogIds, moveToEdge } from './catalogSelection.js';
+import { keepTypedName } from '../LabelStudio/editorRules.js';
+import { appImageSrc } from '../../lib/imageUrl.js';
+import { timeAgo } from '../../lib/format.js';
 
 /* v0.1.63: the design controls, the theme list and the card-field defaults all
  * moved out of this file so the template builder can share them. The five
@@ -102,65 +106,176 @@ function projectConfig(template, title) {
   };
 }
 
+/* A miniature of the template: the cover in its colours, then one page of
+ * product tiles. Two rows of tiles share the page's fixed height (the CSS
+ * bounds the rows and clips), so a 2-column layout can no longer grow past the
+ * preview box and draw over the card's own text. */
 function TemplateVisual({ template, large = false }) {
   const columns = Math.min(4, template.config.columns || 3);
-  return <div className={`catalog-template-visual catalog-template-visual--${template.id}${large ? ' is-large' : ''}`} style={{ '--catalog-primary': template.config.primaryColor, '--catalog-accent': template.config.accentColor }}>
-    <div className="catalog-template-visual__cover"><span>PRODUCT CATALOG</span><strong>{template.name}</strong></div>
-    <div className="catalog-template-visual__page" style={{ gridTemplateColumns: `repeat(${columns}, 1fr)` }}>
+  return <div className={`catalog-template-visual catalog-template-visual--${template.id}${large ? ' is-large' : ''}`} style={{ '--catalog-primary': template.config.primaryColor, '--catalog-accent': template.config.accentColor }} aria-hidden="true">
+    <div className="catalog-template-visual__cover"><strong>{template.name}</strong></div>
+    <div className="catalog-template-visual__page" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
       {Array.from({ length: columns * 2 }, (_, i) => <span key={i}><i /><b /><em /></span>)}
     </div>
   </div>;
 }
 
+/* House card (docs/UI_GUIDE.md): cover miniature, then name + facts, then one
+ * row of actions — primary Open first, Duplicate, and Delete (danger) last. The
+ * cover keeps the catalog's OWN colours: they are the user's print design, not
+ * app chrome. */
 function ProjectCard({ project, onOpen, onDuplicate, onDelete }) {
   const c = project.config || {};
-  const productLabel = c.selectionMode === 'explicit' ? `${(c.productIds || []).length} products` : 'All active products';
-  return <article className="catalog-project-card">
-    <button type="button" className="catalog-cover-mini" style={{ background: `linear-gradient(145deg, ${c.primaryColor || '#111827'}, ${c.accentColor || '#6366f1'})` }} onClick={onOpen}>
-      <span>PRODUCT CATALOG</span><strong>{c.cover?.title || project.name}</strong><small>{c.columns || 3}-column · {c.pageSize || 'A4'}</small>
-    </button>
-    <div className="catalog-project-card__meta"><div><strong>{project.name}</strong><span>{productLabel} · {project.lastExportedAt ? `Exported ${new Date(project.lastExportedAt).toLocaleDateString()}` : 'Not exported yet'}</span></div>
-      <div><Button variant="ghost" onClick={onDuplicate}>Duplicate</Button><Button variant="ghost" onClick={onDelete}>Delete</Button><Button onClick={onOpen}>Open</Button></div>
+  const count = (c.productIds || []).length;
+  const productLabel = c.selectionMode === 'explicit' ? `${count} product${count === 1 ? '' : 's'}` : 'All active products';
+  return <article className="card catalog-card">
+    <div className="card__media">
+      <button type="button" className="catalog-cover-mini" style={{ background: `linear-gradient(145deg, ${c.primaryColor || '#111827'}, ${c.accentColor || '#6366f1'})` }} onClick={onOpen} aria-label={`Open ${project.name}`}>
+        <strong>{c.cover?.title || project.name}</strong>
+      </button>
+    </div>
+    <div className="card__body">
+      <span className="card__eyebrow">{c.columns || 3} columns · {c.pageSize || 'A4'}</span>
+      <h3 className="card__title">{project.name}</h3>
+      <p className="card__meta">{productLabel} · {project.lastExportedAt ? `Exported ${timeAgo(project.lastExportedAt)}` : 'Not exported yet'}</p>
+    </div>
+    <div className="card__actions">
+      <Button variant="primary" size="sm" onClick={onOpen}>Open</Button>
+      <Button size="sm" onClick={onDuplicate}>Duplicate</Button>
+      <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>
     </div>
   </article>;
 }
 
+function ProductThumb({ product }) {
+  const src = product.mainImagePath ? appImageSrc(product.mainImagePath, product.contentHash || product.updatedAt, { w: 96 }) : null;
+  return <div className="catalog-product-avatar">{src ? <img src={src} alt="" loading="lazy" decoding="async" /> : String(product.sku || 'P').slice(0, 2).toUpperCase()}</div>;
+}
+
+const SORT_NAMES = { sku: 'SKU', name: 'product name' };
+
 function ProductManager({ products, config, onChange }) {
   const [query, setQuery] = useState('');
-  const activeProducts = useMemo(() => products.filter((p) => p.status !== 'inactive'), [products]);
-  const productMap = useMemo(() => new Map(activeProducts.map((p) => [p.id, p])), [activeProducts]);
-  const includedIds = useMemo(() => {
-    if (config.selectionMode === 'explicit') return (config.productIds || []).filter((id) => productMap.has(id));
-    if (config.productIds?.length) return config.productIds.filter((id) => productMap.has(id));
-    return activeProducts.map((p) => p.id);
-  }, [config.selectionMode, config.productIds, productMap, activeProducts]);
+  const [availablePage, setAvailablePage] = useState(0); const [availableSize, setAvailableSize] = useState(50);
+  const [includedPage, setIncludedPage] = useState(0); const [includedSize, setIncludedSize] = useState(50);
+  const productList = useMemo(() => (Array.isArray(products) ? products : []), [products]);
+  const allById = useMemo(() => new Map(productList.map((p) => [p.id, p])), [productList]);
+  const activeProducts = useMemo(() => productList.filter((p) => p.status !== 'inactive'), [productList]);
+  // includedIds: what prints. hiddenIds: saved ids that are inactive (or gone)
+  // — kept in place on every edit, see catalogSelection.js.
+  const { storedIds, includedIds, hiddenIds } = useMemo(() => catalogIdLists(config, productList), [config, productList]);
   const includedSet = useMemo(() => new Set(includedIds), [includedIds]);
   const normalized = query.trim().toLowerCase();
   const available = useMemo(() => activeProducts.filter((p) => !includedSet.has(p.id) && (!normalized || `${p.sku} ${p.name || ''} ${p.barcode || ''}`.toLowerCase().includes(normalized))), [activeProducts, includedSet, normalized]);
-  const included = includedIds.map((id) => productMap.get(id)).filter(Boolean);
-  function commit(ids, manual = false) {
-    onChange({ productIds: ids, selectionMode: 'explicit', brandIds: [], categoryIds: [], ...(manual ? { sortBy: 'manual' } : {}) });
+  const included = includedIds.map((id) => allById.get(id)).filter(Boolean);
+  const inactive = hiddenIds.map((id) => allById.get(id)).filter(Boolean);
+  // §10 pagination, one pager per list.
+  const availableInfo = paginate(available.length, availablePage, availableSize);
+  const includedInfo = paginate(included.length, includedPage, includedSize);
+  useEffect(() => { if (availablePage !== availableInfo.currentPage) setAvailablePage(availableInfo.currentPage); }, [availablePage, availableInfo.currentPage]);
+  useEffect(() => { if (includedPage !== includedInfo.currentPage) setIncludedPage(includedInfo.currentPage); }, [includedPage, includedInfo.currentPage]);
+  useEffect(() => { setAvailablePage(0); }, [normalized, availableSize]);
+  useEffect(() => { setIncludedPage(0); }, [includedSize]);
+  const availableShown = available.slice(availableInfo.pageStart, availableInfo.pageEnd);
+  const includedShown = included.slice(includedInfo.pageStart, includedInfo.pageEnd);
+  const sortBy = config.sortBy || 'manual';
+
+  function commit(visibleIds, { manual = false, dropHidden = false, keepHiddenIds = hiddenIds } = {}) {
+    const productIds = dropHidden ? [...visibleIds] : mergeCatalogIds(storedIds, visibleIds, keepHiddenIds);
+    onChange({ productIds, selectionMode: 'explicit', brandIds: [], categoryIds: [], ...(manual ? { sortBy: 'manual' } : {}) });
   }
   function move(id, direction) {
     const index = includedIds.indexOf(id); const target = index + direction;
     if (index < 0 || target < 0 || target >= includedIds.length) return;
-    const next = [...includedIds]; [next[index], next[target]] = [next[target], next[index]]; commit(next, true);
+    const next = [...includedIds]; [next[index], next[target]] = [next[target], next[index]]; commit(next, { manual: true });
   }
+  async function removeAll() {
+    const count = included.length + inactive.length;
+    if (!count) return;
+    const ok = await confirm({
+      title: `Remove all ${count} product${count === 1 ? '' : 's'} from this catalog?`,
+      message: inactive.length
+        ? `That is ${included.length} shown and ${inactive.length} inactive. The catalog's order is lost, and there is no undo. Products in the library are not affected.`
+        : "The catalog's order is lost, and there is no undo. Products in the library are not affected.",
+      confirmLabel: 'Remove all',
+      danger: true,
+    });
+    if (ok) commit([], { dropHidden: true });
+  }
+  function applySortAsOrder() {
+    commit(idsInSortOrder(includedIds, allById, sortBy), { manual: true });
+  }
+  const sortName = SORT_NAMES[sortBy] || sortBy;
   return <section className="catalog-product-manager">
-    <div className="catalog-product-manager__heading"><div><span>Catalog contents</span><strong>{included.length} product{included.length === 1 ? '' : 's'} included</strong><p>Pick products from the shared library, then arrange their catalog order.</p></div><Button variant="ghost" onClick={() => commit([])}>Remove all</Button></div>
+    <div className="section-head">
+      <h2 className="section-title">{included.length} product{included.length === 1 ? '' : 's'} included</h2>
+      <p className="section-hint">Pick products from the library, then arrange their order.</p>
+      <div className="section-head__actions">
+        {sortBy !== 'manual' && included.length > 1 ? <Button size="sm" onClick={applySortAsOrder} title={`Save the ${sortName} order as this catalog's own order, then switch Sort by to Catalog order`}>Use {sortName} order</Button> : null}
+        <Button variant="danger" size="sm" disabled={!included.length && !inactive.length} onClick={removeAll}>Remove all</Button>
+      </div>
+    </div>
     <div className="catalog-product-columns">
-      <section className="catalog-product-panel"><header><div><strong>Product Library</strong><span>{available.length} available</span></div><Button variant="ghost" disabled={!available.length} onClick={() => commit([...includedIds, ...available.map((p) => p.id)])}>Add all shown</Button></header><div className="catalog-product-search"><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search SKU, name or barcode" /></div><div className="catalog-product-list">
-        {available.length ? available.map((p) => <article key={p.id}><div className="catalog-product-avatar">{String(p.sku || 'P').slice(0, 2).toUpperCase()}</div><div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div><Button variant="ghost" onClick={() => commit([...includedIds, p.id])}>Add</Button></article>) : <div className="catalog-product-empty">{normalized ? 'No matching products outside this catalog.' : 'Every active product is already included.'}</div>}
-      </div></section>
-      <section className="catalog-product-panel catalog-product-panel--included"><header><div><strong>Included in catalog</strong><span>Shown in this order</span></div></header><div className="catalog-product-list">
-        {included.length ? included.map((p, index) => <article key={p.id}><span className="catalog-order-number">{index + 1}</span><div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div><div className="catalog-product-row-actions"><button type="button" aria-label={`Move ${p.sku} up`} disabled={index === 0} onClick={() => move(p.id, -1)}>↑</button><button type="button" aria-label={`Move ${p.sku} down`} disabled={index === included.length - 1} onClick={() => move(p.id, 1)}>↓</button><button type="button" onClick={() => commit(includedIds.filter((id) => id !== p.id))}>Remove</button></div></article>) : <div className="catalog-product-empty"><strong>No products added yet</strong><span>Add products from the library to build this catalog.</span></div>}
-      </div></section>
+      <section className="catalog-product-panel">
+        <header>
+          <div><strong>Product Library</strong><span>{available.length} available</span></div>
+          <Button size="sm" disabled={!available.length} onClick={() => commit([...includedIds, ...available.map((p) => p.id)])}>Add all shown</Button>
+        </header>
+        <div className="catalog-product-search"><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search SKU, name or barcode" aria-label="Search the product library" /></div>
+        <div className="catalog-product-list">
+          {availableShown.length ? availableShown.map((p) => (
+            <article key={p.id}>
+              <ProductThumb product={p} />
+              <div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div>
+              <Button size="sm" onClick={() => commit([...includedIds, p.id])} aria-label={`Add ${p.sku} to the catalog`}>Add</Button>
+            </article>
+          )) : <div className="catalog-product-empty">{normalized ? 'No matching products outside this catalog.' : 'Every active product is already included.'}</div>}
+        </div>
+        <Pagination total={available.length} pageStart={availableInfo.pageStart} pageEnd={availableInfo.pageEnd} currentPage={availableInfo.currentPage} maxPage={availableInfo.maxPage} pageSize={availableSize} onPageChange={setAvailablePage} onPageSizeChange={setAvailableSize} />
+      </section>
+      <section className="catalog-product-panel catalog-product-panel--included">
+        <header>
+          <div><strong>Included in catalog</strong><span>{sortBy === 'manual' ? 'Shown in this order' : `Printed sorted by ${sortName}; this order applies with Catalog order`}</span></div>
+        </header>
+        <div className="catalog-product-list">
+          {includedShown.length ? includedShown.map((p, i) => {
+            const index = includedInfo.pageStart + i;
+            return <article key={p.id}>
+              <span className="catalog-order-number">{index + 1}</span>
+              <div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div>
+              <div className="catalog-product-row-actions">
+                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the top`} title="Move to top" disabled={index === 0} onClick={() => commit(moveToEdge(includedIds, p.id, 'top'), { manual: true })}>⤒</button>
+                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} up`} title="Move up" disabled={index === 0} onClick={() => move(p.id, -1)}>↑</button>
+                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} down`} title="Move down" disabled={index === included.length - 1} onClick={() => move(p.id, 1)}>↓</button>
+                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the bottom`} title="Move to bottom" disabled={index === included.length - 1} onClick={() => commit(moveToEdge(includedIds, p.id, 'bottom'), { manual: true })}>⤓</button>
+                <Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={() => commit(includedIds.filter((id) => id !== p.id))}>Remove</Button>
+              </div>
+            </article>;
+          }) : <div className="catalog-product-empty"><strong>No products added yet</strong><span>Add products from the library to build this catalog.</span></div>}
+          {inactive.length ? <div className="catalog-product-hidden">
+            <p>{inactive.length} inactive — hidden from the catalog. They keep their place and print again if reactivated.</p>
+            {inactive.map((p) => (
+              <article key={p.id} className="is-inactive">
+                <ProductThumb product={p} />
+                <div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'} · inactive — hidden from the catalog</span></div>
+                <div className="catalog-product-row-actions">
+                  <Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={() => commit(includedIds, { keepHiddenIds: hiddenIds.filter((id) => id !== p.id) })}>Remove</Button>
+                </div>
+              </article>
+            ))}
+          </div> : null}
+        </div>
+        <Pagination total={included.length} pageStart={includedInfo.pageStart} pageEnd={includedInfo.pageEnd} currentPage={includedInfo.currentPage} maxPage={includedInfo.maxPage} pageSize={includedSize} onPageChange={setIncludedPage} onPageSizeChange={setIncludedSize} />
+      </section>
     </div>
   </section>;
 }
 
 function LivePreview({ preview, onRefresh }) {
-  return <main className="catalog-preview"><div className="catalog-preview__bar"><span>Live PDF preview</span><Button variant="ghost" onClick={onRefresh}>Refresh</Button></div>{preview ? <iframe title="Catalog preview" srcDoc={preview} /> : <div className="preview-placeholder">Building preview…</div>}</main>;
+  return <main className="catalog-preview">
+    <div className="catalog-preview__head"><span>Live PDF preview</span><Button size="sm" onClick={onRefresh}>Refresh</Button></div>
+    {preview ? <iframe title="Catalog preview" srcDoc={preview} /> : <div className="preview-placeholder">Building preview…</div>}
+  </main>;
 }
 
 export function CatalogEditor({ projectId, onBack }) {
@@ -174,6 +289,9 @@ export function CatalogEditor({ projectId, onBack }) {
   const catalogPriceGroups = (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [];
   const [project, setProject] = useState(null); const [preview, setPreview] = useState(''); const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null);
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [tab, setTab] = useState('products'); const timer = useRef(null);
+  // The PDF this session exported last, for the "Open PDF" button.
+  const [lastExport, setLastExport] = useState(null);
+  const [printing, setPrinting] = useState(false);
   // v0.1.63: the template builder, opened from this project's design.
   const [templateDraft, setTemplateDraft] = useState(null);
   /* v0.1.27: the pending edit is FLUSHED on unmount, not thrown away. The
@@ -197,7 +315,9 @@ export function CatalogEditor({ projectId, onBack }) {
           if (generation !== editorGeneration.current) return;
           acknowledgedRevision.current = row.updatedAt;
           if (latest.current !== value) return;
-          setProject(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
+          // Keep a typed trailing space in the name box (see keepTypedName).
+          const adopted = keepTypedName(value, row);
+          setProject(adopted); latest.current = adopted; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
         },
         onError: (e) => {
           if (generation !== editorGeneration.current) return;
@@ -293,6 +413,7 @@ export function CatalogEditor({ projectId, onBack }) {
       const baselineRevision = acknowledgedRevision.current;
       const res = await window.api.catalogStudio.exportPdf(exportDraft.id, folder);
       setProgress(100);
+      setLastExport(res.outputPath);
       addToast(`Catalog exported to ${res.outputPath}`, 'success');
       const row = await window.api.catalogStudio.get(exportDraft.id);
       const ownsBaseline = generation === editorGeneration.current
@@ -314,11 +435,29 @@ export function CatalogEditor({ projectId, onBack }) {
     }
     catch (e) { addToast(parseConflictError(e) ? 'This catalog changed elsewhere. Use Save to review it before exporting.' : e.message, 'error'); } finally { if (pulse) clearInterval(pulse); setWorking(false); }
   }
+  async function openExport() {
+    if (!lastExport) return;
+    // The same open-a-file channel Label History uses; it runs on this Mac,
+    // which is where the export was written.
+    try { await window.api.labels.openOutput(lastExport); } catch (e) { addToast(e.message, 'error'); }
+  }
+  async function printCatalog() {
+    setPrinting(true);
+    try {
+      if (dirty.current) await flushPending();
+      const res = await window.api.catalogStudio.print((latest.current || project).id);
+      if (res?.openedPdf) addToast('The catalog PDF is open in Preview — print it from there (⌘P).', 'info');
+    } catch (e) {
+      addToast(parseConflictError(e) ? 'This catalog changed elsewhere. Use Save to review it before printing.' : e.message, 'error');
+    } finally { setPrinting(false); }
+  }
   if (!project) return <div className="page-loading">Loading catalog…</div>;
   if (templateDraft) {
     return (
       <CatalogTemplateBuilder
         draft={templateDraft}
+        // Opened from this catalog ("Save as template"), so Back returns here.
+        backLabel={project.name || 'Catalog'}
         onClose={() => setTemplateDraft(null)}
         onSaved={() => setTemplateDraft(null)}
       />
@@ -326,31 +465,54 @@ export function CatalogEditor({ projectId, onBack }) {
   }
   const c = project.config || {};
   return <section className="page catalog-editor-page">
-    <div className="catalog-editor-back"><Button variant="ghost" onClick={leaveEditor}>← Catalog projects</Button><span>Editing project</span></div>
-    <PageHeader title={project.name} subtitle="Catalog Studio" actions={<><SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} /><Button
-        onClick={() => setTemplateDraft({
-          name: `${project.name} template`,
-          description: `Layout from “${project.name}”.`,
-          // The design only: the products belong to this catalog, and the cover
-          // title is its name. Save as template is a starting point the user
-          // reviews in the builder, not a silent copy.
-          config: { ...project.config, selectionMode: 'explicit', productIds: [], brandIds: [], categoryIds: [] },
-        })}
-        title="Open this catalog's layout in the template builder — the products stay with the catalog."
-      >
-        Save as template
-      </Button><Button onClick={exportPdf}>Export PDF</Button></>} />
-    <div className="catalog-editor-tabs"><button type="button" className={tab === 'products' ? 'is-active' : ''} onClick={() => setTab('products')}><span>1</span><div><strong>Products</strong><small>Choose and arrange catalog items</small></div></button><button type="button" className={tab === 'design' ? 'is-active' : ''} onClick={() => setTab('design')}><span>2</span><div><strong>Layout & design</strong><small>Style pages and product cards</small></div></button></div>
+    <PageHeader
+      title={project.name}
+      subtitle="Catalog project"
+      backTo={{ label: 'Catalog projects', onClick: leaveEditor }}
+      actions={<>
+        <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
+        <Button
+          onClick={() => setTemplateDraft({
+            name: `${project.name} template`,
+            description: `Layout from “${project.name}”.`,
+            // The design only: the products belong to this catalog, and the cover
+            // title is its name. Save as template is a starting point the user
+            // reviews in the builder, not a silent copy.
+            config: { ...project.config, selectionMode: 'explicit', productIds: [], brandIds: [], categoryIds: [] },
+          })}
+          title="Open this catalog's layout in the template builder — the products stay with the catalog."
+        >
+          Save as template
+        </Button>
+        <Button onClick={printCatalog} disabled={printing || working}>{printing ? 'Preparing…' : 'Print…'}</Button>
+        {lastExport ? <Button onClick={openExport} title={lastExport}>Open PDF</Button> : null}
+        <Button variant="primary" onClick={exportPdf}>Export PDF</Button>
+      </>}
+    />
+    <div className="toolbar catalog-editor-toolbar">
+      <div className="segments" role="tablist" aria-label="Catalog editor">
+        <button type="button" role="tab" aria-selected={tab === 'products'} className={`segment${tab === 'products' ? ' is-active' : ''}`} onClick={() => setTab('products')} title="Choose and arrange catalog items">Products</button>
+        <button type="button" role="tab" aria-selected={tab === 'design'} className={`segment${tab === 'design' ? ' is-active' : ''}`} onClick={() => setTab('design')} title="Style pages and product cards">Layout & design</button>
+      </div>
+    </div>
     {tab === 'products' ? <div className="catalog-product-workspace"><ProductManager products={products} config={c} onChange={updateConfig} /><LivePreview preview={preview} onRefresh={refreshPreview} /></div> :
-      <div className="catalog-editor"><aside className="catalog-controls"><section><h3>Project</h3><label>Name<Input value={project.name} onChange={(e) => change({ name: e.target.value })} /></label><label>Description<Input value={project.description || ''} onChange={(e) => change({ description: e.target.value })} /></label></section>
-        <DesignControls
-          config={c}
-          onChange={updateConfig}
-          priceGroups={catalogPriceGroups}
-          coverTitle={{ value: c.cover?.title || project.name, onChange: (title) => updateConfig({ cover: { ...c.cover, title } }) }}
-          coverSubtitle={{ value: c.cover?.subtitle || '', onChange: (subtitle) => updateConfig({ cover: { ...c.cover, subtitle } }) }}
-        />
-      </aside><LivePreview preview={preview} onRefresh={refreshPreview} /></div>}
+      <div className="catalog-editor">
+        <aside className="catalog-sidebar">
+          <section className="catalog-sidebar__section">
+            <h3 className="section-title">Project</h3>
+            <Field label="Name">{({ id }) => <Input id={id} value={project.name} onChange={(e) => change({ name: e.target.value })} />}</Field>
+            <Field label="Description">{({ id }) => <Input id={id} value={project.description || ''} onChange={(e) => change({ description: e.target.value })} />}</Field>
+          </section>
+          <DesignControls
+            config={c}
+            onChange={updateConfig}
+            priceGroups={catalogPriceGroups}
+            coverTitle={{ value: c.cover?.title || project.name, onChange: (title) => updateConfig({ cover: { ...c.cover, title } }) }}
+            coverSubtitle={{ value: c.cover?.subtitle || '', onChange: (subtitle) => updateConfig({ cover: { ...c.cover, subtitle } }) }}
+          />
+        </aside>
+        <LivePreview preview={preview} onRefresh={refreshPreview} />
+      </div>}
     <GenerationExperience open={working} title="Building your catalog" progress={progress} phase={Math.min(3, Math.floor(progress / 28))} detail={project.name} />
   </section>;
 }
@@ -429,13 +591,21 @@ export function CatalogTemplates() {
     );
   }
 
+  async function duplicateTemplate(t) {
+    try { await window.api.catalogStudio.duplicateTemplate(t.id); void loadTemplates(); } catch (e) { addToast(e.message, 'error'); }
+  }
+  async function deleteTemplate(t) {
+    if (!(await confirm({ title: `Delete “${t.name}”?`, message: 'Catalogs already created from it are not affected.', confirmLabel: 'Delete template', danger: true }))) return;
+    try { await window.api.catalogStudio.removeTemplate(t.id); void loadTemplates(); } catch (e) { addToast(e.message, 'error'); }
+  }
+
   return <section className="page">
     <PageHeader
       title="Catalog Templates"
-      subtitle="Build your own layouts, or start from a proven one — then choose exactly which products belong in each catalog."
+      subtitle="A template holds the page size, grid, style, cover and card fields — never the products."
       actions={(
         <>
-          <Button variant="ghost" onClick={() => setActiveModule('catalogprojects')}>View projects</Button>
+          <Button onClick={() => setActiveModule('catalogprojects')}>View projects</Button>
           <Button variant="primary" onClick={() => setBuilderDraft({ name: '', description: '', config: {} })} disabled={!companyId}>
             + New template
           </Button>
@@ -443,68 +613,95 @@ export function CatalogTemplates() {
       )}
     />
 
-    <div className="studio-intro studio-intro--catalog">
-      <div>
-        <span className="studio-intro__icon">T</span>
-        <div>
-          <strong>Build the look once, use it for every catalog</strong>
-          <p>A template holds the page size, grid, style, cover and product-card fields — never the products. Open one in the builder and the preview is a real page render of your own catalogue.</p>
-        </div>
-      </div>
-      <span className="studio-intro__badge">{templates.length} saved · {CATALOG_TEMPLATES.length} proven</span>
-    </div>
-
     {/* ── my templates ─────────────────────────────────────────────── */}
     <section className="catalog-section">
-      <div className="catalog-section__head">
-        <h2>My templates</h2>
-        <span className="muted">Yours to edit, duplicate and reuse in any catalog.</span>
+      <div className="section-head">
+        <h2 className="section-title">My templates</h2>
+        <p className="section-hint">Yours to edit, duplicate and reuse in any catalog.</p>
       </div>
       {templates.length ? (
-        <div className="catalog-template-grid">
+        <div className="card-grid catalog-template-grid">
           {templates.map((t) => (
-            <article className="catalog-template-card catalog-template-card--mine" key={t.id}>
-              <TemplateVisual template={{ id: t.config.theme || 'modern', name: t.name, config: t.config }} />
-              <div className="catalog-template-card__body">
-                <span>{(t.config.columns || 3)} columns · {t.config.pageSize || 'A4'} {t.config.orientation || 'portrait'}</span>
-                <strong>{t.name}</strong>
-                <p>{t.description || 'No description.'}</p>
-                <small>
+            <article className="card catalog-card" key={t.id}>
+              <div className="card__media">
+                <TemplateVisual template={{ id: t.config.theme || 'modern', name: t.name, config: t.config }} />
+              </div>
+              <div className="card__body">
+                <span className="card__eyebrow">{(t.config.columns || 3)} columns · {t.config.pageSize || 'A4'} {t.config.orientation || 'portrait'}</span>
+                <h3 className="card__title">{t.name}</h3>
+                <p className="card__meta">{t.description || 'No description.'}</p>
+                <p className="card__meta">
                   {(t.config.fields || []).filter((f) => f.visible !== false).length} card fields
                   {' · '}{(t.config.theme || 'modern')} style
                   {t.config.coverEnabled === false ? ' · no cover' : ' · cover page'}
-                </small>
-                <div>
-                  <Button variant="ghost" onClick={() => setBuilderDraft({ id: t.id, name: t.name, description: t.description || '', config: { ...t.config } })}>Edit</Button>
-                  <Button variant="ghost" onClick={async () => { try { await window.api.catalogStudio.duplicateTemplate(t.id); void loadTemplates(); } catch (e) { addToast(e.message, 'error'); } }}>Duplicate</Button>
-                  <Button variant="ghost" onClick={async () => {
-                    if (!(await confirm({ title: `Delete “${t.name}”?`, message: 'Catalogs already created from it are not affected.', danger: true }))) return;
-                    try { await window.api.catalogStudio.removeTemplate(t.id); void loadTemplates(); } catch (e) { addToast(e.message, 'error'); }
-                  }}>Delete</Button>
-                  <Button onClick={() => begin({ ...t, builtIn: false })}>Use in a new catalog</Button>
-                </div>
+                </p>
+              </div>
+              <div className="card__actions">
+                <Button variant="primary" size="sm" onClick={() => begin({ ...t, builtIn: false })}>Use template</Button>
+                <Button size="sm" onClick={() => setBuilderDraft({ id: t.id, name: t.name, description: t.description || '', config: { ...t.config } })}>Edit</Button>
+                <Button size="sm" onClick={() => duplicateTemplate(t)}>Duplicate</Button>
+                <Button variant="danger" size="sm" onClick={() => deleteTemplate(t)}>Delete</Button>
               </div>
             </article>
           ))}
         </div>
       ) : (
-        <p className="catalog-section__empty">
-          No templates of your own yet. Press <strong>+ New template</strong> to build one, or open a proven layout below and save your version of it.
-        </p>
+        <EmptyState
+          title="No templates of your own yet"
+          body="Press + New template to build one, or open a proven layout below in the builder and save your version."
+        />
       )}
     </section>
 
     {/* ── proven layouts ───────────────────────────────────────────── */}
     <section className="catalog-section">
-      <div className="catalog-section__head">
-        <h2>Proven layouts</h2>
-        <span className="muted">Ready-made structures. Use one as-is, or open it in the builder and save your own version.</span>
+      <div className="section-head">
+        <h2 className="section-title">Proven layouts</h2>
+        <p className="section-hint">Use one as it is, or open it in the builder and save your own version.</p>
       </div>
-      <div className="catalog-template-grid">{CATALOG_TEMPLATES.map((template) => <article className="catalog-template-card" key={template.id}><TemplateVisual template={template} /><div className="catalog-template-card__body"><span>{template.eyebrow}</span><strong>{template.name}</strong><p>{template.description}</p><small>Best for: {template.bestFor}</small><div><Button variant="ghost" onClick={() => setPreviewTemplate(template)}>Preview</Button><Button variant="ghost" onClick={() => setBuilderDraft({ name: `${template.name} (mine)`, description: template.description, config: clone(template.config) })}>Open in builder</Button><Button onClick={() => begin(template)}>Use template</Button></div></div></article>)}</div>
+      <div className="card-grid catalog-template-grid">
+        {CATALOG_TEMPLATES.map((template) => (
+          <article className="card catalog-card" key={template.id}>
+            <div className="card__media"><TemplateVisual template={template} /></div>
+            <div className="card__body">
+              <span className="card__eyebrow">{template.eyebrow}</span>
+              <h3 className="card__title">{template.name}</h3>
+              <p className="card__meta">{template.description}</p>
+              <p className="card__meta">Best for: {template.bestFor}</p>
+            </div>
+            <div className="card__actions">
+              <Button variant="primary" size="sm" onClick={() => begin(template)}>Use template</Button>
+              <Button size="sm" onClick={() => setPreviewTemplate(template)}>Preview</Button>
+              <Button size="sm" onClick={() => setBuilderDraft({ name: `${template.name} (mine)`, description: template.description, config: clone(template.config) })}>Open in builder</Button>
+            </div>
+          </article>
+        ))}
+      </div>
     </section>
 
-    <Modal open={!!previewTemplate} onClose={() => setPreviewTemplate(null)} title={previewTemplate?.name || 'Catalog template'} footer={<><Button variant="ghost" onClick={() => setPreviewTemplate(null)}>Close</Button><Button onClick={() => { const selected = previewTemplate; setPreviewTemplate(null); begin(selected); }}>Use this template</Button></>}>{previewTemplate ? <div className="catalog-template-detail"><TemplateVisual template={previewTemplate} large /><p>{previewTemplate.description}</p><strong>Best for</strong><span>{previewTemplate.bestFor}</span><div className="catalog-template-facts"><span>{previewTemplate.config.columns} columns</span><span>{previewTemplate.config.theme} style</span><span>{previewTemplate.config.fields.length} product fields</span></div></div> : null}</Modal>
-    <Modal open={!!createTemplate} onClose={() => setCreateTemplate(null)} title="Create catalog project" footer={<><Button variant="ghost" onClick={() => setCreateTemplate(null)}>Cancel</Button><Button disabled={creating} onClick={create}>{creating ? 'Creating…' : 'Create and add products'}</Button></>}><label className="field"><span className="field__label">Project name</span><Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. 2026 Wholesale Collection" /><span className="field__hint">Using {createTemplate?.builtIn ? 'the' : 'your'} {createTemplate?.name} template. You can change every layout setting later.</span></label></Modal>
+    <Modal
+      open={!!previewTemplate}
+      onClose={() => setPreviewTemplate(null)}
+      title={previewTemplate?.name || 'Catalog template'}
+      footer={<><Button onClick={() => setPreviewTemplate(null)}>Close</Button><Button variant="primary" onClick={() => { const selected = previewTemplate; setPreviewTemplate(null); begin(selected); }}>Use this template</Button></>}
+    >
+      {previewTemplate ? <div className="catalog-template-detail">
+        <TemplateVisual template={previewTemplate} large />
+        <p>{previewTemplate.description}</p>
+        <p><strong>Best for:</strong> {previewTemplate.bestFor}</p>
+        <div className="catalog-template-facts"><span>{previewTemplate.config.columns} columns</span><span>{previewTemplate.config.theme} style</span><span>{previewTemplate.config.fields.length} product fields</span></div>
+      </div> : null}
+    </Modal>
+    <Modal
+      open={!!createTemplate}
+      onClose={() => setCreateTemplate(null)}
+      title="Create catalog project"
+      footer={<><Button onClick={() => setCreateTemplate(null)}>Cancel</Button><Button variant="primary" disabled={creating} onClick={create}>{creating ? 'Creating…' : 'Create and add products'}</Button></>}
+    >
+      <Field label="Project name" hint={`Using ${createTemplate?.builtIn ? 'the' : 'your'} ${createTemplate?.name} template. You can change every layout setting later.`}>
+        {({ id }) => <Input id={id} autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. 2026 Wholesale Collection" />}
+      </Field>
+    </Modal>
   </section>;
 }
 
@@ -530,9 +727,30 @@ export function CatalogProjects() {
   }, [load]);
   useEffect(() => { if (pendingProjectId) { setEditing(pendingProjectId); clearPendingCatalogNav(); } }, [pendingProjectId, clearPendingCatalogNav]);
   if (editing) return <CatalogEditor key={editing} projectId={editing} onBack={() => { setEditing(null); void load(); }} />;
-  return <section className="page"><PageHeader title="Catalog Projects" subtitle="Manage saved catalogs and continue where you left off." actions={<Button onClick={() => setActiveModule('catalogtemplates')}>+ New from template</Button>} />
-    <div className="studio-intro studio-intro--catalog"><div><span className="studio-intro__icon">C</span><div><strong>Your catalog workspace</strong><p>Open a project to manage its products, ordering, layout and PDF output.</p></div></div><span className="studio-intro__badge">{projects.length} project{projects.length === 1 ? '' : 's'}</span></div>
-    <div className="catalog-project-grid">{projects.length ? projects.map((p) => <ProjectCard key={p.id} project={p} onOpen={() => setEditing(p.id)} onDuplicate={async () => { try { await window.api.catalogStudio.duplicate(p.id); void load(); } catch (e) { addToast(e.message, 'error'); } }} onDelete={async () => { if (!(await confirm({ title: `Delete “${p.name}”?`, message: 'The catalog project is removed. Products and images are not affected.', danger: true }))) return; try { await window.api.catalogStudio.remove(p.id); void load(); } catch (e) { addToast(e.message, 'error'); } }} />) : <EmptyState title="No catalog projects" body="Choose a template, then add products from your library." action={<Button onClick={() => setActiveModule('catalogtemplates')}>Browse catalog templates</Button>} />}</div>
+  async function duplicateProject(p) {
+    try { await window.api.catalogStudio.duplicate(p.id); void load(); } catch (e) { addToast(e.message, 'error'); }
+  }
+  async function deleteProject(p) {
+    if (!(await confirm({ title: `Delete “${p.name}”?`, message: 'The catalog project is removed. Products and images are not affected.', confirmLabel: 'Delete catalog', danger: true }))) return;
+    try { await window.api.catalogStudio.remove(p.id); void load(); } catch (e) { addToast(e.message, 'error'); }
+  }
+  return <section className="page">
+    <PageHeader
+      title="Catalog Projects"
+      subtitle="Open a catalog to manage its products, order, layout and PDF."
+      actions={<Button variant="primary" onClick={() => setActiveModule('catalogtemplates')}>+ New from template</Button>}
+    />
+    {projects.length ? (
+      <div className="card-grid card-grid--compact">
+        {projects.map((p) => <ProjectCard key={p.id} project={p} onOpen={() => setEditing(p.id)} onDuplicate={() => duplicateProject(p)} onDelete={() => deleteProject(p)} />)}
+      </div>
+    ) : (
+      <EmptyState
+        title="No catalog projects yet"
+        body="Choose a template, then add products from your library."
+        action={<Button onClick={() => setActiveModule('catalogtemplates')}>Browse templates</Button>}
+      />
+    )}
   </section>;
 }
 

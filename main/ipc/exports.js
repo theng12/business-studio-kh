@@ -22,7 +22,47 @@ const exportRunner = require('../exportRunner');
 const { broadcast } = require('../events');
 const { emitCatalogChange } = require('./helpers');
 
+/**
+ * v0.1.89: running exports that may be cancelled, keyed by the progress-event
+ * id the renderer already receives (`progress:event` with kind
+ * 'export-run'). A run checks its entry between images. Entries leave the map
+ * when the run ends, so a stale id is a harmless no-op.
+ */
+const activeRuns = new Map();
+
+/**
+ * The renderer picks the run id up front so its Cancel button targets exactly
+ * its own run (never another Mac's). A supplied id is used only when it is a
+ * short [A-Za-z0-9_-] string; anything else (or nothing, from an older
+ * client) falls back to a server-generated id.
+ */
+const RUN_ID_RE = /^[A-Za-z0-9_-]{1,100}$/;
+function pickRunId(runId) {
+  if (typeof runId === 'string' && RUN_ID_RE.test(runId)) return runId;
+  return `export-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+function startRun(opId) {
+  const run = { cancelled: false };
+  activeRuns.set(opId, run);
+  return run;
+}
+
+function cancelRun(opId) {
+  const run = activeRuns.get(opId);
+  if (!run) return { ok: false };
+  run.cancelled = true;
+  return { ok: true };
+}
+
 function register({ expose, assertEntityInActiveCompany, assertProductInActiveCompany, exposeLocal }) {
+  /**
+   * v0.1.89: stop a running export after the image in progress. Exposed (not
+   * local) because in client mode the run happens on the server, inside
+   * `exports:runForClient`; the id is the one the renderer chose when it started the run.
+   */
+  expose('exports:cancel', (runId) => cancelRun(String(runId || '')));
+
   // v0.14.4: read paths portable to clients.
   expose('exports:listProfiles', (companyId) => {
     if (companyId && companyId !== companies.getActiveId()) return [];
@@ -119,7 +159,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     return exportRunner.expectedOutputs({ profile, productIds });
   });
 
-  exposeLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary }) => {
+  exposeLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId }) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     // Block any productId that doesn't belong to the active company.
     for (const pid of (productIds ?? [])) {
@@ -136,9 +176,13 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     // forward those through the broadcast bus. Wrapped in
     // try/finally so a thrown export doesn't leave a stale row in
     // the progress overlay.
-    const opId = `export-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const opId = pickRunId(runId);
     let done = 0;
     let result;
+    const run = startRun(opId);
+    // A first event before any image is encoded, so the Export Center learns
+    // the run id (and can offer Cancel) straight away.
+    broadcast('progress:event', { id: opId, kind: 'export-run', done: 0, total: null, phase: 'exporting', label: null, cancellable: true });
     try {
       result = await exportRunner.runExport({
         profile,
@@ -146,6 +190,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
         outputRoot,
         onExisting: onExistingMode,
         saveToLibrary: !!saveToLibrary,
+        isCancelled: () => run.cancelled,
         onProgress: (stage, payload) => {
           if (stage === 'image') {
             done += 1;
@@ -160,11 +205,13 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
               total: null,
               phase: 'exporting',
               label: payload?.product?.sku,
+              cancellable: true,
             });
           }
         },
       });
     } finally {
+      activeRuns.delete(opId);
       broadcast('progress:event', { id: opId, complete: true });
     }
     exportRuns.record({
@@ -173,9 +220,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
       imageCount: result.exported,
       skippedCount: result.skipped,
       outputPath: result.outputPath,
-      notes: result.skips.length
-        ? result.skips.slice(0, 50).map((s) => `${s.sku}: ${s.reason}`).join('\n')
-        : null,
+      notes: runNotes(result),
     });
     // v0.31.0: if we appended exports back into the library, tell every
     // client the catalog moved so their Library refreshes.
@@ -195,7 +240,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
    * out with a clear message ("Use the server Mac for very large
    * exports, or split the selection").
    */
-  expose('exports:runForClient', async ({ profileId, productIds, saveToLibrary } = {}) => {
+  expose('exports:runForClient', async ({ profileId, productIds, saveToLibrary, runId } = {}) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) {
       assertProductInActiveCompany(pid);
@@ -209,14 +254,17 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     // client) via the broadcast bus — both the local renderer
     // and any WS client see them. Each connected client filters
     // by id on their side.
-    const opId = `export-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const opId = pickRunId(runId);
     let done = 0;
+    const run = startRun(opId);
+    broadcast('progress:event', { id: opId, kind: 'export-run', done: 0, total: null, phase: 'processing', label: null, cancellable: true });
     try {
       const result = await exportRunner.runExport({
         profile,
         productIds,
         outputRoot: tmpRoot,
         saveToLibrary: !!saveToLibrary,
+        isCancelled: () => run.cancelled,
         onProgress: (stage, payload) => {
           if (stage === 'image') {
             done += 1;
@@ -227,6 +275,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
               total: null,
               phase: 'processing',
               label: payload?.product?.sku,
+              cancellable: true,
             });
           }
         },
@@ -267,9 +316,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
         // they wanted. Server doesn't know the client's real
         // path; the client patches the run history if it cares.
         outputPath: null,
-        notes: result.skips.length
-          ? result.skips.slice(0, 50).map((s) => `${s.sku}: ${s.reason}`).join('\n')
-          : null,
+        notes: runNotes(result),
       });
 
       // v0.31.0: the append-to-library happened on the SERVER's DB+assets,
@@ -277,6 +324,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
       if (result.savedToLibrary > 0) emitCatalogChange('images', 'exportSaved', null);
       return { ...result, files };
     } finally {
+      activeRuns.delete(opId);
       broadcast('progress:event', { id: opId, complete: true });
       try { await fs.promises.rm(tmpRoot, { recursive: true, force: true }); } catch (_) {}
     }
@@ -289,4 +337,13 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
   });
 }
 
-module.exports = { register };
+/** The run-history note: a cancel first (it explains the short count), then
+ *  the first 50 skips. */
+function runNotes(result) {
+  const lines = [];
+  if (result.cancelled) lines.push(`Cancelled after ${result.exported} image${result.exported === 1 ? '' : 's'}.`);
+  for (const s of result.skips.slice(0, 50)) lines.push(`${s.sku}: ${s.reason}`);
+  return lines.length ? lines.join('\n') : null;
+}
+
+module.exports = { register, cancelRun, startRun, pickRunId };

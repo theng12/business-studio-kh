@@ -119,7 +119,7 @@ async function loadComponent(harness) {
   return mod.exports.LabelGenerate;
 }
 
-test('label generator paginates and Select visible targets only the displayed page', async () => {
+test('label generator paginates and Add visible targets only the displayed page', async () => {
   const products = Array.from({ length: 251 }, (_, i) => ({ id: `product-${i}`, sku: `SKU-${i}`, name: `Product ${i}` }));
   const storeState = { activeCompanyId: 'company-a', products, addToast() {} };
   let generatedIds = null;
@@ -149,7 +149,7 @@ test('label generator paginates and Select visible targets only the displayed pa
   assert.equal(visibleLabels.length, 1);
   assert.equal(textOf(visibleLabels[0]), 'SKU-250Product 250No barcode');
 
-  const selectVisible = findAll(output, (node) => node.type === 'button' && textOf(node) === 'Select visible')[0];
+  const selectVisible = findAll(output, (node) => node.type === 'button' && textOf(node) === 'Add visible')[0];
   selectVisible.props.onClick();
   output = harness.render(LabelGenerate);
   const selectedLabels = findAll(output, (node) => node.type === 'label' && node.props.className === 'is-selected');

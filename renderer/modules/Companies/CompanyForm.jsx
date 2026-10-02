@@ -53,7 +53,12 @@ export function CompanyForm({ open, company, onClose, onSubmit, onDelete }) {
 
   const footer = (
     <>
-      {isEdit ? <Button variant="danger" onClick={onDelete}>Delete</Button> : null}
+      {/* v0.1.89: not a red button beside Save — a company delete takes every
+          product with it, and it now asks for the name to be typed. Hidden
+          for anyone but the admin, who is the only one the server allows. */}
+      {isEdit && onDelete ? (
+        <Button variant="ghost" className="company-form__delete" onClick={onDelete}>Delete company…</Button>
+      ) : null}
       <div style={{ flex: 1 }} />
       <Button onClick={onClose}>Cancel</Button>
       <Button variant="primary" disabled={saving || !form.name.trim()} onClick={handleSave}>

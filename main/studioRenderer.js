@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const bwipjs = require('bwip-js');
 const { priceEntry, formatPriceEntry } = require('./util/prices');
+const { formatAmount } = require('./util/currencies');
 
 /* v0.1.25: resolved lazily rather than at module load.
  *
@@ -117,14 +118,36 @@ function previewImageSrc(rel, version) {
   return version == null || version === '' ? url : `${url}?v=${encodeURIComponent(String(version))}`;
 }
 
+/* The price source a field key names, or null when it is not a price:
+ * `priceRetail` → retail, `priceWholesale` → wholesale, `price.<key>` → that
+ * company price group. */
+function priceSourceFor(field) {
+  if (field === 'priceRetail') return 'retail';
+  if (field === 'priceWholesale') return 'wholesale';
+  if (typeof field === 'string' && field.startsWith('price.')) return field.slice(6);
+  return null;
+}
+
+/* A label price is a BARE formatted number — "1,234.50" — and the currency is
+ * the template's own text (the element's prefix/suffix). Owner's decision,
+ * 2026-10-02: retail used to print raw ("12.5") while a group printed
+ * "$1,234.50", so a "$" prefix gave "$$1,234.50" on one and "$12.5" on the
+ * other. en-US grouping, with the price's own currency's decimals — two for
+ * USD ("1,234.50"), none for riel ("41,000"), the app-wide currency rule. Mirrored for the designer
+ * canvas in renderer/modules/LabelStudio/labelFields.js (labelPriceText);
+ * test/labelCatalog.test.js keeps the two copies in step. */
+function labelPriceAmount(entry) {
+  if (!entry || entry.amount == null) return '';
+  return formatAmount(entry.amount, entry.currency);
+}
+
 function productValue(product, field) {
   if (!field) return '';
   if (field.startsWith('custom.')) return product.customFields?.[field.slice(7)] ?? '';
-  // v0.1.55: a group value is { amount, currency } (or a legacy bare number);
-  // format it with its own symbol rather than stringifying the object.
-  if (field.startsWith('price.')) {
-    return formatPriceEntry(priceEntry(product, field.slice(6)), '$');
-  }
+  // v0.1.55: a group value is { amount, currency } (or a legacy bare number),
+  // so every price goes through priceEntry rather than off the column/map.
+  const source = priceSourceFor(field);
+  if (source) return labelPriceAmount(priceEntry(product, source));
   return product[field] ?? '';
 }
 
@@ -178,7 +201,9 @@ async function renderLabel(template, product, brand = null, preview = false) {
       parts.push(src ? `<img src="${src}" style="${style};object-fit:fill"/>` : `<div class="empty-element" style="${style}">No ${el.type} value</div>`);
       continue;
     }
-    let value = el.manualValue != null ? el.manualValue : productValue(product, el.field || 'name');
+    // A cleared "Manual text" box is '' — that means "use the product field",
+    // as its placeholder says and as the designer canvas draws it.
+    let value = el.manualValue != null && el.manualValue !== '' ? el.manualValue : productValue(product, el.field || 'name');
     if (el.type === 'date' && !value) value = new Date().toLocaleDateString('en-CA');
     if (el.type === 'country' && !value) value = product.countryOfOrigin || '';
     value = `${el.prefix || ''}${value ?? ''}${el.suffix || ''}`;
@@ -225,8 +250,22 @@ function catalogValue(product, key, config) {
     }
     return formatPriceEntry(entry, config.currencySymbol || '$');
   }
+  // A catalog card prints a price WITH its currency (the catalog has no
+  // per-field prefix/suffix; its own "Currency fallback" setting covers rows
+  // without a currency). So a retail / wholesale / group card field formats
+  // exactly like the main "Price" row, rather than as the label's bare number.
+  const source = priceSourceFor(key);
+  if (source) return formatPriceEntry(priceEntry(product, source), config.currencySymbol || '$');
   return productValue(product, key);
 }
+
+/* What an empty catalog shows — in the app's preview iframe and in an empty
+ * export. It copies the app's own empty state (dashed box, 15px title, 13px
+ * muted body; the `.empty` rule in the document's <style>) instead of the bare
+ * <p> that rendered as unstyled 18px serif text. The iframe cannot see the
+ * app's stylesheet, so the look is inlined with the app's light tokens: the
+ * preview is a sheet of paper, light in both themes. */
+const EMPTY_CATALOG_HTML = '<div class="empty"><strong>No products have been added to this catalog yet.</strong>Add products from the Product Library and they appear here.</div>';
 
 /* `preview: true` is for a document shown in the app's own preview iframe:
  * photos become app-image URLs (see previewImageSrc) and the embedded fonts
@@ -277,13 +316,19 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
     }
     cards = Array.from(groups.entries()).map(([name, rows]) => `<h2 class="section-title">${esc(name)}</h2>${rows.map(card).join('')}`).join('');
   }
+  /* The cover is `height:100vh`. Measured in Electron's printToPDF (A4, 20 mm
+   * margins): in print, 100vh is the page's CONTENT box — 257 mm fits on one
+   * page, 258 mm spills onto a second — so the margins are already taken out.
+   * The old `calc(100vh - 20mm)` subtracted them a second time and left the
+   * cover 20 mm short of the page at every margin setting. */
   const title = c.cover?.title || project.name;
   const subtitle = c.cover?.subtitle || company?.name || '';
-  const cover = c.cover?.enabled === false ? '' : `<section class="cover"><div class="cover-orb"></div><div class="eyebrow">PRODUCT CATALOG</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p><div class="cover-count">${selected.length} products</div></section>`;
+  const cover = c.cover?.enabled === false ? '' : `<section class="cover"><div class="cover-orb"></div><div class="eyebrow">PRODUCT CATALOG</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p><div class="cover-count">${selected.length} ${selected.length === 1 ? 'product' : 'products'}</div></section>`;
   const cols = Math.max(1, Math.min(5, Number(c.columns) || 3));
+  const marginMm = Math.max(0, Number(c.marginMm) || 10);
   return `<!doctype html><html><head><meta charset="utf-8"><style>
-    ${fonts}@page{size:${c.pageSize || 'A4'} ${c.orientation || 'portrait'};margin:${Number(c.marginMm) || 10}mm}*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"MS Noto Khmer","MS Noto Thai","MS Noto SC","MS Noto JP","MS Noto KR","MS Noto",Arial,sans-serif;color:#162033;-webkit-print-color-adjust:exact;print-color-adjust:exact}.cover{height:calc(100vh - 20mm);position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:22mm;background:linear-gradient(145deg,${esc(c.primaryColor || '#111827')},${esc(c.accentColor || '#6366f1')});color:white;break-after:page}.cover-orb{position:absolute;width:150mm;height:150mm;border-radius:50%;right:-50mm;top:-55mm;background:rgba(255,255,255,.12);filter:blur(1px)}.eyebrow{font-size:9pt;letter-spacing:.22em;font-weight:700;opacity:.75}.cover h1{font-size:38pt;line-height:1.02;margin:6mm 0 3mm;max-width:150mm}.cover p{font-size:14pt;opacity:.78}.cover-count{margin-top:14mm;font-size:9pt;opacity:.65}.grid{display:grid;grid-template-columns:repeat(${cols},1fr);gap:${Number(c.gapMm) || 5}mm}.card{border:1px solid #e5e7eb;border-radius:${c.theme === 'minimal' ? '0' : '4mm'};overflow:hidden;break-inside:avoid;background:white}.photo{width:100%;aspect-ratio:1;object-fit:contain;background:#f8fafc;display:block}.placeholder{display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9pt}.card-body{padding:4mm}.brand{font-size:7pt;letter-spacing:.08em;text-transform:uppercase;color:${esc(c.accentColor || '#6366f1')};font-weight:700;margin-bottom:1.5mm}.field{font-size:8.5pt;color:#475569;margin-top:1mm;display:flex;gap:2mm;justify-content:space-between}.field span{color:#94a3b8}.field.bold{font-size:11pt;font-weight:700;color:#111827}.section-title{grid-column:1/-1;font-size:20pt;margin:2mm 0 4mm;color:${esc(c.primaryColor || '#111827')}}
-  </style></head><body>${cover}<main class="grid">${cards || '<p>No products have been added to this catalog yet.</p>'}</main></body></html>`;
+    ${fonts}@page{size:${c.pageSize || 'A4'} ${c.orientation || 'portrait'};margin:${marginMm}mm}*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"MS Noto Khmer","MS Noto Thai","MS Noto SC","MS Noto JP","MS Noto KR","MS Noto",Arial,sans-serif;color:#162033;-webkit-print-color-adjust:exact;print-color-adjust:exact}.cover{height:100vh;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:22mm;background:linear-gradient(145deg,${esc(c.primaryColor || '#111827')},${esc(c.accentColor || '#6366f1')});color:white;break-after:page}.cover-orb{position:absolute;width:150mm;height:150mm;border-radius:50%;right:-50mm;top:-55mm;background:rgba(255,255,255,.12);filter:blur(1px)}.eyebrow{font-size:9pt;letter-spacing:.22em;font-weight:700;opacity:.75}.cover h1{font-size:38pt;line-height:1.02;margin:6mm 0 3mm;max-width:150mm}.cover p{font-size:14pt;opacity:.78}.cover-count{margin-top:14mm;font-size:9pt;opacity:.65}.grid{display:grid;grid-template-columns:repeat(${cols},1fr);gap:${Number(c.gapMm) || 5}mm}.card{border:1px solid #e5e7eb;border-radius:${c.theme === 'minimal' ? '0' : '4mm'};overflow:hidden;break-inside:avoid;background:white}.photo{width:100%;aspect-ratio:1;object-fit:contain;background:#f8fafc;display:block}.placeholder{display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9pt}.card-body{padding:4mm}.brand{font-size:7pt;letter-spacing:.08em;text-transform:uppercase;color:${esc(c.accentColor || '#6366f1')};font-weight:700;margin-bottom:1.5mm}.field{font-size:8.5pt;color:#475569;margin-top:1mm;display:flex;gap:2mm;justify-content:space-between}.field span{color:#94a3b8}.field.bold{font-size:11pt;font-weight:700;color:#111827}.section-title{grid-column:1/-1;font-size:20pt;margin:2mm 0 4mm;color:${esc(c.primaryColor || '#111827')};break-after:avoid;page-break-after:avoid;break-inside:avoid;page-break-inside:avoid}.empty{grid-column:1/-1;max-width:420px;margin:32px auto;padding:32px 24px;border:1px dashed #d4d4d8;border-radius:8px;background:#fff;text-align:center;color:#6a6a73;font-size:13px;line-height:1.45}.empty strong{display:block;margin-bottom:4px;color:#1c1c1f;font-size:15px;font-weight:600}
+  </style></head><body>${cover}<main class="grid">${cards || EMPTY_CATALOG_HTML}</main></body></html>`;
 }
 
 /* v0.1.25: `embeddedFontCss` and `esc` are exported for socialGridRenderer.js.
@@ -291,4 +336,4 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
  * including the Khmer/Thai/JP/SC fallbacks — and the offscreen render window
  * cannot reach `assets/fonts` on its own, so the font CSS has to be inlined.
  * Re-exporting beats copying: one place decides which scripts get embedded. */
-module.exports = { labelsDocument, buildCatalogHtml, barcodeUri, assetDataUri, embeddedFontCss, esc };
+module.exports = { labelsDocument, buildCatalogHtml, barcodeUri, assetDataUri, embeddedFontCss, esc, labelPriceAmount, productValue };

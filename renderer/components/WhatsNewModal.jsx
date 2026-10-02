@@ -2,6 +2,22 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.89',
+    date: '2026-10-02',
+    items: [
+      'POLISH — one consistent look across the whole app. Catalog, Label Templates and Social Grid had been built on a different style from every other page (purple accents, tiny 9–10px text, odd corner sizes); every page now shares the same headers (title left, actions right, "+ New …" as the main button), back buttons, cards, tables, toolbars, empty states and save indicator. Buttons and dropdowns that had silently lost their styling (Save all in the bulk table, the CSV picker, sort menus, the Support button) look like buttons again. Emoji in the interface are now proper icons, the sidebar has a distinct icon per page, and Settings stays visible at the bottom of the sidebar.',
+      'FIX — Overlay Studio preview now matches the saved image. Text in the preview was drawn about twice as large as in the result; the preview could be blank, flicker, or show an older render; bold text was cut off at the right; and the photo was squeezed or shifted when the template was a different shape from the photo.',
+      'Overlay results now take the TEMPLATE\'s shape: a square photo on a 4:5 post template comes out 4:5 with white bands (transparent bands for cut-out photos), so what you design is what you get, and QR codes stay square. Text, padding and corners are sized relative to the template, so a template looks the same on every photo whatever its resolution. "Watermark external photos" is the exception: those keep each photo\'s own size and shape.',
+      'FIX — purchase orders: closing a received PO no longer wipes its landed cost from every product; adding duty or freight to a received PO now updates product costs; correcting the exchange rate or currency now re-converts every line (and changing the currency asks first and needs the rate); a discount line now lowers cost instead of adding to it (old ones are corrected automatically); the received date can be set, and the 3- and 12-month averages age with today\'s date.',
+      'NEW — purchase orders: suggested next PO number, a searchable product picker for lines, Export CSV, the product\'s price and margin in the Cost Calculator, and an Operations card on the Dashboard (open and in-transit orders, what is owed to suppliers).',
+      'FIX — labels: prices print as a plain number with the template\'s own prefix/suffix (no more "$$1,234.50"; riel without decimals), and label templates gained Prefix and Suffix boxes; PNG/JPEG labels come out at the exact size for their dpi on every Mac; Undo now covers edits in the side panel; "Add visible" adds to your selection instead of replacing it.',
+      'FIX — catalogs: "Remove all" asks first; editing a catalog no longer silently drops inactive products; leaving the template builder with unsaved changes asks first; the cover page fits exactly one page. NEW — custom fields and price groups as card fields (with reordering and renamable labels), pagination with thumbnails, move to top/bottom, Print and Open PDF.',
+      'FIX — exports and Social Grid never overwrite a file from the same run, and Khmer names stay in the file name; a running export can be cancelled; deleting an AI image sends it to the Trash; name fields no longer eat the space you just typed.',
+      'Company delete is admin only and asks you to type the company\'s name; the phone viewer shows exactly the buttons your account may use, and says that a deleted photo goes to Recently deleted; permission errors are plain sentences; keyboard shortcuts no longer fire while you type in a form; History can filter by who, when and text and now records brand and category edits; search finds suppliers and PO numbers.',
+      'Internal — UI: docs/UI_GUIDE.md is the house pattern; renderer/components/ui.jsx primitives merge className; PageHeader backTo accepts {label,onClick}; SaveStatus has dirty/error states; renderer/lib/format.js for dates; shared .card/.data-table/.toolbar/.section-title. Overlay: templateRenderer composeDetailed(maxPx, canvas) with design-pixel scaling and letterboxing; preview sequencing guard. POs: received+closed are cost sources, read-time averages, currency switch requires a rate, one-time discount recompute at boot (app_state po_discount_recompute_v1). New channels exports:cancel (renderer-chosen run id) and catalogStudio:print (local).',
+    ],
+  },
+  {
     version: '0.1.88',
     date: '2026-10-02',
     items: [

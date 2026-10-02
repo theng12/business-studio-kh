@@ -1,7 +1,7 @@
 {
   "name": "media-studio-kh",
   "private": true,
-  "version": "0.1.88",
+  "version": "0.1.89",
   "description": "Media Studio KH — product images, labels, and catalogs in one workspace",
   "author": "TerraNash",
   "main": "dist-electron/main/index.js",
@@ -17,7 +17,7 @@
     "dist:arm64": "vite build && electron-builder --arm64",
     "dist:x64": "vite build && electron-builder --x64",
     "test": "node --test 'test/**/*.test.js'",
-    "test:native": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test test/productImageFilename.test.js test/stockQty.test.js test/assetDirCollision.test.js test/archiveRestore.test.js test/productsListQuery.test.js test/purchaseOrderTenant.test.js test/dataFolderSafety.test.js test/importLifecycle.test.js test/workspaceImageIdentity.test.js test/overlayOutcome.test.js test/overlayPriceTokens.test.js test/pricePaths.test.js test/legacyBackupImport.test.js test/archiveRoundTrip.test.js test/maintenanceRecovery.test.js test/archiveConcurrency.test.js test/editorConcurrency.test.js test/workspaceConcurrency.test.js test/importOverwriteNull.test.js test/priceGroups.test.js test/socialGridTemplates.test.js test/catalogTemplates.test.js test/importPriceGroups.test.js test/listToolsDelete.test.js test/bulkColumnSets.test.js test/fileTrash.test.js test/deletedItems.test.js test/userAccessControl.test.js test/dataSafety.test.js test/mainPerfDb.test.js",
+    "test:native": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test test/productImageFilename.test.js test/stockQty.test.js test/assetDirCollision.test.js test/archiveRestore.test.js test/productsListQuery.test.js test/purchaseOrderTenant.test.js test/dataFolderSafety.test.js test/importLifecycle.test.js test/workspaceImageIdentity.test.js test/overlayOutcome.test.js test/overlayPriceTokens.test.js test/pricePaths.test.js test/legacyBackupImport.test.js test/archiveRoundTrip.test.js test/maintenanceRecovery.test.js test/archiveConcurrency.test.js test/editorConcurrency.test.js test/workspaceConcurrency.test.js test/importOverwriteNull.test.js test/priceGroups.test.js test/socialGridTemplates.test.js test/catalogTemplates.test.js test/importPriceGroups.test.js test/listToolsDelete.test.js test/bulkColumnSets.test.js test/fileTrash.test.js test/deletedItems.test.js test/userAccessControl.test.js test/dataSafety.test.js test/mainPerfDb.test.js test/poCost.test.js test/overlayPreviewIpc.test.js test/uxSweepNative.test.js",
     "lint": "eslint .",
     "check": "npm run lint && npm test",
     "postinstall": "electron-builder install-app-deps",

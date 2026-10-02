@@ -9,17 +9,33 @@
  *     landed-cost calc on every mutation that could affect them
  *     (line add/remove/edit, component add/remove/edit). Callers
  *     don't need to remember to recalc.
- *   - On status transition to 'received', the product_landed_costs
- *     cache for every product referenced by this PO is refreshed
- *     atomically with the status flip.
- *   - Hard delete of a received PO recomputes the affected products'
- *     caches (so a PO mistakenly received then deleted doesn't leave
- *     stale latest-cost values).
+ *   - A PO is a COST SOURCE when its status is 'received' or 'closed'
+ *     (closing is the documented last step after receiving, so it must
+ *     not take the PO's cost away) and it has a received_at date. A PO
+ *     closed straight from draft never got a received date, so it is not
+ *     one.
+ *   - While a PO is a cost source, every change that can move its landed
+ *     cost (lines, components, payments with in-landed fees, FX rate,
+ *     currency, received date) refreshes the product_landed_costs cache
+ *     for the products on it, in the same transaction.
+ *   - Hard delete of a received/closed PO recomputes the affected
+ *     products' caches (so a PO mistakenly received then deleted doesn't
+ *     leave stale latest-cost values).
+ *   - The 3- and 12-month averages are computed when READ, against today's
+ *     date — a cached average would never age out a PO received long ago.
  */
 
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
 const landedCost = require('../util/landedCost');
+
+/** Statuses whose PO counts toward product landed cost (with a received_at). */
+const COST_SOURCE_STATUSES = ['received', 'closed'];
+function isCostSource(status) { return COST_SOURCE_STATUSES.includes(status); }
+const COST_SOURCE_SQL = `po.status IN ('received', 'closed') AND po.received_at IS NOT NULL`;
+
+/** Run `fn` in one transaction (better-sqlite3 nests these as savepoints). */
+function inTransaction(fn) { return getDb().transaction(fn)(); }
 
 /* ─── row mappers ───────────────────────────────────────────────── */
 
@@ -305,38 +321,98 @@ const HEADER_PATCH = [
   ['orderedAt',         'ordered_at'],
   ['eta',               'eta'],
   ['notes',             'notes',            (v) => v?.trim() || null],
+  ['receivedAt',        'received_at',      Number],
 ];
+
+/**
+ * Re-convert every line's and cost component's USD amount from the amount
+ * in the supplier's currency at `rate`. Called when the PO's FX rate or
+ * currency changes — the USD figures are snapshots taken at that rate, so
+ * without this a corrected rate changed nothing until each line was edited.
+ * A rate of 0 means "not known yet"; converting at it would zero every USD
+ * figure, so it is skipped.
+ */
+function reconvertAmounts(poId, rate) {
+  if (!(rate > 0)) return;
+  const db = getDb();
+  db.prepare(`UPDATE po_lines SET unit_price_usd_at_po = unit_price_supplier_currency * ? WHERE po_id = ?`).run(rate, poId);
+  db.prepare(`UPDATE po_cost_components SET amount_usd = amount_supplier_currency * ? WHERE po_id = ?`).run(rate, poId);
+}
 
 function update(id, patch, userId = null) {
   const existing = get(id);
   if (!existing) throw new Error('PO not found');
+  const input = { ...(patch ?? {}) };
+
+  if ('receivedAt' in input) {
+    if (!isCostSource(existing.status)) {
+      throw new Error('The received date can only be set on a received or closed purchase order.');
+    }
+    const ts = Number(input.receivedAt);
+    if (input.receivedAt == null || input.receivedAt === '' || !Number.isFinite(ts) || ts <= 0) {
+      throw new Error('Received date must be a valid date.');
+    }
+  }
+  // Switching a PO to USD without naming a rate: USD converts 1:1.
+  // Switching to any OTHER currency must name its rate: keeping the old one
+  // (often USD's 1) would silently re-convert every line at the wrong rate —
+  // a misclicked USD → CNY round trip used to leave a received PO at rate 1
+  // and its products' landed cost ~7x too high, with the real rate lost.
+  if ('currency' in input && !('exchangeRateToUsd' in input)) {
+    const next = String(input.currency || 'USD').toUpperCase();
+    if (next === 'USD') {
+      input.exchangeRateToUsd = 1;
+    } else if (next !== String(existing.currency || 'USD').toUpperCase()) {
+      throw new Error(`Enter the exchange rate for ${next} (how many US dollars one ${next} is worth) when changing the currency.`);
+    }
+  }
 
   const sets = [];
   const params = { id, updatedAt: Date.now(), updatedByUserId: userId };
   for (const [key, col, fn] of HEADER_PATCH) {
-    if (key in (patch ?? {})) {
+    if (key in input) {
       sets.push(`${col} = @${key}`);
-      params[key] = fn ? fn(patch[key]) : patch[key];
+      params[key] = fn ? fn(input[key]) : input[key];
     }
   }
   if (sets.length === 0) return existing;
   sets.push(`updated_at = @updatedAt`);
   sets.push(`updated_by_user_id = @updatedByUserId`);
-  getDb().prepare(`UPDATE purchase_orders SET ${sets.join(', ')} WHERE id = @id`).run(params);
+
+  const rateChanged = 'exchangeRateToUsd' in params
+    && params.exchangeRateToUsd !== (Number(existing.exchangeRateToUsd) || 0);
+  const currencyChanged = 'currency' in params && params.currency !== existing.currency;
+  const receivedChanged = 'receivedAt' in params && params.receivedAt !== existing.receivedAt;
+
+  inTransaction(() => {
+    getDb().prepare(`UPDATE purchase_orders SET ${sets.join(', ')} WHERE id = @id`).run(params);
+    if (rateChanged || currencyChanged) {
+      const rate = 'exchangeRateToUsd' in params ? params.exchangeRateToUsd : Number(existing.exchangeRateToUsd) || 0;
+      reconvertAmounts(id, rate);
+      recomputeHeader(id); // also refreshes product costs when the PO is a cost source
+    } else if (receivedChanged) {
+      refreshProductCostsForPO(id);
+    }
+  });
   return get(id);
 }
 
 /**
- * Status transitions. The interesting one is →'received': triggers
- * the landed-cost calc for the whole PO and writes the
- * product_landed_costs cache for every product on the PO.
+ * Status transitions. The interesting ones move a PO in or out of being a
+ * cost source ('received' / 'closed' with a received date): those refresh
+ * the product_landed_costs cache for every product on the PO.
  *
  * Allowed transitions (relaxed — we trust the user):
  *   draft       → ordered, closed
  *   ordered     → in_transit, received, closed
  *   in_transit  → received, closed
- *   received    → closed, ordered (re-open with warning surfaced by UI)
- *   closed      → ordered (re-open, drops landed cost cache on next received)
+ *   received    → closed (keeps its cost), ordered (re-open with warning)
+ *   closed      → received, ordered (re-open)
+ *
+ * received_at is stamped the first time a PO is received and kept through
+ * 'closed'; it is cleared only when the PO goes back to draft / ordered /
+ * in transit. Closing used to clear it too, which silently removed a
+ * received PO's landed cost from every product on it.
  *
  * The UI layer warns before destructive transitions; the DB layer
  * accepts whatever the UI tells it.
@@ -348,41 +424,34 @@ function setStatus(id, newStatus, userId = null) {
 
   const now = Date.now();
   const db = getDb();
-  const inTx = db.transaction(() => {
-    const becomingReceived = newStatus === 'received' && existing.status !== 'received';
-    const leavingReceived  = newStatus !== 'received' && existing.status === 'received';
+  inTransaction(() => {
+    const wasSource = isCostSource(existing.status) && existing.receivedAt != null;
 
     const sets = [`status = ?`, `updated_at = ?`, `updated_by_user_id = ?`];
     const params = [newStatus, now, userId];
-    if (becomingReceived) {
+    if (newStatus === 'received' && existing.receivedAt == null) {
       sets.push(`received_at = ?`);
       params.push(now);
-    } else if (leavingReceived) {
+    } else if (!isCostSource(newStatus) && existing.receivedAt != null) {
       sets.push(`received_at = NULL`);
     }
     db.prepare(`UPDATE purchase_orders SET ${sets.join(', ')} WHERE id = ?`).run(...params, id);
 
-    // Recompute first (so the line landed_unit_cost_usd snapshots are
-    // current before we use them for the per-product cache).
+    // Recompute (so the line landed_unit_cost_usd snapshots are current);
+    // when the PO is now a cost source this also refreshes the products.
     recomputeHeader(id);
 
-    if (becomingReceived) {
-      refreshProductCostsForPO(id);
-    } else if (leavingReceived) {
-      // The PO no longer counts as a received-cost source. Refresh
-      // every product it touched so their caches drop this PO's
-      // contribution.
-      refreshProductCostsForPO(id);
-    }
+    // Leaving cost-source status: recomputeHeader no longer refreshes, so
+    // drop this PO's contribution from every product it touched here.
+    if (wasSource && !isCostSource(newStatus)) refreshProductCostsForPO(id);
   });
-  inTx();
   return get(id);
 }
 
 function remove(id) {
   const existing = get(id);
   if (!existing) return { deleted: 0 };
-  const wasReceived = existing.status === 'received';
+  const wasReceived = isCostSource(existing.status);
   const db = getDb();
   const tx = db.transaction(() => {
     // Capture affected products BEFORE delete so we can refresh after.
@@ -415,34 +484,35 @@ function addLine(poId, input, userId = null) {
   const unitPriceUsd      = (unitPriceSupplier * (Number(po.exchangeRateToUsd) || 0)) || Number(input.unitPriceUsdAtPo) || 0;
 
   const id = `pol_${crypto.randomBytes(6).toString('hex')}`;
-  db.prepare(`
-    INSERT INTO po_lines (
-      id, po_id, product_id, supplier_sku, qty,
-      unit_price_supplier_currency, unit_price_usd_at_po,
-      carton_qty, carton_w_cm, carton_h_cm, carton_d_cm, weight_per_unit_kg,
-      notes
-    ) VALUES (
-      @id, @poId, @productId, @supplierSku, @qty,
-      @unitPriceSupplierCurrency, @unitPriceUsdAtPo,
-      @cartonQty, @cartonWCm, @cartonHCm, @cartonDCm, @weightPerUnitKg,
-      @notes
-    )
-  `).run({
-    id, poId,
-    productId: input.productId,
-    supplierSku: input.supplierSku ?? product.supplier_sku ?? null,
-    qty: Number(input.qty) || 0,
-    unitPriceSupplierCurrency: unitPriceSupplier,
-    unitPriceUsdAtPo: unitPriceUsd,
-    cartonQty: Number(input.cartonQty ?? product.carton_qty)         || null,
-    cartonWCm: Number(input.cartonWCm ?? product.carton_w_cm)        || null,
-    cartonHCm: Number(input.cartonHCm ?? product.carton_h_cm)        || null,
-    cartonDCm: Number(input.cartonDCm ?? product.carton_d_cm)        || null,
-    weightPerUnitKg: Number(input.weightPerUnitKg ?? product.weight_per_unit_kg) || null,
-    notes: input.notes || null,
+  inTransaction(() => {
+    db.prepare(`
+      INSERT INTO po_lines (
+        id, po_id, product_id, supplier_sku, qty,
+        unit_price_supplier_currency, unit_price_usd_at_po,
+        carton_qty, carton_w_cm, carton_h_cm, carton_d_cm, weight_per_unit_kg,
+        notes
+      ) VALUES (
+        @id, @poId, @productId, @supplierSku, @qty,
+        @unitPriceSupplierCurrency, @unitPriceUsdAtPo,
+        @cartonQty, @cartonWCm, @cartonHCm, @cartonDCm, @weightPerUnitKg,
+        @notes
+      )
+    `).run({
+      id, poId,
+      productId: input.productId,
+      supplierSku: input.supplierSku ?? product.supplier_sku ?? null,
+      qty: Number(input.qty) || 0,
+      unitPriceSupplierCurrency: unitPriceSupplier,
+      unitPriceUsdAtPo: unitPriceUsd,
+      cartonQty: Number(input.cartonQty ?? product.carton_qty)         || null,
+      cartonWCm: Number(input.cartonWCm ?? product.carton_w_cm)        || null,
+      cartonHCm: Number(input.cartonHCm ?? product.carton_h_cm)        || null,
+      cartonDCm: Number(input.cartonDCm ?? product.carton_d_cm)        || null,
+      weightPerUnitKg: Number(input.weightPerUnitKg ?? product.weight_per_unit_kg) || null,
+      notes: input.notes || null,
+    });
+    recomputeHeader(poId, userId);
   });
-
-  recomputeHeader(poId, userId);
   return getDetail(poId);
 }
 
@@ -482,53 +552,65 @@ function updateLine(lineId, patch, userId = null) {
     params.newUsd = newUsd;
   }
 
-  db.prepare(`UPDATE po_lines SET ${sets.join(', ')} WHERE id = @id`).run(params);
-  recomputeHeader(po.id, userId);
+  inTransaction(() => {
+    db.prepare(`UPDATE po_lines SET ${sets.join(', ')} WHERE id = @id`).run(params);
+    recomputeHeader(po.id, userId);
+  });
   return getDetail(po.id);
 }
 
 function removeLine(lineId, userId = null) {
   const db = getDb();
-  const row = db.prepare(`SELECT po_id FROM po_lines WHERE id = ?`).get(lineId);
+  const row = db.prepare(`SELECT po_id, product_id FROM po_lines WHERE id = ?`).get(lineId);
   if (!row) return null;
-  db.prepare(`DELETE FROM po_lines WHERE id = ?`).run(lineId);
-  recomputeHeader(row.po_id, userId);
+  inTransaction(() => {
+    db.prepare(`DELETE FROM po_lines WHERE id = ?`).run(lineId);
+    recomputeHeader(row.po_id, userId);
+    // The removed line's product is no longer on this PO, so the refresh in
+    // recomputeHeader cannot reach it — recompute it by hand.
+    const po = get(row.po_id);
+    if (po && isCostSource(po.status)) recomputeProductCost(row.product_id);
+  });
   return getDetail(row.po_id);
 }
 
 function addComponent(poId, input, userId = null) {
   const po = get(poId);
   if (!po) throw new Error('PO not found');
-  const amountSupplier = Number(input.amountSupplierCurrency) || 0;
+  // A discount is stored negative (the form takes a positive number); every
+  // other kind is stored as a positive amount. See landedCost.componentUsd.
+  const kind = input.kind || 'other';
+  const amountSupplier = landedCost.signedComponentAmount(kind, input.amountSupplierCurrency);
   const amountUsd      = amountSupplier * (Number(po.exchangeRateToUsd) || 0)
-                        || Number(input.amountUsd) || 0;
+                        || landedCost.signedComponentAmount(kind, input.amountUsd);
 
   const id = `pcc_${crypto.randomBytes(6).toString('hex')}`;
-  getDb().prepare(`
-    INSERT INTO po_cost_components (
-      id, po_id, kind, label,
-      amount_supplier_currency, amount_usd, allocation_basis, notes
-    ) VALUES (
-      @id, @poId, @kind, @label,
-      @amountSupplierCurrency, @amountUsd, @allocationBasis, @notes
-    )
-  `).run({
-    id, poId,
-    kind: input.kind || 'other',
-    label: input.label || null,
-    amountSupplierCurrency: amountSupplier,
-    amountUsd,
-    allocationBasis: input.allocationBasis || 'by_value',
-    notes: input.notes || null,
+  inTransaction(() => {
+    getDb().prepare(`
+      INSERT INTO po_cost_components (
+        id, po_id, kind, label,
+        amount_supplier_currency, amount_usd, allocation_basis, notes
+      ) VALUES (
+        @id, @poId, @kind, @label,
+        @amountSupplierCurrency, @amountUsd, @allocationBasis, @notes
+      )
+    `).run({
+      id, poId,
+      kind,
+      label: input.label || null,
+      amountSupplierCurrency: amountSupplier,
+      amountUsd,
+      allocationBasis: input.allocationBasis || 'by_value',
+      notes: input.notes || null,
+    });
+    recomputeHeader(poId, userId);
   });
-  recomputeHeader(poId, userId);
   return getDetail(poId);
 }
 
 const COMP_PATCH = [
   ['kind',                    'kind'],
   ['label',                   'label',                    (v) => v?.trim() || null],
-  ['amountSupplierCurrency',  'amount_supplier_currency', Number],
   ['allocationBasis',         'allocation_basis'],
   ['notes',                   'notes',                    (v) => v?.trim() || null],
 ];
@@ -538,25 +620,37 @@ function updateComponent(componentId, patch, userId = null) {
   const row = db.prepare(`SELECT * FROM po_cost_components WHERE id = ?`).get(componentId);
   if (!row) throw new Error('Component not found');
   const po = get(row.po_id);
+  const input = patch ?? {};
 
   const sets = [];
   const params = { id: componentId };
   for (const [key, col, fn] of COMP_PATCH) {
-    if (key in (patch ?? {})) {
+    if (key in input) {
       sets.push(`${col} = @${key}`);
-      params[key] = fn ? fn(patch[key]) : patch[key];
+      params[key] = fn ? fn(input[key]) : input[key];
     }
+  }
+
+  // Amounts: re-sign whenever the kind or the amount changes, so turning a
+  // freight line into a discount (or back) flips its sign with it.
+  if ('amountSupplierCurrency' in input || 'kind' in input) {
+    const kind = 'kind' in input ? params.kind : row.kind;
+    const amountChanged = 'amountSupplierCurrency' in input;
+    const supplier = landedCost.signedComponentAmount(
+      kind, amountChanged ? input.amountSupplierCurrency : row.amount_supplier_currency,
+    );
+    sets.push('amount_supplier_currency = @newSupplier', 'amount_usd = @newUsd');
+    params.newSupplier = supplier;
+    params.newUsd = amountChanged
+      ? supplier * (Number(po.exchangeRateToUsd) || 0)
+      : landedCost.signedComponentAmount(kind, row.amount_usd);
   }
   if (sets.length === 0) return getDetail(po.id);
 
-  if ('amountSupplierCurrency' in (patch ?? {})) {
-    const newSupplier = Number(patch.amountSupplierCurrency) || 0;
-    const newUsd = newSupplier * (Number(po.exchangeRateToUsd) || 0);
-    sets.push(`amount_usd = @newUsd`);
-    params.newUsd = newUsd;
-  }
-  db.prepare(`UPDATE po_cost_components SET ${sets.join(', ')} WHERE id = @id`).run(params);
-  recomputeHeader(po.id, userId);
+  inTransaction(() => {
+    db.prepare(`UPDATE po_cost_components SET ${sets.join(', ')} WHERE id = @id`).run(params);
+    recomputeHeader(po.id, userId);
+  });
   return getDetail(po.id);
 }
 
@@ -564,8 +658,10 @@ function removeComponent(componentId, userId = null) {
   const db = getDb();
   const row = db.prepare(`SELECT po_id FROM po_cost_components WHERE id = ?`).get(componentId);
   if (!row) return null;
-  db.prepare(`DELETE FROM po_cost_components WHERE id = ?`).run(componentId);
-  recomputeHeader(row.po_id, userId);
+  inTransaction(() => {
+    db.prepare(`DELETE FROM po_cost_components WHERE id = ?`).run(componentId);
+    recomputeHeader(row.po_id, userId);
+  });
   return getDetail(row.po_id);
 }
 
@@ -680,8 +776,8 @@ function listPayments(poId) {
 /**
  * After a payment mutation: re-run the landed cost (an in-landed TT fee
  * may have changed per-unit cost) — recomputeHeader also refreshes the
- * payment cache at its tail. Then, if the PO is already received,
- * refresh the affected products' cost cache so the snapshot tracks.
+ * payment cache at its tail and, when the PO is received/closed, the
+ * affected products' cost cache so the snapshot tracks.
  *
  * NOTE: the payment-cache WRITE itself lives in recomputePaymentCache()
  * and is called from the tail of recomputeHeader() — that one-way edge
@@ -689,10 +785,8 @@ function listPayments(poId) {
  * from recursing into each other.
  */
 function recomputePayments(poId, _userId = null) {
-  const po = get(poId);
-  if (!po) return;
-  recomputeHeader(poId);
-  if (po.status === 'received') refreshProductCostsForPO(poId);
+  if (!get(poId)) return;
+  inTransaction(() => recomputeHeader(poId));
 }
 
 /**
@@ -722,10 +816,12 @@ function recomputePaymentCache(poId) {
 
 /**
  * Re-run the landed cost calc for one PO + write per-line cache cols +
- * write header totals. Called on every line/component mutation so the
- * cached numbers stay in sync. Also re-snapshots line USD prices using
- * the PO's current exchange rate, in case the rate changed after lines
- * were added (rare; keeps everything coherent).
+ * write header totals. Called on every line/component/payment mutation so
+ * the cached numbers stay in sync. When the PO is a cost source (received
+ * or closed) it also refreshes product_landed_costs for its products, so an
+ * edit after receiving reaches the products. It does NOT re-convert USD
+ * amounts — update() does that (reconvertAmounts) when the FX rate or
+ * currency changes.
  */
 function recomputeHeader(poId, _userId = null) {
   const db = getDb();
@@ -775,7 +871,7 @@ function recomputeHeader(poId, _userId = null) {
   // the fee changes per-line landed cost but shouldn't inflate the PO's
   // component total or the supplier-spend rollup.
   const totalSupplier = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPriceSupplierCurrency) || 0), 0);
-  const realComponentsUsd = components.reduce((s, c) => s + (Number(c.amountUsd) || 0), 0);
+  const realComponentsUsd = components.reduce((s, c) => s + landedCost.componentUsd(c), 0);
   db.prepare(`
     UPDATE purchase_orders
        SET total_value_supplier = ?, total_value_usd = ?,
@@ -796,6 +892,8 @@ function recomputeHeader(poId, _userId = null) {
   // refresh the payment rollup. One-way edge — recomputePaymentCache
   // never calls back into recomputeHeader, so no recursion.
   recomputePaymentCache(poId);
+
+  if (isCostSource(po.status) && po.receivedAt != null) refreshProductCostsForPO(poId);
 }
 
 /**
@@ -808,43 +906,63 @@ function refreshProductCostsForPO(poId) {
   for (const pid of productIds) recomputeProductCost(pid);
 }
 
+const DAY_MS = 24 * 3600 * 1000;
+
 /**
- * Compute the cache row for ONE product across ALL its received POs.
- * - latest = most recent po.received_at × its landed_unit_cost_usd
- * - 3mo avg = weighted by qty over POs received in last 90 days
- * - 12mo avg = weighted by qty over POs received in last 365 days
+ * Landed-cost summary for one product from its cost-source PO lines
+ * (`rows` newest first: { qty, landed, po_id, received_at }), measured
+ * against `now`:
+ * - latest = the most recently received line's landed_unit_cost_usd
+ * - 3mo avg = weighted by qty over POs received in the last 90 days
+ * - 12mo avg = weighted by qty over POs received in the last 365 days
+ * Returns null when there are no rows.
  */
-function recomputeProductCost(productId) {
-  const db = getDb();
-  const now = Date.now();
-  const cutoff3mo  = now - 90  * 24 * 3600 * 1000;
-  const cutoff12mo = now - 365 * 24 * 3600 * 1000;
-
-  const rows = db.prepare(`
-    SELECT l.qty, l.landed_unit_cost_usd AS landed, po.id AS po_id, po.received_at
-      FROM po_lines l
-      JOIN purchase_orders po ON po.id = l.po_id
-     WHERE l.product_id = ?
-       AND po.status = 'received'
-       AND po.received_at IS NOT NULL
-     ORDER BY po.received_at DESC
-  `).all(productId);
-
-  if (rows.length === 0) {
-    db.prepare(`DELETE FROM product_landed_costs WHERE product_id = ?`).run(productId);
-    return;
-  }
-
-  const latest = rows[0];
+function summarizeCostRows(productId, rows, now = Date.now()) {
+  if (!rows || rows.length === 0) return null;
   const avg = (subset) => {
     const totalQty = subset.reduce((s, r) => s + (Number(r.qty) || 0), 0);
     if (totalQty <= 0) return null;
     const weighted = subset.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.landed) || 0), 0);
     return weighted / totalQty;
   };
-  const rows3mo  = rows.filter((r) => r.received_at >= cutoff3mo);
-  const rows12mo = rows.filter((r) => r.received_at >= cutoff12mo);
+  const latest = rows[0];
+  return {
+    productId,
+    latestLandedCostUsd:  latest.landed,
+    latestPoId:           latest.po_id,
+    latestReceivedAt:     latest.received_at,
+    avgLandedCostUsd3mo:  avg(rows.filter((r) => r.received_at >= now - 90 * DAY_MS)),
+    avgLandedCostUsd12mo: avg(rows.filter((r) => r.received_at >= now - 365 * DAY_MS)),
+    updatedAt:            now,
+  };
+}
 
+const COST_ROWS_SELECT = `
+  SELECT l.product_id, l.qty, l.landed_unit_cost_usd AS landed, po.id AS po_id, po.received_at
+    FROM po_lines l
+    JOIN purchase_orders po ON po.id = l.po_id`;
+
+function costRowsForProduct(productId) {
+  return getDb().prepare(`${COST_ROWS_SELECT}
+     WHERE l.product_id = ? AND ${COST_SOURCE_SQL}
+     ORDER BY po.received_at DESC, l.rowid DESC
+  `).all(productId);
+}
+
+/**
+ * Write the product_landed_costs cache row for ONE product across ALL its
+ * received/closed POs. The cache keeps "latest" handy for anything that
+ * reads the table directly; the reads below (getProductCost /
+ * listProductCosts) recompute from the PO lines so the windowed averages
+ * age with today's date instead of the date of the last PO edit.
+ */
+function recomputeProductCost(productId) {
+  const db = getDb();
+  const summary = summarizeCostRows(productId, costRowsForProduct(productId));
+  if (!summary) {
+    db.prepare(`DELETE FROM product_landed_costs WHERE product_id = ?`).run(productId);
+    return;
+  }
   db.prepare(`
     INSERT INTO product_landed_costs (product_id, latest_landed_cost_usd, latest_po_id, latest_received_at, avg_landed_cost_usd_3mo, avg_landed_cost_usd_12mo, updated_at)
     VALUES (@productId, @latest, @poId, @receivedAt, @avg3mo, @avg12mo, @updatedAt)
@@ -857,12 +975,12 @@ function recomputeProductCost(productId) {
       updated_at               = excluded.updated_at
   `).run({
     productId,
-    latest: latest.landed,
-    poId: latest.po_id,
-    receivedAt: latest.received_at,
-    avg3mo:  avg(rows3mo),
-    avg12mo: avg(rows12mo),
-    updatedAt: now,
+    latest: summary.latestLandedCostUsd,
+    poId: summary.latestPoId,
+    receivedAt: summary.latestReceivedAt,
+    avg3mo: summary.avgLandedCostUsd3mo,
+    avg12mo: summary.avgLandedCostUsd12mo,
+    updatedAt: summary.updatedAt,
   });
 }
 
@@ -870,17 +988,7 @@ function recomputeProductCost(productId) {
 
 function getProductCost(productId) {
   if (!productId) return null;
-  const row = getDb().prepare(`SELECT * FROM product_landed_costs WHERE product_id = ?`).get(productId);
-  if (!row) return null;
-  return {
-    productId:                row.product_id,
-    latestLandedCostUsd:      row.latest_landed_cost_usd,
-    latestPoId:               row.latest_po_id,
-    latestReceivedAt:         row.latest_received_at,
-    avgLandedCostUsd3mo:      row.avg_landed_cost_usd_3mo,
-    avgLandedCostUsd12mo:     row.avg_landed_cost_usd_12mo,
-    updatedAt:                row.updated_at,
-  };
+  return summarizeCostRows(productId, costRowsForProduct(productId));
 }
 
 function listPosForSupplier(supplierId) {
@@ -894,26 +1002,25 @@ function listPosForSupplier(supplierId) {
 /**
  * v0.49.48 — bulk cost fetch for the Product Library Cost column.
  * Returns a flat array of cost rows for every product in the company
- * that has a cached cost. The renderer keys it into a Map. One query
+ * that has received/closed PO history (computed now, so the averages are
+ * against today's date). The renderer keys it into a Map. One query
  * instead of N per-row round-trips — important on a 200-row table in
  * client mode.
  */
 function listProductCosts(companyId) {
   if (!companyId) return [];
-  return getDb().prepare(`
-    SELECT plc.*
-      FROM product_landed_costs plc
-      JOIN products p ON p.id = plc.product_id
-     WHERE p.company_id = ?
-  `).all(companyId).map((row) => ({
-    productId:            row.product_id,
-    latestLandedCostUsd:  row.latest_landed_cost_usd,
-    latestPoId:           row.latest_po_id,
-    latestReceivedAt:     row.latest_received_at,
-    avgLandedCostUsd3mo:  row.avg_landed_cost_usd_3mo,
-    avgLandedCostUsd12mo: row.avg_landed_cost_usd_12mo,
-    updatedAt:            row.updated_at,
-  }));
+  const rows = getDb().prepare(`${COST_ROWS_SELECT}
+      JOIN products p ON p.id = l.product_id
+     WHERE p.company_id = ? AND ${COST_SOURCE_SQL}
+     ORDER BY l.product_id, po.received_at DESC, l.rowid DESC
+  `).all(companyId);
+  const byProduct = new Map();
+  for (const r of rows) {
+    if (!byProduct.has(r.product_id)) byProduct.set(r.product_id, []);
+    byProduct.get(r.product_id).push(r);
+  }
+  const now = Date.now();
+  return [...byProduct].map(([productId, list]) => summarizeCostRows(productId, list, now));
 }
 
 /**
@@ -929,7 +1036,7 @@ function supplierSpendRollup(companyId) {
   const rows = getDb().prepare(`
     SELECT supplier_id,
            COUNT(*)                                             AS po_count,
-           SUM(CASE WHEN status = 'received' THEN 1 ELSE 0 END) AS received_count,
+           SUM(CASE WHEN status IN ('received', 'closed') AND received_at IS NOT NULL THEN 1 ELSE 0 END) AS received_count,
            SUM(COALESCE(total_value_usd, 0) + COALESCE(total_components_usd, 0)) AS total_spend_usd,
            MAX(COALESCE(ordered_at, created_at))                AS last_ordered_at
       FROM purchase_orders

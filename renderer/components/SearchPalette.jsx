@@ -17,12 +17,19 @@
  *
  * Click also opens. Picking a result:
  *   - product  → open Library, set side-panel to that product
- *   - brand    → open Brands page
+ *   - brand    → open Library filtered to that brand (v0.1.89 — it used to
+ *                land on the Brands page with nothing selected)
  *   - category → open Library with that category filtered
+ *   - supplier → open Purchase Orders filtered to that supplier (v0.1.89)
+ *   - po       → open that purchase order (v0.1.89)
+ * Suppliers and POs only come back for an account that may see costing —
+ * the server decides (main/ipc/search.js).
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/index.js';
+import { useUserCaps } from './Sidebar.jsx';
+import { hasCap } from '../lib/capabilities.js';
 
 const DEBOUNCE_MS = 150;
 
@@ -31,6 +38,8 @@ function kindBadge(kind) {
     case 'product':  return 'Product';
     case 'brand':    return 'Brand';
     case 'category': return 'Category';
+    case 'supplier': return 'Supplier';
+    case 'po':       return 'PO';
     default:         return kind || '';
   }
 }
@@ -40,12 +49,20 @@ export function SearchPalette({ open, onClose }) {
   const setActiveProductId = useAppStore((s) => s.setActiveProductId);
   const setCategoryFilter = useAppStore((s) => s.toggleCategoryFilter);
   const clearCategoryFilter = useAppStore((s) => s.clearCategoryFilter);
+  const toggleBrandFilter = useAppStore((s) => s.toggleBrandFilter);
+  const clearBrandFilter = useAppStore((s) => s.clearBrandFilter);
+  const openPurchaseOrder = useAppStore((s) => s.openPurchaseOrder);
+  const openPurchaseOrdersForSupplier = useAppStore((s) => s.openPurchaseOrdersForSupplier);
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
+  const canSeeCosting = hasCap(useUserCaps(), 'costing.view');
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [highlight, setHighlight] = useState(0);
   const [searching, setSearching] = useState(false);
+  // v0.1.89: a failed search says so. It used to read "No matches", which is
+  // a different — and wrong — answer.
+  const [searchError, setSearchError] = useState(null);
   const inputRef = useRef(null);
   const debounceRef = useRef(null);
   /** Monotonic id for the newest search, so an older response can be ignored. */
@@ -56,6 +73,7 @@ export function SearchPalette({ open, onClose }) {
     if (!open) return;
     setQuery('');
     setResults([]);
+    setSearchError(null);
     setHighlight(0);
     queueMicrotask(() => inputRef.current?.focus());
   }, [open]);
@@ -79,6 +97,7 @@ export function SearchPalette({ open, onClose }) {
     const q = query.trim();
     if (!q) {
       setResults([]);
+      setSearchError(null);
       setSearching(false);
       return;
     }
@@ -88,11 +107,14 @@ export function SearchPalette({ open, onClose }) {
         const hits = await window.api.search.global(q, 30);
         if (fresh()) {
           setResults(Array.isArray(hits) ? hits : []);
+          setSearchError(null);
           setHighlight(0);
         }
-      } catch (_err) {
-        // Search failures are non-fatal; just show no results.
-        if (fresh()) setResults([]);
+      } catch (err) {
+        if (fresh()) {
+          setResults([]);
+          setSearchError(err?.message || String(err));
+        }
       } finally {
         if (fresh()) setSearching(false);
       }
@@ -107,8 +129,14 @@ export function SearchPalette({ open, onClose }) {
       setActiveModule('library');
       setActiveProductId(r.productId);
     } else if (r.kind === 'brand') {
-      setActiveModule('brands');
-      // No brand-id deep-link yet — just jumping to the Brands page.
+      // The brand's own products, the same way a category result works.
+      setActiveModule('library');
+      clearBrandFilter?.();
+      toggleBrandFilter?.(r.id);
+    } else if (r.kind === 'supplier') {
+      openPurchaseOrdersForSupplier?.(r.id);
+    } else if (r.kind === 'po') {
+      openPurchaseOrder?.(r.id);
     } else if (r.kind === 'category') {
       setActiveModule('library');
       // Apply the category as a filter so the Library narrows to it.
@@ -158,7 +186,9 @@ export function SearchPalette({ open, onClose }) {
             ref={inputRef}
             className="palette__input"
             type="text"
-            placeholder={activeCompanyId ? 'Search SKUs, products, brands, categories…' : 'Pick a company first'}
+            placeholder={!activeCompanyId ? 'Pick a company first'
+              : canSeeCosting ? 'Search SKUs, products, brands, categories, suppliers, PO numbers…'
+                : 'Search SKUs, products, brands, categories…'}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
@@ -169,7 +199,11 @@ export function SearchPalette({ open, onClose }) {
 
         {showResults ? (
           <div className="palette__results">
-            {results.length === 0 && !searching ? (
+            {searchError && !searching ? (
+              <div className="palette__empty palette__empty--error" role="alert">
+                Search failed: {searchError}
+              </div>
+            ) : results.length === 0 && !searching ? (
               <div className="palette__empty">No matches for &ldquo;{query}&rdquo;.</div>
             ) : (
               <ul role="listbox">

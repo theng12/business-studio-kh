@@ -565,9 +565,9 @@
   #detail .gallery .tile-arrow.right { right: 6px; }
   #detail .gallery .tile-arrow:active { background: rgba(0,0,0,0.75); }
   #detail .gallery .tile-arrow[disabled] { opacity: 0.35; }
-  /* v0.49.8: writer-only — same gating as the ⋯ menu rows. */
-  body[data-role="viewer"]       #detail .gallery .tile-arrow,
-  body[data-role="photographer"] #detail .gallery .tile-arrow { display: none !important; }
+  /* v0.49.8: writer-only — same gating as the ⋯ menu rows.
+     v0.1.89: by capability, not role name — reordering is Edit images. */
+  body[data-caps-known]:not([data-can~="images.manage"]) #detail .gallery .tile-arrow { display: none !important; }
 
   /* v0.49.12 — multi-select state. Long-press a tile (writer roles) to
      enter; tiles get a coloured ring + checkmark badge; the per-tile ⋯ /
@@ -710,20 +710,20 @@
   .sheet-row.is-group-head:active { background: var(--surface); }
   .sheet-row .row-meta { font-size: 12px; color: var(--muted); margin-left: auto; flex-shrink: 0; }
 
-  /* v0.45.0 → v0.47.0: role-based UI gating. Replaces the old × hiding with
-     the new ⋯ menu button (both delete + use-with-AI + set-as-main are writes,
-     so the menu itself is hidden for restricted roles). */
-  body[data-role="viewer"] #addPhotoBtn,
-  body[data-role="viewer"] #autoCropBtn,
-  body[data-role="viewer"] #enhanceBtn,
-  body[data-role="viewer"] #overlayBtn,
-  body[data-role="viewer"] #aiActivityBtn,
-  body[data-role="viewer"] #detail .ai-results .ai-actions,
-  body[data-role="photographer"] #autoCropBtn,
-  body[data-role="photographer"] #enhanceBtn,
-  body[data-role="photographer"] #overlayBtn,
-  body[data-role="photographer"] #aiActivityBtn,
-  body[data-role="photographer"] #detail .ai-results .ai-actions { display: none !important; }
+  /* v0.45.0 → v0.47.0: role-based UI gating.
+     v0.1.89: gated by CAPABILITY. It used to test the role NAME (viewer /
+     photographer), so a custom role — or an editor without, say, AI — was
+     shown buttons the server then refused with a 403. `data-can` lists what
+     /api/whoami says this account may do (admin's '*' is expanded to every
+     key); `data-caps-known` is only set once whoami has answered, so nothing
+     is hidden while it is still loading (the server is the real gate). */
+  body[data-caps-known]:not([data-can~="images.add"]) #addPhotoBtn,
+  body[data-caps-known]:not([data-can~="images.manage"]) #autoCropBtn,
+  body[data-caps-known]:not([data-can~="images.manage"]) #enhanceBtn,
+  body[data-caps-known]:not([data-can~="overlay.use"]) #overlayBtn,
+  body[data-caps-known]:not([data-can~="overlay.use"]) #selectModeBtn,
+  body[data-caps-known]:not([data-can~="ai.run"]) #aiActivityBtn,
+  body[data-caps-known]:not([data-can~="ai.run"]) #detail .ai-results .ai-actions { display: none !important; }
   /* v0.49.6: the ⋯ menu is now visible for every role because it always
      contains "Save image to device" — a pure read action everyone gets.
      The menu's WRITE rows (Set as main, Use with AI, Delete) are gated
@@ -1343,6 +1343,7 @@
     sortKey: (localStorage.getItem(LS.sortKey) || 'updated'),
     sortDir: (localStorage.getItem(LS.sortDir) === 'asc' ? 'asc' : 'desc'),
     role: '', // v0.45.0 — populated from /api/whoami; drives applyRoleGating()
+    caps: null, // v0.1.89 — capability keys from /api/whoami (null = not known yet)
     // v0.47.0 — AI flow state. Models loaded lazily on first AI sheet open.
     aiModels: null,                  // null until first fetch; then array
     aiPickedSource: null,            // { productId, filepath, sku, name } — the image to process
@@ -1585,6 +1586,7 @@
         // Capture role so we can hide buttons that the server would 403 on
         // anyway — server is the authoritative gate (main/util/permissions.js).
         state.role = (whoami && whoami.user && whoami.user.role) || '';
+        state.caps = capsFromWhoami(whoami);
         applyRoleGating();
         document.getElementById('connect').style.display = 'none';
         document.getElementById('app').style.display = 'block';
@@ -1609,7 +1611,47 @@
   // this is purely the UX layer so the buttons don't even appear.
   function applyRoleGating() {
     document.body.dataset.role = state.role || '';
+    if (Array.isArray(state.caps)) {
+      document.body.dataset.can = gatedCapList(state.caps).join(' ');
+      document.body.dataset.capsKnown = '1';
+    } else {
+      delete document.body.dataset.can;
+      delete document.body.dataset.capsKnown;
+    }
   }
+
+  /* caps:begin — v0.1.89: what this account may do, by capability.
+     Pure functions (test/uxSweep.test.js runs this block on its own). The
+     keys are the server's (main/util/capabilities.js); '*' is the admin. */
+  var VIEWER_CAPS = ['images.add', 'images.manage', 'products.delete', 'overlay.use', 'ai.run'];
+  function capsFromWhoami(whoami) {
+    var u = whoami && whoami.user;
+    if (u && Array.isArray(u.caps)) return u.caps.slice();
+    // A server too old to send caps: fall back to what its roles meant then.
+    var role = (u && u.role) || '';
+    if (role === 'admin' || role === 'editor') return ['*'];
+    if (role === 'photographer') return ['images.add'];
+    return [];
+  }
+  function capsAllow(caps, cap) {
+    return Array.isArray(caps) && (caps.indexOf('*') >= 0 || caps.indexOf(cap) >= 0);
+  }
+  function gatedCapList(caps) {
+    return VIEWER_CAPS.filter(function (cap) { return capsAllow(caps, cap); });
+  }
+  /* The phone's image-delete confirm. A deleted photo is held in the Mac's
+     recycle bin (Settings → Recently deleted), so "can't be undone" stopped
+     being true in v0.1.86. */
+  function deleteImageConfirmText(index) {
+    var label = '#' + (index + 1) + (index === 0 ? ' (main)' : '');
+    return 'Delete image ' + label + ' from this product?\n\n'
+      + 'It goes to Recently deleted on the Mac (Settings → Recently deleted), '
+      + 'where it can be restored until it expires.';
+  }
+  /* caps:end */
+  function can(cap) { return capsAllow(state.caps, cap); }
+  // Select mode only feeds the reframe / enhance / overlay "Selected (N)" scope.
+  function canSelectImages() { return can('images.manage') || can('overlay.use'); }
 
   function switchCompany(id) {
     var request = {
@@ -1729,7 +1771,7 @@
       ? Promise.resolve()
       : fetch(baseUrl + '/api/whoami', { headers: { Authorization: 'Bearer ' + token } })
           .then(function (res) { return res.ok ? res.json() : null; })
-          .then(function (j) { state.role = (j && j.user && j.user.role) || ''; applyRoleGating(); })
+          .then(function (j) { state.role = (j && j.user && j.user.role) || ''; state.caps = j ? capsFromWhoami(j) : null; applyRoleGating(); })
           .catch(function () { /* non-fatal — UI just shows everything */ });
 
     ensureRole.then(function () {
@@ -2307,7 +2349,7 @@
         // just selected via the long-press itself.
         var lpTimer = null, lpStartX = 0, lpStartY = 0;
         fig.addEventListener('pointerdown', function (ev) {
-          if (isSelecting() || !isWriter()) return; // no LP needed in select mode
+          if (isSelecting() || !canSelectImages()) return; // no LP needed in select mode
           lpStartX = ev.clientX; lpStartY = ev.clientY;
           if (lpTimer) clearTimeout(lpTimer);
           lpTimer = setTimeout(function () {
@@ -2362,7 +2404,7 @@
   }
 
   function enterSelectMode(firstFilepath) {
-    if (!isWriter()) return;
+    if (!canSelectImages()) return;
     state.selectMode = true;
     state.selected.clear();
     if (firstFilepath) state.selected.add(firstFilepath);
@@ -2501,8 +2543,7 @@
   // The image cap on the product means deletion can only DECREMENT imageCount,
   // never push it negative; the Math.max guard is a belt-and-braces clamp.
   function confirmAndDeleteImage(productId, filepath, index) {
-    var label = '#' + (index + 1) + (index === 0 ? ' (main)' : '');
-    if (!window.confirm('Delete image ' + label + ' from this product?\n\nThis can\'t be undone.')) return;
+    if (!window.confirm(deleteImageConfirmText(index))) return;
     rpc('images:removeFromProduct', { productId: productId, filepath: filepath })
       .then(function () {
         clearImageCaches(productId);
@@ -2527,8 +2568,8 @@
      menu entirely for Viewer / Photographer.
      ────────────────────────────────────────────────────────────── */
 
-  // v0.49.6 — quick role check used by tile-menu + AI flow.
-  function isWriter() { return state.role === 'admin' || state.role === 'editor'; }
+  // v0.49.6 had isWriter() here — a role-NAME check. v0.1.89: each action
+  // now asks for its own capability through can() (see caps:begin above).
 
   /* ── Per-tile ⋯ menu (save / set-main / use-with-AI / delete) ── */
   function openTileMenu(ctx) {
@@ -2543,43 +2584,41 @@
       closeSheet('tileMenuSheet');
       saveImageToDevice(ctx);
     }));
-    // Writer-only rows. Server enforces with the v0.45.0 ACL; this is just
-    // UI hiding so Viewer / Photographer don\'t see buttons that would 403.
-    if (isWriter()) {
-      if (!ctx.isMain) {
-        list.appendChild(menuRow('★  Set as main image', function () {
-          closeSheet('tileMenuSheet');
-          rpc('images:setMainImage', { productId: ctx.productId, filepath: ctx.filepath })
-            .then(function () {
-              // Renumbering means this product's filepaths shifted around.
-              clearImageCaches(ctx.productId);
-              renderGallery(ctx.productId);
-              toast('Set as main');
-            })
-            .catch(function (e) { toast('Set-main failed: ' + e.message); });
-        }));
-      }
-      list.appendChild(menuRow('✨  Use with AI', function () {
+    // Write rows, each behind the capability the server will check for it
+    // (v0.1.89). Server enforces; this only hides what would be refused.
+    if (!ctx.isMain && can('images.manage')) {
+      list.appendChild(menuRow('★  Set as main image', function () {
         closeSheet('tileMenuSheet');
-        openAiSheet({ productId: ctx.productId, filepath: ctx.filepath, index: ctx.index, sku: ctx.sku || '' });
+        rpc('images:setMainImage', { productId: ctx.productId, filepath: ctx.filepath })
+          .then(function () {
+            // Renumbering means this product's filepaths shifted around.
+            clearImageCaches(ctx.productId);
+            renderGallery(ctx.productId);
+            toast('Set as main');
+          })
+          .catch(function (e) { toast('Set-main failed: ' + e.message); });
       }));
-      // v0.49.9: per-image Reframe & crop now opens the Reframe sheet with
-      // scope locked to this specific image — gives the user a live preview
-      // + the tightness/fill/colour controls before committing. The
-      // sheet\'s "Apply" button is the explicit confirm; the destructive
-      // window.confirm we used in v0.49.8 is now redundant.
-      list.appendChild(menuRow('✂︎  Reframe & crop this image', function () {
-        closeSheet('tileMenuSheet');
-        getImageList(ctx.productId).then(function (imgs) {
-          if (!imgs || !imgs.length) { toast('No images to reframe'); return; }
-          openReframeSheet({ productId: ctx.productId, imgs: imgs, focusedIndex: ctx.index, lockScope: true });
-        });
-      }));
-      list.appendChild(menuRow('🗑  Delete', function () {
-        closeSheet('tileMenuSheet');
-        confirmAndDeleteImage(ctx.productId, ctx.filepath, ctx.index);
-      }, true));
     }
+    if (can('ai.run')) list.appendChild(menuRow('✨  Use with AI', function () {
+      closeSheet('tileMenuSheet');
+      openAiSheet({ productId: ctx.productId, filepath: ctx.filepath, index: ctx.index, sku: ctx.sku || '' });
+    }));
+    // v0.49.9: per-image Reframe & crop now opens the Reframe sheet with
+    // scope locked to this specific image — gives the user a live preview
+    // + the tightness/fill/colour controls before committing. The
+    // sheet\'s "Apply" button is the explicit confirm; the destructive
+    // window.confirm we used in v0.49.8 is now redundant.
+    if (can('images.manage')) list.appendChild(menuRow('✂︎  Reframe & crop this image', function () {
+      closeSheet('tileMenuSheet');
+      getImageList(ctx.productId).then(function (imgs) {
+        if (!imgs || !imgs.length) { toast('No images to reframe'); return; }
+        openReframeSheet({ productId: ctx.productId, imgs: imgs, focusedIndex: ctx.index, lockScope: true });
+      });
+    }));
+    if (can('products.delete')) list.appendChild(menuRow('🗑  Delete', function () {
+      closeSheet('tileMenuSheet');
+      confirmAndDeleteImage(ctx.productId, ctx.filepath, ctx.index);
+    }, true));
     openSheet('tileMenuSheet');
   }
 
@@ -4055,14 +4094,30 @@
     return {};   // main image
   }
   /* Which image the preview should compose onto: the first one the run will
-     touch, so the picture on screen is the picture he is about to change. */
+     touch, so the picture on screen is the picture he is about to change.
+     v0.1.89: for "Main image" this is null — no position at all — because the
+     apply's main-image rule (main/util/imageScope.js) takes the first
+     PROCESSED photo when there is one, and renderPreview applies that same
+     rule when it is given no position. Sending position 1 previewed the raw
+     first photo while the apply used a different one. */
   function overlayPreviewPosition(o) {
     if (o.scope === 'position') return overlayPositionNumber(o);
     if (o.scope === 'selected') {
       var picks = overlaySelectedPositions(o);
       return picks.length ? picks[0] : 1;
     }
-    return 1;
+    if (o.scope === 'all') return 1;
+    return null;
+  }
+  /* v0.1.89: the preview is shown a few hundred pixels wide; a full-size PNG
+     over the RPC (and Wi-Fi / Tailscale) was megabytes per tweak. renderPreview
+     scales inside compose(), so a capped preview is the export, smaller. */
+  var OVERLAY_PREVIEW_MAX_PX = 1080;
+  function overlayPreviewArgs(o) {
+    var args = { templateId: o.templateId, productId: o.productId, maxPx: OVERLAY_PREVIEW_MAX_PX };
+    var pos = overlayPreviewPosition(o);
+    if (pos != null) args.position = pos;
+    return args;
   }
   function overlayTargetLabel(o) {
     if (o.scope === 'all') return o.batch ? 'all images' : ('all ' + (o.imgs.length || '') + ' images').replace('  ', ' ');
@@ -4094,9 +4149,7 @@
     // v0.1.77: compose onto the image the run will actually touch, so the
     // preview is not quietly showing the main photo while the apply is aimed
     // at photo #2.
-    rpc('templates:renderPreview', {
-      templateId: o.templateId, productId: o.productId, position: overlayPreviewPosition(o),
-    })
+    rpc('templates:renderPreview', overlayPreviewArgs(o))
       .then(function (res) {
         if (!state.overlay || state.overlay.previewSeq !== seq) return;
         var url = envelopeToBlobUrl(res && res.bytes, 'image/png');

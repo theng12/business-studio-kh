@@ -121,3 +121,14 @@ test('the delete screens point at the bin, so the restore is discoverable', () =
   assert.match(LIBRARY, /restore from Settings → Recently deleted/);
   assert.match(LIBRARY, /wait in Settings →\s*Recently deleted/);
 });
+
+test('the phone viewer\'s image delete points at the bin too (v0.1.89)', () => {
+  // The viewer deletes through images:removeFromProduct, which holds the photo
+  // in the recycle bin like the desktop does — so its confirm must not say
+  // the delete is final, and must say where the photo went.
+  const VIEWER = read('webclient/index.html');
+  assert.doesNotMatch(VIEWER, /This can\\'t be undone\./, 'the viewer still calls an image delete final');
+  assert.match(VIEWER, /It goes to Recently deleted on the Mac \(Settings → Recently deleted\)/);
+  assert.match(VIEWER, /window\.confirm\(deleteImageConfirmText\(index\)\)/);
+  assert.match(VIEWER, /rpc\('images:removeFromProduct'/);
+});

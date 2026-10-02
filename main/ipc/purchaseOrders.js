@@ -10,7 +10,28 @@
 const purchaseOrders = require('../db/purchaseOrders');
 const landedCost = require('../util/landedCost');
 
-function register({ expose }) {
+/**
+ * Every PO write announces itself as a `catalog:changed` event of kind
+ * 'purchaseOrder' so another Mac looking at the same PO list / detail /
+ * Suppliers spend refetches. `poId` rides along so a detail screen can tell
+ * whether the change is its own PO. The store's dispatcher ignores kinds it
+ * does not route (renderer/store/catalogEvents.js); the PO, Supplier,
+ * Dashboard and Cost Calculator screens subscribe themselves.
+ */
+function register({ expose, emitCatalogChange = () => {} }) {
+  const emitPo = (op, poId) => {
+    try { emitCatalogChange('purchaseOrder', op, poId ?? null, { poId: poId ?? null }); } catch (_) { /* best effort */ }
+  };
+  // Write wrapper: run the DB call, then emit with the PO it touched. The
+  // channel stays a literal expose('…') so test/validatorCoverage.test.js
+  // and test/clientReachability.test.js still see it.
+  const emitting = (op, fn, poIdOf) => (args) => {
+    const result = fn(args);
+    emitPo(op, poIdOf(args, result));
+    return result;
+  };
+  const detailPoId = (_args, result) => result?.header?.id ?? null;
+
   // Reads
   expose('pos:list',                 ({ companyId, filters } = {}) => purchaseOrders.list(companyId, filters || {}));
   expose('pos:get',                  (id) => purchaseOrders.get(id));
@@ -23,24 +44,24 @@ function register({ expose }) {
   expose('pos:supplierSpendRollup',  (companyId) => purchaseOrders.supplierSpendRollup(companyId));
 
   // Header CRUD
-  expose('pos:create',               (input) => purchaseOrders.create(input ?? {}));
-  expose('pos:update',               ({ id, patch } = {}) => purchaseOrders.update(id, patch ?? {}));
-  expose('pos:setStatus',            ({ id, status } = {}) => purchaseOrders.setStatus(id, status));
-  expose('pos:remove',               (id) => purchaseOrders.remove(id));
+  expose('pos:create',    emitting('create',    (input) => purchaseOrders.create(input ?? {}), (_a, r) => r?.id));
+  expose('pos:update',    emitting('update',    ({ id, patch } = {}) => purchaseOrders.update(id, patch ?? {}), (a) => a?.id));
+  expose('pos:setStatus', emitting('setStatus', ({ id, status } = {}) => purchaseOrders.setStatus(id, status), (a) => a?.id));
+  expose('pos:remove',    emitting('remove',    (id) => purchaseOrders.remove(id), (id) => id));
 
   // Lines + components
-  expose('pos:addLine',              ({ poId, input } = {}) => purchaseOrders.addLine(poId, input ?? {}));
-  expose('pos:updateLine',           ({ lineId, patch } = {}) => purchaseOrders.updateLine(lineId, patch ?? {}));
-  expose('pos:removeLine',           (lineId) => purchaseOrders.removeLine(lineId));
-  expose('pos:addComponent',         ({ poId, input } = {}) => purchaseOrders.addComponent(poId, input ?? {}));
-  expose('pos:updateComponent',      ({ componentId, patch } = {}) => purchaseOrders.updateComponent(componentId, patch ?? {}));
-  expose('pos:removeComponent',      (componentId) => purchaseOrders.removeComponent(componentId));
+  expose('pos:addLine',         emitting('update', ({ poId, input } = {}) => purchaseOrders.addLine(poId, input ?? {}), (a) => a?.poId));
+  expose('pos:updateLine',      emitting('update', ({ lineId, patch } = {}) => purchaseOrders.updateLine(lineId, patch ?? {}), detailPoId));
+  expose('pos:removeLine',      emitting('update', (lineId) => purchaseOrders.removeLine(lineId), detailPoId));
+  expose('pos:addComponent',    emitting('update', ({ poId, input } = {}) => purchaseOrders.addComponent(poId, input ?? {}), (a) => a?.poId));
+  expose('pos:updateComponent', emitting('update', ({ componentId, patch } = {}) => purchaseOrders.updateComponent(componentId, patch ?? {}), detailPoId));
+  expose('pos:removeComponent', emitting('update', (componentId) => purchaseOrders.removeComponent(componentId), detailPoId));
 
   // v0.49.50: TT / payment ledger.
   expose('pos:listPayments',         (poId) => purchaseOrders.listPayments(poId));
-  expose('pos:addPayment',           ({ poId, input } = {}) => purchaseOrders.addPayment(poId, input ?? {}));
-  expose('pos:updatePayment',        ({ paymentId, patch } = {}) => purchaseOrders.updatePayment(paymentId, patch ?? {}));
-  expose('pos:removePayment',        (paymentId) => purchaseOrders.removePayment(paymentId));
+  expose('pos:addPayment',    emitting('update', ({ poId, input } = {}) => purchaseOrders.addPayment(poId, input ?? {}), (a) => a?.poId));
+  expose('pos:updatePayment', emitting('update', ({ paymentId, patch } = {}) => purchaseOrders.updatePayment(paymentId, patch ?? {}), detailPoId));
+  expose('pos:removePayment', emitting('update', (paymentId) => purchaseOrders.removePayment(paymentId), detailPoId));
 
   // v0.49.47: pricing helpers exposed so the Cost Calculator + Library
   // can compute suggested retail without a backend round-trip per

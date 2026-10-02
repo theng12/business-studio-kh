@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Select } from '../../components/ui.jsx';
+import { Button, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { useAppStore } from '../../store/index.js';
-import { relativeTime } from '../../components/BackupReminder.jsx';
+import { timeAgo } from '../../lib/format.js';
 import { useUserCaps } from '../../components/Sidebar.jsx';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx and
@@ -46,6 +46,11 @@ export function DeletedItemsPanel({ config, addToast }) {
   const canPurge = useUserCaps().includes('*');
   const [state, setState] = useState({ items: [], retentionDays: 30, loading: true });
   const [busyId, setBusyId] = useState(null);
+  // v0.1.89: paged (§10) — a bulk delete can put hundreds of rows here.
+  // `paginate` clamps, so restoring the last row of the last page steps back
+  // a page instead of showing an empty one.
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
 
   const refresh = useCallback(async () => {
     try {
@@ -132,12 +137,14 @@ export function DeletedItemsPanel({ config, addToast }) {
   }
 
   const retention = state.retentionDays;
+  const pager = paginate(state.items.length, page, pageSize);
+  const visibleItems = state.items.slice(pager.pageStart, pager.pageEnd);
 
   return (
     <div className="settings-page">
-      <h2 className="settings-section-heading">Recently deleted</h2>
+      <h2 className="section-title">Recently deleted</h2>
 
-      <p className="setting-row__hint" style={{ marginTop: 0, maxWidth: 640 }}>
+      <p className="setting-row__hint settings-intro">
         Every product and photo deleted in this company is kept here, with its images, so a mistake
         can be undone. Restore puts it back exactly as it was — same SKU, same photo order.
       </p>
@@ -186,14 +193,15 @@ export function DeletedItemsPanel({ config, addToast }) {
               click to undo.
             </p>
           ) : (
+            <>
             <ul className="backups-table">
-              {state.items.map((item) => (
+              {visibleItems.map((item) => (
                 <li key={item.id} className="backups-row">
                   <div className="backups-row__main">
                     <span className="backups-row__when">
                       {item.kind === 'image' ? 'Photo' : 'Product'} · {item.label}
                     </span>
-                    <span className="muted backups-row__rel"> · {relativeTime(item.deletedAt)}</span>
+                    <span className="muted backups-row__rel"> · {timeAgo(item.deletedAt)}</span>
                     <div className="muted backups-row__file">
                       {item.detail ? `${item.detail} · ` : ''}
                       {item.daysLeft == null
@@ -223,6 +231,17 @@ export function DeletedItemsPanel({ config, addToast }) {
                 </li>
               ))}
             </ul>
+            <Pagination
+              total={state.items.length}
+              pageStart={pager.pageStart}
+              pageEnd={pager.pageEnd}
+              currentPage={pager.currentPage}
+              maxPage={pager.maxPage}
+              pageSize={pageSize}
+              onPageChange={setPage}
+              onPageSizeChange={(n) => { setPageSize(n); setPage(0); }}
+            />
+            </>
           )}
         </div>
       </SettingRow>

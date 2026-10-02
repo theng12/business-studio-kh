@@ -27,8 +27,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Pagination, paginate, Badge, Select, Input, Modal } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
+import { formatDate } from '../../lib/format.js';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PODetail, PAYMENT_STATUS_TONE, PAYMENT_STATUS_LABEL } from './PODetail.jsx';
+import { useCostingCaps } from './costingCaps.js';
+import { suggestNextPoNumber } from './poNumber.js';
 
 const STATUS_FILTERS = [
   { value: 'all',        label: 'All' },
@@ -64,11 +68,14 @@ export function STATUS_LABEL(status) {
 export function PurchaseOrders() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
+  const setActiveModule = useAppStore((s) => s.setActiveModule);
   // v0.49.48: pending cross-module navigation (from Library Cost column
   // or Suppliers "Orders" button). Consumed once on mount.
   const pendingPoId = useAppStore((s) => s.pendingPoId);
   const pendingPoSupplierId = useAppStore((s) => s.pendingPoSupplierId);
   const clearPendingPoNav = useAppStore((s) => s.clearPendingPoNav);
+  // §8 gating: a costing.view-only client sees the list but no write controls.
+  const { canManage } = useCostingCaps();
 
   const [rows, setRows] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
@@ -81,6 +88,7 @@ export function PurchaseOrders() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [refreshTick, setRefreshTick] = useState(0);
+  const [supplierTick, setSupplierTick] = useState(0);
   const listRequestRef = useRef(0);
   const supplierRequestRef = useRef(0);
   const previousCompanyRef = useRef(activeCompanyId);
@@ -103,7 +111,24 @@ export function PurchaseOrders() {
       .catch(() => {
         if (request === supplierRequestRef.current) setSuppliers([]);
       });
-  }, [activeCompanyId]);
+  }, [activeCompanyId, supplierTick]);
+
+  // Another Mac (or another screen) changed a PO or a supplier: refetch. The
+  // list effect is already debounced, so a burst of events is one query.
+  useEffect(() => {
+    if (!window.api?.events?.onCatalogChanged) return undefined;
+    const off = window.api.events.onCatalogChanged((evt) => {
+      if (evt?.kind === 'purchaseOrder' || evt?.kind === 'supplier') {
+        listRequestRef.current += 1;
+        setRefreshTick((tick) => tick + 1);
+      }
+      if (evt?.kind === 'supplier') {
+        supplierRequestRef.current += 1;
+        setSupplierTick((tick) => tick + 1);
+      }
+    });
+    return typeof off === 'function' ? off : undefined;
+  }, []);
 
   useEffect(() => {
     if (previousCompanyRef.current === activeCompanyId) return;
@@ -148,6 +173,14 @@ export function PurchaseOrders() {
   );
   const visibleRows = useMemo(() => rows.slice(pageStart, pageEnd), [rows, pageStart, pageEnd]);
 
+  const filtersActive = search.trim() !== '' || supplierFilter !== '' || statusFilter !== 'all';
+  function clearFilters() {
+    setSearch('');
+    setSupplierFilter('');
+    setStatusFilter('all');
+    setPage(0);
+  }
+
   function refreshList() {
     if (!activeCompanyId) return;
     // Invalidate any in-flight list before the state update schedules the
@@ -174,8 +207,8 @@ export function PurchaseOrders() {
   async function handleRemove(po) {
     const sure = await confirm({
       title: `Delete PO ${po.poNumber || '(no number)'}?`,
-      body: po.status === 'received'
-        ? 'This PO is already received — deleting it will roll back its contribution to landed cost for every product it touched. This cannot be undone.'
+      body: po.status === 'received' || po.status === 'closed'
+        ? 'This PO was received — deleting it removes its landed cost from every product on it. This cannot be undone.'
         : 'This cannot be undone.',
       confirmLabel: 'Delete',
       destructive: true,
@@ -206,38 +239,49 @@ export function PurchaseOrders() {
       <PageHeader
         title="Purchase Orders"
         subtitle="Track orders from overseas suppliers + their landed cost."
-        actions={
+        actions={canManage ? (
           <Button
             variant="primary"
             disabled={!activeCompanyId || suppliers.length === 0}
+            title={!activeCompanyId
+              ? 'Choose a company first'
+              : suppliers.length === 0 ? 'Add a supplier first. Every purchase order belongs to one.' : undefined}
             onClick={() => setCreating(true)}
           >
-            New purchase order
+            + New purchase order
           </Button>
-        }
+        ) : null}
       />
 
-      {!activeCompanyId && (
-        <EmptyState
-          title="No company selected"
-          body="Pick a company from the sidebar to start tracking purchase orders."
-        />
-      )}
+      {!activeCompanyId && <NoCompanyState purpose="track its purchase orders" />}
       {activeCompanyId && suppliers.length === 0 && (
         <EmptyState
           title="Add a supplier first"
-          body="POs are tied to a supplier — head to the Suppliers page and create one before recording a purchase order."
+          body={canManage
+            ? 'Every purchase order belongs to a supplier. Add one, then come back to record the order.'
+            : 'No suppliers have been added for this company yet.'}
+          action={<Button variant="primary" onClick={() => setActiveModule('suppliers')}>Go to Suppliers</Button>}
         />
       )}
       {activeCompanyId && suppliers.length > 0 && (
         <>
-          <div className="pos-toolbar">
-            <Input
-              placeholder="Search by PO number or supplier name…"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-            />
+          <div className="toolbar">
+            <div className="search-wrap">
+              <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M9 9l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+              <Input
+                type="search"
+                className="search-input"
+                aria-label="Search purchase orders"
+                placeholder="Search by PO number or supplier name…"
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+              />
+            </div>
             <Select
+              aria-label="Filter by supplier"
               value={supplierFilter}
               onChange={(e) => { setSupplierFilter(e.target.value); setPage(0); }}
             >
@@ -245,6 +289,7 @@ export function PurchaseOrders() {
               {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </Select>
             <Select
+              aria-label="Filter by status"
               value={statusFilter}
               onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
             >
@@ -253,15 +298,22 @@ export function PurchaseOrders() {
           </div>
 
           {loading && <div className="muted">Loading…</div>}
-          {!loading && rows.length === 0 && (
+          {!loading && rows.length === 0 && (filtersActive ? (
+            <EmptyState
+              title="No purchase orders match these filters"
+              body="Try a different search, supplier or status."
+              action={<Button onClick={clearFilters}>Clear filters</Button>}
+            />
+          ) : (
             <EmptyState
               title="No purchase orders yet"
-              body="Click 'New purchase order' to record your first one."
+              body={canManage ? 'Record your first order to start tracking landed cost.' : 'Purchase orders recorded for this company will be listed here.'}
+              action={canManage ? <Button variant="primary" onClick={() => setCreating(true)}>+ New purchase order</Button> : null}
             />
-          )}
+          ))}
           {!loading && rows.length > 0 && (
-            <div className="pos-table-wrap">
-              <table className="pos-table">
+            <div className="data-table-wrap">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th>PO #</th>
@@ -270,20 +322,19 @@ export function PurchaseOrders() {
                     <th>Payment</th>
                     <th>Incoterm</th>
                     <th>Currency</th>
-                    <th className="ralign">Lines</th>
-                    <th className="ralign">Total USD</th>
+                    <th className="is-num">Lines</th>
+                    <th className="is-num">Total USD</th>
                     <th>Ordered</th>
                     <th>Received</th>
-                    <th></th>
+                    {canManage ? <th className="is-actions" aria-label="Actions" /> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {visibleRows.map((po) => (
                     <tr
                       key={po.id}
-                      className="pos-row"
+                      className="is-clickable"
                       onClick={() => setOpenPoId(po.id)}
-                      style={{ cursor: 'pointer' }}
                     >
                       <td><strong>{po.poNumber || '(no number)'}</strong></td>
                       <td>{po.supplierName || '—'}</td>
@@ -295,13 +346,15 @@ export function PurchaseOrders() {
                       </td>
                       <td>{po.incoterm || '—'}</td>
                       <td>{po.currency || '—'}</td>
-                      <td className="ralign">{po.linesCount || 0}</td>
-                      <td className="ralign">{fmtUsd(po.totalValueUsd + (po.totalComponentsUsd || 0))}</td>
-                      <td>{fmtDate(po.orderedAt)}</td>
-                      <td>{fmtDate(po.receivedAt)}</td>
-                      <td className="ralign" onClick={(e) => e.stopPropagation()}>
-                        <Button variant="ghost" onClick={() => handleRemove(po)}>Delete</Button>
-                      </td>
+                      <td className="is-num">{po.linesCount || 0}</td>
+                      <td className="is-num">{fmtUsd(po.totalValueUsd + (po.totalComponentsUsd || 0))}</td>
+                      <td>{formatDate(po.orderedAt)}</td>
+                      <td>{formatDate(po.receivedAt)}</td>
+                      {canManage ? (
+                        <td className="is-actions" onClick={(e) => e.stopPropagation()}>
+                          <Button variant="danger" size="sm" onClick={() => handleRemove(po)}>Delete</Button>
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>
@@ -325,6 +378,7 @@ export function PurchaseOrders() {
 
       {creating && (
         <NewPOModal
+          companyId={activeCompanyId}
           suppliers={suppliers}
           onCancel={() => setCreating(false)}
           onCreate={handleCreate}
@@ -339,25 +393,46 @@ export function PurchaseOrders() {
  * exchange rate, container type, incoterm. Everything else (lines,
  * components, status flow) happens on the detail page.
  */
-function NewPOModal({ suppliers, onCancel, onCreate }) {
+function NewPOModal({ companyId, suppliers, onCancel, onCreate }) {
   // Default to the first supplier so the currency / incoterm prefills
   // are sensible without the user having to pick again.
   const [supplierId, setSupplierId] = useState(suppliers[0]?.id || '');
   const supplier = suppliers.find((s) => s.id === supplierId) || null;
   const [poNumber, setPoNumber] = useState('');
+  const poNumberTouched = useRef(false);
+  const [suggested, setSuggested] = useState(false);
   const [currency, setCurrency] = useState(supplier?.defaultCurrency || 'USD');
   const [incoterm, setIncoterm] = useState(supplier?.defaultIncoterm || 'FOB');
   const [exchangeRateToUsd, setExchangeRateToUsd] = useState(currency === 'USD' ? 1 : '');
   const [containerType, setContainerType] = useState('40HQ');
   const [orderedAt, setOrderedAt] = useState(new Date().toISOString().slice(0, 10));
 
-  // Re-prefill currency/incoterm when supplier changes.
+  // Re-prefill currency/incoterm when supplier changes. A non-USD supplier
+  // clears the rate — a USD supplier's 1 carried over to a CNY one would
+  // price every line at 1 CNY = 1 USD — so Create stays disabled until the
+  // real rate is typed.
   useEffect(() => {
     if (!supplier) return;
-    setCurrency(supplier.defaultCurrency || 'USD');
+    const nextCurrency = supplier.defaultCurrency || 'USD';
+    setCurrency(nextCurrency);
     setIncoterm(supplier.defaultIncoterm || 'FOB');
-    if ((supplier.defaultCurrency || 'USD') === 'USD') setExchangeRateToUsd(1);
+    setExchangeRateToUsd(nextCurrency === 'USD' ? 1 : '');
   }, [supplier]);
+
+  // Suggest the next PO number from this company's existing ones (their own
+  // pattern, e.g. PO-2026-007 → PO-2026-008). Never overwrites a typed value.
+  useEffect(() => {
+    if (!companyId || !window.api?.purchaseOrders?.list) return undefined;
+    let cancelled = false;
+    Promise.resolve(window.api.purchaseOrders.list(companyId, { status: 'all' }))
+      .then((list) => {
+        if (cancelled || poNumberTouched.current) return;
+        const next = suggestNextPoNumber((Array.isArray(list) ? list : []).map((po) => po.poNumber));
+        if (next) { setPoNumber(next); setSuggested(true); }
+      })
+      .catch(() => { /* no suggestion — the field stays empty */ });
+    return () => { cancelled = true; };
+  }, [companyId]);
 
   function submit() {
     onCreate({
@@ -383,8 +458,15 @@ function NewPOModal({ suppliers, onCancel, onCreate }) {
       size="md"
       footer={
         <>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
-          <Button variant="primary" onClick={submit} disabled={!canSubmit}>Create</Button>
+          <Button onClick={onCancel}>Cancel</Button>
+          <Button
+            variant="primary"
+            onClick={submit}
+            disabled={!canSubmit}
+            title={canSubmit ? undefined : !supplierId ? 'Choose a supplier first' : `Enter the exchange rate for ${currency} first`}
+          >
+            Create purchase order
+          </Button>
         </>
       }
     >
@@ -400,17 +482,18 @@ function NewPOModal({ suppliers, onCancel, onCreate }) {
           <span className="field__label">PO number</span>
           <Input
             value={poNumber}
-            onChange={(e) => setPoNumber(e.target.value)}
+            onChange={(e) => { poNumberTouched.current = true; setPoNumber(e.target.value); }}
             placeholder="e.g. PO-2026-001"
           />
+          {suggested ? <span className="field__hint">Suggested from your existing PO numbers. Change it freely.</span> : null}
         </label>
         <label className="field">
           <span className="field__label">Currency</span>
           <Select value={currency} onChange={(e) => {
             const v = e.target.value;
             setCurrency(v);
-            if (v === 'USD') setExchangeRateToUsd(1);
-            else if (exchangeRateToUsd === 1) setExchangeRateToUsd('');
+            // A rate belongs to one currency: switching clears it.
+            setExchangeRateToUsd(v === 'USD' ? 1 : '');
           }}>
             {['USD','CNY','THB','VND','KHR','EUR','JPY','KRW','INR','IDR','MYR','SGD'].map((c) =>
               <option key={c} value={c}>{c}</option>)}
@@ -467,10 +550,4 @@ function NewPOModal({ suppliers, onCancel, onCreate }) {
 function fmtUsd(n) {
   const v = Number(n) || 0;
   return `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-function fmtDate(ts) {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString();
 }

@@ -543,6 +543,32 @@ app.whenReady().then(() => {
     logEvent('recycle:sweep-failed', err.message);
   }
 
+  /* 0.1.89: a 'discount' cost line always lowers cost now, whatever sign it
+   * was stored with — but POs saved before that kept cached totals (list
+   * totals, per-line landed cost) built from the old, cost-RAISING maths.
+   * Recompute those POs once, flagged in app_state so it never runs again.
+   * Best-effort: a failure must never stop the app from starting. */
+  try {
+    const dbMod = require('./db');
+    if (dbMod.getAppState('po_discount_recompute_v1') !== 'done') {
+      const ids = dbMod.getDb()
+        .prepare(`SELECT DISTINCT po_id FROM po_cost_components WHERE lower(kind) = 'discount'`)
+        .all()
+        .map((r) => r.po_id);
+      const pos = require('./db/purchaseOrders');
+      let failed = 0;
+      for (const id of ids) {
+        // One PO that cannot be recomputed must not keep the whole pass (and
+        // a crash.log line) coming back at every launch.
+        try { pos.recomputeHeader(id); } catch (err) { failed += 1; logEvent('po:discount-recompute-po-failed', `${id}: ${err.message}`); }
+      }
+      dbMod.setAppState('po_discount_recompute_v1', 'done');
+      if (ids.length) logEvent('po:discount-recompute', `pos=${ids.length} failed=${failed}`);
+    }
+  } catch (err) {
+    logEvent('po:discount-recompute-failed', err.message);
+  }
+
   registerImageProtocol(config.dataDir);
   registerRendererProtocol(path.join(__dirname, '..', '..', 'dist-renderer'));
   registerIpc({ getMainWindow: () => mainWindow });

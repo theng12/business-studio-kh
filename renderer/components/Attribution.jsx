@@ -11,6 +11,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { useAppStore } from '../store/index.js';
+import { formatDateTime, timeAgo } from '../lib/format.js';
 
 /* One minute ticker shared by every chip on screen. Each chip used to start
  * its own 60s interval, so a 200-row Library page ran 200 timers firing out
@@ -43,25 +44,6 @@ function useMinuteTick() {
   return useSyncExternalStore(subscribeMinute, getMinuteTick);
 }
 
-function relativeTime(ts) {
-  if (!ts) return '';
-  const now = Date.now();
-  const diffMs = now - Number(ts);
-  if (diffMs < 0) return 'just now';
-  const sec = Math.floor(diffMs / 1000);
-  if (sec < 60) return 'just now';
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} min ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} hr ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
-  const mo = Math.floor(day / 30);
-  if (mo < 12) return `${mo} mo ago`;
-  const yr = Math.floor(mo / 12);
-  return `${yr} yr ago`;
-}
-
 export function Attribution({ updatedAt, updatedByUserId, prefix = 'Edited' }) {
   const attributionUsers = useAppStore((s) => s.attributionUsers);
   // Re-render once a minute so the relative time stays fresh.
@@ -71,12 +53,12 @@ export function Attribution({ updatedAt, updatedByUserId, prefix = 'Edited' }) {
   const name = updatedByUserId ? (attributionUsers?.[updatedByUserId] ?? null) : null;
 
   return (
-    <div className="attribution" title={new Date(Number(updatedAt)).toLocaleString()}>
+    <div className="attribution" title={formatDateTime(updatedAt)}>
       <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
         <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.1" />
         <path d="M6 3.2v3l1.8 1.1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
       </svg>
-      <span>{prefix} {relativeTime(updatedAt)}</span>
+      <span>{prefix} {timeAgo(updatedAt)}</span>
       {name ? <span className="attribution__by">by <strong>{name}</strong></span> : null}
     </div>
   );
@@ -98,10 +80,10 @@ export function CompactAttribution({ updatedAt, updatedByUserId }) {
 
   if (!updatedAt) return null;
   const name = updatedByUserId ? (attributionUsers?.[updatedByUserId] ?? null) : null;
-  const when = relativeTime(updatedAt);
+  const when = timeAgo(updatedAt);
   const tip = name
-    ? `Edited ${when} by ${name} (${new Date(Number(updatedAt)).toLocaleString()})`
-    : `Edited ${new Date(Number(updatedAt)).toLocaleString()}`;
+    ? `Edited ${when} by ${name} (${formatDateTime(updatedAt)})`
+    : `Edited ${formatDateTime(updatedAt)}`;
   return (
     <span className="attribution--compact" title={tip}>
       <span className="attribution--compact__when">{when}</span>

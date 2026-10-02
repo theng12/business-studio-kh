@@ -101,8 +101,18 @@ export function defaultElement(type) {
  * estimation when the element doesn't declare an explicit width. Caller
  * passes the token-filled content so the bg pill auto-sizes to fit
  * "BF-R5232-GD" instead of the un-filled "{sku}" string.
+ *
+ * `designW × designH` is the template's design size: font size and padding
+ * are design pixels, shown on screen at `canvasW / designW` — the same factor
+ * the export uses for its own output size (templateRenderer designPixelScale).
+ *
+ * `measureInk(text, el)` is optional: it returns the text's real inked width in
+ * those same pixels (the editor measures with a canvas 2D context). The server
+ * sizes a text box from the measured ink since the clipped-glyph fix, so the
+ * editor's box should too; without a measurer (tests, no DOM) the old ~0.55 em
+ * per character estimate is used.
  */
-export function elementBox(el, canvasW, canvasH, previewText = null, designW = 2000, designH = 2000) {
+export function elementBox(el, canvasW, canvasH, previewText = null, designW = 2000, designH = 2000, measureInk = null) {
   const explicitW = (el.width  ?? 0) * canvasW;
   const explicitH = (el.height ?? 0) * canvasH;
   // Text fallback: estimate from the actual content + font + padding so a
@@ -120,16 +130,25 @@ export function elementBox(el, canvasW, canvasH, previewText = null, designW = 2
   let fallbackW = explicitW;
   let fallbackH = explicitH;
   if (el.type === 'text') {
-    const fontSize = el.font?.size ?? 48;
+    // The renderer never draws below 8 px (renderTextElement).
+    const fontSize = Math.max(8, Number(el.font?.size ?? 48));
     const padding = (el.bg?.padding ?? 0);
     const scaleX = designW ? canvasW / designW : 1;
     const scaleY = designH ? canvasH / designH : 1;
     const sample = previewText && previewText.length > 0 ? previewText : (el.content || '');
-    // Width = character count × 0.55em + horizontal padding × 2, in DESIGN
-    // px, then scaled to the editor's CSS pixel size. Clamp to a sane
+    // Width = text width (measured ink, else character count × 0.55em) +
+    // horizontal padding × 2, in DESIGN px, then scaled to the editor's CSS
+    // pixel size. Clamp to a sane
     // minimum so a brand-new empty text element is still grabbable.
-    const designWpx = Math.max(80, sample.length * fontSize * 0.55 + padding * 2);
-    const designHpx = Math.max(fontSize * 1.15, fontSize + padding * 2);
+    const measured = typeof measureInk === 'function' && sample ? measureInk(sample, el) : null;
+    const textWpx = Number.isFinite(measured) && measured > 0 ? measured : sample.length * fontSize * 0.55;
+    const designWpx = Math.max(80, textWpx + padding * 2);
+    // Height = one line (1.15 em) + padding top and bottom — the renderer's
+    // `lineHeight + padding * 2`. This was `max(1.15 em, 1 em + 2 × padding)`,
+    // which came out shorter than the render whenever there was padding
+    // (120 vs 134 px for a 96 px font with 12 px padding), so a
+    // bottom-anchored text sat lower in the export than in the editor.
+    const designHpx = fontSize * 1.15 + padding * 2;
     fallbackW = designWpx * scaleX;
     fallbackH = designHpx * scaleY;
   }

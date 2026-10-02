@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Badge, Button, EmptyState, Pagination, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
+import { appImageSrc } from '../../lib/imageUrl.js';
 import { PromoteToProductDialog } from './PromoteToProductDialog.jsx';
 
 /**
@@ -72,7 +73,8 @@ export function BulkGallery({ refreshKey, addToast }) {
   async function handleDelete(entry) {
     const ok = await confirm({
       title: 'Delete this result?',
-      message: 'The image will be removed from the bulk gallery and from disk.',
+      message: 'It leaves the bulk gallery, and its image file moves to the Trash on the Mac that holds the data.',
+      detail: 'To get it back, open the Trash in Finder and choose Put Back — the gallery entry itself is not restored.',
       danger: true,
       confirmLabel: 'Delete',
     });
@@ -102,7 +104,10 @@ export function BulkGallery({ refreshKey, addToast }) {
 
   return (
     <section className="ai-card ai-card--gallery">
-      <h3 className="ai-card__title">Bulk gallery <span className="ai-card__title-count">{total}</span></h3>
+      <div className="section-head">
+        <h2 className="section-title">Bulk gallery</h2>
+        <p className="section-hint">{total} result{total === 1 ? '' : 's'}</p>
+      </div>
       {loading && rows.length === 0 ? (
         <p className="muted">Loading…</p>
       ) : total === 0 ? (
@@ -117,7 +122,7 @@ export function BulkGallery({ refreshKey, addToast }) {
               <div key={entry.id} className="ai-bulk-gallery__tile">
                 <div className="ai-bulk-gallery__thumb">
                   <img
-                    src={`app-image://local/${encodeURIComponent(entry.filepath)}`}
+                    src={appImageSrc(entry.filepath, entry.id, { w: 320 })}
                     alt=""
                     loading="lazy"
                   />
