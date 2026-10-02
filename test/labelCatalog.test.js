@@ -256,7 +256,7 @@ test('Run again rebuilds the Generate & Print settings from a recorded run', () 
 test('leaving the template builder with unsaved changes asks first', () => {
   const src = read('renderer/modules/CatalogStudio/TemplateBuilder.jsx');
   assert.match(src, /if \(dirty && !\(await confirm\(/);
-  assert.match(src, /onClick=\{leave\}>← Catalog templates/);
+  assert.match(src, /backTo=\{\{ label: backLabel, onClick: leave \}\}/, 'the header back button asks first too');
   assert.match(src, /<Button onClick=\{leave\} disabled=\{saving\}>Cancel/);
   assert.doesNotMatch(src, /onClick=\{onClose\}/);
 });

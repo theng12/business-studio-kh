@@ -17,10 +17,13 @@ const CANVAS_PRESETS = [
 ];
 import { useAppStore } from '../../store/index.js';
 import { Button, Field, Input, Select, SliderField } from '../../components/ui.jsx';
+import { PageHeader } from '../../components/PageHeader.jsx';
+import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { defaultElement } from './elementDefaults.js';
 import { EditorCanvas } from './EditorCanvas.jsx';
 import { Inspector } from './Inspector.jsx';
+import { EyeIcon, EyeOffIcon, LockIcon, UnlockIcon } from './icons.jsx';
 import { BulkOverlayRunModal } from '../ProductLibrary/BulkOverlayRunModal.jsx';
 import { priceEntry } from '../../lib/prices.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
@@ -335,7 +338,8 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
      * the typo. */
     if (saveTimer.current) clearTimeout(saveTimer.current);
     if (json === lastSavedJSON.current) return;  // genuinely nothing to save
-    setSaveStatus((s) => ({ ...s, state: 'saving' }));
+    // Waiting for the debounce: "Unsaved changes" (the Save button flushes now).
+    setSaveStatus((s) => ({ ...s, state: 'dirty' }));
     saveTimer.current = setTimeout(() => {
       saveNow(next, /* showToast */ false);
     }, 500);
@@ -350,6 +354,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
       if (showToast) addToast('Already saved', 'info');
       return;
     }
+    setSaveStatus((s) => ({ ...s, state: 'saving' }));
     try {
       await window.api.templates.update(t.id, {
         name: t.name,
@@ -365,7 +370,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
       onChanged?.();
       if (showToast) addToast('Saved', 'success');
     } catch (err) {
-      setSaveStatus({ state: 'error', lastSavedAt: null });
+      setSaveStatus((s) => ({ state: 'error', lastSavedAt: s.lastSavedAt, error: err.message }));
       addToast(`Save failed: ${err.message}`, 'error');
     }
   }
@@ -464,8 +469,16 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
 
   /* ── render ──────────────────────────────────────────────── */
 
+  // docs/UI_GUIDE.md: the editor's header is the page header — back to the
+  // list via `backTo`, SaveStatus first in the actions, the primary last.
+  const back = { label: 'All templates', onClick: onClose };
   if (!template) {
-    return <div className="ovl-editor"><p className="muted" style={{ padding: 'var(--s-4)' }}>Loading template…</p></div>;
+    return (
+      <>
+        <PageHeader title="Overlay Studio" subtitle="Loading template…" backTo={back} />
+        <div className="ovl-editor"><p className="muted">Loading template…</p></div>
+      </>
+    );
   }
 
   const selectedElement = template.elements.find((e) => e.id === selectedId) ?? null;
@@ -474,6 +487,30 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
   const insetIsWhite = (inset?.fillColor || '').toUpperCase() === '#FFFFFF';
 
   return (
+    <>
+    <PageHeader
+      title="Overlay Studio"
+      subtitle={`Editing “${template.name || 'Untitled template'}” · ${template.canvasWidth} × ${template.canvasHeight}`}
+      backTo={back}
+      actions={(
+        <>
+          <SaveStatus status={saveStatus} error={saveStatus.error} onSave={() => saveNow()} />
+          {/* v0.26.15: single-product apply. Renders the template against
+              whichever product the user has in "Preview against" (the
+              dropdown in the toolbar), routes the output per the
+              destination radio in the modal. Disabled until a product is
+              chosen so the user gets a tooltip instead of a silent no-op. */}
+          <Button
+            onClick={() => setApplyOpen(true)}
+            disabled={!backdropProductId}
+            title={backdropProductId
+              ? 'Render this template against the previewed product and save the result.'
+              : 'Pick a product in "Preview against" to enable Apply.'}
+          >Apply…</Button>
+          <Button variant="primary" onClick={onClose}>Done</Button>
+        </>
+      )}
+    />
     <div className="ovl-editor">
       <header className="ovl-editor__head">
         <div className="ovl-editor__head-left">
@@ -513,25 +550,6 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
           </div>
         </div>
 
-        <div className="ovl-editor__head-right">
-          <SaveStatus status={saveStatus} />
-          {/* v0.26.15: single-product apply. Renders the template against
-              whichever product the user has in "Preview against" (the
-              dropdown below this header), routes the output per the
-              destination radio in the modal. Disabled until a product is
-              chosen so the user gets a tooltip instead of a silent no-op. */}
-          <Button
-            onClick={() => setApplyOpen(true)}
-            disabled={!backdropProductId}
-            title={backdropProductId
-              ? 'Render this template against the previewed product and save the result.'
-              : 'Pick a product in "Preview against" below to enable Apply.'}
-          >Apply…</Button>
-          <Button onClick={() => saveNow()} disabled={saveStatus.state === 'saving'}>
-            {saveStatus.state === 'saving' ? 'Saving…' : 'Save'}
-          </Button>
-          <Button variant="primary" onClick={onClose}>Done</Button>
-        </div>
       </header>
 
       <div className="ovl-editor__toolbar">
@@ -792,6 +810,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
         onDone={() => setApplyOpen(false)}
       />
     </div>
+    </>
   );
 }
 
@@ -803,8 +822,8 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
  *
  * Per-row controls:
  *   - Click row name → select
- *   - 👁 eye toggle  → flip element.visible
- *   - 🔒 lock toggle → flip element.locked
+ *   - eye toggle    → flip element.visible
+ *   - lock toggle   → flip element.locked
  *   - ↑ / ↓ arrows  → swap with neighbor in elements array (moves
  *     the layer forward / backward in the render order)
  *   - × delete      → drop the element entirely (no confirm — the
@@ -819,7 +838,7 @@ function LayersPanel({ elements, selectedId, onSelect, onChange, onReorder, onDe
   const rows = [...elements].map((el, arrIdx) => ({ el, arrIdx })).reverse();
   return (
     <section className="ovl-layers">
-      <h3 className="ovl-layers__title">LAYERS</h3>
+      <h3 className="section-title ovl-layers__title">Layers</h3>
       {elements.length === 0 ? (
         <p className="ovl-layers__empty muted">
           No elements yet. Use the + Text / + Barcode / + Image buttons in the toolbar to add one.
@@ -852,14 +871,14 @@ function LayersPanel({ elements, selectedId, onSelect, onChange, onReorder, onDe
                   onClick={(e) => { e.stopPropagation(); onChange(el.id, { visible: isHidden }); }}
                   title={isHidden ? 'Show layer' : 'Hide layer'}
                   aria-label={isHidden ? 'Show layer' : 'Hide layer'}
-                >{isHidden ? '◌' : '●'}</button>
+                >{isHidden ? <EyeOffIcon /> : <EyeIcon />}</button>
                 <button
                   type="button"
                   className={`ovl-layer__icon${isLocked ? ' is-on' : ''}`}
                   onClick={(e) => { e.stopPropagation(); onChange(el.id, { locked: !isLocked }); }}
                   title={isLocked ? 'Unlock layer' : 'Lock layer'}
                   aria-label={isLocked ? 'Unlock layer' : 'Lock layer'}
-                >{isLocked ? '🔒' : '🔓'}</button>
+                >{isLocked ? <LockIcon /> : <UnlockIcon />}</button>
                 <button
                   type="button"
                   className="ovl-layer__icon"
@@ -1061,33 +1080,3 @@ function expandHex(hex) {
   return '#FFFFFF';
 }
 
-function SaveStatus({ status }) {
-  // Tick every 30s so the "X min ago" text refreshes. The timer lives here,
-  // not in the editor, so only this badge re-renders — not the whole canvas.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 30000);
-    return () => clearInterval(id);
-  }, []);
-  if (status.state === 'saving') return <span className="ws-save ws-save--amber">Saving…</span>;
-  if (status.state === 'error')  return <span className="ws-save ws-save--rose">● Save failed</span>;
-  if (status.state === 'saved' || (status.state === 'idle' && status.lastSavedAt)) {
-    return (
-      <span className="ws-save ws-save--emerald" title={status.lastSavedAt ? new Date(status.lastSavedAt).toLocaleString() : ''}>
-        ● All changes saved{status.lastSavedAt ? ` · ${formatAgo(status.lastSavedAt)}` : ''}
-      </span>
-    );
-  }
-  return null;
-}
-
-function formatAgo(ts) {
-  const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (secs < 5)   return 'just now';
-  if (secs < 60)  return `${secs}s ago`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60)  return `${mins} min ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24)   return `${hrs}h ago`;
-  return new Date(ts).toLocaleDateString();
-}

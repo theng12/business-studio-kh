@@ -629,7 +629,9 @@ function ElementBox({ element, pxPerMm, selected, hideHandles, onPointerDown, on
     cursor: element.locked ? 'not-allowed' : 'move',
     // A thin element (divider, colour bar) needs a grab area bigger than itself.
     minHeight: element.height * pxPerMm < 6 ? 6 : undefined,
-    outline: selected ? '1.5px solid #6366f1' : '1px solid transparent',
+    // UI pass, 2026-10: the selection ring is the brand near-black, not indigo
+    // (matches .ld-handle / .ld-bbox in index.css).
+    outline: selected ? '1.5px solid #1c1c1f' : '1px solid transparent',
     outlineOffset: 1,
     boxSizing: 'border-box',
   };

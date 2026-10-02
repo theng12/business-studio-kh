@@ -19,6 +19,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal, Button } from './ui.jsx';
 import { useAppStore } from '../store/index.js';
+import { timeAgo } from '../lib/format.js';
 
 let _setRequest = null;
 
@@ -75,17 +76,6 @@ export async function resolveSaveConflict(error, { refresh, overwrite, choose = 
   return { choice: 'cancel' };
 }
 
-function relativeTime(ts) {
-  if (!ts) return '';
-  const diff = Date.now() - Number(ts);
-  if (diff < 60_000) return 'just now';
-  const min = Math.floor(diff / 60_000);
-  if (min < 60) return `${min} min ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} hr ago`;
-  return new Date(Number(ts)).toLocaleString();
-}
-
 export function ConflictModalHost() {
   const [request, setRequest] = useState(null);
   const requestRef = useRef(null);
@@ -108,7 +98,7 @@ export function ConflictModalHost() {
   const editorName = conflict?.updatedByUserId
     ? (attributionUsers?.[conflict.updatedByUserId] ?? 'another user')
     : 'another editor';
-  const when = relativeTime(conflict?.updatedAt);
+  const when = timeAgo(conflict?.updatedAt);
   const label = conflict?.sku || conflict?.name || conflict?.id || 'this item';
 
   function done(outcome) {

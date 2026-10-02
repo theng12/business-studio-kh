@@ -45,20 +45,20 @@ export function TableView({
               ) : null}
             </th>
             <th className="col-thumb"></th>
-            <SortHeader sortKey="sku"      label="SKU"            sort={sort} onSort={onSort} />
-            {show('brand')    ? <SortHeader sortKey="brand"    label="Brand"          sort={sort} onSort={onSort} /> : null}
-            {show('name')     ? <SortHeader sortKey="name"     label="Name"           sort={sort} onSort={onSort} /> : null}
-            {show('category') ? <SortHeader sortKey="category" label="Category"       sort={sort} onSort={onSort} /> : null}
-            {show('color')    ? <SortHeader sortKey="color"    label="Color / Finish" sort={sort} onSort={onSort} /> : null}
+            <SortHeader sortKey="sku"      label="SKU"            sort={sort} onSort={onSort} className="col-sku" />
+            {show('brand')    ? <SortHeader sortKey="brand"    label="Brand"          sort={sort} onSort={onSort} className="col-brand" /> : null}
+            {show('name')     ? <SortHeader sortKey="name"     label="Name"           sort={sort} onSort={onSort} className="col-name" /> : null}
+            {show('category') ? <SortHeader sortKey="category" label="Category"       sort={sort} onSort={onSort} className="col-category" /> : null}
+            {show('color')    ? <SortHeader sortKey="color"    label="Color / Finish" sort={sort} onSort={onSort} className="col-color" /> : null}
             {show('images')   ? <SortHeader sortKey="images"   label="Images"         sort={sort} onSort={onSort} numeric /> : null}
-            {show('cost')     ? <th className="col-num">Landed cost</th> : null}
-            {show('process')  ? <th>Process</th> : null}
-            {show('status')   ? <th>Status</th> : null}
+            {show('cost')     ? <th className="col-num col-cost">Landed cost</th> : null}
+            {show('process')  ? <th className="col-process">Process</th> : null}
+            {show('status')   ? <th className="col-status">Status</th> : null}
             {/* v0.22.5: "Edited" column surfaces the per-row attribution
                 (relative time + editor name) right in the list, so you
                 don't have to open the side panel to see who last touched
                 a row. v0.22.7 made this column user-toggleable. */}
-            {show('edited')   ? <SortHeader sortKey="updated" label="Edited" sort={sort} onSort={onSort} /> : null}
+            {show('edited')   ? <SortHeader sortKey="updated" label="Edited" sort={sort} onSort={onSort} className="col-edited" /> : null}
             <th className="col-actions"></th>
           </tr>
         </thead>
@@ -91,12 +91,12 @@ export function TableView({
  * column starts in 'asc' (text) or 'desc' (numeric) — that policy lives in
  * the store's setProductSort.
  */
-function SortHeader({ sortKey, label, sort, onSort, numeric = false }) {
+function SortHeader({ sortKey, label, sort, onSort, numeric = false, className = '' }) {
   const active = sort?.key === sortKey;
   const dir = active ? sort.dir : null;
   return (
     <th
-      className={`lib-th-sort${active ? ' is-active' : ''}${numeric ? ' col-num' : ''}`}
+      className={`lib-th-sort${active ? ' is-active' : ''}${numeric ? ' col-num' : ''}${className ? ` ${className}` : ''}`}
       onClick={() => onSort(sortKey)}
       title={`Sort by ${label}`}
     >
@@ -164,11 +164,16 @@ const TableRow = memo(function TableRow({
           <div className="thumb-placeholder" aria-hidden>·</div>
         )}
       </td>
-      <td className="col-sku">{p.sku}</td>
-      {show('brand')    ? <td>{brand?.name ?? <span className="muted">—</span>}</td> : null}
-      {show('name')     ? <td>{p.name ?? <span className="muted">—</span>}</td> : null}
-      {show('category') ? <td>{category?.name ?? <span className="muted">—</span>}</td> : null}
-      {show('color')    ? <td>{p.colorFinish ?? <span className="muted">—</span>}</td> : null}
+      {/* UI pass, 2026-10: SKU never breaks mid-string (ellipsis + full
+          value in the tooltip); Name wraps to at most two lines; the
+          short text columns stay on one line. With the detail panel
+          open the table scrolls sideways instead of stacking one word
+          per line. */}
+      <td className="col-sku"><span className="lib-cell-ellipsis" title={p.sku}>{p.sku}</span></td>
+      {show('brand')    ? <td className="col-brand">{brand?.name ?? <span className="muted">—</span>}</td> : null}
+      {show('name')     ? <td className="col-name">{p.name ? <span className="lib-cell-clamp" title={p.name}>{p.name}</span> : <span className="muted">—</span>}</td> : null}
+      {show('category') ? <td className="col-category">{category?.name ?? <span className="muted">—</span>}</td> : null}
+      {show('color')    ? <td className="col-color">{p.colorFinish ?? <span className="muted">—</span>}</td> : null}
       {show('images')   ? <td className="col-num">{p.imageCount}/50</td> : null}
       {show('cost') ? (
         <td className="col-num col-cost" onClick={(e) => e.stopPropagation()}>
@@ -190,8 +195,8 @@ const TableRow = memo(function TableRow({
           )}
         </td>
       ) : null}
-      {show('process')  ? <td>{proc ? <Badge tone={proc.tone}>{proc.label}</Badge> : null}</td> : null}
-      {show('status')   ? <td>{stat ? <Badge tone={stat.tone}>{stat.label}</Badge> : null}</td> : null}
+      {show('process')  ? <td className="col-process">{proc ? <Badge tone={proc.tone}>{proc.label}</Badge> : null}</td> : null}
+      {show('status')   ? <td className="col-status">{stat ? <Badge tone={stat.tone}>{stat.label}</Badge> : null}</td> : null}
       {show('edited') ? (
         <td className="col-edited">
           <CompactAttribution updatedAt={p.updatedAt} updatedByUserId={p.updatedByUserId} />

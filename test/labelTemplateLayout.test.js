@@ -13,16 +13,21 @@ test('label template card actions stay inside narrow grid cards', () => {
   assert.match(css, /\.studio-card--template \.studio-card__actions > button\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/s);
 });
 
+/* UI pass 2026-10: catalog cards moved onto the shared `.card` (docs/UI_GUIDE.md).
+ * The guarantee is the same — actions never push outside a narrow card — but it
+ * now comes from `.card__actions` wrapping its ROW, not a private 3-column grid. */
 test('catalog project card actions stay inside narrow grid cards', () => {
-  assert.match(css, /\.catalog-project-card__meta\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);
-  assert.match(css, /\.catalog-project-card__meta > div:last-child\s*\{[^}]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)[^}]*width:\s*100%/s);
-  assert.match(css, /\.catalog-project-card__meta > div:last-child > button\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/s);
+  assert.match(css, /\.card__actions\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap/s);
+  assert.match(css, /\.btn\s*\{[^}]*white-space:\s*nowrap/s, 'button labels never wrap inside a squeezed card');
+  assert.match(catalogSource, /<article className="card catalog-card">/);
+  assert.match(catalogSource, /<div className="card__actions">\s*<Button variant="primary" size="sm" onClick=\{onOpen\}>Open<\/Button>/);
+  assert.match(catalogSource, /<Button variant="danger" size="sm" onClick=\{onDelete\}>Delete<\/Button>/);
 });
 
 test('catalog studio exposes templates, projects, return navigation, and explicit product panels', () => {
   assert.match(sidebarSource, /id: 'catalogtemplates', name: 'Catalog Templates'/);
   assert.match(sidebarSource, /id: 'catalogprojects', name: 'Catalog Projects'/);
-  assert.match(catalogSource, /← Catalog projects/);
+  assert.match(catalogSource, /backTo=\{\{ label: 'Catalog projects', onClick: leaveEditor \}\}/);
   assert.match(catalogSource, />Product Library</);
   assert.match(catalogSource, />Included in catalog</);
   assert.match(catalogSource, /selectionMode: 'explicit'/);

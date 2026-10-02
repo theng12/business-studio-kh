@@ -6,6 +6,7 @@ import { hasCap, hasAnyCap } from '../lib/capabilities.js';
 import { WhatsNewModal } from './WhatsNewModal.jsx';
 import { PresenceModal } from './PresenceModal.jsx';
 import { ConnectionLegendModal } from './ConnectionLegendModal.jsx';
+import { timeAgo } from '../lib/format.js';
 
 /**
  * v0.26.30: collapsible sidebar. When the user runs the app on a
@@ -68,17 +69,20 @@ export const NAV = [
   {
     label: 'Label Studio',
     items: [
-      { id: 'labeltemplates', name: 'Label Templates', icon: IconOverlay, caps: ['labels.use'] },
-      { id: 'labelgenerate', name: 'Generate & Print', icon: IconExport, caps: ['labels.use'] },
-      { id: 'barcodes', name: 'Barcode Maker', icon: IconLibrary, caps: ['labels.use'] },
-      { id: 'labeljobs', name: 'Label History', icon: IconHistory, caps: ['labels.use'] },
+      // UI pass, 2026-10: every entry has its own glyph — these used to
+      // borrow Overlay / Export / Library / History, so four rows in a
+      // column looked identical.
+      { id: 'labeltemplates', name: 'Label Templates', icon: IconLabel, caps: ['labels.use'] },
+      { id: 'labelgenerate', name: 'Generate & Print', icon: IconPrint, caps: ['labels.use'] },
+      { id: 'barcodes', name: 'Barcode Maker', icon: IconBarcode, caps: ['labels.use'] },
+      { id: 'labeljobs', name: 'Label History', icon: IconLabelHistory, caps: ['labels.use'] },
     ],
   },
   {
     label: 'Catalog Studio',
     items: [
-      { id: 'catalogtemplates', name: 'Catalog Templates', icon: IconOverlay, caps: ['catalog.design'] },
-      { id: 'catalogprojects', name: 'Catalog Projects', icon: IconExport, caps: ['catalog.design'] },
+      { id: 'catalogtemplates', name: 'Catalog Templates', icon: IconCatalogTemplate, caps: ['catalog.design'] },
+      { id: 'catalogprojects', name: 'Catalog Projects', icon: IconCatalog, caps: ['catalog.design'] },
     ],
   },
   {
@@ -87,7 +91,7 @@ export const NAV = [
     // products out for an audience), just sized for a post instead of a page.
     label: 'Social',
     items: [
-      { id: 'socialgrid', name: 'Social Grid', icon: IconExport, caps: ['catalog.design'] },
+      { id: 'socialgrid', name: 'Social Grid', icon: IconSocialGrid, caps: ['catalog.design'] },
     ],
   },
   {
@@ -103,6 +107,10 @@ export const NAV = [
   },
   {
     label: 'System',
+    // UI pass, 2026-10 (§5): pinned under the scrolling list, above the
+    // footer, so Settings is on screen at any window height — on a
+    // 1000px-tall window it used to sit below the fold.
+    pinned: true,
     items: [
       // v0.26.31: global audit-log feed. Sits above Settings because
       // it's something users will visit often ("what did my assistant
@@ -152,7 +160,7 @@ export function Sidebar() {
   const version = useAppStore((s) => s.appVersion);
   // v0.13.0: cloud-folder indicator. The store mirrors the
   // `dataDirIsCloud` flag the main process computes on each settings
-  // read, so the sidebar can show a small ☁ badge when the user is
+  // read, so the sidebar can show a small iCloud badge when the user is
   // running against an iCloud-synced data folder.
   const dataDirIsCloud = useAppStore((s) => s.dataDirIsCloud);
   // v0.14.0: show mode chip in the footer when mode != standalone.
@@ -216,6 +224,50 @@ export function Sidebar() {
     return () => { document.body.dataset.role = ''; };
   }, [role]);
 
+  function renderSection(section) {
+    const items = (!closedSections[section.label] || collapsed ? section.items : [])
+      .filter((item) => hasAnyCap(caps, item.caps));
+    // A section whose every item is gated out is dropped whole (v0.49.46).
+    if (section.items.every((item) => !hasAnyCap(caps, item.caps))) return null;
+    return (
+      <div key={section.label} className="sidebar__section">
+        {section.label ? (
+          <button type="button" className="sidebar__section-label" onClick={() => toggleSection(section.label)} aria-expanded={!closedSections[section.label]}>
+            <span>{section.label}</span><svg width="10" height="10" viewBox="0 0 10 10" className={closedSections[section.label] ? 'is-closed' : ''} aria-hidden="true"><path d="m2 3 3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+          </button>
+        ) : null}
+        {items.map((item) => {
+          const Icon = item.icon;
+          const active = activeModule === item.id;
+          const disabled = !isModuleAvailable(item.id);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`sidebar__item${active ? ' is-active' : ''}${disabled ? ' is-disabled' : ''}`}
+              onClick={() => !disabled && setActiveModule(item.id)}
+              title={
+                disabled
+                  ? 'Create a company first'
+                  : item.shortcut
+                  ? `${item.name} (${modKey}${item.shortcut})`
+                  : item.name
+              }
+              aria-current={active ? 'page' : undefined}
+              disabled={disabled}
+            >
+              <Icon className="sidebar__item-icon" />
+              <span>{item.name}</span>
+              {item.shortcut ? (
+                <span className="sidebar__item-shortcut">{modKey}{item.shortcut}</span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <>
       <aside className={`sidebar${collapsed ? ' is-collapsed' : ''}`}>
@@ -247,43 +299,13 @@ export function Sidebar() {
         <CompanySwitcher />
 
         <nav className="sidebar__nav" aria-label="Primary">
-          {NAV.map((section, sectionIdx) => (
-            <div key={sectionIdx} className="sidebar__section">
-              {section.label ? (
-                <button type="button" className="sidebar__section-label" onClick={() => toggleSection(section.label)} aria-expanded={!closedSections[section.label]}>
-                  <span>{section.label}</span><svg width="10" height="10" viewBox="0 0 10 10" className={closedSections[section.label] ? 'is-closed' : ''}><path d="m2 3 3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-                </button>
-              ) : null}
-              {(!closedSections[section.label] || collapsed ? section.items : []).filter((item) => hasAnyCap(caps, item.caps)).map((item) => {
-                const Icon = item.icon;
-                const active = activeModule === item.id;
-                const disabled = !isModuleAvailable(item.id);
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={`sidebar__item${active ? ' is-active' : ''}${disabled ? ' is-disabled' : ''}`}
-                    onClick={() => !disabled && setActiveModule(item.id)}
-                    title={
-                      disabled
-                        ? 'Create a company first'
-                        : item.shortcut
-                        ? `${item.name} (${modKey}${item.shortcut})`
-                        : item.name
-                    }
-                    disabled={disabled}
-                  >
-                    <Icon className="sidebar__item-icon" />
-                    <span>{item.name}</span>
-                    {item.shortcut ? (
-                      <span className="sidebar__item-shortcut">{modKey}{item.shortcut}</span>
-                    ) : null}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+          {NAV.filter((section) => !section.pinned).map(renderSection)}
         </nav>
+        {NAV.some((section) => section.pinned) ? (
+          <nav className="sidebar__nav sidebar__nav--pinned" aria-label="System">
+            {NAV.filter((section) => section.pinned).map(renderSection)}
+          </nav>
+        ) : null}
 
         <div className="sidebar__footer">
           <button
@@ -327,7 +349,7 @@ export function Sidebar() {
               <span
                 className="sidebar__storage-tag sidebar__storage-tag--server"
                 title="This Mac is running in Server mode — it hosts data for other Macs."
-              >🌐 Server</span>
+              ><IconServer className="sidebar__storage-tag-icon" />Server</span>
             ) : appMode === 'client' ? (
               // v0.22.11: clickable. Opens the legend modal which
               // explains what each colour means + shows live state +
@@ -348,13 +370,13 @@ export function Sidebar() {
                 })()}
               >
                 <span className="sidebar__conn-dot" aria-hidden="true" />
-                📡 Client
+                Client
               </button>
             ) : dataDirIsCloud ? (
               <span
                 className="sidebar__storage-tag"
                 title="Data folder is on iCloud Drive. Quit before switching Macs; don't open on two Macs at once."
-              >☁ iCloud</span>
+              ><IconCloud className="sidebar__storage-tag-icon" />iCloud</span>
             ) : null}
           </div>
         </div>
@@ -517,7 +539,7 @@ function PresenceRow({ presence, onClick }) {
  * mode only. The user always has a "yes, the app is alive" signal,
  * not just during boot.
  *
- * Why this matters: the connection-state chip above (📡 Client · green
+ * Why this matters: the connection-state chip above (Client · green
  * dot) tells the user "I CAN reach the server," but it doesn't tell
  * them "I JUST received data from the server." On a slow link those
  * are different facts — pings come back fast, but the actual catalog
@@ -572,9 +594,9 @@ function NetworkChip() {
 
   if (!stats) return null;
 
-  // Format helpers — duplicated from ClientSyncOverlay so the chip
+  // Byte formatter — duplicated from ClientSyncOverlay so the chip
   // can stay rendered in trees that don't import the overlay (none
-  // today, but defensive).
+  // today, but defensive). Times come from renderer/lib/format.js.
   function fmtBytes(n) {
     if (!Number.isFinite(n) || n <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -582,17 +604,6 @@ function NetworkChip() {
     while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
     return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
   }
-  function fmtAgo(ms) {
-    if (!Number.isFinite(ms) || ms < 0) return 'never';
-    const s = Math.floor(ms / 1000);
-    if (s < 2)  return 'just now';
-    if (s < 60) return `${s}s ago`;
-    const m = Math.floor(s / 60);
-    if (m < 60) return `${m}m ago`;
-    const h = Math.floor(m / 60);
-    return `${h}h ago`;
-  }
-
   const idle = stats.lastActivityAt ? (now - stats.lastActivityAt) : null;
   const isActive = stats.inFlight > 0;
   const isStale  = idle != null && idle > 60_000;
@@ -616,7 +627,7 @@ function NetworkChip() {
         `Total calls: ${stats.callCount}${stats.errorCount > 0 ? ` (${stats.errorCount} failed)` : ''}`,
         `In flight: ${stats.inFlight}`,
         `Last call: ${stats.lastChannel || '—'}`,
-        idle != null ? `Last activity: ${fmtAgo(idle)}` : 'No activity yet',
+        idle != null ? `Last activity: ${timeAgo(stats.lastActivityAt, now)}` : 'No activity yet',
       ].filter(Boolean).join('\n')}
     >
       <span className="sidebar__net-chip-arrow" aria-hidden>↓</span>
@@ -632,7 +643,7 @@ function NetworkChip() {
           : isActive
             ? 'syncing…'
             : idle != null
-              ? fmtAgo(idle)
+              ? timeAgo(stats.lastActivityAt, now)
               : 'idle'}
       </span>
     </div>
@@ -711,7 +722,7 @@ function IconSettings({ className }) {
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.85"
       strokeLinecap="round"
       strokeLinejoin="round"
     >
@@ -792,8 +803,8 @@ function IconHeart({ className }) {
 function IconAiStudio({ className }) {
   return (
     <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M9 1.5l1.3 3.6L14 6.5l-3.7 1.4L9 11.5 7.7 7.9 4 6.5l3.7-1.4L9 1.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-      <path d="M14 11.5l.6 1.7L16.5 14l-1.9.8L14 16.5l-.6-1.7L11.5 14l1.9-.8L14 11.5z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      <path d="M9 1.5l1.3 3.6L14 6.5l-3.7 1.4L9 11.5 7.7 7.9 4 6.5l3.7-1.4L9 1.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M14 11.5l.6 1.7L16.5 14l-1.9.8L14 16.5l-.6-1.7L11.5 14l1.9-.8L14 11.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -802,8 +813,8 @@ function IconOverlay({ className }) {
   // Two stacked rectangles suggesting layers being composited.
   return (
     <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="2.5" y="2.5" width="9" height="9" rx="1.4" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="6.5" y="6.5" width="9" height="9" rx="1.4" stroke="currentColor" strokeWidth="1.3" fill="currentColor" fillOpacity="0.08" />
+      <rect x="2.5" y="2.5" width="9" height="9" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="6.5" y="6.5" width="9" height="9" rx="1.4" stroke="currentColor" strokeWidth="1.4" fill="currentColor" fillOpacity="0.08" />
     </svg>
   );
 }
@@ -812,6 +823,103 @@ function IconCheck({ className }) {
   return (
     <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="none">
       <path d="M2 6.5L4.5 9L10 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/* UI pass, 2026-10: one glyph per nav entry. All 18 × 18, stroke-based,
+   1.4 stroke (IconSettings draws on a 24 grid, so 1.85 there renders the
+   same weight). */
+
+// Label sheet: a rounded label with a hole and two text lines.
+function IconLabel({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <rect x="2.5" y="4" width="13" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="5.5" cy="9" r="1" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8.5 7.5h4.5M8.5 10.5h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Printer: paper in, paper out.
+function IconPrint({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M5 6.5V2.5h8v4" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M5 12.5H3.5a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H13" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <rect x="5" y="10" width="8" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+// Barcode: bars of mixed width inside scan corners.
+function IconBarcode({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M2.5 5.5v-2a1 1 0 0 1 1-1h2M12.5 2.5h2a1 1 0 0 1 1 1v2M15.5 12.5v2a1 1 0 0 1-1 1h-2M5.5 15.5h-2a1 1 0 0 1-1-1v-2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.5 6v6M8 6v6M10.5 6v6M12.5 6v6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Label history: a stack of printed labels.
+function IconLabelHistory({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <rect x="2.5" y="6.5" width="10" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M5.5 4h8.5a1.5 1.5 0 0 1 1.5 1.5V13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M5 10h5M5 12.5h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Catalog template: a page with a layout wireframe.
+function IconCatalogTemplate({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <rect x="3.5" y="2" width="11" height="14" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="6" y="4.5" width="6" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M6 11h6M6 13.5h3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Catalog project: an open booklet.
+function IconCatalog({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M9 4.5C7.5 3.3 5.3 3 2.5 3.5v10c2.8-.5 5 0 6.5 1.2 1.5-1.2 3.7-1.7 6.5-1.2v-10C12.7 3 10.5 3.3 9 4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M9 4.5v10" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+// Social grid: a square post split into a 3 × 3 grid.
+function IconSocialGrid({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <rect x="2.5" y="2.5" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M6.8 2.5v13M11.2 2.5v13M2.5 6.8h13M2.5 11.2h13" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+// Footer mode chips (replace the old emoji). 12 × 12, same stroke style.
+function IconServer({ className }) {
+  return (
+    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <rect x="1.5" y="1.5" width="9" height="4" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <rect x="1.5" y="6.5" width="9" height="4" rx="1" stroke="currentColor" strokeWidth="1.2" />
+      <path d="M3.5 3.5h.01M3.5 8.5h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconCloud({ className }) {
+  return (
+    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path d="M3.5 9.5a2.25 2.25 0 0 1-.3-4.48A3 3 0 0 1 9 4.6a2.45 2.45 0 0 1-.25 4.9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
     </svg>
   );
 }

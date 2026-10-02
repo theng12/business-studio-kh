@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Button, EmptyState, Pagination, Select } from '../../components/ui.jsx';
+import { Button, EmptyState, Pagination } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { Lightbox } from '../../components/Lightbox.jsx';
 import { ProductForm } from './ProductForm.jsx';
@@ -658,6 +658,12 @@ export function ProductLibrary() {
           />
         </div>
       ) : null}
+      {/* UI pass, 2026-10: the header carries only page-level actions
+          (secondary menus, then the one primary at the far right); the
+          search · view · filters · columns controls moved to the house
+          `.toolbar` row underneath (docs/UI_GUIDE.md). Import-ish actions
+          share one "Import" menu and the CSV feeds an "Export" menu, which
+          replaces the old bare "CSV…" select. */}
       <PageHeader
         title="Product Library"
         subtitle={loading
@@ -665,105 +671,115 @@ export function ProductLibrary() {
           : `${total} product${total === 1 ? '' : 's'}${hasActiveFilters ? ' (filtered)' : ''}`}
         actions={
           <>
-            <div className="search-wrap">
-              <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
-                <path d="M9 9l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-              </svg>
-              <input
-                type="search"
-                className="search-input"
-                /* v0.49.37: dropped the misleading "tags" hint — tags
-                   haven't been part of the Library search since v0.26.49
-                   when the scope narrowed to (sku, name, color_finish).
-                   Now the placeholder matches what actually gets searched. */
-                placeholder="Search SKU, name, color…"
-                value={filters.search}
-                onChange={(e) => setProductSearch(e.target.value)}
-              />
-            </div>
-            <div className="ws-toolbar__group">
-              <button
-                type="button"
-                className={`segment${view === 'table' ? ' is-active' : ''}`}
-                onClick={() => setView('table')}
-                title="Table view"
-              >Table</button>
-              <button
-                type="button"
-                className={`segment${view === 'grid' ? ' is-active' : ''}`}
-                onClick={() => setView('grid')}
-                title="Grid view"
-              >Grid</button>
-            </div>
-            {/* v0.22.1: side-panel show/hide. Persists in
-                localStorage. Defaults OFF on narrow first-load
-                viewports (<1400px) so small MacBook screens
-                don't feel squashed.
-                v0.1.67: the same boolean retracts the FILTER column
-                to a rail (and the detail panel with it), so the
-                tooltip names the filter column — the width win is
-                the point. The panel header has a twin control. */}
-            <button
-              type="button"
-              className={`segment lib-panel-toggle${panelVisible ? ' is-active' : ''}`}
-              onClick={togglePanel}
-              title={panelVisible
-                ? 'Hide filters for a bigger view (⌘B)'
-                : 'Show filters (⌘B)'}
-              aria-label={panelVisible ? 'Hide filters' : 'Show filters'}
-              aria-pressed={panelVisible}
-            >
-              {panelVisible ? '◧ Filters on' : '◧ Filters off'}
-            </button>
-            {view === 'grid' ? (
-              <>
-                <GridSortControl sort={sort} onSort={setProductSort} />
-                <GridSizeControl value={gridSize} onChange={setGridSize} />
-              </>
-            ) : (
-              // v0.22.7: column picker — only meaningful for the
-              // table view (grid card content is curated). Lives in
-              // a small popover; closes on outside click + Esc.
-              <ColumnsControl
-                visibleCols={visibleCols}
-                onToggle={toggleColumn}
-                onReset={resetColumns}
-              />
-            )}
-            {/* v0.26.21: manual refresh affordance. Catalog events
-                already auto-refresh from server-driven changes, but a
-                manual button is good for two reasons: (1) a peace-of-
-                mind "give me the latest" button users expect, (2) a
-                cheap escape hatch if any auto-refresh path ever
-                misses an edge case (like the AI-promote updated_at
-                bug fixed in this same release). Refreshes the same
-                slices the catalog dispatcher does. */}
-            <RefreshButton />
-            <Button onClick={() => setAutoMatchOpen(true)}>Auto-match images…</Button>
             <Button onClick={() => setDedupOpen(true)}>Merge duplicates…</Button>
-            <Button onClick={handleDownloadSample}>Download sample</Button>
-            <Button onClick={() => setImportOpen(true)}>Import Excel/CSV</Button>
-            {/* v0.36.0: catalog CSV / marketplace feed export. Pick a format;
-                snaps back to the placeholder so the same one can re-fire.
-                Labels kept SHORT so the closed select doesn't dominate the
-                toolbar — hover/title carries the full explanation. */}
-            <Select
-              value=""
-              className="lib-csv-select"
-              aria-label="Export catalog CSV"
-              title="Export the whole catalog as a CSV / marketplace feed (Catalog · Shopify · Google Shopping)"
-              onChange={(e) => { const f = e.target.value; e.target.value = ''; handleExportCsv(f); }}
-            >
-              <option value="">CSV…</option>
-              <option value="generic">Catalog</option>
-              <option value="shopify">Shopify</option>
-              <option value="google">Google</option>
-            </Select>
+            <HeaderMenu
+              label="Import"
+              items={[
+                { label: 'Import Excel/CSV…', hint: 'Add or update products from a spreadsheet.', onClick: () => setImportOpen(true) },
+                { label: 'Download sample', hint: 'A workbook with every column this company uses.', onClick: handleDownloadSample },
+                { label: 'Auto-match images…', hint: 'Match a folder of photos to products by SKU.', onClick: () => setAutoMatchOpen(true) },
+              ]}
+            />
+            {/* v0.36.0: catalog CSV / marketplace feed export. */}
+            <HeaderMenu
+              label="Export"
+              title="Export the whole catalog as a CSV / marketplace feed"
+              items={[
+                { label: 'Catalog CSV', hint: 'Every product with its fields.', onClick: () => handleExportCsv('generic') },
+                { label: 'Shopify CSV', hint: 'Shopify product import format.', onClick: () => handleExportCsv('shopify') },
+                { label: 'Google Shopping feed', hint: 'Google Merchant Center format.', onClick: () => handleExportCsv('google') },
+              ]}
+            />
             <Button variant="primary" onClick={startNewProduct}>+ New product</Button>
           </>
         }
       />
+
+      <div className="toolbar lib-toolbar">
+        <div className="search-wrap">
+          <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
+            <path d="M9 9l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+          <input
+            type="search"
+            className="search-input"
+            /* v0.49.37: dropped the misleading "tags" hint — tags
+               haven't been part of the Library search since v0.26.49
+               when the scope narrowed to (sku, name, color_finish).
+               Now the placeholder matches what actually gets searched. */
+            placeholder="Search SKU, name, color…"
+            aria-label="Search products"
+            value={filters.search}
+            onChange={(e) => setProductSearch(e.target.value)}
+          />
+        </div>
+        {view === 'grid' ? (
+          <>
+            <GridSortControl sort={sort} onSort={setProductSort} />
+            <GridSizeControl value={gridSize} onChange={setGridSize} />
+          </>
+        ) : null}
+        <div className="toolbar__spacer" />
+        <div className="segments" role="group" aria-label="View">
+          <button
+            type="button"
+            className={`segment${view === 'table' ? ' is-active' : ''}`}
+            onClick={() => setView('table')}
+            title="Table view"
+            aria-pressed={view === 'table'}
+          >Table</button>
+          <button
+            type="button"
+            className={`segment${view === 'grid' ? ' is-active' : ''}`}
+            onClick={() => setView('grid')}
+            title="Grid view"
+            aria-pressed={view === 'grid'}
+          >Grid</button>
+        </div>
+        {/* v0.22.1: side-panel show/hide. Persists in
+            localStorage. Defaults OFF on narrow first-load
+            viewports (<1400px) so small MacBook screens
+            don't feel squashed.
+            v0.1.67: the same boolean retracts the FILTER column
+            to a rail (and the detail panel with it), so the
+            tooltip names the filter column — the width win is
+            the point. The panel header has a twin control. */}
+        <button
+          type="button"
+          className={`lib-toolbar-btn lib-panel-toggle${panelVisible ? ' is-active' : ''}`}
+          onClick={togglePanel}
+          title={panelVisible
+            ? 'Hide filters for a bigger view (⌘B)'
+            : 'Show filters (⌘B)'}
+          aria-label={panelVisible ? 'Hide filters' : 'Show filters'}
+          aria-pressed={panelVisible}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M2.5 3.5h11l-4.25 5v4l-2.5 1.25V8.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+          </svg>
+          <span>Filters</span>
+        </button>
+        {view === 'table' ? (
+          // v0.22.7: column picker — only meaningful for the
+          // table view (grid card content is curated). Lives in
+          // a small popover; closes on outside click + Esc.
+          <ColumnsControl
+            visibleCols={visibleCols}
+            onToggle={toggleColumn}
+            onReset={resetColumns}
+          />
+        ) : null}
+        {/* v0.26.21: manual refresh affordance. Catalog events
+            already auto-refresh from server-driven changes, but a
+            manual button is good for two reasons: (1) a peace-of-
+            mind "give me the latest" button users expect, (2) a
+            cheap escape hatch if any auto-refresh path ever
+            misses an edge case (like the AI-promote updated_at
+            bug fixed in this same release). Refreshes the same
+            slices the catalog dispatcher does. */}
+        <RefreshButton />
+      </div>
 
       <div className={`lib-layout${panelVisible ? ' lib-layout--has-panel' : ' lib-layout--filters-collapsed'}`}>
         <aside className={`lib-filters${panelVisible ? '' : ' is-collapsed'}`} aria-label="Filters">
@@ -903,7 +919,10 @@ export function ProductLibrary() {
                     {selectedIds.size} selected
                   </span>
                   <div className="lib-bulk-toolbar__spacer" />
-                  {/* v0.49.30: toolbar shape:
+                  {/* UI pass, 2026-10: the count lives once, in "N selected";
+                      the buttons no longer repeat it, so the bar fits a
+                      ~560px column without wrapping its labels.
+                      v0.49.30: toolbar shape:
                        AI Studio  →  Image operations ▾  |  Edit fields  |  Delete N  |  Clear
                       AI Studio stays its own top-level button — it has cost
                       + provider-queue implications that don\'t belong in
@@ -916,10 +935,10 @@ export function ProductLibrary() {
                       Edit fields is metadata-only — stays its own button.
                       Delete + Clear stay inline (destructive affordance / escape). */}
                   <Button onClick={() => setBulkAiOpen(true)} disabled={bulkDeleting} title="Queues a paid OpenAI image generation for each — confirms cost before running.">
-                    AI Studio ({selectedIds.size}) →
+                    AI Studio…
                   </Button>
                   <BulkActionsMenu
-                    label={`Image operations (${selectedIds.size}) ▾`}
+                    label="Image operations ▾"
                     disabled={bulkDeleting}
                     sections={[
                       {
@@ -968,7 +987,7 @@ export function ProductLibrary() {
                     ]}
                   />
                   <Button onClick={() => setBulkEditOpen(true)} disabled={bulkDeleting} title="Bulk-update metadata fields (brand, category, status, etc.) — doesn’t touch the image bytes.">
-                    Edit fields ({selectedIds.size})
+                    Edit fields…
                   </Button>
                   {/* v0.1.85: Delete used to sit right here, a red button beside
                       "Image operations" — which is how a product got deleted by
@@ -994,7 +1013,7 @@ export function ProductLibrary() {
                       },
                     ]}
                   />
-                  <Button onClick={clearSelection} disabled={bulkDeleting}>Clear</Button>
+                  <Button variant="ghost" onClick={clearSelection} disabled={bulkDeleting}>Clear</Button>
                 </div>
               ) : null}
               {view === 'table' ? (
@@ -1231,6 +1250,61 @@ function FilterPill({ active, onClick, children }) {
   );
 }
 
+
+/**
+ * UI pass, 2026-10: a plain one-level dropdown for the page header
+ * ("Import ▾", "Export ▾"). Same look and behaviour as the side panel's
+ * "Copy ▾" / "⋯" menus (`.copy-menu`): click toggles, Esc or a click
+ * outside closes, each item runs and closes. The two-level
+ * BulkActionsMenu below stays for the bulk toolbar, where its search and
+ * submenus earn their keep.
+ */
+function HeaderMenu({ label, title, items }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <div className="copy-menu lib-header-menu" ref={rootRef}>
+      <Button
+        onClick={() => setOpen((v) => !v)}
+        title={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {label}
+        <svg className="lib-header-menu__caret" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+          <path d="M2.5 4l2.5 2.5L7.5 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </Button>
+      {open ? (
+        <div className="copy-menu__panel" role="menu">
+          {items.map((it) => (
+            <button
+              key={it.label}
+              type="button"
+              className="copy-menu__item"
+              role="menuitem"
+              onClick={() => { setOpen(false); it.onClick(); }}
+            >
+              <span className="copy-menu__label">{it.label}</span>
+              {it.hint ? <span className="copy-menu__hint">{it.hint}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * v0.26.21: manual Refresh button for the Library header. The store

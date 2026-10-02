@@ -48,16 +48,39 @@ function editableTemplate(template, expectedUpdatedAt) {
   };
 }
 
+/* UI pass, 2026-10: the house card (docs/UI_GUIDE.md) — preview, then name +
+ * size, then Open (primary) · Duplicate · Delete (danger, pushed to the end).
+ * The preview sits in a fixed-height media box and the miniature scales to fit
+ * it whatever the label's shape, so every card in a row is the same height. */
 function TemplateCard({ item, onOpen, onDuplicate, onDelete }) {
+  const count = (item.elements || []).length;
+  const ratio = Number(item.widthMm) > 0 && Number(item.heightMm) > 0 ? item.widthMm / item.heightMm : 1.5;
   return (
-    <article className="studio-card studio-card--template">
-      <button type="button" className="label-miniature" onClick={onOpen} style={{ aspectRatio: `${item.widthMm}/${item.heightMm}`, background: item.backgroundColor }}>
-        {(item.elements || []).slice(0, 8).map((el) => <span key={el.id} style={{ left: `${el.x / item.widthMm * 100}%`, top: `${el.y / item.heightMm * 100}%`, width: `${el.width / item.widthMm * 100}%`, height: `${el.height / item.heightMm * 100}%` }} />)}
+    <article className="card label-template-card">
+      <button type="button" className="card__media label-template-card__media" onClick={onOpen} aria-label={`Open ${item.name}`}>
+        <span className="label-miniature" style={{ '--ratio': ratio, background: item.backgroundColor }}>
+          {(item.elements || []).slice(0, 8).map((el) => <span key={el.id} style={{ left: `${el.x / item.widthMm * 100}%`, top: `${el.y / item.heightMm * 100}%`, width: `${el.width / item.widthMm * 100}%`, height: `${el.height / item.heightMm * 100}%` }} />)}
+        </span>
       </button>
-      <div className="studio-card__body"><div><strong>{item.name}</strong><span>{item.widthMm} × {item.heightMm} mm · {item.elements.length} elements</span></div>
-        <div className="studio-card__actions"><Button variant="ghost" onClick={onDuplicate}>Duplicate</Button><Button variant="ghost" onClick={onDelete}>Delete</Button><Button onClick={onOpen}>Open</Button></div>
+      <div className="card__body">
+        <h3 className="card__title">{item.name}</h3>
+        <p className="card__meta">{item.widthMm} × {item.heightMm} mm · {count} element{count === 1 ? '' : 's'}</p>
+      </div>
+      <div className="card__actions">
+        <Button variant="primary" size="sm" onClick={onOpen}>Open</Button>
+        <Button size="sm" onClick={onDuplicate}>Duplicate</Button>
+        <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>
       </div>
     </article>
+  );
+}
+
+function UndoIcon({ redo = false }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style={redo ? { transform: 'scaleX(-1)' } : undefined}>
+      <path d="M4.5 3L2 5.5 4.5 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2.5 5.5h5.75a3.25 3.25 0 010 6.5H6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -82,7 +105,7 @@ function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, on
       <aside className="studio-inspector">
         <div className="inspector-title">
           <div><span>Selection</span><strong>{selectionCount} elements</strong></div>
-          <Button variant="ghost" onClick={onRemove}>Remove</Button>
+          <Button variant="danger" size="sm" onClick={onRemove}>Remove</Button>
         </div>
         <p className="ld-inspector-note">
           Drag any of them to move the whole selection. The dashed box around them resizes all of
@@ -96,12 +119,12 @@ function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, on
       </aside>
     );
   }
-  if (!element) return <aside className="studio-inspector studio-inspector--empty"><div className="inspector-empty-icon">◇</div><strong>Select an element</strong><p>Click any object on the label, or a row in the Layers list, to adjust its content and layout.</p></aside>;
+  if (!element) return <aside className="studio-inspector studio-inspector--empty"><svg className="inspector-empty-icon" width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true"><rect x="5" y="5" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 2.5" /><path d="M14 10v8M10 14h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg><strong>Select an element</strong><p>Click any object on the label, or a row in the Layers list, to adjust its content and layout.</p></aside>;
   // `key` travels with the patch so the designer can record ONE undo step per
   // field edit (see changeFromInspector), not one per keystroke.
   const set = (key, value) => onChange({ [key]: value }, key);
   // Any field gaining focus starts a new edit: its first change pushes history.
-  return <aside className="studio-inspector" onFocusCapture={onFieldFocus}><div className="inspector-title"><div><span>{element.type}</span><strong>{TYPES.find(([id]) => id === element.type)?.[1] || element.type}</strong></div><Button variant="ghost" onClick={onRemove}>Remove</Button></div>
+  return <aside className="studio-inspector" onFocusCapture={onFieldFocus}><div className="inspector-title"><div><span>{element.type}</span><strong>{TYPES.find(([id]) => id === element.type)?.[1] || element.type}</strong></div><Button variant="danger" size="sm" onClick={onRemove}>Remove</Button></div>
     {!['rect', 'colorbar', 'divider', 'productImage', 'logo', 'image', 'cert'].includes(element.type) ? <>
       <label>Product field<Select value={element.field || 'name'} onChange={(e) => set('field', e.target.value)}>{fieldOptions(priceGroups).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></label>
       <label>Manual text<Input value={element.manualValue || ''} placeholder="Uses product field when empty" onChange={(e) => set('manualValue', e.target.value)} /></label>
@@ -445,7 +468,8 @@ export function LabelTemplates() {
       <section className="page label-designer-page">
         <PageHeader
           title={draft.name}
-          subtitle={`${draft.widthMm} × ${draft.heightMm} mm · Label Designer`}
+          subtitle={`${draft.widthMm} × ${draft.heightMm} mm label`}
+          backTo={{ label: 'Label Templates', onClick: leaveEditor }}
           actions={(
             <>
               <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
@@ -457,9 +481,10 @@ export function LabelTemplates() {
                   </Select>
                 </label>
               ) : null}
-              <Button variant="ghost" onClick={undo} disabled={!history.canUndo} title="Undo (⌘Z)">Undo</Button>
-              <Button variant="ghost" onClick={redo} disabled={!history.canRedo} title="Redo (⇧⌘Z)">Redo</Button>
-              <Button variant="ghost" onClick={leaveEditor}>Back to templates</Button>
+              <div className="ld-history" role="group" aria-label="History">
+                <Button size="sm" onClick={undo} disabled={!history.canUndo} title="Undo (⌘Z)"><UndoIcon />Undo</Button>
+                <Button size="sm" onClick={redo} disabled={!history.canRedo} title="Redo (⇧⌘Z)"><UndoIcon redo />Redo</Button>
+              </div>
             </>
           )}
         />
@@ -558,9 +583,16 @@ export function LabelTemplates() {
       </section>
     );
   }
-  return <section className="page"><PageHeader title="Label Templates" subtitle="Design once, generate and print from the shared Product Library." actions={<Button onClick={() => setNewOpen(true)}>+ New label template</Button>} />
-    <div className="studio-intro"><div><span className="studio-intro__icon">L</span><div><strong>Print-ready labels, connected to every product</strong><p>Templates use live product fields and support retail labels, shelf cards, QR codes, barcodes and multilingual text.</p></div></div><span className="studio-intro__badge">Autosave on</span></div>
-    <div className="template-grid">{items.length ? items.map((item) => <TemplateCard key={item.id} item={item} onOpen={() => open(item)} onDuplicate={async () => { try { const row = await window.api.labels.duplicateTemplate(item.id); setItems((x) => [row, ...x]); } catch (e) { addToast(e.message, 'error'); } }} onDelete={async () => { if (!(await confirm({ title: `Delete “${item.name}”?`, message: 'This cannot be undone.', danger: true }))) return; try { await window.api.labels.deleteTemplate(item.id); load(); } catch (e) { addToast(e.message, 'error'); } }} />) : <EmptyState title="No label templates" body="Create your first template to begin." action={<Button onClick={() => setNewOpen(true)}>Create template</Button>} />}</div>
-    <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New label template" footer={<><Button variant="ghost" onClick={() => setNewOpen(false)}>Cancel</Button><Button onClick={createTemplate}>Create</Button></>}><label className="field"><span className="field__label">Template name</span><Input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Retail price label" /></label></Modal>
+  const duplicate = async (item) => { try { const row = await window.api.labels.duplicateTemplate(item.id); setItems((x) => [row, ...x]); } catch (e) { addToast(e.message, 'error'); } };
+  const remove = async (item) => { if (!(await confirm({ title: `Delete “${item.name}”?`, message: 'This cannot be undone.', danger: true }))) return; try { await window.api.labels.deleteTemplate(item.id); load(); } catch (e) { addToast(e.message, 'error'); } };
+  /* UI pass, 2026-10: the "Print-ready labels" intro banner and its "Autosave
+   * on" chip are gone; what they said lives in the subtitle. */
+  return <section className="page"><PageHeader title="Label Templates" subtitle="Design once with live product fields, then generate and print from the Product Library. Changes save automatically." actions={<Button variant="primary" onClick={() => setNewOpen(true)}>+ New template</Button>} />
+    {items.length ? (
+      <div className="card-grid card-grid--compact label-template-grid">
+        {items.map((item) => <TemplateCard key={item.id} item={item} onOpen={() => open(item)} onDuplicate={() => duplicate(item)} onDelete={() => remove(item)} />)}
+      </div>
+    ) : <EmptyState title="No label templates yet" body="Create your first one to start printing labels." action={<Button variant="primary" onClick={() => setNewOpen(true)}>+ New template</Button>} />}
+    <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New label template" footer={<><Button onClick={() => setNewOpen(false)}>Cancel</Button><Button variant="primary" onClick={createTemplate}>Create template</Button></>}><label className="field"><span className="field__label">Template name</span><Input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Retail price label" /></label></Modal>
   </section>;
 }

@@ -7,8 +7,6 @@ export function SettingsPanel({
   onChange,
   onApplyThis,
   onApplyAll,
-  onSave,
-  saveStatus,
   totalImages,
   processing,
   hasImage,
@@ -337,19 +335,13 @@ export function SettingsPanel({
         </Section>
       </div>
 
+      {/* UI pass, 2026-10: one primary (Apply), one outlined secondary. The
+          explicit Save moved to the header beside the save status (§6,
+          docs/UI_GUIDE.md); it was a third full-width button here with a
+          left-aligned label, and the same action twice on one screen. */}
       <div className="ws-panel__actions">
-        {/* Save: persists the current settings (rotation, crop, watermark,
-            etc.) without running the processing pipeline. Auto-save also
-            does this on a 500ms debounce, but the explicit button is the
-            user's "commit now and don't worry about timing" affordance. */}
         <Button
-          onClick={onSave}
-          disabled={!hasImage || saveStatus?.state === 'saving'}
-          title="Save settings without re-processing (auto-save also runs in the background)"
-        >
-          {saveStatus?.state === 'saving' ? 'Saving…' : 'Save'}
-        </Button>
-        <Button
+          block
           onClick={onApplyThis}
           disabled={!hasImage || processing}
           variant="primary"
@@ -357,13 +349,14 @@ export function SettingsPanel({
           {processing ? 'Processing…' : 'Apply to this image'}
         </Button>
         <Button
+          block
           onClick={onApplyAll}
           disabled={!hasImage || processing || totalImages < 1}
         >
-          Apply to all {totalImages > 0 ? `(${totalImages})` : ''}
+          Apply to all{totalImages > 0 ? ` (${totalImages})` : ''}
         </Button>
         <p className="ws-hint ws-hint--center">
-          Save persists settings only. Apply runs the processing pipeline (bg removal, canvas composition, watermark).
+          Settings save automatically. Apply runs the processing: background removal, canvas and watermark.
         </p>
       </div>
     </aside>

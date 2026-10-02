@@ -2,7 +2,7 @@
  * v0.26.43: extracted from Settings/index.jsx. Three components that
  * collectively render the Settings → About tab.
  *
- *  - AboutCard      — version info + Sponsor / data-folder / logs links
+ *  - AboutCard      — version info + Support / data-folder / logs links
  *  - CrashLogPanel  — collapsible tail of crash.log for support copy/paste
  *  - AboutItem      — internal one-cell key/value row used by AboutCard
  *
@@ -15,7 +15,7 @@ import { useAppStore } from '../../store/index.js';
 import { Button } from '../../components/ui.jsx';
 
 export function AboutCard({ versionInfo }) {
-  const openExternal = (url) => window.api?.app.openExternal(url);
+  const setActiveModule = useAppStore((s) => s.setActiveModule);
   /* v0.1.25: the main-process handler now THROWS when the OS refuses to open
    * the folder (it used to report success regardless — see
    * main/util/openPath.js). An uncaught rejection here would be invisible, so
@@ -25,35 +25,63 @@ export function AboutCard({ versionInfo }) {
       .then(call)
       .catch((err) => useAppStore.getState().addToast(err.message, 'error'));
   };
+  /* UI pass, 2026-10: About is flat label/control rows like every other
+   * Settings tab, instead of a lone card. "Sponsor" (a generic GitHub
+   * Sponsors link) became "Support this app", the same name and page the
+   * sidebar footer uses. */
   return (
-    <section className="about-card">
-      <header className="about-card__head">
-        <div>
-          <div className="about-card__label">About</div>
-          <h2 className="about-card__title">Business Studio KH</h2>
-          <div className="about-card__subtitle">Batch product image processor</div>
+    <section className="about-panel">
+      <AboutRow
+        title="Business Studio KH"
+        hint="Product catalogue, images, labels and purchase orders for your business."
+      >
+        <span className="about-card__version">v{versionInfo?.app ?? '—'}</span>
+      </AboutRow>
+
+      <AboutRow title="Build" hint="What this copy of the app runs on.">
+        <div className="about-card__grid">
+          <AboutItem label="Platform"  value={versionInfo ? `${versionInfo.platform} · ${versionInfo.arch}` : '—'} />
+          <AboutItem label="Electron"  value={versionInfo?.electron ?? '—'} />
+          <AboutItem label="Chromium"  value={versionInfo?.chrome   ?? '—'} />
+          <AboutItem label="Node"      value={versionInfo?.node     ?? '—'} />
         </div>
-        <div className="about-card__version">v{versionInfo?.app ?? '—'}</div>
-      </header>
+      </AboutRow>
 
-      <div className="about-card__grid">
-        <AboutItem label="Platform"  value={versionInfo ? `${versionInfo.platform} · ${versionInfo.arch}` : '—'} />
-        <AboutItem label="Electron"  value={versionInfo?.electron ?? '—'} />
-        <AboutItem label="Chromium"  value={versionInfo?.chrome   ?? '—'} />
-        <AboutItem label="Node"      value={versionInfo?.node     ?? '—'} />
-      </div>
+      <AboutRow title="Updates" hint="When a new build is available it appears in What's new.">
+        <div className="setting-control-row">
+          <Button onClick={() => useAppStore.getState().addToast(`You're on v${versionInfo?.app ?? '?'} — the latest dev build.`, 'info')}>
+            Check for updates
+          </Button>
+        </div>
+      </AboutRow>
 
-      <p className="about-card__updates">When a new build is available it'll appear in <strong>What's new</strong>. Auto-update prompts coming in a future release.</p>
-      <footer className="about-card__actions">
-        <Button onClick={() => openFolder(() => window.api?.app.openDataFolder())}>Open data folder</Button>
-        <Button onClick={() => openFolder(() => window.api?.app.openLogsFolder())}>Open logs folder</Button>
-        <Button onClick={() => openExternal('https://github.com/sponsors')}>Sponsor</Button>
-        <Button onClick={() => useAppStore.getState().addToast(`You're on v${versionInfo?.app ?? '?'} — the latest dev build.`, 'info')}>
-          Check for updates
-        </Button>
-      </footer>
+      <AboutRow title="Folders" hint="Where this Mac keeps your data and the app's logs.">
+        <div className="setting-control-row">
+          <Button onClick={() => openFolder(() => window.api?.app.openDataFolder())}>Open data folder</Button>
+          <Button onClick={() => openFolder(() => window.api?.app.openLogsFolder())}>Open logs folder</Button>
+        </div>
+      </AboutRow>
+
+      <AboutRow title="Support this app" hint="The app is free. You can help keep it maintained.">
+        <div className="setting-control-row">
+          <Button onClick={() => setActiveModule('support')}>Support this app</Button>
+        </div>
+      </AboutRow>
+
       <CrashLogPanel />
     </section>
+  );
+}
+
+function AboutRow({ title, hint, children }) {
+  return (
+    <div className="setting-row">
+      <div className="setting-row__label">
+        <div className="setting-row__title">{title}</div>
+        {hint ? <div className="setting-row__hint">{hint}</div> : null}
+      </div>
+      <div className="setting-row__control">{children}</div>
+    </div>
   );
 }
 
@@ -90,7 +118,10 @@ export function CrashLogPanel() {
   return (
     <div className="crash-log">
       <div className="crash-log__head">
-        <div className="crash-log__title">Crash log (last 100 lines)</div>
+        <div>
+          <div className="setting-row__title">Crash log</div>
+          <div className="setting-row__hint">The last 100 lines of crash.log, for reporting a problem.</div>
+        </div>
         <div className="crash-log__actions">
           {loaded ? (
             <Button onClick={copyToClipboard} disabled={!content}>Copy</Button>
@@ -102,8 +133,7 @@ export function CrashLogPanel() {
         <pre className="crash-log__body">{content || '(empty)'}</pre>
       ) : (
         <div className="crash-log__hint">
-          Click <strong>Show</strong> to load the tail of crash.log. Useful when something looks
-          broken — copy the contents and paste them when reporting the issue.
+          Click Show to load it, then Copy and paste it when you report the issue.
         </div>
       )}
     </div>

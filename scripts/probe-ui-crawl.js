@@ -751,7 +751,10 @@ async function deepSocialTemplateFlow(crawl, outDir) {
 
   /* A post to save the look from. The price-group leg already made one, but do
    * not depend on that: create one if the list is empty. */
-  const hasPost = await crawl.eval(`window.__ui.all('button').some((b) => b.outerHTML.includes('social-card') || b.closest('.social-card'))`);
+  /* UI pass 2026-10: posts and templates are both shared `.card`s now; a post
+   * is the card whose eyebrow is its grid ("3 × 3 grid"), a template's says
+   * "Template". The eyebrow is CSS-uppercased, so read textContent. */
+  const hasPost = await crawl.eval(`window.__ui.all('.social-card').some((c) => /grid/i.test((c.querySelector('.card__eyebrow') || {}).textContent || ''))`);
   if (!hasPost) {
     await crawl.eval(`window.__ui.clickExact('+ New post')`);
     await crawl.waitFor(`window.__ui.fieldInput('Post name') !== null`, 6000, 'the new-post modal');
@@ -760,7 +763,13 @@ async function deepSocialTemplateFlow(crawl, outDir) {
     await crawl.waitFor(`!!document.querySelector('.social-editor')`, 12_000, 'the Social Grid editor');
     await crawl.settle(700);
   } else {
-    await crawl.eval(`window.__ui.click('.social-card__actions button', 'Open')`);
+    await crawl.eval(`(() => {
+      const card = window.__ui.all('.social-card').find((c) => /grid/i.test((c.querySelector('.card__eyebrow') || {}).textContent || ''));
+      const open = card && Array.from(card.querySelectorAll('.card__actions button')).find((b) => b.textContent.trim() === 'Open');
+      if (!open) return 'MISS Open';
+      open.click();
+      return 'ok';
+    })()`);
     await crawl.waitFor(`!!document.querySelector('.social-editor')`, 12_000, 'the Social Grid editor');
     await crawl.settle(700);
   }
@@ -780,10 +789,13 @@ async function deepSocialTemplateFlow(crawl, outDir) {
     modalGone ? `toast: ${savedToast || '(none)'}` : 'the modal stayed open');
 
   /* 2 ── it is listed on the Social Grid page, with no products attached */
-  await crawl.eval(`window.__ui.click('.social-editor-back button', 'Social Grid')`);
+  // The PageHeader `backTo` button is the editor's only way back.
+  await crawl.eval(`window.__ui.click('.page__back', 'Social Grid')`);
   await crawl.settle(1200);
   const listed = await crawl.eval(`(() => {
-    const card = Array.from(document.querySelectorAll('.social-card--template')).find((c) => c.innerText.includes(${JSON.stringify(tplName)}));
+    const card = Array.from(document.querySelectorAll('.social-card'))
+      .filter((c) => ((c.querySelector('.card__eyebrow') || {}).textContent || '').trim() === 'Template')
+      .find((c) => c.innerText.includes(${JSON.stringify(tplName)}));
     return card ? card.innerText.replace(/\\n+/g, ' | ') : null;
   })()`);
   await crawl.shot('social-templates-list');
@@ -799,9 +811,12 @@ async function deepSocialTemplateFlow(crawl, outDir) {
     return rows.length;
   })()`);
   await crawl.settle(600);
+  // UI pass 2026-10: the count lives once, in the bar's "N selected"; the
+  // "Image operations ▾" button no longer repeats it.
   const selectedCount = await crawl.eval(`(() => {
-    const btn = Array.from(document.querySelectorAll('button')).find((b) => String(b.innerText).startsWith('Image operations ('));
-    return btn ? btn.innerText : null;
+    const count = document.querySelector('.lib-bulk-toolbar__count');
+    const btn = Array.from(document.querySelectorAll('.lib-bulk-toolbar button')).find((b) => String(b.innerText).startsWith('Image operations'));
+    return count && btn && /^[1-9]\\d* selected/.test(count.textContent.trim()) ? count.textContent.trim() : null;
   })()`);
   if (!selectedCount) {
     crawl.step('deep: select products + open the bulk menu', false, `found ${picked} row checkbox(es), no toolbar`);
@@ -915,7 +930,9 @@ async function deepCatalogTemplateFlow(crawl) {
   await crawl.settle(1200);
   const builderCrash = await crawl.eval('window.__ui.crash()');
   if (builderCrash) { crawl.step('deep: the builder opens', false, `CRASHED: ${builderCrash}`); return; }
-  const sections = await crawl.eval(`window.__ui.all('.catalog-controls section h3').map((h) => h.innerText)`);
+  // UI pass 2026-10: the controls column is `.catalog-sidebar`, one
+  // `.catalog-sidebar__section` per group (Template, Cover, Layout, Style, Card fields).
+  const sections = await crawl.eval(`window.__ui.all('.catalog-sidebar section h3').map((h) => h.textContent)`);
   await crawl.shot('catalog-builder');
   crawl.step('deep: the builder opens with the design controls', sections.length >= 4, `sections: ${JSON.stringify(sections)}`);
 
@@ -948,7 +965,7 @@ async function deepCatalogTemplateFlow(crawl) {
   await crawl.eval(`window.__ui.click('.theme-choices button', 'Minimal')`);
   await crawl.settle(200);
   const coverOff = await crawl.eval(`(() => {
-    const label = Array.from(document.querySelectorAll('.catalog-controls .switch-row')).find((l) => /cover page/i.test(l.innerText));
+    const label = Array.from(document.querySelectorAll('.catalog-sidebar .catalog-check')).find((l) => /cover page/i.test(l.textContent));
     if (!label) return 'MISS';
     const box = label.querySelector('input[type=checkbox]');
     if (box && box.checked) box.click();
@@ -988,7 +1005,10 @@ async function deepCatalogTemplateFlow(crawl) {
   await crawl.settle(1200);
   const savedToast = await crawl.eval('window.__ui.toastText()');
   const listed = await crawl.eval(`(() => {
-    const card = Array.from(document.querySelectorAll('.catalog-template-card--mine')).find((c) => c.innerText.includes(${JSON.stringify(name)}));
+    // "My templates" is the section whose title says so; its cards are shared .card elements.
+    const mine = Array.from(document.querySelectorAll('.catalog-section'))
+      .find((sec) => /My templates/.test((sec.querySelector('.section-title') || {}).textContent || ''));
+    const card = mine && Array.from(mine.querySelectorAll('.card')).find((c) => c.innerText.includes(${JSON.stringify(name)}));
     return card ? card.innerText.replace(/\\n+/g, ' | ') : null;
   })()`);
   await crawl.shot('catalog-templates-saved');
@@ -997,9 +1017,12 @@ async function deepCatalogTemplateFlow(crawl) {
   /* Create a catalog from it and verify the project picked up the design. */
   crawl.phase = 'deep: catalog from template';
   const usedIt = await crawl.eval(`(() => {
-    const card = Array.from(document.querySelectorAll('.catalog-template-card--mine')).find((c) => c.innerText.includes(${JSON.stringify(name)}));
+    // "My templates" is the section whose title says so; its cards are shared .card elements.
+    const mine = Array.from(document.querySelectorAll('.catalog-section'))
+      .find((sec) => /My templates/.test((sec.querySelector('.section-title') || {}).textContent || ''));
+    const card = mine && Array.from(mine.querySelectorAll('.card')).find((c) => c.innerText.includes(${JSON.stringify(name)}));
     if (!card) return 'MISS';
-    const btn = Array.from(card.querySelectorAll('button')).find((b) => b.innerText.includes('Use in a new catalog'));
+    const btn = Array.from(card.querySelectorAll('.card__actions button')).find((b) => b.textContent.trim() === 'Use template');
     if (!btn) return 'no button';
     btn.click();
     return 'ok';
@@ -1012,7 +1035,7 @@ async function deepCatalogTemplateFlow(crawl) {
   await crawl.settle(300);
   await crawl.eval(`window.__ui.fieldSet('Project name', ${JSON.stringify(`${name} catalog`)})`);
   await crawl.eval(`window.__ui.clickExact('Create and add products')`);
-  await crawl.waitFor(`!!document.querySelector('.catalog-editor-tabs')`, 15_000, 'the catalog editor');
+  await crawl.waitFor(`!!document.querySelector('.catalog-editor-page .segments')`, 15_000, 'the catalog editor');
   await crawl.settle(1200);
   const project = await crawl.eval(`(async () => {
     const cid = await window.api.companies.getActiveId();
@@ -1039,7 +1062,7 @@ async function deepCatalogTemplateFlow(crawl) {
   crawl.phase = 'deep: save project as template';
   const fromProject = await crawl.eval(`window.__ui.clickExact('Save as template')`);
   if (fromProject !== 'ok') { crawl.step('deep: Save as template opens the builder pre-filled', false, fromProject); return; }
-  await crawl.waitFor(`!!document.querySelector('.catalog-editor-back')`, 6000, 'the builder from a project');
+  await crawl.waitFor(`!!document.querySelector('.catalog-editor-page .catalog-sidebar') && window.__ui.fieldInput('Name') !== null && /template/.test(window.__ui.fieldValue('Name') || '')`, 6000, 'the builder from a project');
   await crawl.settle(800);
   const draftName = await crawl.eval(`window.__ui.fieldValue('Name')`);
   const draftCrash = await crawl.eval('window.__ui.crash()');
@@ -1067,11 +1090,13 @@ async function deepLabelDesignerFlow(crawl) {
   /* A brand-new template, not an existing one: the canvas then starts empty and
    * the geometry below is exact. Opening whatever happens to be in the profile
    * would make this leg depend on leftover data from earlier runs. */
-  const opened = await crawl.eval(`window.__ui.clickExact('+ New label template')`);
+  // UI pass 2026-10: the header's primary is "+ New template" (the page title
+  // already says Label Templates) and the modal commits with "Create template".
+  const opened = await crawl.eval(`window.__ui.clickExact('+ New template')`);
   if (opened !== 'ok') { crawl.step('deep: open a label template', false, opened); return; }
   await crawl.waitFor(`window.__ui.fieldInput('Template name') !== null`, 8000, 'the new-template modal');
   await crawl.eval(`window.__ui.fieldSet('Template name', 'UI Crawl Label')`);
-  await crawl.eval(`window.__ui.clickExact('Create')`);
+  await crawl.eval(`window.__ui.clickExact('Create template')`);
   await crawl.waitFor(`!!document.querySelector('.ld-canvas')`, 12_000, 'the designer canvas');
   await crawl.settle(900);
   const crash = await crawl.eval('window.__ui.crash()');
@@ -2073,7 +2098,8 @@ async function deepListToolsFlow(crawl) {
 
   // An active filter makes "Reset all filters" render; a search term is the
   // cheapest one to set, and clear again afterwards.
-  await crawl.eval(`window.__ui.set('.page__header input.search-input', 'a')`);
+  // UI pass 2026-10: the search box lives in the `.toolbar` row under the header.
+  await crawl.eval(`window.__ui.set('.lib-toolbar input.search-input', 'a')`);
   await crawl.settle(500);
   await crawl.waitFor(`!!document.querySelector('.lib-filters__reset')`, 6000, 'the reset button');
   const order = await crawl.eval(`(() => {
@@ -2134,7 +2160,7 @@ async function deepListToolsFlow(crawl) {
     layout: document.querySelector('.lib-layout').classList.contains('lib-layout--filters-collapsed'),
     groups: document.querySelectorAll('.filter-group').length,
     chevron: !!document.querySelector('.lib-filters__collapse'),
-    toolbar: (document.querySelector('.lib-panel-toggle') || {}).textContent,
+    toolbar: document.querySelector('.lib-panel-toggle') ? document.querySelector('.lib-panel-toggle').getAttribute('aria-label') : null,
     toolbarPressed: document.querySelector('.lib-panel-toggle') ? document.querySelector('.lib-panel-toggle').getAttribute('aria-pressed') : null,
     stored: localStorage.getItem('ProductLibrary.panelVisible'),
   }))()`);
@@ -2142,7 +2168,7 @@ async function deepListToolsFlow(crawl) {
   await crawl.shot('listtools-filters-rail');
   crawl.step('list tools: the filter column retracts to a rail with a way back',
     rail.aside && rail.layout && rail.groups === 0 && rail.chevron && rail.stored === 'off'
-      && /Filters off/.test(rail.toolbar || '') && rail.toolbarPressed === 'false',
+      && /Show filters/.test(rail.toolbar || '') && rail.toolbarPressed === 'false',
     JSON.stringify({ ...rail, tableExpanded, tableCollapsed }));
   crawl.step('list tools: the grid gets the width back in Table view',
     tableCollapsed - tableExpanded > 100, `expanded ${tableExpanded}px → rail ${tableCollapsed}px`);
@@ -2160,7 +2186,7 @@ async function deepListToolsFlow(crawl) {
     JSON.stringify(reExpanded));
 
   /* Grid view: same retract must return the width to the grid. */
-  await crawl.eval(`window.__ui.click('.ws-toolbar__group .segment', 'Grid')`);
+  await crawl.eval(`window.__ui.click('.lib-toolbar .segments .segment', 'Grid')`);
   await crawl.settle(600);
   const gridExpanded = await mainWidth();
   await crawl.eval(`document.querySelector('.lib-filters__collapse').click()`);
@@ -2172,9 +2198,9 @@ async function deepListToolsFlow(crawl) {
     gridCollapsed - gridExpanded > 100, `expanded ${gridExpanded}px → rail ${gridCollapsed}px`);
 
   // Leave the Library on Table with no search filter.
-  await crawl.eval(`window.__ui.click('.ws-toolbar__group .segment', 'Table')`);
+  await crawl.eval(`window.__ui.click('.lib-toolbar .segments .segment', 'Table')`);
   await crawl.settle(300);
-  await crawl.eval(`window.__ui.set('.page__header input.search-input', '')`);
+  await crawl.eval(`window.__ui.set('.lib-toolbar input.search-input', '')`);
   await crawl.settle(500);
 
   /* ── B: Brands ────────────────────────────────────────────────────── */
@@ -2197,17 +2223,20 @@ async function deepListToolsFlow(crawl) {
   await crawl.settle(700);
 
   await crawl.goto('Brands');
-  await crawl.waitFor(`!!document.querySelector('.list-tools input.search-input')`, 8000, 'the Brands search box');
-  await crawl.eval(`window.__ui.set('.list-tools input.search-input', ${JSON.stringify(stamp)})`);
-  await crawl.waitFor(`document.querySelectorAll('.entity-card').length === 2`, 8000, 'the two seeded brands');
-  const brandCount = await crawl.eval(`document.querySelectorAll('.entity-card').length`);
+  // UI pass 2026-10: list tools sit in the shared `.toolbar`; brand cards are
+  // shared `.card`s, each still carrying its `.entity-card__check` box.
+  const brandCards = `document.querySelectorAll('.card-grid .card .entity-card__check')`;
+  await crawl.waitFor(`!!document.querySelector('.toolbar input.search-input')`, 8000, 'the Brands search box');
+  await crawl.eval(`window.__ui.set('.toolbar input.search-input', ${JSON.stringify(stamp)})`);
+  await crawl.waitFor(`${brandCards}.length === 2`, 8000, 'the two seeded brands');
+  const brandCount = await crawl.eval(`${brandCards}.length`);
   crawl.step('list tools: the Brands search filters the list', brandCount === 2, `${brandCount} card(s) for "${stamp}"`);
   await crawl.shot('listtools-brands-search');
 
   // Name Z–A must float "Crawl Tool B" to the top.
-  await crawl.eval(`window.__ui.set('.list-tools select', 'nameDesc')`);
+  await crawl.eval(`window.__ui.set('.toolbar select.list-tools__sort', 'nameDesc')`);
   await crawl.settle(400);
-  const firstTitle = await crawl.eval(`(document.querySelector('.entity-card__title') || {}).textContent || null`);
+  const firstTitle = await crawl.eval(`(document.querySelector('.card-grid .card .card__title') || {}).textContent || null`);
   crawl.step('list tools: the Brands sort select reorders', /Crawl Tool B/.test(firstTitle || ''), `first card: ${firstTitle}`);
 
   // Plain-click the first row, ⌘-click the second: the two documented
@@ -2238,7 +2267,7 @@ async function deepListToolsFlow(crawl) {
     /will lose their brand/.test(confirmBody || ''), `confirm: ${(confirmBody || '').slice(0, 140)}…`);
   await crawl.eval(`window.__ui.click('.modal__footer button', 'Keep')`);
   await crawl.settle(400);
-  const stillThere = await crawl.eval(`document.querySelectorAll('.entity-card').length`);
+  const stillThere = await crawl.eval(`${brandCards}.length`);
   crawl.step('list tools: cancelling the delete keeps the brands', stillThere === 2, `${stillThere} card(s) still listed`);
   await crawl.eval(`window.__ui.click('.list-bulk-bar button', 'Clear')`);
   await crawl.settle(200);
@@ -2258,13 +2287,13 @@ async function deepListToolsFlow(crawl) {
   await crawl.settle(500);
   await crawl.goto('Settings');
   await crawl.eval(`window.__ui.click('.settings-tabs button', 'Categories')`);
-  await crawl.waitFor(`!!document.querySelector('.list-tools input.search-input')`, 8000, 'the Categories toolbar');
+  await crawl.waitFor(`!!document.querySelector('.toolbar input.search-input')`, 8000, 'the Categories toolbar');
   const catTools = await crawl.eval(`(() => {
     const chipEl = document.querySelector('.list-tools__unassigned');
     return {
-      search: !!document.querySelector('.list-tools input.search-input'),
-      sort: !!document.querySelector('.list-tools select'),
-      check: !!document.querySelector('.categories-list__check, .list-tools input[type="checkbox"]'),
+      search: !!document.querySelector('.toolbar input.search-input'),
+      sort: !!document.querySelector('.toolbar select.list-tools__sort'),
+      check: !!document.querySelector('.categories-list__check, .toolbar .list-tools__all input[type="checkbox"]'),
       chip: chipEl ? chipEl.textContent : null,
       crash: window.__ui.crash(),
     };
@@ -2287,10 +2316,10 @@ async function deepListToolsFlow(crawl) {
   crawl.step('list tools: a supplier with a PO exists', true, `supplier ${poSeed.supId} · PO ${poSeed.poId}`);
 
   await crawl.goto('Suppliers');
-  await crawl.waitFor(`!!document.querySelector('.suppliers-toolbar input.search-input')`, 8000, 'the Suppliers search box');
-  const supSort = await crawl.eval(`!!document.querySelector('.suppliers-toolbar select')`);
+  await crawl.waitFor(`!!document.querySelector('.toolbar input.search-input')`, 8000, 'the Suppliers search box');
+  const supSort = await crawl.eval(`!!document.querySelector('.toolbar select.list-tools__sort')`);
   crawl.step('list tools: Suppliers has a sort select', supSort, `sort select present: ${supSort}`);
-  await crawl.eval(`window.__ui.set('.suppliers-toolbar input.search-input', ${JSON.stringify(supName)})`);
+  await crawl.eval(`window.__ui.set('.toolbar input.search-input', ${JSON.stringify(supName)})`);
   await crawl.waitFor(`window.__ui.textOf(document.body).includes(${JSON.stringify(supName)})`, 8000, 'the supplier row');
   // The Orders chip only renders once the PO rollup has loaded — which is the
   // data the pre-check reads, so waiting for it makes the refusal deterministic.
@@ -2355,7 +2384,7 @@ async function deepOverlayPositionsFlow(crawl, photoPath) {
   crawl.step('deep positions: one-image product exists', true, `${seeded.sku} · ${seeded.count} image`);
 
   await crawl.goto('Product Library');
-  await crawl.eval(`window.__ui.set('.page__header input.search-input', ${JSON.stringify(seeded.sku)})`);
+  await crawl.eval(`window.__ui.set('.lib-toolbar input.search-input', ${JSON.stringify(seeded.sku)})`);
   await crawl.waitFor(`window.__ui.textOf(document.body).includes(${JSON.stringify(seeded.sku)})`, 10_000, 'the one-image product row');
   await crawl.settle(400);
   const picked = await crawl.eval(`(() => {
@@ -2574,7 +2603,7 @@ async function deepOverlayPositionsFlow(crawl, photoPath) {
 
   /* Leave the Library as we found it. */
   await crawl.eval(`window.__ui.pressEscape()`).catch(() => {});
-  await crawl.eval(`window.__ui.set('.page__header input.search-input', '')`).catch(() => {});
+  await crawl.eval(`window.__ui.set('.lib-toolbar input.search-input', '')`).catch(() => {});
   await crawl.settle(250);
 }
 
@@ -2645,12 +2674,14 @@ async function deepOverlayFitFlow(crawl, photoPath) {
   await crawl.waitFor(`window.__ui.textOf(document.body).includes(${JSON.stringify(seeded.templateName)})`, 10_000, 'the fit template card');
   await crawl.settle(400);
   const openedTemplate = await crawl.eval(`(() => {
-    const card = Array.from(document.querySelectorAll('.ovl-card')).find((c) => c.innerText.includes(${JSON.stringify(seeded.templateName)}));
-    const edit = card && Array.from(card.querySelectorAll('button')).find((b) => b.innerText === 'Edit');
+    // UI pass 2026-10: template cards are shared .card elements; Edit is the primary action.
+    const card = Array.from(document.querySelectorAll('.card')).find((c) => (c.querySelector('.card__title') || {}).textContent === ${JSON.stringify(seeded.templateName)});
+    const edit = card && Array.from(card.querySelectorAll('.card__actions button')).find((b) => b.textContent.trim() === 'Edit');
     if (!edit) return 'MISS';
     edit.click();
     return 'ok';
   })()`);
+  if (openedTemplate !== 'ok') { crawl.step('deep overlay fit: open the fit template in the editor', false, openedTemplate); return; }
   await crawl.waitFor(`!!document.querySelector('.ovl-canvas')`, 15_000, 'the overlay editor');
   await crawl.settle(600);
 
@@ -2755,7 +2786,7 @@ async function deepImageScopeFlow(crawl, photoPath) {
   crawl.step('deep scope: one-image product exists', true, `${seeded.sku} · ${seeded.count} image`);
 
   await crawl.goto('Product Library');
-  await crawl.eval(`window.__ui.set('.page__header input.search-input', ${JSON.stringify(seeded.sku)})`);
+  await crawl.eval(`window.__ui.set('.lib-toolbar input.search-input', ${JSON.stringify(seeded.sku)})`);
   await crawl.waitFor(`window.__ui.textOf(document.body).includes(${JSON.stringify(seeded.sku)})`, 10_000, 'the one-image product row');
   await crawl.settle(400);
   const picked = await crawl.eval(`(() => {
@@ -2820,7 +2851,7 @@ async function deepImageScopeFlow(crawl, photoPath) {
     `menu ${openedMenu} · item ${openedItem} · radio ${positioned} · set ${setPos} · run ${ran} · ${JSON.stringify(state)} · toast: ${toast || '(none)'}`);
 
   await crawl.eval(`window.__ui.pressEscape()`).catch(() => {});
-  await crawl.eval(`window.__ui.set('.page__header input.search-input', '')`).catch(() => {});
+  await crawl.eval(`window.__ui.set('.lib-toolbar input.search-input', '')`).catch(() => {});
   await crawl.settle(250);
 }
 

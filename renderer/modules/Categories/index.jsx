@@ -24,6 +24,7 @@ import {
   Button, EmptyState, Input, Pagination, Select, paginate,
 } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { allIds, filterRows, nextSelection, sortRows } from '../../lib/listTools.js';
 
@@ -153,13 +154,7 @@ export function CategoriesBody({ autoFocus = false }) {
   if (!activeCompanyId) {
     // No PageHeader here — caller (Settings tab or stand-alone page)
     // owns the chrome.
-    return (
-      <EmptyState
-        title="Select a company first"
-        body="Categories are scoped per company. Pick a company in the sidebar dropdown to manage its category list."
-        action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Companies →</Button>}
-      />
-    );
+    return <NoCompanyState purpose="manage its categories" />;
   }
 
   async function handleAdd() {
@@ -283,7 +278,8 @@ export function CategoriesBody({ autoFocus = false }) {
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
-          placeholder="Type a name then press Enter or click + Add"
+          aria-label="New category name"
+          placeholder="New category name, then press Enter"
           disabled={busy}
           autoFocus={autoFocus}
         />
@@ -309,11 +305,11 @@ export function CategoriesBody({ autoFocus = false }) {
         {categories.length === 0 ? (
           <EmptyState
             title="No categories yet"
-            body="Categories group products together so the Library sidebar filter is meaningful (e.g. Basin Faucet, Bathtub, Hand Shower Set). Add your first one above."
+            body="Categories group products for the Library filter, e.g. Basin Faucet or Bathtub. Add your first one above."
           />
         ) : (
           <>
-            <div className="list-tools">
+            <div className="toolbar">
               <div className="search-wrap">
                 <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
                   <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
@@ -340,7 +336,7 @@ export function CategoriesBody({ autoFocus = false }) {
                 <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
                 <span>Select all visible</span>
               </label>
-              <div className="list-tools__spacer" />
+              <div className="toolbar__spacer" />
               {/* v0.1.67: summary chip, not a selectable row — select-all
                   and bulk delete can never touch it. */}
               <button
@@ -371,63 +367,84 @@ export function CategoriesBody({ autoFocus = false }) {
             {sorted.length === 0 ? (
               <EmptyState title="No matches" body={`Nothing matches "${search}". Try a shorter search.`} />
             ) : (
-            <ul className="categories-list">
+            <div className="data-table-wrap">
+            <table className="data-table categories-table">
+              <thead>
+                <tr>
+                  <th className="is-check">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleAllVisible}
+                      aria-label="Select all visible"
+                      title="Select all visible"
+                    />
+                  </th>
+                  <th>Name</th>
+                  <th className="is-num">Products</th>
+                  <th className="is-actions" aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
               {visible.map((c, index) => {
                 const isEditing = editingId === c.id;
                 const isSelected = selected.includes(c.id);
                 return (
-                  <li key={c.id} className={`categories-list__row${isSelected ? ' is-selected' : ''}`}>
-                    <input
-                      type="checkbox"
-                      className="categories-list__check"
-                      checked={isSelected}
-                      onChange={(e) => onRowSelect(index, e)}
-                      aria-label={`Select ${c.name}`}
-                    />
+                  <tr key={c.id} className={isSelected ? 'is-selected' : undefined}>
+                    <td className="is-check">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => onRowSelect(index, e)}
+                        aria-label={`Select ${c.name}`}
+                      />
+                    </td>
                     {isEditing ? (
                       <>
-                        <Input
-                          value={editingName}
-                          onChange={(e) => setEditingName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') saveEdit();
-                            if (e.key === 'Escape') cancelEdit();
-                          }}
-                          disabled={busy}
-                          autoFocus
-                        />
-                        <span className="muted">{c.productCount} product{c.productCount === 1 ? '' : 's'}</span>
-                        <Button onClick={cancelEdit} disabled={busy}>Cancel</Button>
-                        <Button variant="primary" onClick={saveEdit} disabled={busy || !editingName.trim()}>Save</Button>
+                        <td>
+                          <Input
+                            aria-label={`Rename ${c.name}`}
+                            value={editingName}
+                            onChange={(e) => setEditingName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') saveEdit();
+                              if (e.key === 'Escape') cancelEdit();
+                            }}
+                            disabled={busy}
+                            autoFocus
+                          />
+                        </td>
+                        <td className="is-num">{c.productCount}</td>
+                        <td className="is-actions">
+                          <Button size="sm" onClick={cancelEdit} disabled={busy}>Cancel</Button>
+                          <Button size="sm" variant="primary" onClick={saveEdit} disabled={busy || !editingName.trim()}>Save</Button>
+                        </td>
                       </>
                     ) : (
                       <>
-                        <button
-                          type="button"
-                          className="categories-list__name"
-                          onClick={() => startEdit(c)}
-                          title="Click to rename"
-                        >
-                          {c.name}
-                        </button>
-                        <span className="muted">{c.productCount} product{c.productCount === 1 ? '' : 's'}</span>
-                        <button
-                          type="button"
-                          className="row-action"
-                          onClick={() => startEdit(c)}
-                        >Edit</button>
-                        <button
-                          type="button"
-                          className="row-action row-action--danger"
-                          onClick={() => handleDelete(c)}
-                          disabled={busy}
-                        >Delete</button>
+                        <td>
+                          <button
+                            type="button"
+                            className="categories-list__name"
+                            onClick={() => startEdit(c)}
+                            title="Click to rename"
+                          >
+                            {c.name}
+                          </button>
+                        </td>
+                        <td className="is-num">{c.productCount}</td>
+                        <td className="is-actions">
+                          <Button size="sm" variant="ghost" onClick={() => startEdit(c)}>Rename</Button>
+                          <Button size="sm" variant="danger" onClick={() => handleDelete(c)} disabled={busy}>Delete</Button>
+                        </td>
                       </>
                     )}
-                  </li>
+                  </tr>
                 );
               })}
-            </ul>
+              </tbody>
+            </table>
+            </div>
             )}
 
             {sorted.length > pageSize ? (

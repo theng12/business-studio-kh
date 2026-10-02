@@ -373,6 +373,15 @@ database is a directory (§14), and PDFs come from Electron's own
 There is also no `tailwind.config.js` / `postcss.config.js`: styling is plain
 CSS in `renderer/index.css`, so there is no CSS build step.
 
+## 17b. UI design system
+
+`docs/UI_GUIDE.md` is the house pattern for every screen (verified 2026-10-02): `PageHeader`
+(title left, actions right, one primary "+ New …", `backTo` for sub-pages), `SaveStatus` first in
+editor headers, shared `.card` / `.data-table` / `.toolbar` / `.section-title`, full-width
+`EmptyState` with one action, `Field` for every labelled control, dates through
+`renderer/lib/format.js`, tokens only (`--c-brand`, `--radius-*`, `--fs-*`; nothing below 11px; no
+indigo). Extend the shared layer and the guide rather than building a page-private copy.
+
 ## 18. Tone & copy
 
 - Plain English. No marketing speak. No emoji in UI text unless I ask.

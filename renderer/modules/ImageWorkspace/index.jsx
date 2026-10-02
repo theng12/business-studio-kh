@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { Button, EmptyState } from '../../components/ui.jsx';
 import { Lightbox } from '../../components/Lightbox.jsx';
 import { ImageStrip } from './ImageStrip.jsx';
@@ -59,10 +60,9 @@ export function ImageWorkspace() {
   // click still SELECTS the image as the active workspace target; preview
   // is the secondary action (magnifier button or double-click).
   const [lightbox, setLightbox] = useState({ open: false, idx: 0 });
-  // Auto-save status indicator per AGENTS.md §6 — Editors don't have a Save
-  // button; every change persists via IPC immediately. We surface the state
-  // ('idle' | 'saving' | 'saved' | 'error') so the user knows their tweaks
-  // are durable without clicking anything.
+  // Auto-save status per AGENTS.md §6: every change persists via IPC on a
+  // debounce, and the header's SaveStatus shows this state ('idle' | 'saving'
+  // | 'saved' | 'error') beside the explicit Save button (handleSaveNow).
   const [saveStatus, setSaveStatus] = useState({ state: 'idle', lastSavedAt: null });
   // Debounce settings writes so a slider drag doesn't fire 50 IPC calls.
   // The actual latest drafts live in per-image editor contexts below so a
@@ -802,16 +802,20 @@ export function ImageWorkspace() {
     return true;
   }
 
-  // Top toolbar (view mode + flip + fill preview)
-  const topBar = (
-    <div className="ws-toolbar">
+  /* UI pass, 2026-10: the header carries only the §6 save status + Save (the
+   * house order, docs/UI_GUIDE.md). Product navigation, the view switch and
+   * flip used to share the header's action slot with it and crowded the title
+   * and SKU chip off the row; they are the page's toolbar now. */
+  const toolbar = (
+    <div className="toolbar ws-toolbar">
       <ProductNav
         products={products}
         activeProductId={activeProductId}
         onPick={(id) => { if (id) openProductInWorkspace(id); }}
         busy={processing}
       />
-      <div className="ws-toolbar__group">
+      <span className="toolbar__spacer" />
+      <div className="segments" role="group" aria-label="View">
         <button
           type="button"
           className={`segment${viewMode === 'single' ? ' is-active' : ''}`}
@@ -827,27 +831,27 @@ export function ImageWorkspace() {
       </div>
       {/* v0.26.14: flip the source file on disk. Destructive — same
           IPC the Library Lightbox calls. Disabled if no active image. */}
-      <div className="ws-toolbar__group" role="group" aria-label="Flip source image">
+      <div className="segments" role="group" aria-label="Flip source image">
         <button
           type="button"
-          className="segment"
+          className="segment ws-segment-icon"
           onClick={() => handleFlipActive('h')}
           disabled={!activeImage || processing}
           title="Flip horizontally (mirror left ↔ right). Rewrites the source file on disk."
           aria-label="Flip horizontally"
-        >⇋ Flip H</button>
+        ><FlipIcon axis="h" />Flip H</button>
         <button
           type="button"
-          className="segment"
+          className="segment ws-segment-icon"
           onClick={() => handleFlipActive('v')}
           disabled={!activeImage || processing}
           title="Flip vertically (mirror top ↕ bottom). Rewrites the source file on disk."
           aria-label="Flip vertically"
-        >⥯ Flip V</button>
+        ><FlipIcon axis="v" />Flip V</button>
       </div>
-      <SaveIndicator status={saveStatus} />
     </div>
   );
+  const productLabel = sku ? (productName ? `${sku} · ${productName}` : sku) : null;
 
   if (!activeProductId) {
     return (
@@ -871,9 +875,10 @@ export function ImageWorkspace() {
       <PageHeader
         title="Image Workspace"
         backTo={{ module: 'library', label: 'Product Library' }}
-        contextChip={sku ? (productName ? `${sku} · ${productName}` : sku) : null}
-        actions={topBar}
+        contextChip={productLabel ? <span className="ws-chip" title={productLabel}>{productLabel}</span> : null}
+        actions={images.length ? <SaveStatus status={saveStatus} onSave={handleSaveNow} /> : null}
       />
+      {toolbar}
 
       {loading ? (
         <EmptyState title="Loading…" />
@@ -922,8 +927,6 @@ export function ImageWorkspace() {
             onChange={setSettings}
             onApplyThis={handleApplyThis}
             onApplyAll={handleApplyAll}
-            onSave={handleSaveNow}
-            saveStatus={saveStatus}
             totalImages={images.length}
             processing={processing}
             hasImage={!!activeImage}
@@ -945,7 +948,7 @@ export function ImageWorkspace() {
         onClose={() => setLightbox({ open: false, idx: 0 })}
         images={images}
         startIndex={lightbox.idx}
-        title={sku ? (productName ? `${sku} · ${productName}` : sku) : null}
+        title={productLabel}
         // v0.26.14: Workspace also gets the destructive flip control
         // inside the Lightbox. After the IPC returns, we refresh the
         // workspace's image list so the strip + canvas show the new
@@ -987,14 +990,15 @@ function ProductNav({ products, activeProductId, onPick, busy = false }) {
   const canPrev = idx > 0;
   const canNext = idx >= 0 && idx < products.length - 1;
   return (
-    <div className="ws-toolbar__group ws-prodnav">
+    <div className="segments ws-prodnav" role="group" aria-label="Product">
       <button
         type="button"
-        className="segment"
+        className="segment ws-segment-icon"
         disabled={!canPrev || busy}
         title="Previous product"
+        aria-label="Previous product"
         onClick={() => onPick(products[idx - 1]?.id)}
-      >◀</button>
+      ><Chevron dir="left" /></button>
       <select
         className="ws-prodnav__select segment"
         value={activeProductId ?? ''}
@@ -1019,8 +1023,9 @@ function ProductNav({ products, activeProductId, onPick, busy = false }) {
         className="segment"
         disabled={!canNext || busy}
         title="Next product"
+        aria-label="Next product"
         onClick={() => onPick(products[idx + 1]?.id)}
-      >▶</button>
+      ><Chevron dir="right" /></button>
       {idx >= 0 ? (
         <span className="ws-prodnav__counter muted">{idx + 1} / {products.length}</span>
       ) : null}
@@ -1028,43 +1033,26 @@ function ProductNav({ products, activeProductId, onPick, busy = false }) {
   );
 }
 
-/**
- * Save-status indicator per AGENTS.md §6. Reflects the auto-save state
- * effect's `state` machine: 'idle' | 'saving' | 'saved' | 'error'.
- * Re-renders every 30s (its own tick — matches the AGENTS.md §6 auto-refresh
- * requirement) so the relative time ("2 min ago") stays current without
- * re-fetching anything. The timer lives here, not in the page, so only this
- * badge re-renders rather than the whole workspace.
- */
-function SaveIndicator({ status }) {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 30000);
-    return () => clearInterval(id);
-  }, []);
-  if (status.state === 'saving') {
-    return <span className="ws-save ws-save--amber">Saving…</span>;
-  }
-  if (status.state === 'error') {
-    return <span className="ws-save ws-save--rose">● Save failed</span>;
-  }
-  if (status.state === 'saved' || (status.state === 'idle' && status.lastSavedAt)) {
-    return (
-      <span className="ws-save ws-save--emerald" title={status.lastSavedAt ? new Date(status.lastSavedAt).toLocaleString() : ''}>
-        ● All changes saved{status.lastSavedAt ? ` · ${formatAgo(status.lastSavedAt)}` : ''}
-      </span>
-    );
-  }
-  return null;
+/* UI pass, 2026-10: the private SaveIndicator + formatAgo that lived here are
+ * gone. The header uses the shared SaveStatus (components/SaveStatus.jsx),
+ * which takes this page's `{ state, lastSavedAt }` shape as `status`, owns the
+ * 30 s tick, and shows the error state as a retry instead of "Save failed". */
+
+function Chevron({ dir }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path d={dir === 'left' ? 'M7.5 2.5L4 6l3.5 3.5' : 'M4.5 2.5L8 6l-3.5 3.5'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
-function formatAgo(ts) {
-  const secs = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (secs < 5)   return 'just now';
-  if (secs < 60)  return `${secs}s ago`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60)  return `${mins} min ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24)   return `${hrs}h ago`;
-  return new Date(ts).toLocaleDateString();
+/** Mirror glyph: a dashed axis with a solid and an outlined half. */
+function FlipIcon({ axis }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true" style={axis === 'v' ? { transform: 'rotate(90deg)' } : undefined}>
+      <path d="M7 1.5v11" stroke="currentColor" strokeWidth="1.2" strokeDasharray="1.6 1.6" strokeLinecap="round" />
+      <path d="M5 3.5L1.5 10.5H5z" fill="currentColor" />
+      <path d="M9 3.5l3.5 7H9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    </svg>
+  );
 }

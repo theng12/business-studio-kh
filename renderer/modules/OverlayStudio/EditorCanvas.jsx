@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { elementBox } from './elementDefaults.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { renderBarcodeSVG, formatBarcodeText } from './barcodePreview.js';
 import {
   fitForElement, BACKDROP_FIT, INSET_BLUR_FIT, INSET_FOREGROUND_FIT,
 } from './overlayFit.js';
-import { outputCanvasSize, previewMaxPx, createLatestGuard } from './overlayCanvas.js';
+import { previewMaxPx, createLatestGuard } from './overlayCanvas.js';
 
 /**
  * Text ink width in px, measured with a canvas 2D context — the editor's
@@ -149,14 +149,6 @@ export function EditorCanvas({
   const previewGuardRef = useRef(null);
   if (!previewGuardRef.current) previewGuardRef.current = createLatestGuard();
 
-  // The full-size output the export produces for the previewed photo. Font
-  // sizes, paddings and radii are pixels of THAT picture, so it — not the
-  // template's design size — is what the editor scales its own drawing by.
-  // Learned from the backdrop image as soon as it loads, and confirmed by
-  // every server render (which knows the photo's real pixel size).
-  const [photoSize, setPhotoSize] = useState(null);       // { src, w, h }
-  const [renderSize, setRenderSize] = useState(null);     // { key, w, h }
-
   // What the preview is OF. When this changes the old picture is wrong, not
   // merely old: drop it, and drop every reply still in flight.
   const previewKey = `${template?.id ?? ''}|${backdropProductId ?? ''}|${backdropSrc ?? ''}`;
@@ -210,7 +202,6 @@ export function EditorCanvas({
     // An edit is pending from now until its render is on screen.
     setPreviewBusy(true);
     const guard = previewGuardRef.current;
-    const key = previewKey;
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     previewTimerRef.current = setTimeout(async () => {
       const stamp = guard.next();
@@ -229,9 +220,6 @@ export function EditorCanvas({
         if (!guard.isLatest(stamp)) return;
         const bytes = result?.bytes;
         if (!bytes) return;
-        if (result.fullWidth > 0 && result.fullHeight > 0) {
-          setRenderSize({ key, w: result.fullWidth, h: result.fullHeight });
-        }
         // bytes is a Buffer (standalone) or a Buffer reconstructed
         // from the {__bin, b64} wire envelope (client mode). Both
         // are Uint8Array-compatible — Blob accepts either.
@@ -272,23 +260,6 @@ export function EditorCanvas({
   // v0.1.8: the truthful PNG is ALWAYS the visible picture whenever one has
   // landed; only the element being moved is drawn live on top of it.
   const showTruthful = !!truthfulPng && !!backdropProductId && !placeholders;
-
-  // The pixel space the element sizes live in (see photoSize above).
-  const refSize = useMemo(() => {
-    if (renderSize && renderSize.key === previewKey) return { w: renderSize.w, h: renderSize.h };
-    if (backdropProductId && photoSize && photoSize.src === backdropSrc) {
-      const out = outputCanvasSize(template, photoSize.w, photoSize.h);
-      return { w: out.width, h: out.height };
-    }
-    return { w: template.canvasWidth, h: template.canvasHeight };
-  }, [renderSize, previewKey, backdropProductId, photoSize, backdropSrc, template]);
-
-  function onBackdropLoad(e) {
-    const img = e.currentTarget;
-    if (img?.naturalWidth > 0 && img?.naturalHeight > 0) {
-      setPhotoSize({ src: backdropSrc, w: img.naturalWidth, h: img.naturalHeight });
-    }
-  }
 
   // v0.26.2: compute canvas DOM size from the WRAP's available area
   // + template aspect ratio, then apply as inline width/height. Pure-
@@ -426,7 +397,6 @@ export function EditorCanvas({
                 src={backdropSrc}
                 alt=""
                 draggable={false}
-                onLoad={onBackdropLoad}
                 data-fit={INSET_FOREGROUND_FIT}
                 style={{ width: insetBound, height: insetBound, objectFit: INSET_FOREGROUND_FIT }}
               />
@@ -441,7 +411,6 @@ export function EditorCanvas({
               src={backdropSrc}
               alt=""
               draggable={false}
-              onLoad={onBackdropLoad}
               data-fit={BACKDROP_FIT}
               style={{ objectFit: BACKDROP_FIT }}
             />
@@ -477,9 +446,11 @@ export function EditorCanvas({
             element={el}
             canvasW={canvasSize.w}
             canvasH={canvasSize.h}
-            // Pixel-sized properties are pixels of the full-size output.
-            designW={refSize.w}
-            designH={refSize.h}
+            // Font size, padding and radius are DESIGN pixels: the canvas
+            // shows the design at canvasW / designW, and so does the export
+            // (templateRenderer designPixelScale), on any photo.
+            designW={template.canvasWidth}
+            designH={template.canvasHeight}
             selected={el.id === selectedId}
             live={el.id === liveId}
             onInteractStart={() => setLiveId(el.id)}
@@ -1088,10 +1059,11 @@ export function ElementContent({ element, box, productContext, canvasW, canvasH,
     // sizing computed by elementBox() — keeps the bg pill and the text
     // perfectly synchronized.
     const filled = filledContent ?? fillTokens(element.content ?? '', productContext);
-    // Font size, padding and radius are pixels of the full-size OUTPUT
-    // (`designW` here — see refSize in EditorCanvas), which the canvas shows
-    // at `canvasW / designW`. They are drawn at that same scale, like the
-    // selection box (elementBox) around them.
+    // Font size, padding and radius are pixels of the template's DESIGN
+    // canvas, which the editor shows at `canvasW / designW` — and the export
+    // draws them at outputW / designW (templateRenderer designPixelScale), so
+    // a template looks the same on every photo. Drawn at that same scale as
+    // the selection box (elementBox) around them.
     //
     // History: v0.1.8 removed a hardcoded `canvasW / 2000` factor (wrong on
     // any canvas not 2000 wide) but then drew the sizes UNSCALED — a 96 px
@@ -1144,8 +1116,8 @@ export function ElementContent({ element, box, productContext, canvasW, canvasH,
     const svg = renderBarcodeSVG(content, format, { showText: element.showText !== false });
     const showText = element.showText !== false;
     const humanText = showText ? formatBarcodeText(content, format) : '';
-    // Pixels of the full-size output, drawn at the canvas scale (see the
-    // text branch above) — matching renderBarcodeElement on the server.
+    // Design pixels, drawn at the canvas scale (see the text branch above) —
+    // matching renderBarcodeElement on the server.
     // The export only insets the symbol by the padding when there IS a
     // background pill (no colour = no pill = the symbol fills the box).
     const k = designW > 0 && canvasW > 0 ? canvasW / designW : 1;

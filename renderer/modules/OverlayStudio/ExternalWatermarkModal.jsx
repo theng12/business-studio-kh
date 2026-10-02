@@ -100,7 +100,7 @@ export function ExternalWatermarkModal({ open, onClose }) {
       closeOnBackdrop={!running}
       footer={
         <>
-          <Button variant="ghost" onClick={() => !running && onClose()}>Close</Button>
+          <Button onClick={() => !running && onClose()}>Close</Button>
           <Button variant="primary" onClick={run} disabled={running || !templateId || dedupCount === 0 || !outputFolder}>
             {running ? 'Applying…' : `Apply to ${dedupCount} photo${dedupCount === 1 ? '' : 's'}`}
           </Button>

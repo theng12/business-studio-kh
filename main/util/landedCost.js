@@ -84,7 +84,9 @@ function componentUsd(component) {
 /** The sign a component's amounts are STORED with: discounts negative, the rest as entered. */
 function signedComponentAmount(kind, amount) {
   const n = Number(amount) || 0;
-  return String(kind || '').toLowerCase() === 'discount' ? -Math.abs(n) : Math.abs(n);
+  // Discounts are stored negative; every other kind keeps the sign it was
+  // entered with (a legacy negative "other" adjustment must not flip).
+  return String(kind || '').toLowerCase() === 'discount' ? -Math.abs(n) : n;
 }
 
 /**

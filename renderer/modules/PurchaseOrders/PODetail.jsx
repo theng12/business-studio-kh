@@ -24,12 +24,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Button, Input, Select, Textarea, Badge, EmptyState, Modal } from '../../components/ui.jsx';
+import { Button, Field, Input, Select, Textarea, Badge, EmptyState, Modal } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { STATUS_TONE, STATUS_LABEL } from './index.jsx';
 import { useCostingCaps } from './costingCaps.js';
+import { formatDate } from '../../lib/format.js';
 
 /** Received and closed POs count toward product landed cost (main/db/purchaseOrders.js). */
 const isCostSource = (status) => status === 'received' || status === 'closed';
@@ -170,6 +171,44 @@ export function PODetail({ poId, onBack }) {
     } catch (err) {
       addToast(`Failed to save: ${err.message}`, 'error');
     }
+  }
+
+  /**
+   * A currency change re-reads every line and cost in the new currency and
+   * re-converts it to USD, so it is confirmed first and never saved without
+   * a rate: USD is always 1, any other currency asks for its rate in the
+   * same dialog (the server refuses a non-USD switch that has none). The
+   * select is uncontrolled, so a cancel puts the old value back by hand.
+   */
+  async function changeCurrency(select) {
+    const prev = header.currency;
+    const next = select.value;
+    if (!next || next === prev) return;
+    const toUsd = next === 'USD';
+    const rateBox = { value: '' };
+    const received = isCostSource(header.status);
+    const sure = await confirm({
+      title: `Change the currency to ${next}?`,
+      message: toUsd
+        ? `Every line and cost line will be read as USD and re-converted at rate 1. The current rate (1 ${prev} = ${Number(header.exchangeRateToUsd) || 0} USD) is discarded.`
+        : `Every line and cost line will be read as ${next} and re-converted to USD at the rate you enter below.`,
+      detail: received
+        ? 'This PO is received, so the landed cost of every product on it updates too.'
+        : 'Unit prices keep the numbers you typed; only their currency changes.',
+      confirmLabel: 'Change currency',
+      extra: toUsd ? null : <CurrencyRateInput currency={next} box={rateBox} />,
+    });
+    if (!sure) { select.value = prev; return; }
+    let exchangeRateToUsd = 1;
+    if (!toUsd) {
+      exchangeRateToUsd = Number(rateBox.value);
+      if (String(rateBox.value).trim() === '' || !Number.isFinite(exchangeRateToUsd) || exchangeRateToUsd <= 0) {
+        addToast(`Currency not changed — enter how many US dollars one ${next} is worth (a number above 0).`, 'error');
+        select.value = prev;
+        return;
+      }
+    }
+    await saveHeaderPatch({ currency: next, exchangeRateToUsd, exchangeRateDate: Date.now() });
   }
 
   async function changeStatus(newStatus) {
@@ -350,9 +389,13 @@ export function PODetail({ poId, onBack }) {
       <div className="page page--pos">
         <PageHeader
           title="Purchase order"
-          actions={<Button variant="ghost" onClick={onBack}>← Back to list</Button>}
+          backTo={{ label: 'Purchase orders', onClick: onBack }}
         />
-        <EmptyState title="PO not found" body="It may have been deleted." />
+        <EmptyState
+          title="Purchase order not found"
+          body="It may have been deleted on this Mac or another one."
+          action={<Button onClick={onBack}>Back to purchase orders</Button>}
+        />
       </div>
     );
   }
@@ -366,28 +409,34 @@ export function PODetail({ poId, onBack }) {
       <PageHeader
         title={`PO ${header.poNumber || '(no number)'}`}
         subtitle={`${header.supplierName || 'Unknown supplier'} • ${header.incoterm} • ${header.currency} → USD @ ${Number(header.exchangeRateToUsd).toFixed(4)}`}
+        backTo={{ label: 'Purchase orders', onClick: onBack }}
         actions={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <>
             <Badge tone={STATUS_TONE(header.status)}>{STATUS_LABEL(header.status)}</Badge>
             {canManage ? (
               <Select
+                className="po-status-select"
                 value={header.status}
                 onChange={(e) => changeStatus(e.target.value)}
-                style={{ minWidth: 140 }}
                 aria-label="Change status"
               >
                 {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
               </Select>
             ) : null}
-            <Button variant="ghost" onClick={exportCsv} disabled={detail.lines.length === 0}>Export CSV</Button>
-            <Button variant="ghost" onClick={onBack}>← Back to list</Button>
-          </div>
+            <Button
+              onClick={exportCsv}
+              disabled={detail.lines.length === 0}
+              title={detail.lines.length === 0 ? 'Add a line first — there is nothing to export yet' : 'Download the lines as a CSV file'}
+            >
+              Export CSV
+            </Button>
+          </>
         }
       />
 
       {/* Header — editable inline. */}
       <section className="po-section">
-        <h3 className="po-section__title">Header</h3>
+        <h2 className="section-title">Order details</h2>
         <fieldset className="po-header-fields form-grid" disabled={!canManage}>
           <label className="field">
             <span className="field__label">PO number</span>
@@ -401,7 +450,7 @@ export function PODetail({ poId, onBack }) {
             <Select
               key={`cur-${header.currency}`}
               defaultValue={header.currency}
-              onChange={(e) => saveHeaderPatch({ currency: e.target.value })}
+              onChange={(e) => changeCurrency(e.target)}
             >
               {['USD','CNY','THB','VND','KHR','EUR','JPY','KRW','INR','IDR','MYR','SGD'].map((c) =>
                 <option key={c} value={c}>{c}</option>)}
@@ -507,32 +556,36 @@ export function PODetail({ poId, onBack }) {
 
       {/* Line items. */}
       <section className="po-section">
-        <header className="po-section__header">
-          <h3 className="po-section__title">Line items ({detail.lines.length})</h3>
-          {canManage ? <Button variant="primary" onClick={() => setAddingLine(true)}>Add line</Button> : null}
-        </header>
+        <div className="section-head">
+          <h2 className="section-title">Line items</h2>
+          <p className="section-hint">{detail.lines.length}</p>
+          <div className="section-head__actions">
+            {canManage ? <Button size="sm" onClick={() => setAddingLine(true)}>Add line</Button> : null}
+          </div>
+        </div>
         {detail.lines.length === 0 && (
           <EmptyState
             title="No lines yet"
             body={canManage ? 'Add the products on this PO with their supplier-currency unit prices.' : 'This PO has no products on it yet.'}
+            action={canManage ? <Button variant="primary" onClick={() => setAddingLine(true)}>Add line</Button> : null}
           />
         )}
         {detail.lines.length > 0 && (
-          <div className="pos-table-wrap">
-            <table className="pos-table pos-table--lines">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>SKU</th>
                   <th>Product</th>
-                  <th className="ralign">Qty</th>
-                  <th className="ralign">Unit ({header.currency})</th>
-                  <th className="ralign">Unit (USD)</th>
-                  <th className="ralign">Cartons</th>
-                  <th className="ralign">CBM</th>
-                  <th className="ralign">+ Alloc / unit</th>
-                  <th className="ralign">Landed / unit</th>
-                  <th className="ralign">Line total USD</th>
-                  {canManage ? <th></th> : null}
+                  <th className="is-num">Qty</th>
+                  <th className="is-num">Unit ({header.currency})</th>
+                  <th className="is-num">Unit (USD)</th>
+                  <th className="is-num">Cartons</th>
+                  <th className="is-num">CBM</th>
+                  <th className="is-num">+ Alloc / unit</th>
+                  <th className="is-num">Landed / unit</th>
+                  <th className="is-num">Line total USD</th>
+                  {canManage ? <th className="is-actions" aria-label="Actions" /> : null}
                 </tr>
               </thead>
               <tbody>
@@ -542,18 +595,18 @@ export function PODetail({ poId, onBack }) {
                     <tr key={line.id}>
                       <td><strong>{line.productSku || '—'}</strong></td>
                       <td>{line.productName || '—'}</td>
-                      <td className="ralign">{line.qty}</td>
-                      <td className="ralign">{fmtNum(line.unitPriceSupplierCurrency, 4)}</td>
-                      <td className="ralign">{fmtUsd(line.unitPriceUsdAtPo, 4)}</td>
-                      <td className="ralign">{line.cartonQty ? Math.ceil(line.qty / line.cartonQty) : '—'}</td>
-                      <td className="ralign">{c.volumeCbm ? c.volumeCbm.toFixed(3) : '—'}</td>
-                      <td className="ralign">{fmtUsd(c.allocatedCostUsdPerUnit, 4)}</td>
-                      <td className="ralign"><strong>{fmtUsd(c.landedUnitCostUsd, 4)}</strong></td>
-                      <td className="ralign">{fmtUsd((c.landedUnitCostUsd || 0) * (Number(line.qty) || 0))}</td>
+                      <td className="is-num">{line.qty}</td>
+                      <td className="is-num">{fmtNum(line.unitPriceSupplierCurrency, 4)}</td>
+                      <td className="is-num">{fmtUsd(line.unitPriceUsdAtPo, 4)}</td>
+                      <td className="is-num">{line.cartonQty ? Math.ceil(line.qty / line.cartonQty) : '—'}</td>
+                      <td className="is-num">{c.volumeCbm ? c.volumeCbm.toFixed(3) : '—'}</td>
+                      <td className="is-num">{fmtUsd(c.allocatedCostUsdPerUnit, 4)}</td>
+                      <td className="is-num"><strong>{fmtUsd(c.landedUnitCostUsd, 4)}</strong></td>
+                      <td className="is-num">{fmtUsd((c.landedUnitCostUsd || 0) * (Number(line.qty) || 0))}</td>
                       {canManage ? (
-                        <td className="ralign">
-                          <Button variant="ghost" onClick={() => setEditingLine(line)}>Edit</Button>
-                          <Button variant="ghost" aria-label="Remove line" onClick={() => removeLine(line)}>×</Button>
+                        <td className="is-actions">
+                          <Button size="sm" onClick={() => setEditingLine(line)}>Edit</Button>
+                          <Button variant="danger" size="sm" onClick={() => removeLine(line)}>Remove</Button>
                         </td>
                       ) : null}
                     </tr>
@@ -567,11 +620,14 @@ export function PODetail({ poId, onBack }) {
 
       {/* Cost components. */}
       <section className="po-section">
-        <header className="po-section__header">
-          <h3 className="po-section__title">Cost components ({detail.components.length})</h3>
-          {canManage ? <Button variant="primary" onClick={() => setAddingComponent(true)}>Add cost</Button> : null}
-        </header>
-        <p className="muted">
+        <div className="section-head">
+          <h2 className="section-title">Cost components</h2>
+          <p className="section-hint">{detail.components.length}</p>
+          <div className="section-head__actions">
+            {canManage ? <Button size="sm" onClick={() => setAddingComponent(true)}>Add cost</Button> : null}
+          </div>
+        </div>
+        <p className="section-hint po-section__lead">
           Freight, insurance, duty, clearance, handling — whatever isn’t in the unit
           price. Each gets allocated across line items by value, volume, weight, or flat
           split. A discount is subtracted the same way.
@@ -583,16 +639,16 @@ export function PODetail({ poId, onBack }) {
           />
         )}
         {detail.components.length > 0 && (
-          <div className="pos-table-wrap">
-            <table className="pos-table">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Kind</th>
                   <th>Label</th>
-                  <th className="ralign">Amount ({header.currency})</th>
-                  <th className="ralign">Amount (USD)</th>
+                  <th className="is-num">Amount ({header.currency})</th>
+                  <th className="is-num">Amount (USD)</th>
                   <th>Allocation</th>
-                  {canManage ? <th></th> : null}
+                  {canManage ? <th className="is-actions" aria-label="Actions" /> : null}
                 </tr>
               </thead>
               <tbody>
@@ -600,13 +656,13 @@ export function PODetail({ poId, onBack }) {
                   <tr key={c.id}>
                     <td>{c.kind}</td>
                     <td>{c.label || '—'}</td>
-                    <td className="ralign">{fmtNum(signedAmount(c, c.amountSupplierCurrency), 2)}</td>
-                    <td className="ralign">{fmtUsd(signedAmount(c, c.amountUsd))}</td>
+                    <td className="is-num">{fmtNum(signedAmount(c, c.amountSupplierCurrency), 2)}</td>
+                    <td className="is-num">{fmtUsd(signedAmount(c, c.amountUsd))}</td>
                     <td>{ALLOCATION_BASES.find((a) => a.value === c.allocationBasis)?.label || c.allocationBasis}</td>
                     {canManage ? (
-                      <td className="ralign">
-                        <Button variant="ghost" onClick={() => setEditingComponent(c)}>Edit</Button>
-                        <Button variant="ghost" aria-label="Remove cost" onClick={() => removeComponent(c)}>×</Button>
+                      <td className="is-actions">
+                        <Button size="sm" onClick={() => setEditingComponent(c)}>Edit</Button>
+                        <Button variant="danger" size="sm" onClick={() => removeComponent(c)}>Remove</Button>
                       </td>
                     ) : null}
                   </tr>
@@ -619,10 +675,13 @@ export function PODetail({ poId, onBack }) {
 
       {/* v0.49.50: Payments (TT ledger). */}
       <section className="po-section">
-        <header className="po-section__header">
-          <h3 className="po-section__title">Payments ({detail.payments?.length || 0})</h3>
-          {canManage ? <Button variant="primary" onClick={() => setAddingPayment(true)}>Record payment</Button> : null}
-        </header>
+        <div className="section-head">
+          <h2 className="section-title">Payments</h2>
+          <p className="section-hint">{detail.payments?.length || 0}</p>
+          <div className="section-head__actions">
+            {canManage ? <Button size="sm" onClick={() => setAddingPayment(true)}>Record payment</Button> : null}
+          </div>
+        </div>
 
         {/* Payment summary card — reconciles against what you wire the
             supplier (goods value), not the full landed cost. */}
@@ -666,43 +725,43 @@ export function PODetail({ poId, onBack }) {
             body="Record each TT / wire you send the supplier — deposit, balance, etc. — to track what's paid vs outstanding."
           />
         ) : (
-          <div className="pos-table-wrap">
-            <table className="pos-table">
+          <div className="data-table-wrap">
+            <table className="data-table">
               <thead>
                 <tr>
                   <th>Type</th>
                   <th>Status</th>
                   <th>Date</th>
-                  <th className="ralign">Amount ({header.currency})</th>
-                  <th className="ralign">FX → USD</th>
-                  <th className="ralign">Amount (USD)</th>
-                  <th className="ralign">TT fee (USD)</th>
+                  <th className="is-num">Amount ({header.currency})</th>
+                  <th className="is-num">FX → USD</th>
+                  <th className="is-num">Amount (USD)</th>
+                  <th className="is-num">TT fee (USD)</th>
                   <th>Reference</th>
-                  {canManage ? <th></th> : null}
+                  {canManage ? <th className="is-actions" aria-label="Actions" /> : null}
                 </tr>
               </thead>
               <tbody>
                 {detail.payments.map((p) => (
-                  <tr key={p.id} className={p.status === 'planned' ? 'pos-row--planned' : ''}>
+                  <tr key={p.id} className={p.status === 'planned' ? 'is-muted' : undefined}>
                     <td>{(PAYMENT_KINDS.find((k) => k.value === p.kind) || {}).label || p.kind}</td>
                     <td>
                       <Badge tone={p.status === 'confirmed' ? 'emerald' : p.status === 'paid' ? 'sky' : 'slate'}>
                         {PAYMENT_TT_STATUS_LABEL(p.status)}
                       </Badge>
                     </td>
-                    <td>{fmtDate(p.paidAt)}</td>
-                    <td className="ralign">{fmtNum(p.amountSupplierCurrency, 2)}</td>
-                    <td className="ralign">{Number(p.fxRateToUsd || 0).toFixed(4)}</td>
-                    <td className="ralign">{fmtUsd(p.amountUsd)}</td>
-                    <td className="ralign">
+                    <td>{formatDate(p.paidAt)}</td>
+                    <td className="is-num">{fmtNum(p.amountSupplierCurrency, 2)}</td>
+                    <td className="is-num">{Number(p.fxRateToUsd || 0).toFixed(4)}</td>
+                    <td className="is-num">{fmtUsd(p.amountUsd)}</td>
+                    <td className="is-num">
                       {fmtUsd(p.ttFeeUsd)}
                       {p.ttFeeInLanded && p.ttFeeUsd > 0 ? <span className="po-pay-landed-dot" title="Included in landed cost"> •</span> : null}
                     </td>
                     <td>{p.reference || <span className="muted">—</span>}</td>
                     {canManage ? (
-                      <td className="ralign">
-                        <Button variant="ghost" onClick={() => setEditingPayment(p)}>Edit</Button>
-                        <Button variant="ghost" aria-label="Remove payment" onClick={() => removePayment(p)}>×</Button>
+                      <td className="is-actions">
+                        <Button size="sm" onClick={() => setEditingPayment(p)}>Edit</Button>
+                        <Button variant="danger" size="sm" onClick={() => removePayment(p)}>Remove</Button>
                       </td>
                     ) : null}
                   </tr>
@@ -715,7 +774,7 @@ export function PODetail({ poId, onBack }) {
 
       {/* Summary. */}
       <section className="po-section po-summary">
-        <h3 className="po-section__title">Landed cost summary</h3>
+        <h2 className="section-title">Landed cost summary</h2>
         <div className="po-summary__grid">
           <SummaryStat label="Goods value (USD)" value={fmtUsd(calc.totalValueUsd)} />
           <SummaryStat label="Cost components (USD)" value={fmtUsd(calc.totalComponentsUsd)} />
@@ -796,6 +855,28 @@ export function PODetail({ poId, onBack }) {
         />
       )}
     </div>
+  );
+}
+
+/** The rate box inside the currency-change confirm. `box.value` is read once
+ *  the dialog closes (confirm() itself only answers yes or no). */
+function CurrencyRateInput({ currency, box }) {
+  const [value, setValue] = useState('');
+  return (
+    <Field label={`Exchange rate (1 ${currency} = ? USD)`} hint="Required. Every line and cost is converted to USD at this rate.">
+      {({ id }) => (
+        <Input
+          id={id}
+          type="number"
+          min="0"
+          step="0.0001"
+          autoFocus
+          value={value}
+          placeholder="e.g. 0.14"
+          onChange={(e) => { setValue(e.target.value); box.value = e.target.value; }}
+        />
+      )}
+    </Field>
   );
 }
 
@@ -886,7 +967,7 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
       size="lg"
       footer={
         <>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button onClick={onCancel}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={!canSubmit}>Save</Button>
         </>
       }
@@ -999,7 +1080,7 @@ function ComponentModal({ mode, currency, incoterm, component, onCancel, onSave 
       size="md"
       footer={
         <>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button onClick={onCancel}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={!canSubmit}>Save</Button>
         </>
       }
@@ -1099,7 +1180,7 @@ function PaymentModal({ mode, currency, defaultFxRate, payment, outstanding, onC
       size="md"
       footer={
         <>
-          <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+          <Button onClick={onCancel}>Cancel</Button>
           <Button variant="primary" onClick={submit} disabled={!canSubmit}>Save</Button>
         </>
       }
@@ -1200,9 +1281,4 @@ function dateInputToTs(s) {
   if (!s) return null;
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d.getTime();
-}
-function fmtDate(ts) {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString();
 }

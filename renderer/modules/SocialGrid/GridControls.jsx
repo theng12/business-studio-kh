@@ -60,7 +60,7 @@ export const STOCK_OPTIONS = [
 function Section({ title, hint, children }) {
   return (
     <section className="social-controls__section">
-      <h3>{title}</h3>
+      <h3 className="section-title">{title}</h3>
       {hint ? <p className="social-controls__hint">{hint}</p> : null}
       {children}
     </section>

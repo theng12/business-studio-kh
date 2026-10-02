@@ -101,7 +101,7 @@ export function PriceGroupsPanel() {
       </p>
 
       {rows.length === 0 ? (
-        <p className="muted" style={{ fontSize: 12.5 }}>
+        <p className="setting-row__hint">
           No price groups yet. Add one below — for example “Wholesale” or “Export”.
         </p>
       ) : (

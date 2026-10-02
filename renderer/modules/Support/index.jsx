@@ -21,7 +21,10 @@ export function Support() {
 
   return (
     <div className="page page--support">
-      <PageHeader title="Support this app" />
+      <PageHeader
+        title="Support this app"
+        subtitle="Ways to help keep the app maintained."
+      />
 
       <div className="support-stack">
         <section className="support-card">
@@ -45,7 +48,7 @@ export function Support() {
             <>
               <Button variant="primary" onClick={openDonate} className="support-card__cta">
                 Pay with crypto (NOWPayments)
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden style={{ marginLeft: 6 }}>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden>
                   <path d="M4 8 L8 4 M5 4 L8 4 L8 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </Button>

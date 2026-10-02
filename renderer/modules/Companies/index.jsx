@@ -96,35 +96,37 @@ export function Companies() {
           {companies.map((c) => {
             const isActive = c.id === activeCompanyId;
             return (
-              <div key={c.id} className="entity-card">
-                <div className="entity-card__head">
-                  <div
-                    className="entity-card__swatch entity-card__swatch--lg"
-                    style={{ background: c.color || '#1c1c1f' }}
-                    aria-hidden
-                  />
-                  <div className="entity-card__head-text">
-                    <div className="entity-card__title">{c.name}</div>
-                    {c.sectors.length > 0 ? (
-                      <div className="entity-card__sub">{c.sectors.join(' • ')}</div>
-                    ) : (
-                      <div className="entity-card__sub muted">No sectors set</div>
-                    )}
+              <article key={c.id} className={`card${isActive ? ' is-selected' : ''}`}>
+                <div className="card__body">
+                  <div className="entity-card__head">
+                    <div
+                      className="entity-card__swatch entity-card__swatch--lg"
+                      style={{ background: c.color || '#1c1c1f' }}
+                      aria-hidden
+                    />
+                    <div className="entity-card__head-text">
+                      <h3 className="card__title">{c.name}</h3>
+                      {c.sectors.length > 0 ? (
+                        <p className="card__meta">{c.sectors.join(' · ')}</p>
+                      ) : (
+                        <p className="card__meta">No sectors set</p>
+                      )}
+                    </div>
+                    {isActive ? <Badge tone="emerald">Active</Badge> : null}
                   </div>
-                  {isActive ? <Badge tone="emerald">Active</Badge> : null}
+                  <p className="card__meta">
+                    {c.productCount} product{c.productCount === 1 ? '' : 's'} · {c.brandCount} brand{c.brandCount === 1 ? '' : 's'}
+                  </p>
                 </div>
-                <div className="entity-card__stats">
-                  <span>{c.productCount} product{c.productCount === 1 ? '' : 's'}</span>
-                  <span>·</span>
-                  <span>{c.brandCount} brand{c.brandCount === 1 ? '' : 's'}</span>
-                </div>
-                <div className="entity-card__actions">
-                  {canManage ? <Button onClick={() => setEditing(c)}>Edit</Button> : null}
-                  {isActive ? null : (
-                    <Button onClick={() => setActiveCompany(c.id)}>Set active</Button>
-                  )}
-                </div>
-              </div>
+                {canManage || !isActive ? (
+                  <div className="card__actions">
+                    {isActive ? null : (
+                      <Button variant="primary" size="sm" onClick={() => setActiveCompany(c.id)}>Set active</Button>
+                    )}
+                    {canManage ? <Button size="sm" onClick={() => setEditing(c)}>Edit</Button> : null}
+                  </div>
+                ) : null}
+              </article>
             );
           })}
         </div>

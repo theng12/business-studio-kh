@@ -15,8 +15,11 @@
  *   3. A QR code keeps its square shape in a non-square box.
  *   4. Text is never clipped at the right: the element is as wide as the ink.
  *   5. The editor drops out-of-order preview replies (sequence guard).
- *   6. The editor's mirror of the template-shape rule agrees with the server's.
+ *   6. The preview size follows the canvas in device pixels.
  *   7. The editor draws its own text at the canvas scale (not raw pixels).
+ *   8. Pixel sizes are DESIGN pixels: the same template looks the same on a
+ *      small and a large photo (owner decision 2026-10-02).
+ *   9. The external watermark keeps each photo's own size and shape.
  *
  * Pure: compose() runs on synthetic images, the db module is stubbed for
  * getDataDir() like the other overlay tests. No Electron, no database.
@@ -345,25 +348,7 @@ test('templates:renderPreview scales inside compose and reports the export size'
   assert.doesNotMatch(body, /fit: 'inside'/);
 });
 
-/* ── 6. editor mirror of the shape rule ─────────────────────────────── */
-
-test('outputCanvasSize: the editor mirror agrees with the renderer', async () => {
-  const { outputCanvasSize } = await overlayCanvas;
-  const templates = [
-    { canvasWidth: 2000, canvasHeight: 2000 },
-    { canvasWidth: 1080, canvasHeight: 1350 },
-    { canvasWidth: 1920, canvasHeight: 1080 },
-    { canvasWidth: 1000, canvasHeight: 1000, inset: { enabled: true } },
-    { canvasWidth: 1000, canvasHeight: 1000, inset: { enabled: false } },
-    {},
-  ];
-  const photos = [[1600, 1600], [1600, 1200], [1200, 1600], [2000, 2001], [4032, 3024], [37, 911]];
-  for (const t of templates) {
-    for (const [w, h] of photos) {
-      assert.deepEqual(outputCanvasSize(t, w, h), templateRenderer.outputCanvasSize(t, w, h), JSON.stringify({ t, w, h }));
-    }
-  }
-});
+/* ── 6. preview size ────────────────────────────────────────────────── */
 
 test('previewMaxPx follows the canvas in device pixels, within 256..1600', async () => {
   const { previewMaxPx } = await overlayCanvas;
@@ -384,7 +369,7 @@ test('elementBox uses a measured ink width when the editor supplies one', async 
   assert.equal(Math.round(measured.width), 320);
 });
 
-test('the editor draws text at canvasW / outputW, the same scale as its box', async () => {
+test('the editor draws text at canvasW / designW, the same scale as its box', async () => {
   const esbuild = require('esbuild');
   const { createRequire } = require('node:module');
   const out = await esbuild.build({
@@ -403,8 +388,108 @@ test('the editor draws text at canvasW / outputW, the same scale as its box', as
     box: { left: 0, top: 0, width: 100, height: 40 },
     productContext: {}, canvasW: 400, canvasH: 500, designW: 1600, designH: 2000, filledContent: 'ABC',
   }));
-  // 96 px of a 1600 px output, shown 400 px wide → 24 px; padding 12 → 3 px.
+  // 96 px of a 1600 px design, shown 400 px wide → 24 px; padding 12 → 3 px.
   assert.match(html, /font-size:24px/);
   assert.match(html, /padding:3px/);
   assert.match(html, /border-radius:2px/);
+});
+
+/* ── 8. design pixels ───────────────────────────────────────────────── */
+
+test('the same template has the same relative text size on an 800 px and a 1600 px photo', async () => {
+  const template = pillTemplate(2000, 2000);
+  const fracs = {};
+  for (const px of [800, 1600, 3000]) {
+    const out = await templateRenderer.composeDetailed({ inputImage: await photo(px, px), template, context: { sku: 'SKU-12345' } });
+    const b = await bbox(out.bytes, isYellow);
+    fracs[px] = { w: b.w / b.imgW, h: b.h / b.imgH };
+  }
+  for (const px of [800, 3000]) {
+    assert.ok(Math.abs(fracs[px].w / fracs[1600].w - 1) < 0.03, `${px}px photo: ${(fracs[px].w * 100).toFixed(2)}% vs ${(fracs[1600].w * 100).toFixed(2)}%`);
+    assert.ok(Math.abs(fracs[px].h / fracs[1600].h - 1) < 0.04);
+  }
+});
+
+test('designPixelScale: output over design; the smaller axis off-shape; legacy falls back', () => {
+  const { designPixelScale } = templateRenderer;
+  assert.equal(designPixelScale({ canvasWidth: 2000, canvasHeight: 2000 }, 800, 800), 0.4);
+  assert.equal(designPixelScale({ canvasWidth: 2000, canvasHeight: 2000 }, 4000, 1000), 0.5);
+  assert.equal(designPixelScale({}, 800, 800, 1), 1);
+  assert.equal(designPixelScale({}, 400, 400, 0.5), 0.5);
+});
+
+/* ── 9. external watermark keeps the photo's shape ──────────────────── */
+
+test("canvas: 'photo' keeps the photo's own size and shape — no bands, no inset", async () => {
+  const input = await photo(1600, 900, '#336699');
+  for (const template of [
+    pillTemplate(2000, 2000),
+    { ...pillTemplate(2000, 2000), inset: { enabled: true, scale: 0.8, fillMode: 'color', fillColor: '#FFFFFF' } },
+  ]) {
+    const out = await templateRenderer.composeDetailed({ inputImage: input, template, context: { sku: 'W' }, canvas: 'photo' });
+    assert.deepEqual([out.width, out.height, out.mode], [1600, 900, 'photo']);
+    const { data, info } = await raw(out.bytes);
+    const rgb = (x, y) => Array.from(data.subarray((y * info.width + x) * 4, (y * info.width + x) * 4 + 3));
+    // Corners away from the text are the photo, not a white band.
+    assert.deepEqual(rgb(info.width - 1, info.height - 1), [0x33, 0x66, 0x99]);
+    assert.deepEqual(rgb(info.width - 1, 0), [0x33, 0x66, 0x99]);
+  }
+});
+
+test('the external watermark tool composes with the photo canvas (server and client share it)', async () => {
+  const os = require('node:os');
+  const { applyTemplateToFiles } = require('../main/util/externalOverlay');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'msk-watermark-shape-'));
+  const src = path.join(dir, 'wide.png');
+  await sharp(await photo(1200, 500)).png().toFile(src);
+  const outDir = path.join(dir, 'out');
+  const res = await applyTemplateToFiles({
+    template: { name: 'Square mark', ...pillTemplate(2000, 2000, { content: 'MARK' }) },
+    inputPaths: [src],
+    outputFolder: outDir,
+    resolveAsset: () => null,
+  });
+  assert.equal(res.failed.length, 0, JSON.stringify(res.failed));
+  assert.equal(res.done, 1);
+  const written = fs.readdirSync(outDir);
+  const meta = await sharp(path.join(outDir, written[0])).metadata();
+  assert.deepEqual([meta.width, meta.height], [1200, 500]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+/* ── 10. review follow-ups ──────────────────────────────────────────── */
+
+test('very long text is drawn (clipped at the edge), never silently dropped', async () => {
+  for (const [len, size] of [[300, 96], [1000, 24]]) {
+    const out = await templateRenderer.compose({
+      inputImage: await photo(2000, 400, '#ffffff'),
+      template: {
+        canvasWidth: 2000, canvasHeight: 400,
+        elements: [{
+          id: 't', type: 'text', x: 0.01, y: 0.1, anchor: 'tl', content: 'W'.repeat(len),
+          font: { family: 'Helvetica, Arial, sans-serif', size, weight: 'bold', color: '#000000' },
+        }],
+      },
+      context: {},
+    });
+    const ink = await bbox(out, isDark);
+    assert.ok(ink, `${len} chars at ${size}px: the text vanished`);
+    assert.ok(ink.x1 >= 1990, `${len} chars at ${size}px should run to the right edge (got ${ink.x1})`);
+  }
+});
+
+test('a transparent photo gets transparent bands; an opaque one gets white', async () => {
+  const template = { canvasWidth: 1000, canvasHeight: 1000, elements: [] };
+  const cutout = await sharp({ create: { width: 800, height: 400, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .composite([{ input: await photo(200, 200, '#336699'), left: 300, top: 100 }])
+    .png().toBuffer();
+  const a = await raw(await templateRenderer.compose({ inputImage: cutout, template, context: {} }));
+  assert.deepEqual([a.info.width, a.info.height], [800, 800]);
+  assert.equal(a.data[3], 0, 'top band should be transparent for a transparent photo');
+  assert.equal(a.data[(799 * 800 + 400) * 4 + 3], 0, 'bottom band should be transparent');
+  const centre = (400 * 800 + 400) * 4;
+  assert.deepEqual(Array.from(a.data.subarray(centre, centre + 4)), [0x33, 0x66, 0x99, 255]);
+
+  const b = await raw(await templateRenderer.compose({ inputImage: await photo(800, 400), template, context: {} }));
+  assert.deepEqual(Array.from(b.data.subarray(0, 4)), [255, 255, 255, 255]);
 });

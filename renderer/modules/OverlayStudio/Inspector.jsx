@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ANCHORS, BARCODE_FORMATS, IMAGE_SOURCES, TOKENS } from './elementDefaults.js';
-import { Field, Input, Select, Textarea, SliderField } from '../../components/ui.jsx';
+import { Button, Field, Input, Select, Textarea, SliderField } from '../../components/ui.jsx';
 import { FontFamilyPicker } from './FontFamilyPicker.jsx';
+import { EyeIcon, EyeOffIcon, LockIcon, UnlockIcon } from './icons.jsx';
 
 /**
  * v0.26.17: NumberInput — a controlled number input that doesn't
@@ -123,30 +124,34 @@ export function Inspector({ element, onChange, onDelete }) {
         {/* v0.26.0 (Phase 4): eye / lock toggles. Inline with the
             type label + delete button so they're always visible at
             the top of the inspector, no scrolling. */}
-        <button
-          type="button"
-          className={`row-action${element.visible === false ? ' is-active' : ''}`}
-          // Toggle: hidden → visible, anything else → hidden.
-          // `element.visible === false` is true when explicitly hidden;
-          // both `true` and `undefined` (default) count as visible.
-          onClick={() => patchEl({ visible: element.visible === false })}
-          title={element.visible === false ? 'Show element (currently hidden)' : 'Hide element'}
-          aria-pressed={element.visible === false}
-        >{element.visible === false ? 'Hidden ●' : '👁 Hide'}</button>
-        <button
-          type="button"
-          className={`row-action${element.locked === true ? ' is-active' : ''}`}
-          onClick={() => patchEl({ locked: !(element.locked === true) })}
-          title={element.locked === true ? 'Unlock element' : 'Lock element (prevents drag / resize / rotate)'}
-          aria-pressed={element.locked === true}
-        >{element.locked === true ? '🔒 Locked' : '🔓 Lock'}</button>
-        <button
-          type="button"
-          className="row-action"
-          onClick={onDelete}
-          title="Delete element"
-          aria-label="Delete element"
-        >Delete</button>
+        <div className="ovl-inspector__head-actions">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`ovl-icon-btn${element.visible === false ? ' is-active' : ''}`}
+            // Toggle: hidden → visible, anything else → hidden.
+            // `element.visible === false` is true when explicitly hidden;
+            // both `true` and `undefined` (default) count as visible.
+            onClick={() => patchEl({ visible: element.visible === false })}
+            title={element.visible === false ? 'Show element (currently hidden)' : 'Hide element'}
+            aria-pressed={element.visible === false}
+          >
+            {element.visible === false ? <EyeOffIcon /> : <EyeIcon />}
+            <span>{element.visible === false ? 'Show' : 'Hide'}</span>
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`ovl-icon-btn${element.locked === true ? ' is-active' : ''}`}
+            onClick={() => patchEl({ locked: !(element.locked === true) })}
+            title={element.locked === true ? 'Unlock element' : 'Lock element (prevents drag / resize / rotate)'}
+            aria-pressed={element.locked === true}
+          >
+            {element.locked === true ? <LockIcon /> : <UnlockIcon />}
+            <span>{element.locked === true ? 'Unlock' : 'Lock'}</span>
+          </Button>
+          <Button variant="danger" size="sm" onClick={onDelete} title="Delete element">Delete</Button>
+        </div>
       </div>
 
       <Section title="Position">
@@ -231,7 +236,7 @@ function labelForType(t) {
 function Section({ title, children }) {
   return (
     <div className="ovl-inspector__section">
-      <div className="ovl-inspector__section-title">{title}</div>
+      <h3 className="section-title">{title}</h3>
       <div className="ovl-inspector__section-body">{children}</div>
     </div>
   );

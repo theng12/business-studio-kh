@@ -74,15 +74,20 @@ test('Overlay Studio shortcuts read the current render through a ref', () => {
     'a shortcut effect keyed on selectedId is back — its closures go stale');
 });
 
+/* UI pass, 2026-10: both editors dropped their private badge (TemplateEditor's
+ * SaveStatus copy, ImageWorkspace's SaveIndicator) for the shared
+ * components/SaveStatus.jsx. The invariant is unchanged — the 30 s tick lives
+ * in the badge, never in the editor — it is just pinned in one place now. */
 test('the save badges tick themselves; the editors do not re-render for a timestamp', () => {
-  for (const [name, src, badge] of [
-    ['TemplateEditor', TEMPLATE_EDITOR, 'SaveStatus'],
-    ['ImageWorkspace', WORKSPACE, 'SaveIndicator'],
+  const SHARED = read('renderer/components/SaveStatus.jsx');
+  assert.equal((SHARED.match(/setInterval\(/g) || []).length, 1, 'the shared SaveStatus should own exactly one 30 s tick');
+  assert.match(fnBody(SHARED, 'SaveStatus'), /setInterval\(\(\) => tick\(/, 'the tick is not inside SaveStatus');
+  for (const [name, src] of [
+    ['TemplateEditor', TEMPLATE_EDITOR],
+    ['ImageWorkspace', WORKSPACE],
   ]) {
-    const ticks = src.match(/setInterval\(\(\) => setTick/g) || [];
-    assert.equal(ticks.length, 1, `${name} should have exactly one 30 s tick`);
-    assert.match(fnBody(src, badge), /setInterval\(\(\) => setTick/,
-      `${name}'s tick is not inside ${badge}`);
+    assert.match(src, /import \{ SaveStatus \} from '\.\.\/\.\.\/components\/SaveStatus\.jsx';/, `${name} should use the shared SaveStatus`);
+    assert.doesNotMatch(src, /setInterval\(\(\) => setTick/, `${name} starts its own timestamp tick again`);
   }
 });
 

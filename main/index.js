@@ -556,9 +556,14 @@ app.whenReady().then(() => {
         .all()
         .map((r) => r.po_id);
       const pos = require('./db/purchaseOrders');
-      for (const id of ids) pos.recomputeHeader(id);
+      let failed = 0;
+      for (const id of ids) {
+        // One PO that cannot be recomputed must not keep the whole pass (and
+        // a crash.log line) coming back at every launch.
+        try { pos.recomputeHeader(id); } catch (err) { failed += 1; logEvent('po:discount-recompute-po-failed', `${id}: ${err.message}`); }
+      }
       dbMod.setAppState('po_discount_recompute_v1', 'done');
-      if (ids.length) logEvent('po:discount-recompute', `pos=${ids.length}`);
+      if (ids.length) logEvent('po:discount-recompute', `pos=${ids.length} failed=${failed}`);
     }
   } catch (err) {
     logEvent('po:discount-recompute-failed', err.message);

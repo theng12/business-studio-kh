@@ -354,9 +354,17 @@ function update(id, patch, userId = null) {
     }
   }
   // Switching a PO to USD without naming a rate: USD converts 1:1.
-  if ('currency' in input && !('exchangeRateToUsd' in input)
-      && String(input.currency || 'USD').toUpperCase() === 'USD') {
-    input.exchangeRateToUsd = 1;
+  // Switching to any OTHER currency must name its rate: keeping the old one
+  // (often USD's 1) would silently re-convert every line at the wrong rate —
+  // a misclicked USD → CNY round trip used to leave a received PO at rate 1
+  // and its products' landed cost ~7x too high, with the real rate lost.
+  if ('currency' in input && !('exchangeRateToUsd' in input)) {
+    const next = String(input.currency || 'USD').toUpperCase();
+    if (next === 'USD') {
+      input.exchangeRateToUsd = 1;
+    } else if (next !== String(existing.currency || 'USD').toUpperCase()) {
+      throw new Error(`Enter the exchange rate for ${next} (how many US dollars one ${next} is worth) when changing the currency.`);
+    }
   }
 
   const sets = [];

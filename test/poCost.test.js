@@ -173,6 +173,20 @@ test('3: changing the FX rate or currency re-converts every line and cost', { sk
   assert.deepEqual(purchaseOrders.getDetail(po.id).lines, before.lines);
 });
 
+test('3b: switching back to a non-USD currency must name its rate — the old rate is never reused', { skip: skipReason }, () => {
+  const { a, po } = seed({ currency: 'CNY', rate: 0.14 });
+  purchaseOrders.addLine(po.id, { productId: a.id, qty: 10, unitPriceSupplierCurrency: 70 });
+  purchaseOrders.setStatus(po.id, 'received');
+  close(purchaseOrders.getProductCost(a.id).latestLandedCostUsd, 9.8);
+
+  purchaseOrders.update(po.id, { currency: 'USD' });           // misclick
+  assert.throws(() => purchaseOrders.update(po.id, { currency: 'CNY' }), /Enter the exchange rate for CNY/);
+  assert.equal(purchaseOrders.getDetail(po.id).header.currency, 'USD', 'a refused switch changes nothing');
+
+  purchaseOrders.update(po.id, { currency: 'CNY', exchangeRateToUsd: 0.14 });
+  close(purchaseOrders.getProductCost(a.id).latestLandedCostUsd, 9.8, 'back to the real cost');
+});
+
 test('5: a discount lowers landed cost — stored negative, and old positive rows read as negative', { skip: skipReason }, () => {
   const { a, po } = seed();
   purchaseOrders.addLine(po.id, { productId: a.id, qty: 10, unitPriceSupplierCurrency: 10 });

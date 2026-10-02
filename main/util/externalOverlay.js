@@ -71,8 +71,13 @@ async function applyTemplateToFiles({
       if (!fs.existsSync(src)) {
         failed.push({ src, error: 'file not found' });
       } else {
+        // `canvas: 'photo'` (owner decision 2026-10-02): watermarking keeps
+        // each photo's own size and shape — no template-shaped white bands,
+        // no inset — and only adds the artwork. Product overlays take the
+        // template's shape instead (templateRenderer.outputCanvasSize).
         const bytes = await templateRenderer.compose({
           inputImage: src, template, context: ctx, resolveAsset, strictImageAssets: true,
+          canvas: 'photo',
         });
         // Re-encode to the source format so a JPG photo stays a JPG
         // (PNG output would balloon photo file sizes).
