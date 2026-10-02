@@ -1,7 +1,7 @@
 # HANDOFF — Business Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.87, commit `@MERGE@`, 2026-10-02**. If it disagrees with the
+that produced it. It was true at **v0.1.87, commit `dd60f2e`, 2026-10-02**. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,7 +9,7 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Business Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.87** (the performance + data-safety audit), merged to `main` at `@MERGE@` (PR #95). **Not installed into `/Applications` by the session that built it** — the DMG is in the owner's `dist/`; 0.1.86 is what is installed until he installs it. Replaced apps are in `_trash/Business Studio KH-0.1.8{2,…,5}.app` and, when the folder has not been emptied again, `-0.1.7{2,…,9}.app`. |
+| Current release | **0.1.87** (the performance + data-safety audit), merged to `main` at `dd60f2e` (PR #95). **Not installed into `/Applications` by the session that built it** — the DMG is in the owner's `dist/` (sha256 `e106c498…922b`, smoke-tested from `dist/mac-arm64`: boots, footer v0.1.87, thumbnails served by the packaged sharp); 0.1.86 is what is installed until he installs it. Replaced apps are in `_trash/Business Studio KH-0.1.8{2,…,5}.app` and, when the folder has not been emptied again, `-0.1.7{2,…,9}.app`. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into `_trash/README.md`. |
