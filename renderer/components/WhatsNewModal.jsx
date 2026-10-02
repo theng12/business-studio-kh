@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.88',
+    date: '2026-10-02',
+    items: [
+      'FIX — uploading a brand icon never replaces another icon file. Two brands whose names differ only by punctuation (Royal and Royal!) used to share one icon file, so changing one changed both; and choosing a new icon then pressing Cancel still swapped the live icon. A new icon now gets its own file (Royal-2.png, …), and uploading the same picture again reuses the file it already has.',
+      'Settings → Recently deleted: "Delete forever" and "Delete everything now" are for the admin account only. Anyone allowed to delete products can still see the list and restore from it; on another Mac those two buttons are hidden for everyone but an admin.',
+      'Internal — imageManager.importBrandIcon encodes to a dot-temp in the icon folder and claims the first free <slug>.<ext> / <slug>-N.<ext> slot with fs.linkSync (EEXIST → next slot), reusing a slot whose bytes already match; replaced icons are left in place because overlay templates may reference them. deleted:purge / deleted:empty map to the new ADMIN_ONLY rule in main/util/capabilities.js, which allowedByCaps grants only to the "*" role — no grantable capability, not even system.manage, covers it. Tests: brand-icon case in test/dataSafety.test.js (native); admin-only verdicts in test/dataSafetyWiring.test.js.',
+    ],
+  },
+  {
     version: '0.1.87',
     date: '2026-10-02',
     items: [

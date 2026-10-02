@@ -14,12 +14,24 @@ const { channelCapability } = require('../main/util/capabilities');
 const root = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
 
-test('the recycle bin is gated: restore with delete rights, purge with system rights', () => {
+test('the recycle bin is gated: restore with delete rights, purge is admin only', () => {
+  const { ADMIN_ONLY } = require('../main/util/capabilities');
+  const { allowedByCaps } = require('../main/util/permissions');
   assert.equal(channelCapability('deleted:list'), 'products.delete');
   assert.equal(channelCapability('deleted:restore'), 'products.delete');
-  // Purging is the irreversible step (the files leave the data folder).
-  assert.equal(channelCapability('deleted:purge'), 'system.manage');
-  assert.equal(channelCapability('deleted:empty'), 'system.manage');
+  // Purging is the irreversible step (the files leave the data folder), and
+  // the owner wants it for the admin alone (2026-10-02) — no grantable key.
+  assert.equal(channelCapability('deleted:purge'), ADMIN_ONLY);
+  assert.equal(channelCapability('deleted:empty'), ADMIN_ONLY);
+  const admin = new Set(['*']);
+  const powerful = new Set(['products.delete', 'system.manage', 'users.manage']);
+  assert.equal(allowedByCaps(admin, 'deleted:purge'), true);
+  assert.equal(allowedByCaps(admin, 'deleted:empty'), true);
+  assert.equal(allowedByCaps(powerful, 'deleted:purge'), false, 'even system.manage cannot purge');
+  assert.equal(allowedByCaps(powerful, 'deleted:empty'), false);
+  assert.equal(allowedByCaps(powerful, 'deleted:restore'), true, 'restoring stays open to delete rights');
+  const panel = read('renderer/modules/Settings/DeletedItemsPanel.jsx');
+  assert.match(panel, /canPurge = useUserCaps\(\)\.includes\('\*'\)/, 'the screen hides the purge buttons from non-admins');
 });
 
 test('every in-place image writer lands through replaceImageFile, by row id', () => {
