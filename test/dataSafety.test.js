@@ -524,3 +524,34 @@ test('reverting a merge restores the photo next to — not on top of — the ren
   assert.deepEqual(bytes, ['bytes-1', 'bytes-2', 'bytes-3'], 'every photo is still there exactly once');
   cleanup(dataDir);
 });
+
+/* ─── brand icons never overwrite ─────────────────────────────────── */
+
+test('a brand icon upload never overwrites an existing icon file', { skip: skipReason }, async () => {
+  const imageManager = require('../main/imageManager');
+  const dataDir = freshDataDir();
+  const src = (name, colour) => {
+    const p = path.join(dataDir, name);
+    return sharp({ create: { width: 16, height: 16, channels: 3, background: colour } }).png().toFile(p).then(() => p);
+  };
+  const destDirRel = 'Shop/_brand-icons';
+  const red = await src('red.png', '#ff0000');
+  const blue = await src('blue.png', '#0000ff');
+
+  // "Royal" and "Royal!" slug the same; each keeps its own file.
+  const first = await imageManager.importBrandIcon(red, { destDirRel, baseName: 'Royal' });
+  const firstBytes = fs.readFileSync(abs(dataDir, first.relativePath));
+  const second = await imageManager.importBrandIcon(blue, { destDirRel, baseName: 'Royal' });
+  assert.equal(first.relativePath, 'Shop/_brand-icons/Royal.png');
+  assert.equal(second.relativePath, 'Shop/_brand-icons/Royal-2.png');
+  assert.deepEqual(fs.readFileSync(abs(dataDir, first.relativePath)), firstBytes,
+    'the first brand\'s icon is untouched — and an upload that is later cancelled cannot replace a live icon');
+
+  // The same picture again reuses its slot instead of piling up copies.
+  const again = await imageManager.importBrandIcon(red, { destDirRel, baseName: 'Royal' });
+  assert.equal(again.relativePath, first.relativePath);
+  assert.equal(again.skipped, true);
+  assert.deepEqual(fs.readdirSync(abs(dataDir, destDirRel)).sort(), ['Royal-2.png', 'Royal.png'],
+    'no temp file is left behind');
+  cleanup(dataDir);
+});
