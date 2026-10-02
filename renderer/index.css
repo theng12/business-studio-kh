@@ -3190,6 +3190,12 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   flex-direction: column;
   gap: var(--s-5);
 }
+/* The page is a height-bounded scroll box, so in this column flexbox every
+   section may SHRINK below its content when the page is taller than the
+   window — which squeezed "Needs attention" / "Operations" (min-height: 0)
+   until their chips were cut off under the next card (0.1.89, owner's
+   screenshot). Sections keep their natural height; the page scrolls. */
+.page--dashboard > * { flex-shrink: 0; }
 
 .stat-grid {
   display: grid;

@@ -1,7 +1,7 @@
 # HANDOFF — Media Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.89 (PR #101, merge `1b550e7`), 2026-10-02**. If it disagrees with the
+that produced it. It was true at **v0.1.90, 2026-10-02**. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -107,6 +107,8 @@ Each of these has already burned a session. They are instructions, not backgroun
 - **A received OR closed purchase order is a landed-cost source**, and the 3/12-month averages are computed at read time against today. Changing a PO's currency re-converts every line and cost line, so switching to a non-USD currency must name the rate (`purchaseOrders.update` refuses otherwise — a misclicked USD round trip used to leave a received PO at rate 1 and its products ~7× too expensive). A `discount` cost line always lowers cost, whatever sign it was stored with (v0.1.89).
 - **A label price prints as a bare amount in the price's own currency style** (`formatAmount`: two decimals for USD, none for riel) **plus the template's own prefix/suffix** — owner's decision. Same rule mirrored in `main/studioRenderer.js` and `renderer/modules/LabelStudio/labelFields.js` (v0.1.89).
 - **Parallel agents editing `renderer/index.css` can overwrite each other** — one 0.1.89 agent rewrote the whole file while four others were editing it. After any parallel UI work, diff the class names defined in `index.css` against `main` and check every removed class is no longer referenced in `renderer/` (the 0.1.89 check found eight, all intentional). Also: macOS has no `timeout` command — `timeout 600 npm test` fails instantly and looks like a hang (v0.1.89).
+
+- **The crawl's test companies are nearly empty, so it cannot see layout that only breaks with real data.** 0.1.89 passed 145/145 and still shipped a Dashboard whose cards were squeezed shut on the owner's 2,535-product catalogue. For a layout change, also check the screen with enough content to overflow the window (or force a short page height through CDP), especially column-flex pages inside the bounded `.page` scroll box (v0.1.90).
 
 ## DO NOT TOUCH
 
