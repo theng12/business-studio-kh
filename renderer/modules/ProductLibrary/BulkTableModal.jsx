@@ -18,7 +18,7 @@
  * cells) lives in bulkGridPaste.js — pure, unit-tested, reused here unchanged.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Modal, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
@@ -124,6 +124,124 @@ function AutoGrowTextarea({ value, className, onFocus, ...props }) {
 }
 
 
+/* One row's cells, memoised. A keystroke changes a single cell's edit, and
+ * re-rendering every row × column — each Brand / Category select carrying the
+ * full option list — made typing lag on a 200-row table. `sameRowCells` lets a
+ * row through only when its product, image state, the visible columns, or one
+ * of ITS OWN edits changed; the callbacks it receives are stable for the life
+ * of the modal. The parent still owns the <tr> (and its key). */
+function sameRowCells(prev, next) {
+  if (prev.product !== next.product || prev.r !== next.r || prev.columns !== next.columns
+    || prev.localImage !== next.localImage
+    || prev.onCellChange !== next.onCellChange || prev.onCellFocus !== next.onCellFocus) return false;
+  if (prev.edits === next.edits) return true;
+  for (const c of next.columns) {
+    const k = `${next.r}:${c.key}`;
+    if (prev.edits[k] !== next.edits[k]) return false;
+  }
+  return true;
+}
+
+const BulkTableRowCells = memo(function BulkTableRowCells({
+  product, r, columns, edits, localImage, onCellChange, onCellFocus,
+}) {
+  function cellValue(row, key) {
+    const edited = edits[`${row}:${key}`];
+    if (edited !== undefined) return edited;
+    return productValue(product, key);
+  }
+
+  function imageFor() {
+    if (localImage) return localImage;
+    return {
+      count: Number(product?.imageCount ?? 0),
+      mainImagePath: product?.mainImagePath ?? null,
+      stamp: product?.updatedAt ?? null,
+    };
+  }
+
+  return (
+    <>
+      <td className="bulk-table__rownum">{r + 1}</td>
+      {columns.map((c) => {
+        if (c.type === 'image') {
+          const img = imageFor();
+          return (
+            <td key={c.key} className="bulk-table__cell bulk-table__cell--image">
+              <div
+                className="bulk-table__image"
+                tabIndex={0}
+                data-row={r}
+                data-col="image"
+                aria-label={`Image for row ${r + 1}: ${img.count} of 50`}
+                onFocus={() => onCellFocus(r, 'image')}
+              >
+                {img.mainImagePath ? (
+                  <img className="bulk-table__thumb" src={appImageSrc(img.mainImagePath, img.stamp, { w: 96 })} alt="" loading="lazy" decoding="async" />
+                ) : (
+                  <span className="bulk-table__thumb bulk-table__thumb--empty" aria-hidden="true" />
+                )}
+                <span className="bulk-table__image-count" data-col="image-count">{img.count} / 50</span>
+              </div>
+            </td>
+          );
+        }
+        const value = cellValue(r, c.key);
+        if (c.type === 'select') {
+          return (
+            <td key={c.key} className="bulk-table__cell">
+              <Select
+                data-row={r}
+                data-col={c.key}
+                value={value == null ? '' : String(value)}
+                onFocus={() => onCellFocus(r, c.key)}
+                onChange={(e) => onCellChange(r, c.key, e.target.value)}
+                aria-label={`${c.label} row ${r + 1}`}
+              >
+                {c.options.map((o) => <option key={o.value || '__blank'} value={o.value}>{o.label}</option>)}
+              </Select>
+            </td>
+          );
+        }
+        // Long free-text columns wrap and grow instead of clipping.
+        if (isLongTextColumn(c)) {
+          return (
+            <td key={c.key} className="bulk-table__cell bulk-table__cell--wrap">
+              <AutoGrowTextarea
+                className="bulk-table__textarea"
+                data-row={r}
+                data-col={c.key}
+                value={value == null ? '' : String(value)}
+                onFocus={() => onCellFocus(r, c.key)}
+                onChange={(e) => onCellChange(r, c.key, e.target.value)}
+                aria-label={`${c.label} row ${r + 1}`}
+              />
+            </td>
+          );
+        }
+        const isCurrency = c.type === 'currency';
+        return (
+          <td key={c.key} className="bulk-table__cell">
+            <input
+              className={`bulk-table__input${c.type === 'number' ? ' bulk-table__input--num' : ''}`}
+              type={c.type === 'number' ? 'number' : 'text'}
+              step={c.type === 'number' ? 'any' : undefined}
+              list={isCurrency ? 'bulk-table-currency-codes' : undefined}
+              data-row={r}
+              data-col={c.key}
+              value={value == null ? '' : String(value)}
+              onFocus={() => onCellFocus(r, c.key)}
+              onChange={(e) => onCellChange(r, c.key, e.target.value)}
+              aria-label={`${c.label} row ${r + 1}`}
+            />
+          </td>
+        );
+      })}
+    </>
+  );
+}, sameRowCells);
+
+
 export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
@@ -170,9 +288,9 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
    * the click land on the PREVIOUS cell. That is a real data-integrity bug
    * (found by the UI crawl), not a test artifact. */
   const focusedRef = useRef(null);
-  function focusCell(row, key) {
+  const focusCell = useCallback((row, key) => {
     focusedRef.current = { row, key };
-  }
+  }, []);
   function cellInFocus() {
     const el = document.activeElement;
     const row = Number(el?.dataset?.row);
@@ -458,6 +576,11 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
       return next;
     }, `${row}:${key}`);
   }
+  // The memoised row cells need ONE function for the life of the modal, so
+  // they call through a ref to the current render's setCell.
+  const setCellRef = useRef(setCell);
+  setCellRef.current = setCell;
+  const setCellStable = useCallback((row, key, value) => setCellRef.current(row, key, value), []);
 
   function undo() {
     const entry = historyRef.current.pop();
@@ -468,12 +591,6 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
     setEdits(entry.edits);
     setConfirm(null);
     setClosePrompt(false);
-  }
-
-  function cellValue(row, key) {
-    const edited = edits[`${row}:${key}`];
-    if (edited !== undefined) return edited;
-    return productValue(rows[row], key);
   }
 
   /* ── column widths: drag, auto-fit, reset ───────────────────────────── */
@@ -630,17 +747,6 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
   }, [open]);
 
   /* ── image cell ─────────────────────────────────────────────────────── */
-
-  function imageFor(row) {
-    const local = imageState[row];
-    if (local) return local;
-    const p = rows[row];
-    return {
-      count: Number(p?.imageCount ?? 0),
-      mainImagePath: p?.mainImagePath ?? null,
-      stamp: p?.updatedAt ?? null,
-    };
-  }
 
   async function pasteImage(imageItems, f) {
     const { rows: currentRows, imageMode: mode } = stateRef.current;
@@ -1085,81 +1191,15 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
             <tbody>
               {rows.map((product, r) => (
                 <tr key={product.id ?? r} className="bulk-table__row" data-row={r}>
-                  <td className="bulk-table__rownum">{r + 1}</td>
-                  {visibleColumns.map((c) => {
-                    if (c.type === 'image') {
-                      const img = imageFor(r);
-                      return (
-                        <td key={c.key} className="bulk-table__cell bulk-table__cell--image">
-                          <div
-                            className="bulk-table__image"
-                            tabIndex={0}
-                            data-row={r}
-                            data-col="image"
-                            aria-label={`Image for row ${r + 1}: ${img.count} of 50`}
-                            onFocus={() => focusCell(r, 'image')}
-                          >
-                            {img.mainImagePath ? (
-                              <img className="bulk-table__thumb" src={appImageSrc(img.mainImagePath, img.stamp)} alt="" />
-                            ) : (
-                              <span className="bulk-table__thumb bulk-table__thumb--empty" aria-hidden="true" />
-                            )}
-                            <span className="bulk-table__image-count" data-col="image-count">{img.count} / 50</span>
-                          </div>
-                        </td>
-                      );
-                    }
-                    const value = cellValue(r, c.key);
-                    if (c.type === 'select') {
-                      return (
-                        <td key={c.key} className="bulk-table__cell">
-                          <Select
-                            data-row={r}
-                            data-col={c.key}
-                            value={value == null ? '' : String(value)}
-                            onFocus={() => focusCell(r, c.key)}
-                            onChange={(e) => setCell(r, c.key, e.target.value)}
-                            aria-label={`${c.label} row ${r + 1}`}
-                          >
-                            {c.options.map((o) => <option key={o.value || '__blank'} value={o.value}>{o.label}</option>)}
-                          </Select>
-                        </td>
-                      );
-                    }
-                    // Long free-text columns wrap and grow instead of clipping.
-                    if (isLongTextColumn(c)) {
-                      return (
-                        <td key={c.key} className="bulk-table__cell bulk-table__cell--wrap">
-                          <AutoGrowTextarea
-                            className="bulk-table__textarea"
-                            data-row={r}
-                            data-col={c.key}
-                            value={value == null ? '' : String(value)}
-                            onFocus={() => focusCell(r, c.key)}
-                            onChange={(e) => setCell(r, c.key, e.target.value)}
-                            aria-label={`${c.label} row ${r + 1}`}
-                          />
-                        </td>
-                      );
-                    }
-                    const isCurrency = c.type === 'currency';
-                    return (
-                      <td key={c.key} className="bulk-table__cell">
-                        <input
-                          className={`bulk-table__input${c.type === 'number' ? ' bulk-table__input--num' : ''}`}
-                          type={c.type === 'number' ? 'number' : 'text'}
-                          step={c.type === 'number' ? 'any' : undefined}
-                          list={isCurrency ? 'bulk-table-currency-codes' : undefined}
-                          data-row={r}
-                          data-col={c.key}
-                          value={value == null ? '' : String(value)}
-                          onFocus={() => focusCell(r, c.key)}
-                          onChange={(e) => setCell(r, c.key, e.target.value)}
-                          aria-label={`${c.label} row ${r + 1}`}
-                        />
-                      </td>
-                    );
-                  })}
+                  <BulkTableRowCells
+                    product={product}
+                    r={r}
+                    columns={visibleColumns}
+                    edits={edits}
+                    localImage={imageState[r]}
+                    onCellChange={setCellStable}
+                    onCellFocus={focusCell}
+                  />
                 </tr>
               ))}
             </tbody>

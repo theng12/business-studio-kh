@@ -7,6 +7,7 @@ const sharp = require('sharp');
 const { getDataDir } = require('./db');
 const { slugify: baseSlugify } = require('./util/slug');
 const { ensureDecodablePath } = require('./util/heic');
+const { writeExclusiveFile } = require('./util/exclusiveFile');
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 // `ai-source` accepts inputs for AI Studio bulk mode and is kept at a
@@ -285,28 +286,6 @@ async function importProductImage(sourcePath, { destDirRel, baseName, existingHa
   const destDirAbs = path.join(getDataDir(), 'assets', destDirRel);
   fs.mkdirSync(destDirAbs, { recursive: true });
   const fileName = `${baseName}${outExt}`;
-  const destAbs = path.join(destDirAbs, fileName);
-
-  // If a different file already occupies the slot (shouldn't happen since
-  // the caller picks an unused index — but defensive), pick the next
-  // numeric slot. This is rare enough that we don't bother with hashing
-  // the existing file; the caller is the authority on slot allocation.
-  let finalAbs = destAbs;
-  let finalName = fileName;
-  if (fs.existsSync(finalAbs)) {
-    // The slot is taken — caller should have given us a free one. Bump
-    // by appending `-2`, `-3` rather than overwriting. Same collision
-    // rule as the pre-v0.12 importAsset path.
-    let n = 2;
-    while (fs.existsSync(finalAbs) && n < 1000) {
-      finalName = `${baseName}-${n}${outExt}`;
-      finalAbs = path.join(destDirAbs, finalName);
-      n += 1;
-    }
-    if (fs.existsSync(finalAbs)) {
-      throw new Error(`Couldn't find a free filename slot in ${destDirRel}`);
-    }
-  }
 
   const max = KIND_MAX_DIMENSION.products;
   const pipeline = sharp(src).rotate().resize({
@@ -315,12 +294,30 @@ async function importProductImage(sourcePath, { destDirRel, baseName, existingHa
     fit: 'inside',
     withoutEnlargement: true,
   });
+  let encoded;
   if (outExt === '.png') {
-    await pipeline.png({ compressionLevel: 9 }).toFile(finalAbs);
+    encoded = await pipeline.png({ compressionLevel: 9 }).toBuffer();
   } else if (outExt === '.webp') {
-    await pipeline.webp({ quality: 88 }).toFile(finalAbs);
+    encoded = await pipeline.webp({ quality: 88 }).toBuffer();
   } else {
-    await pipeline.jpeg({ quality: 88, mozjpeg: true }).toFile(finalAbs);
+    encoded = await pipeline.jpeg({ quality: 88, mozjpeg: true }).toBuffer();
+  }
+
+  /* Claim the slot with an exclusive create. "Is it free?" and "write it"
+   * used to be two steps with the encode in between, so two imports aiming
+   * at the same slot both saw it free and the second overwrote the first's
+   * photo. Now a taken slot is an EEXIST and the next `-2`, `-3` … name is
+   * tried; nothing is ever written over an existing file. */
+  let finalName = fileName;
+  for (let n = 2; ; n += 1) {
+    try {
+      await writeExclusiveFile(path.join(destDirAbs, finalName), encoded);
+      break;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      if (n >= 1000) throw new Error(`Couldn't find a free filename slot in ${destDirRel}`, { cause: err });
+      finalName = `${baseName}-${n}${outExt}`;
+    }
   }
 
   return {

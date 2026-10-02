@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Button, Modal, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
 import { createNameIdResolver } from '../../lib/nameIdResolver.js';
@@ -195,7 +195,13 @@ export function ImportModal({ open, onClose }) {
     setMapping(next);
   }
 
+  /* Bumped by reset(). An apply that outlives a reset (the modal was closed and
+   * reopened) compares its own id before it writes state, so it can never
+   * resurrect a stale review screen over a fresh pick step. */
+  const runIdRef = useRef(0);
+
   function reset() {
+    runIdRef.current += 1;
     setStep('pick');
     setWorkbook(null);
     setSheetIdx(0);
@@ -208,6 +214,8 @@ export function ImportModal({ open, onClose }) {
   }
 
   function handleClose() {
+    // Mid-apply a close would reset the screen while batches keep writing.
+    if (busy) return;
     reset();
     onClose();
   }
@@ -395,6 +403,7 @@ export function ImportModal({ open, onClose }) {
       return;
     }
     setBusy(true);
+    const runId = runIdRef.current;
     const BATCH_SIZE = 250;
     const total = cachedRows.length;
     const agg = { inserted: 0, updated: 0, skips: [], rowsConsidered: total, conflictPolicy };
@@ -410,11 +419,12 @@ export function ImportModal({ open, onClose }) {
         agg.updated += res.updated || 0;
         if (Array.isArray(res.skips)) agg.skips.push(...res.skips);
       }
-      setApplyProgress({ done: total, total });
-      setResult(agg);
       // One refresh after all batches land (not per-batch) so the Library
       // re-pulls the catalog once.
       await Promise.all([refreshBrands(), refreshCategories(), refreshProducts(), refreshDashboard()]);
+      if (runId !== runIdRef.current) return;
+      setApplyProgress({ done: total, total });
+      setResult(agg);
       setStep('review');
     } catch (err) {
       addToast(err.message, 'error');
@@ -429,7 +439,7 @@ export function ImportModal({ open, onClose }) {
       <Button onClick={handleClose}>Cancel</Button>
     ) : step === 'map' ? (
       <>
-        <Button onClick={handleClose}>Cancel</Button>
+        <Button onClick={handleClose} disabled={busy}>Cancel</Button>
         <Button variant="primary" disabled={!skuMapped || busy} onClick={handleGoToPreview}>
           {busy ? 'Building preview…' : `Preview ${sheet?.rowCount ?? 0} row${sheet?.rowCount === 1 ? '' : 's'}`}
         </Button>
@@ -452,7 +462,7 @@ export function ImportModal({ open, onClose }) {
     );
 
   return (
-    <Modal open={open} onClose={handleClose} title="Import Excel / CSV" footer={footer} size="xl">
+    <Modal open={open} onClose={handleClose} closeOnBackdrop={!busy} title="Import Excel / CSV" footer={footer} size="xl">
       {step === 'pick' ? (
         <>
           <p>Imports run as three steps: pick file → map columns → review.</p>

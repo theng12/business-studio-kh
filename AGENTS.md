@@ -134,6 +134,12 @@ For desktop apps:
   `logo-2.png`, while a re-import of the *same* bytes reuses whichever slot
   already holds them. (verified 2026-09-19)
 - Renderer accesses these via a custom protocol (e.g. `app-image://local/<relpath>`). Resolve in main process; serve via `protocol.handle()` (not the deprecated `registerFileProtocol`).
+- **List and grid views ask for a thumbnail, never the original** (verified 2026-10-02):
+  `appImageSrc(path, stamp, { w: 96 | 320 | 640 })` adds `?w=`, and both the local
+  protocol and the server's asset route answer it from `main/util/thumbCache.js` — a
+  sharp-made WebP cached in `<userData>/thumb-cache/` (not the data folder, so backups
+  and data-folder moves never see it; capped at 256 MB). Any failure serves the
+  original. Full-size viewers (Lightbox, editors) omit `w`.
 - Auto-import-on-pick: when a user picks a file in a form, copy it to assets immediately. Form state stores the *relative* path returned by the importer, not the absolute pick path.
 
 ## 10. Pagination on long lists
@@ -291,7 +297,7 @@ per-app choice, not the house default.
 
 ## 17. File layout (Electron apps)
 
-*(Counts re-verified 2026-09-23.)*
+*(Counts re-verified 2026-10-02.)*
 
 The shape below is what this app actually uses. Two things to note, because
 they're the parts newcomers get wrong: `db` and `ipc` are **directories with
@@ -304,10 +310,10 @@ main/                    # main process — CommonJS (require/module.exports)
   config.js              # config.json read/write (userData, not the DB)
   preload.js             # contextBridge surface — the ONLY api entry point
   ipc.js                 # barrel: registers every domain module in ipc/
-  ipc/                   # 24 files, one per domain (products.js, images.js, …)
+  ipc/                   # 25 files, one per domain (products.js, images.js, …)
   db/                    # 30 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 29 pure helpers (slug, capabilities, landedCost,
+  util/                  # 32 helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode
@@ -335,7 +341,7 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 118 files — `node --test test/**/*.test.js`
+test/                    # 144 files — `node --test test/**/*.test.js`
 scripts/                 # build-icon.js, build-webclient.js,
                          # probe-overlay-renderer.js,
                          # probe-render-paint.js  (`npm run check:render`)

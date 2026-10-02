@@ -3,6 +3,8 @@ import { Button, Select } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { useAppStore } from '../../store/index.js';
 import { relativeTime } from '../../components/BackupReminder.jsx';
+import { useUserCaps } from '../../components/Sidebar.jsx';
+import { hasCap } from '../../lib/capabilities.js';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx and
 // BackupsPanel.jsx). Kept in sync by hand — see the Settings docblock.
@@ -38,6 +40,10 @@ function SettingRow({ label, hint, children }) {
 export function DeletedItemsPanel({ config, addToast }) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const refreshProducts = useAppStore((s) => s.refreshProducts);
+  // Deleting for good needs system.manage (main/util/capabilities.js); an
+  // account without it can still restore, so only those buttons are hidden
+  // rather than shown and then refused with a permission error.
+  const canPurge = hasCap(useUserCaps(), 'system.manage');
   const [state, setState] = useState({ items: [], retentionDays: 30, loading: true });
   const [busyId, setBusyId] = useState(null);
 
@@ -161,13 +167,15 @@ export function DeletedItemsPanel({ config, addToast }) {
           <Button variant="ghost" onClick={refresh} disabled={state.loading}>
             {state.loading ? 'Refreshing…' : 'Refresh'}
           </Button>
-          <Button
-            variant="danger"
-            onClick={handleEmpty}
-            disabled={state.loading || state.items.length === 0}
-          >
-            Delete everything now
-          </Button>
+          {canPurge ? (
+            <Button
+              variant="danger"
+              onClick={handleEmpty}
+              disabled={state.loading || state.items.length === 0}
+            >
+              Delete everything now
+            </Button>
+          ) : null}
         </div>
         <div className="deleted-list">
           {state.loading ? (
@@ -202,13 +210,15 @@ export function DeletedItemsPanel({ config, addToast }) {
                     >
                       {busyId === item.id ? 'Restoring…' : 'Restore'}
                     </Button>
-                    <Button
-                      variant="ghost"
-                      onClick={() => handlePurge(item)}
-                      disabled={busyId !== null}
-                    >
-                      Delete forever
-                    </Button>
+                    {canPurge ? (
+                      <Button
+                        variant="ghost"
+                        onClick={() => handlePurge(item)}
+                        disabled={busyId !== null}
+                      >
+                        Delete forever
+                      </Button>
+                    ) : null}
                   </div>
                 </li>
               ))}

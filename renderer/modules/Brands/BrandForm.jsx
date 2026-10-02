@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Field, Input, Modal } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
+import { appImageSrc } from '../../lib/imageUrl.js';
 
 const COLOR_PRESETS = ['#2563eb', '#047857', '#b45309', '#b91c1c', '#7c3aed', '#0891b2', '#1c1c1f'];
 
@@ -21,11 +22,16 @@ export function BrandForm({ open, brand, onClose, onSubmit, onDelete }) {
   const [form, setForm] = useState(emptyForm());
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Cache stamp for the icon preview. A new upload is written over the same
+  // `<brand>.png` path, so without a fresh stamp the browser keeps showing
+  // the old picture (AGENTS.md §12).
+  const [iconStamp, setIconStamp] = useState(null);
   const isEdit = !!brand;
 
   useEffect(() => {
     if (!open) return;
     setForm(brand ? brandToForm(brand) : emptyForm());
+    setIconStamp(brand?.updatedAt ?? null);
     setError(null);
   }, [open, brand]);
 
@@ -35,6 +41,7 @@ export function BrandForm({ open, brand, onClose, onSubmit, onDelete }) {
       if (!filePath) return;
       const { relativePath } = await window.api.brands.uploadIcon(filePath, form.name || 'brand');
       setForm((f) => ({ ...f, icon: relativePath }));
+      setIconStamp(`u${Date.now()}`);
     } catch (err) {
       addToast(err.message, 'error');
     }
@@ -56,7 +63,7 @@ export function BrandForm({ open, brand, onClose, onSubmit, onDelete }) {
     }
   }
 
-  const iconSrc = form.icon ? `app-image://local/${encodeURIComponent(form.icon)}` : null;
+  const iconSrc = appImageSrc(form.icon, iconStamp);
 
   const footer = (
     <>

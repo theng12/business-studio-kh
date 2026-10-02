@@ -530,7 +530,7 @@ export function Suppliers() {
             maxPage={maxPage}
             pageSize={pageSize}
             onPageChange={setPage}
-            onPageSizeChange={setPageSize}
+            onPageSizeChange={(n) => { setPageSize(n); setPage(0); }}
           />
         </>
       )}

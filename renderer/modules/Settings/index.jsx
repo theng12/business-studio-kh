@@ -527,11 +527,9 @@ export function Settings() {
           label="OpenAI concurrency"
           hint="Maximum simultaneous image generations (1–10)."
         >
-          <Input
-            type="number" min="1" max="10"
+          <ConcurrencyInput
             value={config.openaiConcurrency ?? 3}
-            onChange={(e) => patch('openaiConcurrency', Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
-            style={{ width: 100 }}
+            onCommit={(n) => patch('openaiConcurrency', n)}
           />
         </SettingRow>
         </>
@@ -716,11 +714,46 @@ function ChangeDataFolderModal({ open, fromPath, toPath, onCancel, onConfirm }) 
   );
 }
 
+/* A number box that lets the user clear it and retype. The text is a local
+ * draft; the clamped value is saved on blur or Enter, never per keystroke
+ * (committing on every key turned "backspace, 5" into 1 then 10). */
+function ConcurrencyInput({ value, onCommit }) {
+  const [draft, setDraft] = useState(null);
+  function commit() {
+    if (draft === null) return;
+    const n = Number(draft);
+    setDraft(null);
+    if (draft.trim() === '' || !Number.isFinite(n)) return; // keep the saved value
+    const clamped = Math.max(1, Math.min(10, Math.round(n)));
+    if (clamped !== value) onCommit(clamped);
+  }
+  return (
+    <Input
+      type="number" min="1" max="10"
+      value={draft ?? value}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      style={{ width: 100 }}
+    />
+  );
+}
+
 function ApiKeyRow({ valueKey, config, patch, testFn }) {
   const [show, setShow] = useState(false);
   const [testing, setTesting] = useState(false);
+  // Typed text lives here until blur, so a keystroke is never dropped while the
+  // previous save is still on its way through IPC.
+  const [draft, setDraft] = useState(null);
   const addToast = useAppStore((s) => s.addToast);
-  const value = config[valueKey] ?? '';
+  const value = draft ?? (config[valueKey] ?? '');
+
+  async function commit() {
+    if (draft === null) return;
+    const typed = draft;
+    if (typed !== (config[valueKey] ?? '')) await patch(valueKey, typed || null);
+    setDraft(null);
+  }
 
   async function handleTest() {
     if (!value) { addToast('Enter a key first', 'error'); return; }
@@ -740,7 +773,8 @@ function ApiKeyRow({ valueKey, config, patch, testFn }) {
       <Input
         type={show ? 'text' : 'password'}
         value={value}
-        onChange={(e) => patch(valueKey, e.target.value || null)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
         autoComplete="off"
         spellCheck={false}
         placeholder="(not set)"

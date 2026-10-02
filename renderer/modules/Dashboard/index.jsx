@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useAppStore } from '../../store/index.js';
+import { appImageSrc } from '../../lib/imageUrl.js';
 import { Button, EmptyState } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 
@@ -123,7 +124,7 @@ export function Dashboard() {
           ) : (
             <ul className="dash-list">
               {recentBrands.map((b) => {
-                const iconSrc = b.icon ? `app-image://local/${encodeURIComponent(b.icon)}` : null;
+                const iconSrc = appImageSrc(b.icon, b.updatedAt);
                 const initials = b.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
                 return (
                   <li key={b.id} className="dash-list__row">
@@ -161,13 +162,12 @@ export function Dashboard() {
           ) : (
             <ul className="dash-list">
               {recentProducts.map((p) => {
-                const thumbSrc = p.mainImagePath
-                  ? `app-image://local/${encodeURIComponent(p.mainImagePath)}`
-                  : null;
+                // Stamped (§12: renumbering reuses paths) and thumbnail-sized.
+                const thumbSrc = appImageSrc(p.mainImagePath, p.updatedAt, { w: 96 });
                 return (
                   <li key={p.id} className="dash-list__row dash-list__row--clickable" onClick={() => openProductInWorkspace(p.id)}>
                     {thumbSrc ? (
-                      <img className="dash-list__thumb" src={thumbSrc} alt="" />
+                      <img className="dash-list__thumb" src={thumbSrc} alt="" decoding="async" />
                     ) : (
                       <div className="dash-list__thumb dash-list__thumb--empty" />
                     )}

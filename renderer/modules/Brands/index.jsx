@@ -5,6 +5,7 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { parseConflictError, showConflict } from '../../components/ConflictModal.jsx';
 import { BrandForm } from './BrandForm.jsx';
+import { appImageSrc } from '../../lib/imageUrl.js';
 // v0.1.67: the shared search / sort / selection rules — NOT a local copy.
 // Brands, Categories and Suppliers all drive the same four functions so a
 // range-selection or name-order fix lands in one place.
@@ -317,7 +318,8 @@ export function Brands() {
 
         <div className="card-grid">
           {visibleBrands.map((b, index) => {
-            const iconSrc = b.icon ? `app-image://local/${encodeURIComponent(b.icon)}` : null;
+            // Stamped: a replaced icon keeps its path, so the URL must change.
+            const iconSrc = appImageSrc(b.icon, b.updatedAt);
             const initials = b.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
             const isSelected = selected.includes(b.id);
             return (

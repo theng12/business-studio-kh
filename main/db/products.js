@@ -1,9 +1,8 @@
 const crypto = require('node:crypto');
-const fs = require('node:fs');
 const path = require('node:path');
 const { getDb, getDataDir } = require('./index');
 const { parseJson, getCallerUserId } = require('./_util');
-const { productAssetDir } = require('../util/assetPath');
+const { productAssetDir, companyDir } = require('../util/assetPath');
 const { trashPathInBackground } = require('../util/fileTrash');
 const { normalizeCurrency } = require('../util/currencies');
 
@@ -226,33 +225,92 @@ function getBySku(companyId, sku) {
  * and the user cannot see which product they are looking at on disk either
  * way. Changing a SKU is cheap; recovering overwritten photos is not.
  *
- * Returns the conflicting product, or null.
+ * Compared case-insensitively. The Mac's disk is: `abc-1` and `ABC-1` are
+ * two SKUs to the database (its UNIQUE is case-sensitive) but ONE folder in
+ * Finder, so they shared files exactly like the punctuation case above, and
+ * renumbering one renamed over the other's photos. For the same reason it
+ * looks across companies whose names land on the same folder ("A&B" and
+ * "A B" are both `A-B`).
+ *
+ * Returns the conflicting product ({ id, sku, companyId }), or null.
+ * `index` is an assetDirIndex() to reuse across many checks (a bulk import);
+ * without one, a fresh one is built.
  */
-function findAssetDirCollision(companyId, proposed, excludeId = null) {
+function findAssetDirCollision(companyId, proposed, excludeId = null, index = null) {
   if (!companyId || !proposed?.sku) return null;
   const company = getCompanies().get(companyId);
   if (!company) return null;
   let target;
   try {
     const brand = proposed.brandId ? getBrands().get(proposed.brandId) : null;
-    target = productAssetDir(company, brand, proposed);
+    target = assetDirKey(productAssetDir(company, brand, proposed));
   } catch (_) {
     return null;   // an uncomputable path cannot collide
   }
-  const rows = getDb()
-    .prepare('SELECT * FROM products WHERE company_id = ? AND id <> ?')
-    .all(companyId, excludeId ?? '');
-  for (const row of rows) {
-    const other = rowToProduct(row);
-    try {
-      const otherBrand = other.brandId ? getBrands().get(other.brandId) : null;
-      if (productAssetDir(company, otherBrand, other) === target) return other;
-    } catch (_) { /* skip uncomputable */ }
-  }
-  return null;
+  const owners = (index ?? assetDirIndex(company)).get(target) || [];
+  return owners.find((o) => o.id !== excludeId) || null;
 }
 
-function create(input) {
+/** The comparison key for a product folder: the disk ignores case, so do we. */
+function assetDirKey(rel) {
+  return String(rel).toLowerCase();
+}
+
+/**
+ * Every product folder that can collide with one under `company`: its own
+ * products plus those of any company whose name lands on the same folder.
+ * Map of assetDirKey → [{ id, sku, companyId }].
+ *
+ * Reads only the three columns the folder is built from, and each company's
+ * brands once. The earlier version mapped every full row (four JSON parses
+ * each) and looked each brand up with its own counting query per product,
+ * which inside a 1,000-row import into a 2,000-product company came to
+ * millions of statements.
+ */
+function assetDirIndex(company) {
+  const db = getDb();
+  let slug;
+  try { slug = companyDir(company).toLowerCase(); } catch (_) { return new Map(); }
+  const companies = db.prepare('SELECT id, name FROM companies').all().filter((c) => {
+    try { return companyDir(c).toLowerCase() === slug; } catch (_) { return false; }
+  });
+  const index = new Map();
+  for (const c of companies) {
+    const brandById = new Map(
+      db.prepare('SELECT id, name FROM brands WHERE company_id = ?').all(c.id).map((b) => [b.id, b]),
+    );
+    const rows = db.prepare('SELECT id, sku, brand_id FROM products WHERE company_id = ?').all(c.id);
+    for (const r of rows) {
+      let key;
+      try {
+        key = assetDirKey(productAssetDir(c, r.brand_id ? brandById.get(r.brand_id) ?? null : null, r));
+      } catch (_) { continue; }   // skip uncomputable
+      addAssetDirOwner(index, key, { id: r.id, sku: r.sku, companyId: c.id });
+    }
+  }
+  return index;
+}
+
+function addAssetDirOwner(index, key, owner) {
+  const list = index.get(key);
+  if (list) list.push(owner);
+  else index.set(key, [owner]);
+}
+
+function dropAssetDirOwner(index, id) {
+  for (const [key, list] of index) {
+    const kept = list.filter((o) => o.id !== id);
+    if (kept.length === list.length) continue;
+    if (kept.length) index.set(key, kept);
+    else index.delete(key);
+  }
+}
+
+/**
+ * `opts.assetDirIndex` lets a bulk import share one folder index across its
+ * rows instead of rebuilding it per product; the new product is added to it.
+ */
+function create(input, opts = {}) {
   if (!input?.companyId) throw new Error('companyId is required');
   if (!input?.sku || !input.sku.trim()) {
     throw new Error('SKU is required');
@@ -264,11 +322,11 @@ function create(input) {
   }
   /* v0.1.27: a different SKU that slugs to the same folder would share this
    * product's images on disk — see findAssetDirCollision. */
-  const clash = findAssetDirCollision(input.companyId, { sku, brandId: input.brandId ?? null });
+  const clash = findAssetDirCollision(input.companyId, { sku, brandId: input.brandId ?? null }, null, opts.assetDirIndex);
   if (clash) {
     throw new Error(
       `SKU "${sku}" would share an image folder with "${clash.sku}" — they differ only by `
-      + 'punctuation, and the app stores images per product. Add a distinguishing character '
+      + 'punctuation or capital letters, and the app stores images per product. Add a distinguishing character '
       + `(for example "${sku}-A") or change the brand.`,
     );
   }
@@ -343,6 +401,14 @@ function create(input) {
       updatedByUserId: getCallerUserId(),
     });
   const created = get(id);
+  if (opts.assetDirIndex) {
+    try {
+      const company = getCompanies().get(created.companyId);
+      const brand = created.brandId ? getBrands().get(created.brandId) : null;
+      addAssetDirOwner(opts.assetDirIndex, assetDirKey(productAssetDir(company, brand, created)),
+        { id: created.id, sku: created.sku, companyId: created.companyId });
+    } catch (_) { /* uncomputable: cannot collide */ }
+  }
   // v0.22.6: audit. Store the full created row as `after` so the
   // History modal can show the initial values.
   try {
@@ -431,7 +497,8 @@ const UPDATABLE = {
  * are intentionally last-write-wins, internal write-then-read
  * sequences) omit `expectedUpdatedAt` and the check is skipped.
  */
-function update(id, patch) {
+/** `opts.assetDirIndex`: see create(). Kept in step when the folder moves. */
+function update(id, patch, opts = {}) {
   const existing = get(id);
   if (!existing) throw new Error('Product not found');
 
@@ -486,11 +553,12 @@ function update(id, patch) {
     newDir = productAssetDir(newCompany, newBrand, proposedProduct);
     /* v0.1.27: same guard when a SKU or brand change moves the product onto a
      * folder another product already owns. */
-    const moveClash = findAssetDirCollision(newCompanyId, proposedProduct, id);
+    const sameGroup = opts.assetDirIndex && newCompanyId === existing.companyId;
+    const moveClash = findAssetDirCollision(newCompanyId, proposedProduct, id, sameGroup ? opts.assetDirIndex : null);
     if (moveClash) {
       throw new Error(
         `SKU "${newSku}" would share an image folder with "${moveClash.sku}" — `
-        + 'they differ only by punctuation, and the app stores images per product. '
+        + 'they differ only by punctuation or capital letters, and the app stores images per product. '
         + `Add a distinguishing character (for example "${newSku}-A") or pick another brand.`,
       );
     }
@@ -538,6 +606,13 @@ function update(id, patch) {
     }
   });
   tx();
+
+  if (pathChanged && opts.assetDirIndex) {
+    dropAssetDirOwner(opts.assetDirIndex, id);
+    if (newCompanyId === existing.companyId) {
+      addAssetDirOwner(opts.assetDirIndex, assetDirKey(newDir), { id, sku: newSku, companyId: newCompanyId });
+    }
+  }
 
   if (pathChanged && oldDir !== newDir) {
     try {
@@ -632,6 +707,7 @@ function remove(id) {
   let rawProductRow = null;
   let rawImageRows = [];
   let aiGalleryRelPaths = [];
+  let rawAiGalleryRows = [];
   try { rawProductRow = getDb().prepare('SELECT * FROM products WHERE id = ?').get(id); } catch (_) {}
   try {
     rawImageRows = getDb()
@@ -639,9 +715,13 @@ function remove(id) {
       .all(id);
   } catch (_) {}
   try {
-    aiGalleryRelPaths = getDb()
-      .prepare('SELECT filepath FROM ai_gallery WHERE product_id = ?')
-      .all(id)
+    /* The rows too, not only their files: ai_gallery cascades with the
+     * product, so without a snapshot a restored product came back with its AI
+     * pictures on disk and nothing in AI Studio pointing at them. */
+    rawAiGalleryRows = getDb()
+      .prepare('SELECT * FROM ai_gallery WHERE product_id = ?')
+      .all(id);
+    aiGalleryRelPaths = rawAiGalleryRows
       .map((r) => r.filepath)
       .filter(Boolean);
   } catch (_) {}
@@ -688,17 +768,14 @@ function remove(id) {
      * If holding fails, fall back to the previous behaviour — files to the
      * Trash, item not restorable — rather than leaving the files behind with
      * no record at all. */
+    /* Case-insensitive and across same-named companies, like
+     * findAssetDirCollision: on the Mac's disk `abc-1` and `ABC-1` are one
+     * folder, and moving it would take the other product's photos too. */
     let sharedWithCount = 0;
     if (dirToClean && removedCompany) {
       try {
-        const siblings = getDb()
-          .prepare('SELECT * FROM products WHERE company_id = ? AND id <> ?')
-          .all(removedCompany.id, id)
-          .map(rowToProduct);
-        sharedWithCount = siblings.filter((other) => {
-          const otherBrand = other.brandId ? getBrands().get(other.brandId) : null;
-          return productAssetDir(removedCompany, otherBrand, other) === dirToClean;
-        }).length;
+        const owners = assetDirIndex(removedCompany).get(assetDirKey(dirToClean)) || [];
+        sharedWithCount = owners.filter((o) => o.id !== id).length;
       } catch (_) { /* treat as unshared */ }
     }
 
@@ -708,6 +785,7 @@ function remove(id) {
         imageRows: rawImageRows,
         assetDirRel: dirToClean,
         aiGalleryRel: aiGalleryRelPaths,
+        aiGalleryRows: rawAiGalleryRows,
         companyId: removedCompany?.id ?? rawProductRow?.company_id ?? null,
         userId: getCallerUserId(),
         moveAssets: sharedWithCount === 0,
@@ -943,6 +1021,18 @@ function bulkUpsert(companyId, rows, opts = {}) {
   const skips = [];   // [{ rowIndex, sku, reason, category }]
   const changes = []; // [{ rowIndex, sku, action, diffs?, reason? }] — preview payload
 
+  /* One folder index for the whole import, built on first use and kept in
+   * step by create()/update(): checking each new SKU against the company is a
+   * Map lookup rather than a scan of every product per row. */
+  let sharedDirIndex = null;
+  const dirIndex = () => {
+    if (!sharedDirIndex) {
+      const company = getCompanies().get(companyId);
+      sharedDirIndex = company ? assetDirIndex(company) : new Map();
+    }
+    return sharedDirIndex;
+  };
+
   const work = (items) => {
     items.forEach((row, idx) => {
       if (!row.sku || !String(row.sku).trim()) {
@@ -1046,7 +1136,7 @@ function bulkUpsert(companyId, rows, opts = {}) {
             changes.push({ rowIndex: idx, sku, action: 'no_change', existingId: existing.id });
           } else {
             if (!dryRun) {
-              update(existing.id, patch);
+              update(existing.id, patch, { assetDirIndex: dirIndex() });
               updatedIds.push(existing.id);
             }
             /* Keep this call's baseline current so a later duplicate row in the
@@ -1112,7 +1202,7 @@ function bulkUpsert(companyId, rows, opts = {}) {
             // becomes an update (same as live behaviour).
             existingMap.set(sku, { id: '__pending__', sku, ...newRecord });
           } else {
-            const created = create(newRecord);
+            const created = create(newRecord, { assetDirIndex: dirIndex() });
             if (created) existingMap.set(sku, created);
             inserted.push(created?.id ?? sku);
             changes.push({ rowIndex: idx, sku, action: 'insert', existingId: created?.id });
@@ -1261,6 +1351,7 @@ function touchUpdated(id) {
 }
 
 module.exports = { customFieldKeys,
+  findAssetDirCollision,
   list,
   get,
   getBySku,

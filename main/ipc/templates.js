@@ -164,8 +164,12 @@ function zipEntryName(product, template, position) {
 }
 
 /** Stamp composed bytes onto an image's RAW file in place (re-encoded to
- *  the source format), atomic-rename, refresh content_hash. Mirrors the
- *  flipSource overwrite pattern. Returns the updated row. */
+ *  the source format), refresh content_hash. Mirrors the flipSource
+ *  overwrite pattern, including where it lands: `image` is the row read
+ *  before the compose, and the bytes go to that row's CURRENT path — or are
+ *  refused if its pixels changed meanwhile — so a set-main or delete during
+ *  the render cannot send the overlay onto another photo
+ *  (productImages.replaceImageFile). Returns the updated row. */
 async function overwriteImageInPlace(productId, image, bytes) {
   const sharp = require('sharp');
   const crypto = require('node:crypto');
@@ -177,15 +181,16 @@ async function overwriteImageInPlace(productId, image, bytes) {
   else if (ext === '.webp')  pipe = pipe.webp({ quality: 90 });
   else                       pipe = pipe.jpeg({ quality: 92, mozjpeg: true });
   try {
-    await pipe.toFile(tmpAbs);
-    await fs.promises.rename(tmpAbs, absSrc);
+    const buf = await pipe.toBuffer();
+    await fs.promises.writeFile(tmpAbs, buf);
+    const newHash = crypto.createHash('sha1').update(buf).digest('hex');
+    return productImages.replaceImageFile(productId, image.id, {
+      tmpAbs, newHash, expectedHash: image.contentHash,
+    });
   } catch (err) {
     try { if (fs.existsSync(tmpAbs)) await fs.promises.unlink(tmpAbs); } catch (_) {}
     throw err;
   }
-  const buf = await fs.promises.readFile(absSrc);
-  const newHash = crypto.createHash('sha1').update(buf).digest('hex');
-  return productImages.setContentHash(productId, image.filepath, newHash);
 }
 
 /**
@@ -223,14 +228,20 @@ async function applyOverlayToProductImages({ template, product, scope, destinati
   const promotesToMain = (destination.kind === 'replaceMain' || destination.kind === 'appendAsMain') && targets.length === 1;
   let appendedCount = 0;
 
-  for (const img of targets) {
-    const baseAbs = imageBaseAbs(img);
-    if (!fs.existsSync(baseAbs)) continue;
-    const bytes = await templateRenderer.compose({ inputImage: baseAbs, template, context: ctx });
+  for (const target of targets) {
+    /* Re-read the row by id and its bytes in the same JS turn: the previous
+     * target's awaits leave time for a set-main or delete to renumber the
+     * product, and a path captured at the start could by now hold another
+     * photo — composed, and (for 'overwrite') written onto this one. */
+    const img = productImages.getById(product.id, target.id);
+    if (!img) continue;
+    let baseBytes;
+    try { baseBytes = fs.readFileSync(imageBaseAbs(img)); } catch (_) { continue; }
+    const bytes = await templateRenderer.compose({ inputImage: baseBytes, template, context: ctx });
 
     if (destination.kind === 'overwrite') {
       const updated = await overwriteImageInPlace(product.id, img, bytes);
-      outputs.push({ outputFilepath: img.filepath, image: updated, overwritten: true });
+      outputs.push({ outputFilepath: updated?.filepath ?? img.filepath, image: updated, overwritten: true });
     } else if (destination.kind === 'saveToFolder') {
       const base = `${slugify(product.sku || 'product', 'product')}-${slugify(template.name || 'overlay', 'overlay')}`;
       if (destination.collect) {
@@ -263,8 +274,13 @@ async function applyOverlayToProductImages({ template, product, scope, destinati
         originalFilepath: `overlay:${template.id}`,
       });
       if (!skipped) appendedCount += 1;
-      if (promotesToMain && image) productImages.setMain(product.id, image.filepath);
-      outputs.push({ outputFilepath: image.filepath, image, skipped: !!skipped });
+      // By id: the add awaited, so the path it returned may have been renumbered.
+      let placed = image;
+      if (promotesToMain && image) {
+        productImages.setMainById(product.id, image.id);
+        placed = productImages.getById(product.id, image.id) || image;
+      }
+      outputs.push({ outputFilepath: placed.filepath, image: placed, skipped: !!skipped });
     }
   }
 

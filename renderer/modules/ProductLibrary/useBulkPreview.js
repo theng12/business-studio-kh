@@ -40,6 +40,8 @@ export function useBulkPreview({ open, productIds, skipPreview, requestPreview, 
   const [previewBusy, setPreviewBusy] = useState(false);
   const afterUrlRef = useRef(null);
   const debounceRef = useRef(null);
+  // Request counter: only the newest preview render may land (see renderPreview).
+  const previewSeq = useRef(0);
 
   // The sample is always the FIRST selected product's main image. Depend on
   // that id, not on the array, so a parent re-render can't restart this.
@@ -47,6 +49,8 @@ export function useBulkPreview({ open, productIds, skipPreview, requestPreview, 
 
   useEffect(() => {
     if (!open) return undefined;
+    previewSeq.current += 1; // a render for the previous sample must not land
+    setPreviewBusy(false);
     setSample(null);
     setAfterUrl(null);
     if (!firstId) return undefined;
@@ -71,10 +75,13 @@ export function useBulkPreview({ open, productIds, skipPreview, requestPreview, 
 
   const renderPreview = useCallback(async () => {
     if (!open || skipPreview || !sample) return;
+    const seq = (previewSeq.current += 1);
+    const fresh = () => seq === previewSeq.current;
     setPreviewBusy(true);
     try {
       const bytes = await requestPreview(sample);
-      if (!bytes) return;
+      // A slower, older render must not replace a newer one.
+      if (!fresh() || !bytes) return;
       const blob = new Blob(
         [bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)],
         { type: 'image/png' },
@@ -84,9 +91,9 @@ export function useBulkPreview({ open, productIds, skipPreview, requestPreview, 
       afterUrlRef.current = url;
       setAfterUrl(url);
     } catch (err) {
-      addToast(`Preview failed: ${err.message}`, 'error');
+      if (fresh()) addToast(`Preview failed: ${err.message}`, 'error');
     } finally {
-      setPreviewBusy(false);
+      if (fresh()) setPreviewBusy(false);
     }
   }, [open, skipPreview, sample, requestPreview, addToast]);
 
