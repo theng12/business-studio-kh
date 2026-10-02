@@ -1,9 +1,15 @@
 # Hardware and provider validation runbook
 
-Status: **not performed** as of 2026-09-23. Nothing in this document has been
-executed. It exists because these checks cannot be closed from the development
-Mac and must not be claimed from loopback/synthetic evidence. Run each row,
-record the result in the table at the bottom, then update the project status.
+Status: **not performed** — re-checked 2026-10-02 at 0.1.90. No row in this
+document has been executed. It exists because these checks cannot be closed from
+the development Mac and must not be claimed from loopback/synthetic evidence. Run
+each row, record the result in the table at the bottom, then update
+`docs/tasks/HANDOFF.md` (OPEN) and the project status page.
+
+The only real-provider evidence so far is outside this runbook: a live OpenAI
+smoke test on 2026-09-22 with the owner's key (model list plus one image-to-image
+edit), recorded in `docs/archive/PROJECT_STATUS_HISTORY_0.1.34-0.1.72.md`. It does
+not close R5.4, which asks for the fixture checks and the model download.
 
 Rules for every row:
 
@@ -36,6 +42,9 @@ the network trusted and never expose the port publicly.
       connects (and the old address fails clearly).
 - [ ] Open original and processed images on both Macs; confirm the correct bytes
       (cache-busting stamp works across machines).
+- [ ] On the client, the Product Library grid loads thumbnails noticeably faster
+      than before 0.1.87 (thumbnails over the link are covered only by
+      `test/thumbServer.test.js` and the loopback probe so far).
 - [ ] Record a timed read/edit round trip on the real LAN.
 
 Not evidence: the local two-process packaged probe. It is loopback with
@@ -53,11 +62,24 @@ synthetic profiles and must never be reported as two-Mac behaviour.
       and leaves no stuck "printing" state.
 - [ ] Confirm copies / gaps / margins behave as configured for a sheet.
 
-## R5.3 — Older OS and mobile viewer
+## R5.3 — Older OS and the phone viewer
+
+The viewer is `http://<server>:13180/m`, reached over plain HTTP on Tailscale —
+HTTPS is declined (AGENTS.md §25.4), so test the HTTP routes, not the share sheet.
+The owner's brother uses an **Android** phone (Chrome), so test that as well as
+iPhone/iPad Safari.
 
 - [ ] Install and open on a **macOS 12** machine (the declared minimum).
-- [ ] Open the browser viewer from iPad Safari on the same network; confirm
+- [ ] Open the viewer from iPhone/iPad Safari and from the Android phone; confirm
       company switch, image display, and reconnect after a server restart.
+- [ ] Apply an overlay with "Save to this device" on, then save the full-screen
+      result by press-and-hold → Save Image (iOS) / Download image (Android).
+      Confirm the picture reaches Photos / the gallery. This is the step the
+      whole HTTP save path depends on, and it has never been watched.
+- [ ] Apply an overlay to several products with "Save copy only" and tap
+      Download on the batch zip; confirm one zip arrives and opens.
+- [ ] Add the viewer to the home screen and try "Save to Files" / "Download"
+      there; record whether the download actually happens.
 
 ## R5.4 — AI providers and the local background-removal model
 
@@ -70,17 +92,21 @@ synthetic profiles and must never be reported as two-Mac behaviour.
 
 ## Results table
 
-Copy this into the project status doc when the rows are executed. Leave a row
+Fill this in as rows are executed, and copy the results into the handoff. Leave a row
 blank only if it is genuinely not applicable, and say why.
 
 | ID | Check | Version | Date | Operator | Result | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | R5.1 | Two-Mac connect/reconnect/edit both ways | | | | not performed | |
 | R5.1 | Wi-Fi loss / sleep-wake / DHCP change | | | | not performed | |
+| R5.1 | Client thumbnails over the link (0.1.87) | | | | not performed | |
 | R5.2 | Physical printer size/margins, Khmer | | | | not performed | |
 | R5.2 | Print cancellation | | | | not performed | |
 | R5.3 | macOS 12 install/open | | | | not performed | |
-| R5.3 | iPad Safari viewer | | | | not performed | |
+| R5.3 | iPhone/iPad Safari viewer | | | | not performed | |
+| R5.3 | Android Chrome viewer (brother's phone) | | | | not performed | |
+| R5.3 | Press-and-hold save reaches Photos / gallery | | | | not performed | |
+| R5.3 | Batch zip download on a phone | | | | not performed | |
 | R5.4 | AI fixtures (no paid calls) | | | | not performed | |
 | R5.4 | Local bg-removal model download | | | | not performed | |
 

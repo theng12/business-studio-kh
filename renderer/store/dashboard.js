@@ -1,7 +1,8 @@
 // Dashboard slice — stats + recent lists + donate banner cool-off.
 
-// Per DONATIONS_HANDOFF: 7-day cool-off. Value is the epoch-ms (string) of
-// the last dismissal. Absent or older than 7 days → banner shows again.
+// Per the donations spec (now docs/archive/DONATIONS_HANDOFF.md): 7-day
+// cool-off. Value is the epoch-ms (string) of the last dismissal. Absent or
+// older than 7 days → banner shows again.
 const DONATE_DISMISS_KEY = 'iskh.donationDismissedAt';
 const DONATE_COOLOFF_MS = 7 * 24 * 60 * 60 * 1000;
 let refreshSeq = 0;

@@ -1,8 +1,8 @@
 # Media Studio KH — Product Briefing
 
-**Last full fact-check: 2026-09-23** (against the code, not against the previous
-version of this document). Same convention as `AGENTS.md` §22: a claim that names
-a file, a package or a number carries `(verified 2026-09-23)` where it is worth
+**Last full fact-check: 2026-10-02, at 0.1.90** (against the code, not against the
+previous version of this document). Same convention as `AGENTS.md` §22: a claim that
+names a file, a package or a number carries `(verified YYYY-MM-DD)` where it is worth
 singling out, and anything else falls back to that date.
 
 > **This file was rewritten, not edited.** The previous version described
@@ -15,9 +15,10 @@ singling out, and anything else falls back to that date.
 **What this document is:** the product overview — what the app is, what it does,
 how it is laid out, what it stores, and how it is built.
 
-**What it is not:** the engineering rulebook. Coding conventions, IPC rules,
-database conventions, packaging traps and versioning policy live in
-`AGENTS.md`. Where the two overlap, `AGENTS.md` wins.
+**What it is not:** the engineering rulebook or the session status. Coding
+conventions, IPC rules, database conventions, packaging traps and versioning policy
+live in `AGENTS.md`; the UI pattern lives in `docs/UI_GUIDE.md`; versions, commands
+and open gaps live in `docs/tasks/HANDOFF.md`. Where they overlap, those win.
 
 ---
 
@@ -32,6 +33,8 @@ batch image work is still the core (Product Library → Image Workspace → Expo
 Center), but the app now also runs a label studio, a catalog studio, an AI image
 studio, an overlay/watermark studio, and a purchasing area.
 
+- **Home use.** The owner's Macs and his brother's. There is no public release
+  (AGENTS.md §25.3).
 - **Runs entirely locally.** No account, no cloud service, no telemetry. The one
   exception is AI Studio, which calls a provider you configure and pay for
   yourself; everything else — including background removal — runs on the Mac.
@@ -49,10 +52,10 @@ studio, an overlay/watermark studio, and a purchasing area.
 
 | Layer | Choice |
 |---|---|
-| Shell | Electron ^44.4.3 + `vite-plugin-electron/simple` (verified 2026-09-21) |
-| UI | React 18 + Vite 7 (verified 2026-09-21) |
-| Styling | One hand-written `renderer/index.css` — no Tailwind, no CSS build step |
-| State | Zustand (one store, composed of 13 slice files; verified 2026-09-21) |
+| Shell | Electron ^44.4.3 + `vite-plugin-electron/simple` (verified 2026-10-02) |
+| UI | React 18 + Vite 7 (verified 2026-10-02) |
+| Styling | One hand-written `renderer/index.css` — no Tailwind, no CSS build step; one design system described in `docs/UI_GUIDE.md` (verified 2026-10-02) |
+| State | Zustand (one store, composed of 13 slice files; verified 2026-10-02) |
 | Database | SQLite via `better-sqlite3` |
 | Spreadsheets | SheetJS (`xlsx`) |
 | Images | `sharp` |
@@ -85,14 +88,22 @@ In client mode the renderer is unchanged — the same screens, the same calls �
 and the main process forwards each request to the server over HTTP, with the
 data folder and its assets served over the same connection.
 
-**Client mode is not fully at parity.** 15 channels — the `NOT_YET_PORTABLE`
-list in `main/client/index.js` (verified 2026-09-23) — are stubbed with a clear
+**Client mode is not fully at parity.** 16 channels — the `NOT_YET_PORTABLE`
+list in `main/client/index.js` (verified 2026-10-02) — are stubbed with a clear
 "not yet available in client mode" message rather than implemented: server
-controls and migration bundles, the data-folder mover, backup browse/reveal, and
-the AI provider key check. User and role administration are **not** on that
+controls and migration bundles, the data-folder mover, backup browse/reveal/pick,
+and the AI provider key check. User and role administration are **not** on that
 list — they sit in `PROXIED_CHANNELS` and do work from a client. This is a
 known, tracked list, not a surprise — `test/clientReachability.test.js` guards
 that no renderer-called channel is missing.
+
+**The phone viewer.** A server Mac also serves a browser page at
+`http://<server>:13180/m` (source `webclient/index.html`, bundled into
+`main/webclientHtml.js`; verified 2026-10-02) for phones and tablets: browse the
+catalog, apply overlays to one or many products, and save results to the device.
+It runs over plain HTTP on Tailscale by decision (AGENTS.md §25.4), so the iOS share
+sheet is unavailable and saving goes through press-and-hold on the full-screen
+picture.
 
 ---
 
@@ -100,7 +111,8 @@ that no renderer-called channel is missing.
 
 The sidebar has seven sections and **21 pages** — 20 sidebar items plus the
 Support page reached from the sidebar footer (`verified 2026-09-21` in
-`renderer/components/Sidebar.jsx` and `renderer/App.jsx`):
+`renderer/components/Sidebar.jsx` and `renderer/App.jsx`; still true
+2026-10-02):
 
 | Section | Pages |
 |---|---|
@@ -117,14 +129,14 @@ sections are gated by **capability**, not by role rank — a page is hidden when
 the signed-in user's role lacks its capability (e.g. `images.manage`, `ai.run`,
 `labels.use`, `catalog.design`, `costing.view`). The Workspace pages and
 Settings are ungated, so Company and Settings are always reachable; `History`
-is gated on `history.view` (`verified 2026-09-23`).
+is gated on `history.view` (`verified 2026-10-02`).
 
-Window: 1400 × 900 by default, minimum 1100 × 700 (`verified 2026-09-19`).
+Window: 1400 × 900 by default, minimum 1100 × 700 (`verified 2026-10-02`).
 
-Deep, per-area specifications live beside this file in `docs/`:
-`PRODUCT_LIBRARY_HANDOFF.md`, `COMPANY_MANAGER_HANDOFF.md`,
-`DONATIONS_HANDOFF.md`, `AUDIT_2026-05-20.md`. Those have their own accuracy
-dates and have not all been re-checked recently.
+The older per-area specs (`PRODUCT_LIBRARY_HANDOFF.md`, `COMPANY_MANAGER_HANDOFF.md`,
+`DONATIONS_HANDOFF.md`) and the 2026-05-20 audit are now in `docs/archive/`. The
+three specs are portable blueprints written for other projects, not descriptions
+of this app.
 
 ---
 
@@ -135,7 +147,10 @@ list of images, position 0 being the main one. Imports run through a three-step
 flow (pick file → map columns → review). Bulk operations act on a selection:
 convert format, compress, resize, auto-crop, enhance, remove background, apply
 an overlay, edit fields, and AI generation. **Cap: 50 images per product**
-(`MAX_IMAGES_PER_PRODUCT` in `main/imageManager.js`, verified 2026-09-19).
+(`MAX_IMAGES_PER_PRODUCT` in `main/imageManager.js`, verified 2026-10-02). Deleted
+products and photos are held in Settings → Recently deleted (`main/deletedItems.js`,
+files moved to `<dataDir>/.recycle/`) and can be restored; the final purge is
+admin-only and sends files to the Mac's Trash rather than erasing them.
 
 **Image Workspace** — per-image, per-product editing: crop and straighten with
 aspect presets, canvas presets, background removal, enhance, watermark.
@@ -145,9 +160,11 @@ Auto-saves, with an explicit Save as well.
 provider you configure. Results land in the product's gallery. Costs are shown
 before you run.
 
-**Overlay Studio** — reusable templates (text, barcode, logo/image) composited
-onto product images or onto loose image files. The latter is the "watermark a
-folder of photos" tool.
+**Overlay Studio** — reusable templates (text, price, barcode/QR, logo/image)
+composited onto product images or onto loose image files. The latter is the
+"watermark a folder of photos" tool. Output takes the template's shape (a photo of
+another shape is letterboxed) and sizes scale with the output, so the preview and
+the saved file match; the outside-photos tool keeps each photo's own shape.
 
 **Export Center** — export profiles (format, size, naming tokens, destination)
 and a batch runner that writes marketplace-ready files.
@@ -160,15 +177,18 @@ per page or sheet layout), a standalone barcode maker, and a run history.
 **Operations** — suppliers, purchase orders with lines/components/payments, and a
 landed-cost calculator that rolls supplier pricing into a per-product cost.
 
-**System** — a global audit-log feed, and Settings (preferences, categories,
-AI keys, multi-Mac configuration, roles and permissions, backup/restore,
-data-folder location, About).
+**Social Grid** — multi-image social posts, saved as presets, with text/logo
+watermark overlays.
+
+**System** — a global audit-log feed (History), and Settings (preferences,
+categories, price groups, AI keys, backups, Recently deleted, multi-Mac
+configuration and users, roles and permissions, data-folder location, About).
 
 ---
 
 ## Data model
 
-SQLite, 33 tables (`verified 2026-09-23` from the schema in `main/db/index.js`):
+SQLite, 34 tables (`verified 2026-10-02` from the schema in `main/db/`):
 
 ```
 companies  users  roles  brands  categories  suppliers
@@ -180,8 +200,11 @@ image_templates  image_template_runs  image_merge_ops
 export_profiles  export_runs
 ai_tasks  ai_gallery  ai_prompt_templates
 bulk_column_sets  bulk_column_widths
-audit_log  app_state  settings
+audit_log  app_state  settings  deleted_items
 ```
+
+`SCHEMA_VERSION` is 2. New tables and columns are added in place; a version bump
+wipes the content tables, so it is avoided (AGENTS.md §14).
 
 `products` carries more than the obvious retail fields — carton dimensions and
 weight, per-unit weight, tax rate, reorder point/quantity, inventory tracking,
@@ -195,52 +218,56 @@ document for the authoritative column list.
 
 **Data folder** — user-configurable in Settings, defaulting to
 `~/Pictures/Media Studio KH` (`defaultDataDir()` in `main/config.js`;
-verified 2026-09-21). `app.getPath('userData')/data` is the legacy path. Its
+verified 2026-10-02). `app.getPath('userData')/data` is the legacy path. Its
 layout:
 
 ```
 <dataDir>/
   database.sqlite      the whole app state
-  assets/              imported files, deduplicated by content
-  processed/           processed image output
+  assets/              imported files and product photos
+  processed/           processed image output (incl. overlay-zips/ for the phone)
   ai-gallery/          AI generation results
+  overlays/            overlay output
   backups/             local .iskhbackup archives (unless repointed)
+  .recycle/            Recently deleted (not included in backups)
+  .merge-trash/        duplicate-merge quarantine (not included in backups)
 ```
 
-**Asset naming.** Imported files are copied into `assets/<kind>/` and named
+Product photos are stored as
+`assets/<company>/<brand or _unassigned>/<sku>/<sku>-NNN.<ext>`, numbered by
+position and renumbered on reorder or delete (`main/util/assetPath.js`; verified
+2026-10-02). List and grid thumbnails are cached outside the data folder, in
+`<userData>/thumb-cache/` (`main/util/thumbCache.js`).
+
+**Asset naming (artwork).** Imported files such as logos and watermarks are copied into `assets/<kind>/` and named
 `<slug>.<ext>`, with `-2`, `-3`, … appended on a filename collision. Dedup works
 by *hashing the existing file and comparing* — identical content reuses the
 existing file rather than being copied again. Note the name is **not** built from
 the hash: an earlier version of this document claimed `<slug>-<hash10>.<ext>`,
 which this app has never done. Distinct but identically-named files therefore
-coexist as `logo.png` and `logo-2.png`.
+coexist as `logo.png` and `logo-2.png`. Brand icons live in
+`assets/<company>/_brand-icons/` and follow the same rule: a new icon claims a
+free slot and never overwrites another brand's file (0.1.88).
 
 **Images in the renderer** are addressed as
-`app-image://local/<relative-path>`, served by `main/protocol.js` from
-`<dataDir>/assets`. A cache-busting `?v=` stamp is appended wherever the bytes
-behind a URL can change without the URL changing. The protocol refuses absolute
-paths and rejects anything that resolves outside the allowed roots.
+`app-image://local/<relative-path>`, served by `main/protocol.js` from the data
+folder's `assets/`, `processed/` and `ai-gallery/` trees. A cache-busting `?v=`
+stamp is appended wherever the bytes behind a URL can change without the URL
+changing, and list/grid views add `?w=96|320|640` to get a cached thumbnail
+(AGENTS.md §9). The protocol refuses absolute paths and rejects anything that
+resolves outside the allowed roots.
 
 ---
 
 ## Verification status
 
-The bullets below are the snapshot taken at the 2026-09-23 fact-check, not a
-live status. `docs/tasks/HANDOFF.md` is the current source for the exact counts
-and the order to run the checks in.
-
-- `npm run lint` — 0 errors, **5 warnings** (snapshot 2026-09-23). Lint is
-  **not** warning-free: two unused vars in `main/socialGridRenderer.js` and
-  three unused `eslint-disable` directives in `test/*.test.js`.
-- `npm run check` (`lint` + `npm test`) — **928 tests pass** across **118 test
-  files** (snapshot 2026-09-23).
-- `npm run test:native` — **143 pass** under Electron's Node for the
-  better-sqlite3 suites (snapshot 2026-09-23).
-- `vite build` — clean.
-- The CDP crawl (`scripts/probe-ui-crawl.js`) runs **144 steps** and was green
-  on both the dev-built app and the installed 0.1.72 package (snapshot
-  2026-09-23); it opens all **21 sidebar-reachable pages** and draws each
-  without error.
+Counts change with every release, so they are kept in `docs/tasks/HANDOFF.md`
+(with the order to run the checks in) rather than here. At this fact-check
+(0.1.90, 2026-10-02): `npm test` **1217 pass** across 154 test files,
+`npm run test:native` **211 pass**, lint 0 errors / 4 warnings, and the CDP UI
+crawl (`scripts/probe-ui-crawl.js`) **145/145** as recorded at 0.1.89. The crawl
+opens all 21 sidebar-reachable pages. `npm test` and `test:native` were re-run for
+this check; the crawl figure is the handoff's.
 
 ---
 
@@ -251,7 +278,7 @@ What the previous version of this file said, and what is true
 
 | It said | Actually |
 |---|---|
-| A four-module app (Library, Workspace, Export, Settings) | Nineteen pages across six sections |
+| A four-module app (Library, Workspace, Export, Settings) | Twenty-one pages across seven sections (as of 2026-10-02) |
 | "Up to 20 images per product" | 50, enforced in `main/imageManager.js` |
 | A `remove.bg` fallback with an API key | Deleted. Only the local `@imgly` engine remains. No cloud background removal exists to fall back to |
 | Background removal is "pure Node/WASM" | It runs in the renderer as local ONNX/WASM, which is why production loads the UI over `app://` rather than `file://` |

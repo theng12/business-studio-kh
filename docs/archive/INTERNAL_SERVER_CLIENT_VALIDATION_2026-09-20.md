@@ -2,7 +2,7 @@
 
 > **Historical record — internal server/client validation, version 0.1.33 (2026-09-20).**
 > The implementation and local verification below are settled for 0.1.33 only, not for the current app (0.1.72); the physical/hardware and paid-provider checks it lists as limits remain open.
-> Live status: [`docs/tasks/HANDOFF.md`](tasks/HANDOFF.md).
+> Live status: [`docs/tasks/HANDOFF.md`](../tasks/HANDOFF.md).
 
 Status: implementation and local verification complete. Repository integration is recorded in the task handoff and Git history. Version 0.1.33; internal Apple Silicon use, macOS 12 or newer. No signing subscription, publication, paid provider calls, or GitHub-hosted compute.
 
