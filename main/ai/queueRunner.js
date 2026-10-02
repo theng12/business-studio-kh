@@ -287,7 +287,8 @@ async function onDone(task, outputUrls, billing = {}) {
             });
             const relativePath = addedImage?.filepath;
             if (wantPromote && relativePath) {
-              productImages.setMain(task.productId, relativePath);
+              // By row id — the path can be renumbered while the add is awaited.
+              productImages.setMainById(task.productId, addedImage.id);
             }
             aiGallery.markPromoted(entry.id);
             productsDb.recomputeProcessStatus(task.productId);

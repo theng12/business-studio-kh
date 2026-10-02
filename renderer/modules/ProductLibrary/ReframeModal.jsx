@@ -38,8 +38,18 @@ export function ReframeModal({ open, productId, image, onClose, onSaved }) {
   const filepath = image?.filepath;
   const isWhite = (fillColor || '').toUpperCase() === '#FFFFFF';
 
-  // Reset controls each time a new image opens.
+  /* Every preview request takes a number; only the newest may land. A slow
+   * render for an older slider position (or the previous image) must not
+   * replace a newer one. */
+  const previewSeq = useRef(0);
+
+  // Reset controls each time a new image opens — and drop the previous image's
+  // preview so it is never shown under the new one while it renders.
   useEffect(() => {
+    previewSeq.current += 1;
+    if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
+    setPreviewUrl(null);
+    setBusy(false);
     if (!open) return;
     setScale(0.85); setOffsetX(0); setOffsetY(0);
     setFillMode('color'); setFillColor('#FFFFFF');
@@ -47,6 +57,8 @@ export function ReframeModal({ open, productId, image, onClose, onSaved }) {
 
   const renderPreview = useCallback(async () => {
     if (!open || !productId || !filepath) return;
+    const seq = (previewSeq.current += 1);
+    const fresh = () => seq === previewSeq.current;
     setBusy(true);
     try {
       const res = await window.api.images.reframePreview({
@@ -57,6 +69,7 @@ export function ReframeModal({ open, productId, image, onClose, onSaved }) {
         offsetX: offsetX / 100, offsetY: offsetY / 100,
         fillMode, fillColor,
       });
+      if (!fresh()) return;
       const bytes = res?.bytes;
       if (!bytes) return;
       const blob = new Blob([bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)], { type: 'image/png' });
@@ -65,9 +78,9 @@ export function ReframeModal({ open, productId, image, onClose, onSaved }) {
       urlRef.current = url;
       setPreviewUrl(url);
     } catch (err) {
-      addToast(`Preview failed: ${err.message}`, 'error');
+      if (fresh()) addToast(`Preview failed: ${err.message}`, 'error');
     } finally {
-      setBusy(false);
+      if (fresh()) setBusy(false);
     }
   }, [open, productId, filepath, scale, offsetX, offsetY, fillMode, fillColor, addToast]);
 

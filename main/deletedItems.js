@@ -23,7 +23,7 @@
  * layer behind it (see main/util/fileTrash.js).
  *
  * Two shapes of held item, `kind` in the table:
- *   'product' — payload = { productRow, imageRows[], assetDirRel, aiGalleryRel[] }
+ *   'product' — payload = { productRow, imageRows[], assetDirRel, aiGalleryRel[], aiGalleryRows[] }
  *   'image'   — payload = { imageRow, fileRelpath }
  *
  * The folder layout on disk mirrors the original so restoring is a rename:
@@ -36,13 +36,19 @@
  * the duplicate-merge quarantine (`.merge-trash`): a backup should carry the
  * live catalogue, not everything anyone ever deleted. The consequence, stated
  * in the panel, is that restoring a backup replaces the recycle bin too.
+ *
+ * The bin's ROWS do travel with a backup (they are in the database) while its
+ * files do not, so a restored backup can list deletions whose pictures are not
+ * there. Restore refuses those with a plain reason, and the boot sweep
+ * (purgeExpired, which runs after the relaunch every restore ends with) drops
+ * them from the list — see dropOrphanedHolds.
  */
 
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDb, getDataDir } = require('./db/index');
-const { trashPath, trashPathInBackground } = require('./util/fileTrash');
+const { trashPath } = require('./util/fileTrash');
 
 const RECYCLE_DIR = '.recycle';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -132,7 +138,7 @@ function insertItem({ id, kind, companyId, productId, label, detail, payload, us
  * apart, and a restore then simply re-inserts the rows over the files that are
  * still there.
  */
-function holdProduct({ productRow, imageRows, assetDirRel, aiGalleryRel = [], companyId, userId, moveAssets = true }) {
+function holdProduct({ productRow, imageRows, assetDirRel, aiGalleryRel = [], aiGalleryRows = [], companyId, userId, moveAssets = true }) {
   const id = crypto.randomUUID();
   const dir = heldDir(id);
   let movedAssets = false;
@@ -159,7 +165,7 @@ function holdProduct({ productRow, imageRows, assetDirRel, aiGalleryRel = [], co
     productId: productRow?.id ?? null,
     label: productRow?.sku || productRow?.name || 'product',
     detail: productRow?.name || '',
-    payload: { productRow, imageRows, assetDirRel: assetDirRel ?? null, aiGalleryRel, movedAssets },
+    payload: { productRow, imageRows, assetDirRel: assetDirRel ?? null, aiGalleryRel, aiGalleryRows, movedAssets },
     userId,
   });
 }
@@ -184,6 +190,27 @@ function holdImage({ imageRow, fileRelpath, companyId, userId }) {
     payload: { imageRow, fileRelpath, moved },
     userId,
   });
+}
+
+/**
+ * Undo a holdImage whose delete did not go through: the photo goes back to
+ * the path it came from (its row is still there, pointing at it) and the bin
+ * entry is dropped. If that path has been taken meanwhile the photo stays held
+ * and listed, so it is never lost either way.
+ */
+function releaseImageHold(id) {
+  const item = get(id);
+  if (!item) return false;
+  const payload = JSON.parse(item.payload_json || '{}');
+  if (payload.moved) {
+    const from = path.join(heldDir(id), 'file', path.basename(payload.fileRelpath));
+    const to = assetsAbs(payload.fileRelpath);
+    if (!fs.existsSync(from) || fs.existsSync(to)) return false;
+    fs.renameSync(from, to);
+  }
+  getDb().prepare('DELETE FROM deleted_items WHERE id = ?').run(id);
+  pruneEmptyDirs(heldDir(id));
+  return true;
 }
 
 /* ─── listing ──────────────────────────────────────────────────────── */
@@ -246,11 +273,51 @@ function pruneEmptyDirs(dir) {
   } catch (_) { /* not empty, or already gone */ }
 }
 
+/** True when a held item's files are expected in the bin but are not there —
+ *  what a restored backup leaves behind (rows came back, `.recycle` did not). */
+function holdIsMissing(item) {
+  let payload;
+  try { payload = JSON.parse(item.payload_json || '{}'); } catch (_) { return false; }
+  if (item.kind === 'image') {
+    if (!payload.moved || !payload.fileRelpath) return false;
+    return !fs.existsSync(path.join(heldDir(item.id), 'file', path.basename(payload.fileRelpath)));
+  }
+  if (payload.movedAssets && payload.assetDirRel) {
+    return !fs.existsSync(path.join(heldDir(item.id), 'assets'));
+  }
+  return false;
+}
+
+const MISSING_HOLD_MESSAGE =
+  'The pictures for this item are no longer in Recently deleted, so it cannot be put back. '
+  + 'This can happen after restoring a backup (backups do not carry deleted items) or if the '
+  + 'files were missing when it was deleted. You can remove it from the list.';
+
+/** Undo a set of putBack() placements, newest first. Only paths this restore
+ *  actually placed are moved — never whatever happens to sit at the target. */
+function undoPlacements(placed) {
+  for (const [placedAbs, fromAbs] of [...placed].reverse()) {
+    try {
+      if (fs.existsSync(placedAbs) && !fs.existsSync(fromAbs)) {
+        fs.mkdirSync(path.dirname(fromAbs), { recursive: true });
+        fs.renameSync(placedAbs, fromAbs);
+      }
+    } catch (_) { /* left where it is; nothing is erased */ }
+  }
+}
+
 function restoreProduct(item) {
   const payload = JSON.parse(item.payload_json || '{}');
-  const productRow = payload.productRow;
-  if (!productRow) throw new Error('This item was stored without a product snapshot and cannot be restored');
+  if (!payload.productRow) throw new Error('This item was stored without a product snapshot and cannot be restored');
+  // A copy: the links fixed up below must not rewrite the stored snapshot.
+  const productRow = { ...payload.productRow };
   const db = getDb();
+  if (holdIsMissing(item)) throw new Error(MISSING_HOLD_MESSAGE);
+
+  const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(productRow.company_id);
+  if (!company) {
+    throw new Error('The company this product belonged to has been deleted, so the product has nowhere to go back to.');
+  }
 
   const clash = db
     .prepare('SELECT sku FROM products WHERE id = ? OR (company_id = ? AND sku = ?)')
@@ -261,40 +328,109 @@ function restoreProduct(item) {
     );
   }
 
+  /* A brand or category deleted while this product was in the bin would fail
+   * the insert with "FOREIGN KEY constraint failed" — forever, since nothing
+   * brings the brand back. Restore it without that link instead; the brand or
+   * category can be set again afterwards. */
+  if (productRow.brand_id && !db.prepare('SELECT 1 FROM brands WHERE id = ?').get(productRow.brand_id)) productRow.brand_id = null;
+  if (productRow.category_id && !db.prepare('SELECT 1 FROM categories WHERE id = ?').get(productRow.category_id)) productRow.category_id = null;
+
+  /* Where the folder belongs NOW. The company or brand may have been renamed
+   * (or the brand removed) since the delete, which moves the product's folder;
+   * the held folder and the image rows follow the current one. */
+  const brand = productRow.brand_id ? db.prepare('SELECT * FROM brands WHERE id = ?').get(productRow.brand_id) : null;
+  const { productAssetDir } = require('./util/assetPath');
+  let targetDirRel = payload.assetDirRel;
+  try { targetDirRel = productAssetDir(company, brand, productRow); } catch (_) { /* keep the old one */ }
+
+  // The case-insensitive / punctuation rule products.create applies.
+  const folderClash = require('./db/products').findAssetDirCollision(
+    productRow.company_id, { sku: productRow.sku, brandId: productRow.brand_id }, productRow.id,
+  );
+  if (folderClash) {
+    throw new Error(
+      `“${folderClash.sku}” now uses the same image folder as this product. Rename one of them first, then restore this one.`,
+    );
+  }
+
   const dir = heldDir(item.id);
-  const moved = [];
   const restores = [];
+  let imageRows = payload.imageRows || [];
   if (payload.movedAssets && payload.assetDirRel) {
     const from = path.join(dir, 'assets');
-    const to = assetsAbs(payload.assetDirRel);
-    if (fs.existsSync(from)) { restores.push([from, to]); moved.push(to); }
+    const to = assetsAbs(targetDirRel);
+    if (fs.existsSync(to)) {
+      // An empty leftover folder is not in the way; anything with files is.
+      try { if (fs.readdirSync(to).length === 0) fs.rmdirSync(to); } catch (_) {}
+      if (fs.existsSync(to)) {
+        throw new Error(
+          `The folder ${targetDirRel} already has files in it, so this product's pictures cannot go back there. Nothing was changed.`,
+        );
+      }
+    }
+    restores.push({ from, to, exact: true });
+    if (targetDirRel !== payload.assetDirRel) {
+      const oldPrefix = `${payload.assetDirRel}/`;
+      imageRows = imageRows.map((r) => (r.filepath && r.filepath.startsWith(oldPrefix)
+        ? { ...r, filepath: `${targetDirRel}/${r.filepath.slice(oldPrefix.length)}` }
+        : r));
+    }
   }
+  const galleryPlaced = new Map(); // original rel → rel it landed at
   for (const rel of payload.aiGalleryRel || []) {
     const from = path.join(dir, 'ai-gallery', path.basename(path.dirname(rel)), path.basename(rel));
-    if (fs.existsSync(from)) restores.push([from, dataAbs(rel)]);
+    if (fs.existsSync(from)) restores.push({ from, to: dataAbs(rel), rel });
   }
 
-  const putBackAll = () => { for (const [from, to] of restores) putBack(from, to); };
-  const undoPutBack = () => {
-    for (const to of moved) {
-      try { if (fs.existsSync(to)) fs.renameSync(to, path.join(heldDir(item.id), 'assets')); } catch (_) {}
+  /* Put the files back, recording where each one ACTUALLY landed. putBack
+   * picks a fresh `restored-<uuid>` name when the target is taken; for the
+   * product folder that would leave the rows pointing at somebody else's
+   * folder, so the whole restore is called off and only what this restore
+   * placed is moved back. */
+  const placed = [];
+  try {
+    for (const r of restores) {
+      const landed = putBack(r.from, r.to);
+      if (!landed) continue;
+      placed.push([landed, r.from]);
+      if (r.exact && landed !== r.to) {
+        throw new Error(
+          `The folder ${targetDirRel} was taken while restoring, so this product's pictures were not put back. Nothing was changed.`,
+        );
+      }
+      if (r.rel) galleryPlaced.set(r.rel, relFromData(landed));
     }
-  };
+  } catch (err) {
+    undoPlacements(placed);
+    throw err;
+  }
 
-  putBackAll();
   try {
     db.transaction(() => {
       insertRow('products', productRow);
-      for (const imageRow of payload.imageRows || []) insertRow('product_images', imageRow);
+      for (const imageRow of imageRows) insertRow('product_images', imageRow);
+      /* AI Studio's rows for this product (older holds have none). A row whose
+       * file did not come back is skipped rather than restored as a broken
+       * picture; a task that no longer exists is unlinked, not required. */
+      for (const g of payload.aiGalleryRows || []) {
+        const landedRel = galleryPlaced.get(g.filepath);
+        if (!landedRel) continue;
+        if (db.prepare('SELECT 1 FROM ai_gallery WHERE id = ?').get(g.id)) continue;
+        const galleryRow = { ...g, filepath: landedRel };
+        if (galleryRow.task_id && !db.prepare('SELECT 1 FROM ai_tasks WHERE id = ?').get(galleryRow.task_id)) {
+          galleryRow.task_id = null;
+        }
+        insertRow('ai_gallery', galleryRow);
+      }
       db.prepare('DELETE FROM deleted_items WHERE id = ?').run(item.id);
     })();
   } catch (err) {
-    undoPutBack();
+    undoPlacements(placed);
     throw err;
   }
 
   pruneEmptyDirs(dir);
-  return { kind: 'product', label: item.label, productId: productRow.id, images: (payload.imageRows || []).length };
+  return { kind: 'product', label: item.label, productId: productRow.id, images: imageRows.length };
 }
 
 function restoreImage(item) {
@@ -307,11 +443,41 @@ function restoreImage(item) {
   if (!product) {
     throw new Error('That product is gone too, so this photo has nowhere to go back to. Restore the product first.');
   }
+  if (db.prepare('SELECT 1 FROM product_images WHERE id = ?').get(imageRow.id)) {
+    throw new Error('This photo is already back on its product.');
+  }
 
-  const from = path.join(heldDir(item.id), 'file', path.basename(payload.fileRelpath));
-  const to = assetsAbs(payload.fileRelpath);
-  const placed = putBack(from, to);
-  const filepath = placed && path.basename(placed) !== path.basename(to) ? relFromData(placed).replace(/^assets\//, '') : payload.fileRelpath;
+  const from = path.join(heldDir(item.id), 'file', path.basename(payload.fileRelpath || ''));
+  /* No file in the bin, no restore. Re-inserting the row anyway pointed it at
+   * whatever now sits at its old path — usually another live photo, which the
+   * renumber that follows then shuffled — so two rows shared one file. */
+  if (!payload.moved || !payload.fileRelpath || !fs.existsSync(from)) {
+    throw new Error(MISSING_HOLD_MESSAGE);
+  }
+
+  const { MAX_IMAGES_PER_PRODUCT } = require('./imageManager');
+  const count = db.prepare('SELECT COUNT(*) AS n FROM product_images WHERE product_id = ?').get(imageRow.product_id).n;
+  if (count >= MAX_IMAGES_PER_PRODUCT) {
+    throw new Error(
+      `This product already has ${count} photos, the most one product can hold (${MAX_IMAGES_PER_PRODUCT}). Remove one, then restore this photo.`,
+    );
+  }
+
+  /* Land in the product's CURRENT folder (a SKU or brand change since the
+   * delete moves it), under the old name only when no row owns that path and
+   * nothing is on disk there. Otherwise a fresh name; the renumber below gives
+   * it a clean slot either way. */
+  const productImages = require('./db/productImages');
+  let dirRel = path.posix.dirname(payload.fileRelpath);
+  try { dirRel = productImages.dirForProduct(imageRow.product_id).dir; } catch (_) { /* keep the old one */ }
+  const ext = path.extname(payload.fileRelpath);
+  let wanted = path.posix.join(dirRel, path.posix.basename(payload.fileRelpath));
+  const owned = db.prepare('SELECT 1 FROM product_images WHERE LOWER(filepath) = LOWER(?)').get(wanted);
+  if (owned || fs.existsSync(assetsAbs(wanted))) {
+    wanted = path.posix.join(dirRel, `restored-${crypto.randomUUID()}${ext}`);
+  }
+  const placed = putBack(from, assetsAbs(wanted));
+  const filepath = relFromData(placed).replace(/^assets\//, '');
 
   // Append at the end: the rows that stayed behind were renumbered while this
   // one was away, so its old index belongs to another photo now.
@@ -320,23 +486,35 @@ function restoreImage(item) {
     .get(imageRow.product_id).n;
   try {
     db.transaction(() => {
-      insertRow('product_images', { ...imageRow, filepath, order_index: next });
+      insertRow('product_images', {
+        ...imageRow,
+        filepath,
+        filename: path.posix.basename(filepath),
+        order_index: next,
+      });
       db.prepare('DELETE FROM deleted_items WHERE id = ?').run(item.id);
     })();
   } catch (err) {
-    if (placed) { try { fs.renameSync(placed, from); } catch (_) {} }
+    try { fs.renameSync(placed, from); } catch (_) {}
     throw err;
   }
 
   /* Close the gap the restore just made. The survivors were renumbered while
-   * this photo was away, so its old slot is taken and `putBack` had to invent a
-   * name (`restored-<uuid>.png`). Running the same renumber pass every other
-   * image operation uses gives it back a clean `-004.png` slot — AGENTS.md §12
-   * keeps filenames contiguous so position N always means the same file. */
-  try { require('./db/productImages').renumberFiles(imageRow.product_id); } catch (_) { /* cosmetic */ }
+   * this photo was away, so its old slot is taken and it may have needed a
+   * fresh name (`restored-<uuid>.png`). Running the same renumber pass every
+   * other image operation uses gives it back a clean `-004.png` slot —
+   * AGENTS.md §12 keeps filenames contiguous so position N always means the
+   * same file. */
+  try { productImages.renumberFiles(imageRow.product_id); } catch (_) { /* cosmetic */ }
+  try {
+    const products = require('./db/products');
+    products.recomputeProcessStatus(imageRow.product_id);
+    products.touchUpdated(imageRow.product_id);
+  } catch (_) { /* the photo is back; status catches up on the next edit */ }
 
+  const restored = db.prepare('SELECT filepath FROM product_images WHERE id = ?').get(imageRow.id);
   pruneEmptyDirs(heldDir(item.id));
-  return { kind: 'image', label: item.label, productId: imageRow.product_id, filepath };
+  return { kind: 'image', label: item.label, productId: imageRow.product_id, filepath: restored?.filepath ?? filepath };
 }
 
 function restore(id) {
@@ -378,6 +556,12 @@ function empty({ companyId } = {}, opts = {}) {
  * purged. `retentionDays <= 0` means "keep until I say so" and purges nothing.
  */
 function purgeExpired({ retentionDays = DEFAULT_RETENTION_DAYS } = {}, opts = {}) {
+  // dropOrphanedHolds() is deliberately NOT run here. A hold that looks
+  // missing at boot is not proof it is gone — the data folder may have been
+  // moved without `.recycle/`, or be on a volume that is slow to appear — and
+  // silently deleting the entry would make a recoverable item unrecoverable.
+  // Such an entry stays listed; restoring it refuses with MISSING_HOLD_MESSAGE,
+  // and it leaves with the retention window or a manual "delete forever".
   if (!(retentionDays > 0)) return { removed: 0, kept: count() };
   const cutoff = Date.now() - retentionDays * DAY_MS;
   const stale = getDb().prepare('SELECT id FROM deleted_items WHERE deleted_at < ?').all(cutoff);
@@ -388,12 +572,42 @@ function purgeExpired({ retentionDays = DEFAULT_RETENTION_DAYS } = {}, opts = {}
   return { removed, kept: count() };
 }
 
+/**
+ * Forget bin entries whose held files are gone. After a backup restore or a
+ * bundle import the database lists every deletion it knew about, but
+ * `.recycle/` is not in either archive, so those entries can never be restored
+ * — and restoring one used to point a photo row at another photo's file.
+ * Only entries that were holding files and no longer are are dropped; one that
+ * never moved files (a product whose folder was shared) can still be restored
+ * and stays. Runs at boot through purgeExpired, i.e. right after the relaunch
+ * every restore and import ends with. Nothing on disk is touched.
+ *
+ * Not called automatically (see purgeExpired): kept for an explicit,
+ * user-initiated clean-up.
+ */
+function dropOrphanedHolds() {
+  let dropped = 0;
+  const del = getDb().prepare('DELETE FROM deleted_items WHERE id = ?');
+  for (const item of getDb().prepare('SELECT * FROM deleted_items').all()) {
+    if (holdIsMissing(item)) {
+      del.run(item.id);
+      dropped += 1;
+    }
+  }
+  if (dropped > 0) {
+    process.stderr.write(`[recycle] dropped ${dropped} deleted item(s) whose files are no longer held (e.g. after a backup restore)\n`);
+  }
+  return dropped;
+}
+
 module.exports = {
   RECYCLE_DIR,
   DEFAULT_RETENTION_DAYS,
   DAY_MS,
   holdProduct,
   holdImage,
+  releaseImageHold,
+  dropOrphanedHolds,
   list,
   get,
   count,

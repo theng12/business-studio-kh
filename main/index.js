@@ -1,3 +1,16 @@
+/* libuv's worker pool — sharp pipelines, every async fs call (including the
+ * app-image protocol's existence check) and stream reads for hashing — is 4
+ * threads unless told otherwise, and a sharp job holds its thread for the
+ * whole pipeline. Four busy sharp jobs therefore stall every image the
+ * Library asks for behind them. The pool is created on first use, so this
+ * must be the first statement in the process: measured in Electron's main
+ * process, 8 concurrent pbkdf2 jobs took 2.07x one job's time with the
+ * default pool and 1.28x with this set here — the same as setting it in the
+ * launch environment. 8 rather than more: it also caps how many sharp
+ * pipelines (each holding a decoded photo) can run at once. An explicit
+ * UV_THREADPOOL_SIZE in the environment still wins. */
+if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '8';
+
 const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, protocol, session, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -472,6 +485,7 @@ app.whenReady().then(() => {
             'Content-Security-Policy': [
               "default-src 'self'; " +
               "img-src 'self' app-image: data: blob:; " +
+              "font-src 'self' data:; " +
               "style-src 'self' 'unsafe-inline'; " +
               // v0.26.5: 'unsafe-eval' is required by @imgly's ONNX
               // backend. See the comment on the standalone-mode CSP
@@ -562,6 +576,7 @@ app.whenReady().then(() => {
           'Content-Security-Policy': [
             "default-src 'self'; " +
             "img-src 'self' app-image: data: blob:; " +
+            "font-src 'self' data:; " +
             "style-src 'self' 'unsafe-inline'; " +
             // `blob:` in script-src is required by @imgly/background-removal:
             // ONNX Runtime spawns a worker from a Blob URL and then does

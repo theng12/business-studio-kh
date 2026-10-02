@@ -38,6 +38,15 @@ function editablePreset(preset, expectedUpdatedAt) {
   };
 }
 
+/* The server's copy of a preset after a save. When its config is the one we
+ * just sent, keep OUR config object: `config` identity drives the preview
+ * effect, and adopting an equal-but-new object re-rendered the preview on the
+ * server a second time (and flashed "Updating…") after every edit. */
+function withLocalConfig(row, local) {
+  if (!row || !local?.config) return row;
+  return JSON.stringify(row.config) === JSON.stringify(local.config) ? { ...row, config: local.config } : row;
+}
+
 function describeSize(config) {
   const preset = CANVAS_PRESETS.find((p) => p.width === config.width && p.height === config.height);
   return preset ? `${preset.name} · ${config.width} × ${config.height}` : `${config.width} × ${config.height}`;
@@ -224,7 +233,7 @@ export function PresetEditor({ presetId, onBack }) {
       if (event.op === 'delete') { onBack(); return; }
       const seq = ++remoteSeq.current;
       window.api.socialGrid.get(presetId).then((row) => {
-        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { setPreset(row); latest.current = row; acknowledgedRevision.current = row.updatedAt; saveQueue.current?.setRevision(row.updatedAt); setSavedAt(row.updatedAt); }
+        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { const kept = withLocalConfig(row, latest.current); setPreset(kept); latest.current = kept; acknowledgedRevision.current = row.updatedAt; saveQueue.current?.setRevision(row.updatedAt); setSavedAt(row.updatedAt); }
       }).catch((e) => { if (generation === editorGeneration.current && seq === remoteSeq.current) addToast(e.message, 'error'); });
     };
     if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
@@ -282,7 +291,8 @@ export function PresetEditor({ presetId, onBack }) {
           if (generation !== editorGeneration.current) return;
           acknowledgedRevision.current = row.updatedAt;
           if (latest.current !== value) return;
-          setPreset(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
+          const kept = withLocalConfig(row, value);
+          setPreset(kept); latest.current = kept; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
         },
         onError: (e) => {
           if (generation !== editorGeneration.current) return;
@@ -326,7 +336,8 @@ export function PresetEditor({ presetId, onBack }) {
         acknowledgedRevision.current = row.updatedAt;
         ensureSaveQueue().setRevision(row.updatedAt);
         if (result.choice === 'refresh' || latest.current === overwrittenDraft) {
-          setPreset(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
+          const kept = withLocalConfig(row, latest.current);
+          setPreset(kept); latest.current = kept; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
           return true;
         }
         await flushPending();

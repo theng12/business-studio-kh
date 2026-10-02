@@ -40,6 +40,19 @@ let refreshAllSeq = 0;
 const refreshRuns = new Map();
 const refreshAllRuns = new Map();
 
+/* A product edit refreshes the list itself (`updateProduct` awaits it), and
+ * the same edit's `catalog:changed` event scheduled a second refresh 250 ms
+ * later that returned the same rows. Each catalog event that touches products
+ * bumps `productsInvalidation`; each committed fetch records the number it
+ * STARTED after. A scheduled event refresh is skipped only when the current
+ * view (and the full list) was fetched after that event — so the redundant
+ * echo of our own edit drops out, while an edit from another Mac, which no
+ * local fetch has followed, still refreshes. A counter, not a clock, so two
+ * things in the same millisecond cannot be misordered. */
+let productsInvalidation = 0;
+const freshThrough = new Map();     // view key → invalidation its last committed fetch started after
+const allFreshThrough = new Map();  // companyId → same, for the filter-agnostic list
+
 function filtersAreDefault(filters) {
   return filters.search === '' &&
     (filters.brandIds == null || filters.brandIds.length === 0) &&
@@ -211,15 +224,24 @@ export function createProductsSlice(set, get) {
       const run = { queued: false, seq: requestedSeq, allSeq: requestedAllSeq, promise: null };
 
       const runOnce = async (seq, allSeq) => {
-        set({ productsLoading: true });
+        // Loading is for a list with nothing to show yet (first load, a
+        // company switch — which empties `products` — or a view that is
+        // still empty). A background refresh of a list already on screen
+        // keeps it, so the Library header doesn't flicker to "Loading…" on
+        // every edit or remote change.
+        if (get().products.length === 0) set({ productsLoading: true });
+        const through = productsInvalidation;
         try {
           const list = await window.api.products.list(companyId, filters);
           if (seq !== refreshSeq || get().activeCompanyId !== companyId) return;
+          freshThrough.set(key, through);
           if (defaultView) {
+            const ownsAll = allSeq === refreshAllSeq;
+            if (ownsAll) allFreshThrough.set(companyId, through);
             set({
               products: list,
               productsLoading: false,
-              ...(allSeq === refreshAllSeq ? { allProducts: list } : {}),
+              ...(ownsAll ? { allProducts: list } : {}),
             });
           } else {
             set({ products: list, productsLoading: false });
@@ -277,9 +299,11 @@ export function createProductsSlice(set, get) {
       const run = { queued: false, seq: requestedSeq, promise: null };
 
       const runOnce = async (seq) => {
+        const through = productsInvalidation;
         try {
           const list = await window.api.products.list(companyId, {});
           if (seq !== refreshAllSeq || get().activeCompanyId !== companyId) return;
+          allFreshThrough.set(companyId, through);
           set({ allProducts: list });
         } catch (err) {
           if (seq === refreshAllSeq && get().activeCompanyId === companyId) {
@@ -296,6 +320,24 @@ export function createProductsSlice(set, get) {
       })().finally(() => { refreshAllRuns.delete(companyId); });
       refreshAllRuns.set(companyId, run);
       return run.promise;
+    },
+
+    /** Record that a catalog event touched products; returns its number. */
+    noteProductsInvalidated() {
+      productsInvalidation += 1;
+      return productsInvalidation;
+    },
+
+    /**
+     * True when both the Library's current view and the full list were
+     * fetched (and committed) after invalidation `n` — i.e. a refresh now
+     * would return what is already in the store.
+     */
+    productsFreshThrough(n) {
+      const companyId = get().activeCompanyId;
+      if (!companyId) return false;
+      const key = JSON.stringify([companyId, get().productFilters]);
+      return (freshThrough.get(key) ?? 0) >= n && (allFreshThrough.get(companyId) ?? 0) >= n;
     },
 
     async createProduct(input) {

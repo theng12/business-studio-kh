@@ -30,11 +30,33 @@
  *
  * The protocol handler at main/protocol.js strips the `?v=…` segment
  * before resolving on disk, so the file lookup still works identically.
+ *
+ * Thumbnail tier: `appImageSrc(path, version, { w: 96 })` adds `w=<n>` so
+ * list / grid views get a small cached WebP instead of decoding the stored
+ * original (up to 1600 px). The width snaps UP to one of THUMB_WIDTHS; any
+ * other value is dropped and the original is served. The thumbnail cache key
+ * includes `v` and the file's size / mtime / inode, so the cache-busting
+ * contract above holds for thumbnails too (main/util/thumbCache.js).
+ * Full-size viewers (Lightbox, editors) must keep calling it WITHOUT `w`.
  */
 
-export function appImageSrc(filepath, version) {
+// Keep in step with THUMB_WIDTHS in main/util/thumbCache.js
+// (test/thumbCache.test.js pins the two lists to each other).
+export const THUMB_WIDTHS = [96, 320, 640];
+
+export function snapThumbWidth(w) {
+  const n = Number(w);
+  if (!Number.isInteger(n) || n <= 0) return null;
+  for (const tier of THUMB_WIDTHS) if (n <= tier) return tier;
+  return null;
+}
+
+export function appImageSrc(filepath, version, opts) {
   if (!filepath) return null;
   const url = `app-image://local/${encodeURIComponent(filepath)}`;
-  if (version == null || version === '') return url;
-  return `${url}?v=${encodeURIComponent(String(version))}`;
+  const params = [];
+  if (version != null && version !== '') params.push(`v=${encodeURIComponent(String(version))}`);
+  const w = opts && opts.w != null ? snapThumbWidth(opts.w) : null;
+  if (w) params.push(`w=${w}`);
+  return params.length ? `${url}?${params.join('&')}` : url;
 }

@@ -24,10 +24,36 @@ const sharp = require('sharp');
 const { getDb, getDataDir } = require('./db');
 const productImages = require('./db/productImages');
 const phash = require('./util/phash');
+const { trashPathInBackground } = require('./util/fileTrash');
 
 function assetsAbs(rel) { return path.join(getDataDir(), 'assets', rel); }
 function dataAbs(rel) { return path.join(getDataDir(), rel); }
 function quarantineDir(opId) { return path.join(getDataDir(), '.merge-trash', opId); }
+
+/** Remove directories under (and including) `dir` that are empty. Anything
+ *  still holding a file is left exactly where it is. */
+function pruneEmptyDirs(dir) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+  for (const entry of entries) {
+    if (entry.isDirectory()) pruneEmptyDirs(path.join(dir, entry.name));
+  }
+  try { if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir); } catch (_) { /* not empty */ }
+}
+
+/** Tidy a quarantine folder after a revert or purge: empty folders go, and
+ *  any photo still in it goes to the Mac's Trash — never erased
+ *  (main/util/fileTrash.js). */
+function releaseQuarantine(dir) {
+  pruneEmptyDirs(dir);
+  if (fs.existsSync(dir)) trashPathInBackground(dir);
+}
+
+/** True when some product_images row already points at `rel` (compared the
+ *  way the Mac's disk compares names). */
+function filepathOwned(db, rel) {
+  return !!db.prepare('SELECT 1 FROM product_images WHERE LOWER(filepath) = LOWER(?)').get(rel);
+}
 
 /** Rows for the scan, optionally scoped to a company. Joined with products
  *  so we can show SKU/name and skip orphans. */
@@ -338,33 +364,50 @@ function revertMergeOp(opId) {
 
   const touchedProducts = new Set();
   let restored = 0;
+  let skipped = 0;
 
   const tx = db.transaction(() => {
     for (const entry of removed) {
       const r = entry.row;
       // Product must still exist (CASCADE would have dropped its images).
       const prod = db.prepare('SELECT id FROM products WHERE id = ?').get(r.product_id);
-      if (!prod) continue;
+      if (!prod) { skipped++; continue; }
 
       // Restore the asset file. If it was shared (never quarantined) the
       // original file is still on disk → reuse it. Otherwise move the
-      // quarantined copy back to its original relative path.
+      // quarantined copy back, under its old name only when no row owns that
+      // path and nothing is on disk there.
+      //
+      // A photo that cannot be put back is SKIPPED rather than re-added
+      // "pointing at original": after the merge's renumber that path usually
+      // holds a different photo, and two rows sharing one file is how a later
+      // renumber or delete takes the wrong picture.
       let restoredFilepath = r.filepath;
       if (entry.quarantine && entry.quarantine.asset && !entry.quarantine.assetWasShared) {
-        const destAbs = assetsAbs(r.filepath);
-        try {
-          fs.mkdirSync(path.dirname(destAbs), { recursive: true });
-          if (fs.existsSync(destAbs)) {
-            // Slot got reused by a renumber — restore under a fresh name.
+        const quarantined = entry.quarantine.asset;
+        if (fs.existsSync(quarantined)) {
+          let destRel = r.filepath;
+          if (fs.existsSync(assetsAbs(destRel)) || filepathOwned(db, destRel)) {
             const ext = path.extname(r.filepath);
-            const freshRel = path.posix.join(path.posix.dirname(r.filepath), `restored-${crypto.randomUUID()}${ext}`);
-            const freshAbs = assetsAbs(freshRel);
-            fs.renameSync(entry.quarantine.asset, freshAbs);
-            restoredFilepath = freshRel;
-          } else {
-            fs.renameSync(entry.quarantine.asset, destAbs);
+            destRel = path.posix.join(path.posix.dirname(r.filepath), `restored-${crypto.randomUUID()}${ext}`);
           }
-        } catch (_) {/* if the move fails, still re-add the row pointing at original */}
+          try {
+            fs.mkdirSync(path.dirname(assetsAbs(destRel)), { recursive: true });
+            fs.renameSync(quarantined, assetsAbs(destRel));
+            restoredFilepath = destRel;
+          } catch (_) {
+            skipped++;
+            continue;
+          }
+        } else if (!fs.existsSync(assetsAbs(r.filepath)) || filepathOwned(db, r.filepath)) {
+          // Never quarantined (the move failed at merge time) and the
+          // original is gone or someone else's now: nothing safe to point at.
+          skipped++;
+          continue;
+        }
+      } else if (filepathOwned(db, r.filepath) && !entry.quarantine?.assetWasShared) {
+        skipped++;
+        continue;
       }
 
       // Restore processed file if it was quarantined.
@@ -403,20 +446,24 @@ function revertMergeOp(opId) {
     try { productImages.renumberFiles(pid); } catch (_) {}
   }
 
-  // Clean up the (now-empty) quarantine dir.
-  try { fs.rmSync(quarantineDir(opId), { recursive: true, force: true }); } catch (_) {}
+  /* Tidy the quarantine dir. It is empty unless a photo was skipped above
+   * (its product was deleted meanwhile, or it could not be moved back) — and
+   * those are still somebody's photos, so they go to the Trash, not away. */
+  releaseQuarantine(quarantineDir(opId));
 
-  return { restored, products: touchedProducts.size, productIds: [...touchedProducts] };
+  return { restored, skipped, products: touchedProducts.size, productIds: [...touchedProducts] };
 }
 
-/** Permanently delete the quarantined files for a merge op (frees disk;
- *  the merge can no longer be reverted afterwards). */
-function purgeMergeOp(opId) {
+/** Clear the quarantined files for a merge op out of the data folder (frees
+ *  disk; the merge can no longer be reverted afterwards). They go to the
+ *  Mac's Trash, so even this is recoverable in Finder until the Trash is
+ *  emptied — the same rule as the recycle bin's purge. */
+function purgeMergeOp(opId, { release = true } = {}) {
   const db = getDb();
   const op = db.prepare('SELECT * FROM image_merge_ops WHERE id = ?').get(opId);
   if (!op) throw new Error('Merge operation not found');
-  try { fs.rmSync(quarantineDir(opId), { recursive: true, force: true }); } catch (_) {}
   db.prepare('UPDATE image_merge_ops SET purged_at = ? WHERE id = ?').run(Date.now(), opId);
+  if (release) releaseQuarantine(quarantineDir(opId));
   return { ok: true };
 }
 
@@ -449,10 +496,11 @@ function purgeAll() {
   const ops = db.prepare('SELECT id FROM image_merge_ops WHERE purged_at IS NULL AND reverted_at IS NULL').all();
   let purged = 0;
   for (const o of ops) {
-    try { purgeMergeOp(o.id); purged++; } catch (_) {}
+    try { purgeMergeOp(o.id, { release: false }); purged++; } catch (_) {}
   }
-  // Safety net: remove any stray quarantine dirs not tracked by a row.
-  try { fs.rmSync(path.join(getDataDir(), '.merge-trash'), { recursive: true, force: true }); } catch (_) {}
+  // The whole quarantine (including stray dirs no row tracks) goes to the
+  // Trash in one move rather than one per op.
+  releaseQuarantine(path.join(getDataDir(), '.merge-trash'));
   return { purged };
 }
 

@@ -35,7 +35,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     assertEntityInActiveCompany(template, 'Label template');
     const product = productsDb.get(productId) || { sku: 'SAMPLE-001', name: 'Sample product', barcode: '123456789012', priceRetail: 9.99 };
     const brands = product.brandId ? [brandsDb.get(product.brandId)].filter(Boolean) : [];
-    return { html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single', ...(layout || {}) } }) };
+    return { html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single', ...(layout || {}) }, preview: true }) };
   });
   /**
    * v0.1.64: the same document, for a template that is still being edited.
@@ -54,7 +54,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       || { sku: 'SAMPLE-001', name: 'Sample product', barcode: '123456789012', priceRetail: 9.99 };
     const brands = product.brandId ? [brandsDb.get(product.brandId)].filter(Boolean) : [];
     return {
-      html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single', ...(layout || {}) } }),
+      html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single', ...(layout || {}) }, preview: true }),
       sample: { id: product.id ?? null, sku: product.sku ?? null, name: product.name ?? null },
     };
   });
@@ -153,9 +153,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       // attributable.
       settings: { ...(settings || {}), originHost: originHost || os.hostname() },
     });
-    for (const item of (Array.isArray(items) ? items : [])) {
-      runs.addItem(run.id, item);
-    }
+    runs.addItems(run.id, Array.isArray(items) ? items : []);
     emitCatalogChange('labels', 'run', templateId);
     return { run };
   });
@@ -199,17 +197,23 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
         made.push(target);
         events.broadcast('progress:event', { id: opId, kind: 'labels', done: products.length, total: products.length, phase: 'finishing', label: template.name });
       } else {
-        for (let i = 0; i < products.length; i += 1) {
+        // Every label shares the template's size, so one offscreen window
+        // renders the whole batch (renderer.toImages) instead of one window —
+        // one renderer process — per label.
+        const ext = format === 'jpeg' ? 'jpg' : 'png';
+        const scale = Math.max(1, Number(layout.dpi) || 203) / 25.4;
+        const dpi = Math.max(72, Number(layout.dpi) || 203);
+        await renderer.toImages(products.length, async (i) => {
           const product = products[i];
-          const html = await labelsDocument({ template, products: [product], brands, layout: { mode: 'single' } });
-          const ext = format === 'jpeg' ? 'jpg' : 'png';
-          const target = path.join(outputFolder, `${slugify(product.sku || product.name, 'label')}-${slugify(template.name, 'label')}.${ext}`);
-          const scale = Math.max(1, Number(layout.dpi) || 203) / 25.4;
-          const dpi = Math.max(72, Number(layout.dpi) || 203);
-          await renderer.toImage(html, target, { format, width: Math.ceil(template.widthMm * scale), height: Math.ceil(template.heightMm * scale), quality: 92, dpi, zoomFactor: dpi / 96 });
+          return {
+            html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single' } }),
+            outputPath: path.join(outputFolder, `${slugify(product.sku || product.name, 'label')}-${slugify(template.name, 'label')}.${ext}`),
+          };
+        }, { format, width: Math.ceil(template.widthMm * scale), height: Math.ceil(template.heightMm * scale), quality: 92, dpi, zoomFactor: dpi / 96 }, (i, target) => {
           made.push(target);
+          const product = products[i];
           events.broadcast('progress:event', { id: opId, kind: 'labels', done: i + 1, total: products.length, phase: 'rendering', label: product.sku || product.name });
-        }
+        });
       }
       run = runs.create({ companyId, templateId, templateName: template.name, format,
         layoutMode: layout.mode || 'single', productCount: products.length,
@@ -218,8 +222,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
         // data, but the files land on whichever Mac ran the job — so a reader on
         // the other Mac needs to be told where they are.
         settings: { ...layout, originHost: os.hostname() } });
-      products.forEach((product, i) => runs.addItem(run.id, { productId: product.id, sku: product.sku,
-        filePath: format === 'pdf' ? made[0] : made[i], productSnapshot: product, templateSnapshot: template }));
+      runs.addItems(run.id, products.map((product, i) => ({ productId: product.id, sku: product.sku,
+        filePath: format === 'pdf' ? made[0] : made[i], productSnapshot: product, templateSnapshot: template })));
       emitCatalogChange('labels', 'run', templateId);
       return { run, files: made, outputPath: run.outputPath };
     } finally {

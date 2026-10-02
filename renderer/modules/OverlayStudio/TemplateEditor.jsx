@@ -23,6 +23,7 @@ import { EditorCanvas } from './EditorCanvas.jsx';
 import { Inspector } from './Inspector.jsx';
 import { BulkOverlayRunModal } from '../ProductLibrary/BulkOverlayRunModal.jsx';
 import { priceEntry } from '../../lib/prices.js';
+import { appImageSrc } from '../../lib/imageUrl.js';
 
 /**
  * Template editor — the heart of Overlay Studio.
@@ -192,7 +193,12 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
     const main = productImages.find((i) => i.isProcessed && i.processedFilepath) || productImages[0];
     const rel = main?.isProcessed && main.processedFilepath ? main.processedFilepath : main?.filepath;
     if (!rel) return null;
-    return `app-image://local/${encodeURIComponent(rel)}`;
+    // Stamped: renumbering and reprocessing rewrite the bytes behind the same
+    // path. The processed file changes with each workspace revision.
+    const stamp = main.isProcessed && main.processedFilepath
+      ? `${main.contentHash || ''}-${main.workspaceRevision ?? 0}`
+      : main.contentHash;
+    return appImageSrc(rel, stamp);
   }, [productImages]);
 
   /* ── change handling ──────────────────────────────────────── */
@@ -364,14 +370,6 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
     }
   }
 
-  // Tick every 30s so the "X min ago" text in the save indicator refreshes
-  // without polling anything else.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 30000);
-    return () => clearInterval(id);
-  }, []);
-
   /* ── element ops ──────────────────────────────────────────── */
 
   function addElement(type) {
@@ -414,46 +412,55 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
   //   Cmd/Ctrl+V          → paste clipboard element
   // All shortcuts skip when an input/textarea/select has focus so the
   // user can still type, paste text, etc. in the inspector fields.
-  useEffect(() => {
-    function onKey(e) {
-      const tag = (e.target?.tagName ?? '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
-      const mod = e.metaKey || e.ctrlKey;
-      if (mod && (e.key === 'z' || e.key === 'Z')) {
-        e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
-        return;
-      }
-      if (mod && (e.key === 'd' || e.key === 'D')) {
-        if (selectedId) {
-          e.preventDefault();
-          duplicateElement(selectedId);
-        }
-        return;
-      }
-      if (mod && (e.key === 'c' || e.key === 'C')) {
-        if (selectedId) {
-          e.preventDefault();
-          copySelected();
-        }
-        return;
-      }
-      if (mod && (e.key === 'v' || e.key === 'V')) {
-        if (clipboardRef.current) {
-          e.preventDefault();
-          pasteFromClipboard();
-        }
-        return;
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedId) { e.preventDefault(); deleteSelected(); }
-      }
+  //
+  // The listener is registered once and calls through `keyHandlerRef`, which
+  // is reassigned every render. `undo`, `redo`, `duplicateElement` and
+  // `copySelected` read `history` / `template` from the render that created
+  // them; a listener keyed only on `[selectedId]` kept the ones from the
+  // moment the selection last changed, so after two drags ⌘Z did nothing
+  // (or restored a pre-selection snapshot and dropped later entries) while
+  // the toolbar's Undo worked.
+  const keyHandlerRef = useRef(null);
+  keyHandlerRef.current = function onKey(e) {
+    const tag = (e.target?.tagName ?? '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && (e.key === 'z' || e.key === 'Z')) {
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+      return;
     }
+    if (mod && (e.key === 'd' || e.key === 'D')) {
+      if (selectedId) {
+        e.preventDefault();
+        duplicateElement(selectedId);
+      }
+      return;
+    }
+    if (mod && (e.key === 'c' || e.key === 'C')) {
+      if (selectedId) {
+        e.preventDefault();
+        copySelected();
+      }
+      return;
+    }
+    if (mod && (e.key === 'v' || e.key === 'V')) {
+      if (clipboardRef.current) {
+        e.preventDefault();
+        pasteFromClipboard();
+      }
+      return;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      if (selectedId) { e.preventDefault(); deleteSelected(); }
+    }
+  };
+  useEffect(() => {
+    const onKey = (e) => keyHandlerRef.current?.(e);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId]);
+  }, []);
 
   /* ── render ──────────────────────────────────────────────── */
 
@@ -1055,6 +1062,13 @@ function expandHex(hex) {
 }
 
 function SaveStatus({ status }) {
+  // Tick every 30s so the "X min ago" text refreshes. The timer lives here,
+  // not in the editor, so only this badge re-renders — not the whole canvas.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
   if (status.state === 'saving') return <span className="ws-save ws-save--amber">Saving…</span>;
   if (status.state === 'error')  return <span className="ws-save ws-save--rose">● Save failed</span>;
   if (status.state === 'saved' || (status.state === 'idle' && status.lastSavedAt)) {

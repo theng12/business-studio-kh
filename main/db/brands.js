@@ -45,17 +45,23 @@ function list(companyId) {
   return getDb().prepare(LIST_SQL).all(companyId).map(rowToBrand);
 }
 
+const GET_SQL = `SELECT b.*,
+    (SELECT COUNT(*) FROM products p WHERE p.brand_id = b.id) AS product_count
+   FROM brands b WHERE b.id = ?`;
+
+// get() is called per product inside loops (asset-folder checks, exports), so
+// its statement is prepared once per connection rather than per call. Keyed
+// on the connection itself: a data-folder switch closes it and opens a new
+// one, and a statement must never outlive the database it was prepared on.
+const getStmtByDb = new WeakMap();
+
 function get(id) {
   // Single row: keep the correlated subquery — there's nothing to "scale"
   // since it runs exactly once.
-  const row = getDb()
-    .prepare(
-      `SELECT b.*,
-        (SELECT COUNT(*) FROM products p WHERE p.brand_id = b.id) AS product_count
-       FROM brands b WHERE b.id = ?`,
-    )
-    .get(id);
-  return rowToBrand(row);
+  const db = getDb();
+  let stmt = getStmtByDb.get(db);
+  if (!stmt) { stmt = db.prepare(GET_SQL); getStmtByDb.set(db, stmt); }
+  return rowToBrand(stmt.get(id));
 }
 
 function getByName(companyId, name) {

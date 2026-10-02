@@ -115,6 +115,14 @@ function initDb(dataDir) {
     db.pragma('journal_mode = WAL');
   }
   db.pragma('foreign_keys = ON');
+  // Per-connection tuning, applied on every open. Temp b-trees (ORDER BY /
+  // GROUP BY sorters) stay in memory instead of temp files, and the page
+  // cache is ~32 MB (negative = KiB) rather than SQLite's ~2 MB default, so a
+  // catalog of a few thousand products and their images stays cached between
+  // list queries. `synchronous` is deliberately left at its default: it trades
+  // durability for speed, and that is not this code's call to make.
+  db.pragma('temp_store = MEMORY');
+  db.pragma('cache_size = -32000');
 
   currentDataDir = dataDir;
 
@@ -132,6 +140,22 @@ function initDb(dataDir) {
   addColumnIfMissing(db, 'product_images', 'workspace_revision', 'INTEGER NOT NULL DEFAULT 0');
   try { db.exec(`CREATE INDEX IF NOT EXISTS idx_product_images_content_hash ON product_images(content_hash);`); }
   catch (_) { /* index race, ignore */ }
+
+  /* Lookup indexes for two query shapes that otherwise scan. Additive and
+     idempotent, so no SCHEMA_VERSION bump (AGENTS.md section 14).
+     - product_images(filepath): `countByFilepath` (WHERE filepath = ?) runs
+       once per removed image during a duplicate merge, and without this it
+       is a full scan of every image in every company each time.
+     - products(company_id, updated_at DESC): the Library list, search and
+       the Dashboard's recent products all filter one company and sort by
+       updated_at DESC; this serves the sort from the index (no temp sorter),
+       and lets "the 8 most recent" stop after 8 rows. */
+  try {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_product_images_filepath ON product_images(filepath);
+      CREATE INDEX IF NOT EXISTS idx_products_company_updated ON products(company_id, updated_at DESC);
+    `);
+  } catch (_) { /* index race, ignore */ }
 
   /* v0.11.0: `ai_gallery.company_id` so bulk-mode results (with no
      product_id) can still be scoped to the active company. Backfill

@@ -81,8 +81,13 @@ async function stageDataFolder(oldPath, stagePath) {
     }
   }
 
+  // Dot-entries are skipped (macOS litter like .DS_Store) EXCEPT the two that
+  // hold user files: the recycle bin and the duplicate-merge quarantine. The
+  // database snapshot above lists their entries, so leaving them behind
+  // stranded every "Recently deleted" item in the old folder.
+  const CARRIED_DOT_DIRS = new Set(['.recycle', '.merge-trash']);
   for (const ent of fs.readdirSync(oldPath, { withFileTypes: true })) {
-    if (ent.name.startsWith('.') || ent.name === 'database.sqlite' || ent.name === 'database.sqlite-wal' || ent.name === 'database.sqlite-shm') continue;
+    if ((ent.name.startsWith('.') && !CARRIED_DOT_DIRS.has(ent.name)) || ent.name === 'database.sqlite' || ent.name === 'database.sqlite-wal' || ent.name === 'database.sqlite-shm') continue;
     if (ent.isSymbolicLink()) throw new Error(`Cannot move data folder: symbolic link found at ${ent.name}`);
     const src = path.join(oldPath, ent.name);
     const dst = path.join(stagePath, ent.name);

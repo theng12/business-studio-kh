@@ -23,6 +23,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDataDir, getDb } = require('./index');
 const { TMP_PREFIX } = require('../util/assetPath');
+const { trashPathInBackground } = require('../util/fileTrash');
 
 function sha1Sync(filePath) {
   const hash = crypto.createHash('sha1');
@@ -78,9 +79,11 @@ function runAssetRecovery() {
     const missingRows = dirRows.filter((r) => !fs.existsSync(path.join(assetsRoot, r.filepath)));
     if (missingRows.length === 0) {
       // tmp files exist but nothing's missing — pure orphans.
+      // To the Trash, never erased: an unmatched tmp is still somebody's
+      // photo bytes (HANDOFF: an app delete never erases a file).
       for (const tmp of tmps) {
-        try { fs.unlinkSync(path.join(absDir, tmp)); orphanRemoved += 1; }
-        catch (_) {}
+        trashPathInBackground(path.join(absDir, tmp));
+        orphanRemoved += 1;
       }
       continue;
     }
@@ -131,11 +134,11 @@ function runAssetRecovery() {
       }
     }
 
-    // Any tmp files not matched are orphans — best-effort delete.
+    // Any tmp files not matched are orphans — to the Trash, never erased.
     for (const tmp of tmps) {
       if (usedTmps.has(tmp)) continue;
-      try { fs.unlinkSync(path.join(absDir, tmp)); orphanRemoved += 1; }
-      catch (_) {}
+      trashPathInBackground(path.join(absDir, tmp));
+      orphanRemoved += 1;
     }
   }
 

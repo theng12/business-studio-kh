@@ -22,7 +22,7 @@
  * doesn't apply to the header.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Input, Select, Textarea, Badge, EmptyState, Modal } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -348,10 +348,17 @@ export function PODetail({ poId, onBack }) {
               step="0.0001"
               min="0"
               defaultValue={header.exchangeRateToUsd}
-              onBlur={(e) => saveHeaderPatch({
-                exchangeRateToUsd: Number(e.target.value) || 0,
-                exchangeRateDate: Date.now(),
-              })}
+              onBlur={(e) => {
+                if (e.target.value === e.target.defaultValue) return; // untouched
+                const next = Number(e.target.value);
+                if (e.target.value.trim() === '' || !Number.isFinite(next) || next <= 0) {
+                  addToast('FX rate must be a number above 0.', 'error');
+                  e.target.value = header.exchangeRateToUsd ?? '';
+                  return;
+                }
+                if (next === Number(header.exchangeRateToUsd)) return;
+                saveHeaderPatch({ exchangeRateToUsd: next, exchangeRateDate: Date.now() });
+              }}
             />
             <span className="field__hint">
               Updates re-snapshot every line’s USD unit price on the next mutation.
@@ -718,18 +725,33 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
   const [weightKg, setWeightKg]     = useState(initial.weightPerUnitKg ?? '');
   const [notes, setNotes]           = useState(initial.notes || '');
 
-  // When the user picks a product in create mode, prefill its
-  // carton + weight defaults if it has them.
+  // When the user picks a product in create mode, prefill its carton + weight
+  // defaults. `autoFilled` remembers what was put there from a product, so a
+  // later pick replaces those values — but never one the user typed over.
+  const autoFilled = useRef({});
   useEffect(() => {
     if (mode !== 'create' || !productId) return;
     const p = products.find((x) => x.id === productId);
     if (!p) return;
-    if (p.cartonQty && !cartonQty)    setCartonQty(p.cartonQty);
-    if (p.cartonWCm && !cartonW)      setCartonW(p.cartonWCm);
-    if (p.cartonHCm && !cartonH)      setCartonH(p.cartonHCm);
-    if (p.cartonDCm && !cartonD)      setCartonD(p.cartonDCm);
-    if (p.weightPerUnitKg && !weightKg) setWeightKg(p.weightPerUnitKg);
-    if (p.supplierSku && !supplierSku) setSupplierSku(p.supplierSku);
+    const fields = [
+      ['cartonQty', cartonQty, setCartonQty, p.cartonQty],
+      ['cartonW', cartonW, setCartonW, p.cartonWCm],
+      ['cartonH', cartonH, setCartonH, p.cartonHCm],
+      ['cartonD', cartonD, setCartonD, p.cartonDCm],
+      ['weightKg', weightKg, setWeightKg, p.weightPerUnitKg],
+      ['supplierSku', supplierSku, setSupplierSku, p.supplierSku],
+    ];
+    for (const [key, current, set, next] of fields) {
+      const wasAuto = key in autoFilled.current && String(current) === String(autoFilled.current[key]);
+      if (current !== '' && !wasAuto) continue; // the user's own value
+      if (next) {
+        set(next);
+        autoFilled.current[key] = next;
+      } else if (wasAuto) {
+        set('');
+        delete autoFilled.current[key];
+      }
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId]);
 
