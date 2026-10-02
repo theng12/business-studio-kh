@@ -1,6 +1,6 @@
-import { lazy, Suspense, useEffect, useState, useMemo } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useAppStore } from './store/index.js';
-import { Sidebar, NAV } from './components/Sidebar.jsx';
+import { Sidebar, NAV, useUserCaps } from './components/Sidebar.jsx';
 import { hasAnyCap } from './lib/capabilities.js';
 import { ToastHost } from './components/Toast.jsx';
 import { Button } from './components/ui.jsx';
@@ -169,10 +169,12 @@ export default function App() {
   /* Same derivation the Sidebar uses, so a keyboard shortcut and the visible nav
    * can never disagree about what this role may open. */
   const appMode = useAppStore((s) => s.appMode);
-  const clientConnection = useAppStore((s) => s.clientConnection);
-  // useMemo so the identity is stable: a fresh `['*']` on every render would
-  // make the shortcut effect tear down and re-register its keydown listener
-  // constantly, and ESLint flags exactly that.
+  // Narrow selectors, never the whole `clientConnection` object: main pushes
+  // that object on every RPC, and subscribing to it re-rendered the shell and
+  // the active page per request. `useUserCaps` returns a stable array, so the
+  // shortcut effect below keeps its keydown listener between pushes.
+  const clientStatus = useAppStore((s) => s.clientConnection?.status);
+  const userCaps = useUserCaps();
   /* v0.1.31: is this Mac a client that has not been pointed at a server yet?
    * That is a SETUP step, not a fault — but every request fails until it is
    * done, and the failure appeared as a red error on each screen in turn. One
@@ -184,11 +186,7 @@ export default function App() {
    * including after a successful connection. Main pushes `unconfigured` on
    * every poll tick while there is no address and stops the moment there is
    * one, so this clears itself. */
-  const clientUnconfigured = appMode === 'client' && clientConnection?.status === 'unconfigured';
-  const userCaps = useMemo(
-    () => (appMode === 'client' ? (clientConnection?.user?.caps || ['*']) : ['*']),
-    [appMode, clientConnection],
-  );
+  const clientUnconfigured = appMode === 'client' && clientStatus === 'unconfigured';
   const bootstrap = useAppStore((s) => s.bootstrap);
   const platform = useAppStore((s) => s.platform);
   const [ready, setReady] = useState(false);

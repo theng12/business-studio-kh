@@ -22,7 +22,14 @@ function fontRoot() {
   return candidates.find((dir) => fs.existsSync(dir)) || null;
 }
 
-function embeddedFontCss(text) {
+/* `preview: true` keeps a document light enough to rebuild on every debounced
+ * edit: the Latin, Khmer and Thai faces (~2 MB together, cached) are embedded
+ * so the preview draws with the same fonts as the print, while the ~17 MB
+ * Chinese / Japanese / Korean faces are left to the Mac's own fonts. The
+ * owner's call (2026-10-02): previews match print for the small fonts only. */
+const LARGE_FACE_FAMILIES = new Set(['MS Noto JP', 'MS Noto KR', 'MS Noto SC']);
+
+function embeddedFontCss(text, { preview = false } = {}) {
   // The control-character range is intentional: this asks "is any character
   // outside plain ASCII?" so we know whether to embed a Unicode font.
   // eslint-disable-next-line no-control-regex
@@ -36,11 +43,30 @@ function embeddedFontCss(text) {
     ...(/[\uac00-\ud7af]/.test(text) ? [['MS Noto KR', 'NotoSansKR-Regular.otf', 'NotoSansKR-Bold.otf']] : []),
     ...(/[\u3400-\u9fff]/.test(text) ? [['MS Noto SC', 'NotoSansSC-Regular.otf', 'NotoSansSC-Bold.otf']] : []),
   ];
-  const mime = (file) => file.endsWith('.otf') ? 'font/otf' : 'font/ttf';
-  return faces.flatMap(([family, regular, bold]) => [[regular, 400], [bold, 700]].map(([file, weight]) => {
-    const abs = path.join(root, file); if (!fs.existsSync(abs)) return '';
-    return `@font-face{font-family:"${family}";src:url(data:${mime(file)};base64,${fs.readFileSync(abs).toString('base64')}) format("${file.endsWith('.otf') ? 'opentype' : 'truetype'}");font-weight:${weight};font-style:normal}`;
-  })).join('');
+  return faces.filter(([family]) => !(preview && LARGE_FACE_FAMILIES.has(family)))
+    .flatMap(([family, regular, bold]) => [[regular, 400], [bold, 700]]
+    .map(([file, weight]) => fontFaceCss(family, path.join(root, file), weight))).join('');
+}
+
+/* One `@font-face` rule per (family, file, weight), built once per process.
+ *
+ * The CJK faces are ~17 MB files each, and every label/catalog/social render
+ * and every debounced preview used to read and base64 them again — two CJK
+ * scripts meant ~90 MB of file reads and encoding per keystroke. The bundled
+ * fonts never change while the app runs, so the finished rule is cached. A
+ * missing file is cached as '' too: the font folder ships with the app. */
+const fontFaceCache = new Map();
+
+function fontFaceCss(family, abs, weight) {
+  const key = `${family}\0${abs}\0${weight}`;
+  if (fontFaceCache.has(key)) return fontFaceCache.get(key);
+  let css = '';
+  if (fs.existsSync(abs)) {
+    const otf = abs.endsWith('.otf');
+    css = `@font-face{font-family:"${family}";src:url(data:${otf ? 'font/otf' : 'font/ttf'};base64,${fs.readFileSync(abs).toString('base64')}) format("${otf ? 'opentype' : 'truetype'}");font-weight:${weight};font-style:normal}`;
+  }
+  fontFaceCache.set(key, css);
+  return css;
 }
 
 function esc(value) {
@@ -64,6 +90,31 @@ function assetDataUri(rel) {
     path.isAbsolute(rel) ? rel : '',
   ].filter(Boolean);
   return fileDataUri(candidates.find((p) => fs.existsSync(p)));
+}
+
+/* The src for an image in a PREVIEW document — one shown in the app's own
+ * window, never handed to the offscreen print/capture window.
+ *
+ * A catalog preview used to inline every product photo as base64, rebuilt on
+ * each edit and structured-cloned over IPC (and over the network in client
+ * mode). An `app-image://local/<rel>?v=<stamp>` URL is a few dozen bytes, and
+ * the preview iframe (srcdoc, so it shares the renderer's CSP, which allows
+ * `img-src app-image:`) loads it through the same protocol the Library uses —
+ * on a client Mac that protocol proxies the server, which is where this HTML
+ * is built. The stamp follows renderer/lib/imageUrl.js: the file behind a
+ * renumbered path can change while the path does not.
+ *
+ * The protocol serves `<dataDir>/assets/<rel>` (and `processed/` /
+ * `ai-gallery/` from the data folder itself), and refuses absolute paths, so
+ * anything that is not a plain file under assets/ keeps the data URI. The
+ * existence check keeps the "No image" placeholder for a missing file. */
+function previewImageSrc(rel, version) {
+  if (!rel || path.isAbsolute(rel) || /^(processed|ai-gallery)\//.test(rel) || rel.split(/[\\/]/).includes('..')) {
+    return assetDataUri(rel);
+  }
+  if (!fs.existsSync(path.join(getDataDir(), 'assets', rel))) return assetDataUri(rel);
+  const url = `app-image://local/${encodeURIComponent(rel)}`;
+  return version == null || version === '' ? url : `${url}?v=${encodeURIComponent(String(version))}`;
 }
 
 function productValue(product, field) {
@@ -101,7 +152,7 @@ function elementStyle(el) {
   ].filter(Boolean).join(';');
 }
 
-async function renderLabel(template, product, brand = null) {
+async function renderLabel(template, product, brand = null, preview = false) {
   const parts = [];
   for (const el of template.elements || []) {
     if (el.visible === false) continue;
@@ -116,7 +167,8 @@ async function renderLabel(template, product, brand = null) {
     }
     if (el.type === 'productImage' || el.type === 'logo' || el.type === 'image' || el.type === 'cert') {
       const rel = el.type === 'productImage' ? product.mainImagePath : el.type === 'logo' ? brand?.icon : el.src;
-      const src = assetDataUri(rel);
+      const stamp = el.type === 'productImage' ? product.updatedAt : el.type === 'logo' ? brand?.updatedAt : null;
+      const src = preview ? previewImageSrc(rel, stamp) : assetDataUri(rel);
       parts.push(src ? `<img src="${src}" style="${style};object-fit:${esc(el.fit || 'contain')}"/>` : '');
       continue;
     }
@@ -135,9 +187,11 @@ async function renderLabel(template, product, brand = null) {
   return `<section class="label" style="width:${template.widthMm}mm;height:${template.heightMm}mm;background:${esc(template.backgroundColor || '#fff')}">${parts.join('')}</section>`;
 }
 
-async function labelsDocument({ template, products, brands = [], layout = {} }) {
+/* `preview: true` — same meaning as for buildCatalogHtml below: shown in the
+ * app's own iframe, so app-image URLs and no embedded fonts. */
+async function labelsDocument({ template, products, brands = [], layout = {}, preview = false }) {
   const brandsById = new Map(brands.map((b) => [b.id, b]));
-  const labels = await Promise.all(products.map((p) => renderLabel(template, p, brandsById.get(p.brandId))));
+  const labels = await Promise.all(products.map((p) => renderLabel(template, p, brandsById.get(p.brandId), preview)));
   const mode = layout.mode || 'sheet';
   const pageSize = layout.pageSize || 'A4';
   const orientation = layout.orientation || 'portrait';
@@ -145,7 +199,7 @@ async function labelsDocument({ template, products, brands = [], layout = {} }) 
   const gap = Math.max(0, Number(layout.gapMm) || 2);
   const copies = Math.max(1, Math.min(100, Number(layout.copies) || 1));
   const repeated = labels.flatMap((html) => Array.from({ length: copies }, () => html));
-  const fonts = embeddedFontCss(JSON.stringify({ template, products }));
+  const fonts = embeddedFontCss(JSON.stringify({ template, products }), { preview });
   const singleSize = `${template.widthMm}mm ${template.heightMm}mm`;
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${mode === 'single' ? singleSize : `${pageSize} ${orientation}`}; margin: ${mode === 'single' ? '0' : `${margin}mm`}; }
@@ -174,9 +228,16 @@ function catalogValue(product, key, config) {
   return productValue(product, key);
 }
 
-function buildCatalogHtml({ project, products, brands = [], categories = [], company = null }) {
+/* `preview: true` is for a document shown in the app's own preview iframe:
+ * photos become app-image URLs (see previewImageSrc) and the embedded fonts
+ * are left out. The renderer's CSP has no `font-src`, so `default-src 'self'`
+ * already blocks a data: font inside that srcdoc iframe — measured: the
+ * face reports status "error" and Chromium logs the CSP refusal — and the
+ * preview has always drawn its text with the Mac's own fonts. Building and
+ * cloning tens of MB of font CSS that is then refused bought nothing. The
+ * PDF export renders in an offscreen window with no such CSP and keeps both. */
+function buildCatalogHtml({ project, products, brands = [], categories = [], company = null }, { preview = false } = {}) {
   const c = project.config || {};
-  const fonts = embeddedFontCss(JSON.stringify({ project, products, brands, categories, company }));
   const brandMap = new Map(brands.map((b) => [b.id, b]));
   const categoryMap = new Map(categories.map((x) => [x.id, x]));
   const explicitSelection = c.selectionMode === 'explicit';
@@ -188,12 +249,16 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
     .sort((a, b) => c.sortBy === 'manual'
       ? (manualOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (manualOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
       : String(c.sortBy === 'name' ? a.name : a.sku).localeCompare(String(c.sortBy === 'name' ? b.name : b.sku), undefined, { numeric: true }));
+  // Script detection reads only what this document renders: the selected
+  // products, not the whole catalog handed in (a template preview passes every
+  // product and renders nine).
+  const fonts = embeddedFontCss(JSON.stringify({ project, products: selected, brands, categories, company }), { preview });
   const fields = c.fields || [
     { key: 'sku', label: 'SKU', visible: true }, { key: 'name', label: 'Name', visible: true, bold: true },
     { key: 'colorFinish', label: 'Color / Finish', visible: true }, { key: 'price', label: 'Price', visible: true, bold: true },
   ];
   const card = (p) => {
-    const image = assetDataUri(p.mainImagePath);
+    const image = preview ? previewImageSrc(p.mainImagePath, p.updatedAt) : assetDataUri(p.mainImagePath);
     const rows = fields.filter((f) => f.visible !== false).map((f) => {
       const value = catalogValue(p, f.key, c);
       return value === '' || value == null ? '' : `<div class="field ${f.bold ? 'bold' : ''}">${f.showLabel === false ? '' : `<span>${esc(f.label || f.key)}</span>`}${esc(value)}</div>`;

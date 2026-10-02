@@ -504,7 +504,7 @@ export function ExportCenter() {
                               {p.mainImagePath
                                 // v0.1.27: cache-bust (§12) — a re-exported or
                                 // edited main image kept showing the old pixels here.
-                                ? <img src={appImageSrc(p.mainImagePath, p.contentHash || p.updatedAt)} alt="" />
+                                ? <img src={appImageSrc(p.mainImagePath, p.contentHash || p.updatedAt, { w: 96 })} alt="" loading="lazy" decoding="async" />
                                 : <div className="thumb-placeholder">·</div>}
                             </div>
                             <div className="export-queue__col">

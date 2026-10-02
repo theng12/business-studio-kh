@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { elementBox } from './elementDefaults.js';
+import { appImageSrc } from '../../lib/imageUrl.js';
 import { renderBarcodeSVG, formatBarcodeText } from './barcodePreview.js';
 import {
   fitForElement, BACKDROP_FIT, INSET_BLUR_FIT, INSET_FOREGROUND_FIT,
@@ -1284,7 +1285,9 @@ function resolveImageSrc(source, ctx) {
   if (source.startsWith('product-image:')) {
     const idx = Number(source.split(':')[1] ?? 0);
     const img = ctx.productImages?.[idx];
-    if (img?.filepath) return `app-image://local/${encodeURIComponent(stripAssetsPrefix(img.filepath))}`;
+    // Stamped with the content hash: a delete/reorder renumbers the files, so the
+    // same path can hold different bytes and the browser would show the old ones.
+    if (img?.filepath) return appImageSrc(stripAssetsPrefix(img.filepath), img.contentHash);
   }
   if (source.startsWith('asset:')) {
     const rel = source.slice('asset:'.length);

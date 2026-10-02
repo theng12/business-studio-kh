@@ -15,6 +15,46 @@ function getCompanies() { return _companies ?? (_companies = require('./companie
 let _imageManager;
 function getImageManager() { return _imageManager ?? (_imageManager = require('../imageManager')); }
 
+/**
+ * One queue per product for the operations that pick or move filename slots.
+ *
+ * An add reads "how many photos are there" before it awaits the image encode,
+ * and only claims the `-NNN` slot afterwards. Two adds into one product at once
+ * (two AI auto-adds, a paste while the phone uploads) both read the same count
+ * and both aimed at the same `-004.jpg`, so one photo was lost. Running them one
+ * after another per product closes that gap; different products still run in
+ * parallel.
+ *
+ * The stored tail is a promise that never rejects, so one failed operation does
+ * not wedge every later one for that product. Do not call `addFromSource` /
+ * `addFromBytes` from inside `fn` — they take this queue themselves, and
+ * waiting on your own place in it never finishes.
+ */
+const imageQueues = new Map();
+function withProductImageLock(productId, fn) {
+  const prev = imageQueues.get(productId) || Promise.resolve();
+  const run = prev.then(() => fn());
+  const tail = run.then(() => {}, () => {});
+  imageQueues.set(productId, tail);
+  tail.then(() => { if (imageQueues.get(productId) === tail) imageQueues.delete(productId); });
+  return run;
+}
+
+/**
+ * Absolute path of a stored image filepath, refusing anything that would land
+ * outside `<dataDir>/assets`. Stored paths are always relative and never climb,
+ * so a path that does is either corrupt or hostile — `../database.sqlite` used
+ * to reach the database itself through `images:removeFromProduct`.
+ */
+function assetAbsPath(filepath) {
+  const root = path.resolve(getDataDir(), 'assets');
+  const abs = path.resolve(root, String(filepath ?? ''));
+  if (!filepath || abs === root || !abs.startsWith(root + path.sep)) {
+    throw new Error('That image path is not inside the library, so it was not touched.');
+  }
+  return abs;
+}
+
 function rowToImage(row) {
   if (!row) return null;
   return {
@@ -149,6 +189,25 @@ function renumberFiles(productId) {
 
   fs.mkdirSync(dirAbs, { recursive: true });
 
+  /* Refuse to land on a file this plan does not own. Every slot a move targets
+   * must be empty or about to be vacated by one of this product's own moves —
+   * anything else belongs to someone else (a product whose SKU differs only by
+   * case shares this folder on macOS, or a stray file) and renaming over it
+   * would silently replace their photo. Compared case-insensitively because
+   * the disk is. Checked before anything moves, so a refusal changes nothing. */
+  const vacated = new Set(realMoves.map((m) => m.oldRel.toLowerCase()));
+  for (const m of realMoves) {
+    if (vacated.has(m.newRel.toLowerCase())) continue;
+    if (fs.existsSync(path.join(assetsRoot, m.newRel))) {
+      const err = new Error(
+        `The photos of "${product.sku}" could not be put back in order: ${m.newName} is already in `
+        + 'its folder and is not one of its photos. Nothing was renamed, so no photo was replaced.',
+      );
+      err.code = 'RENUMBER_REFUSED';   // nothing moved — reorder() rolls its order back on this
+      throw err;
+    }
+  }
+
   // Phase 1: move every involved file to a unique tmp name. Done outside
   // the DB tx because rename is synchronous and we want to fail-fast on
   // disk errors before touching the DB. If phase 1 errors mid-loop, we
@@ -175,6 +234,17 @@ function renumberFiles(productId) {
         const tmpAbs = path.join(assetsRoot, tmpRel);
         const newAbs = path.join(assetsRoot, m.newRel);
         if (fs.existsSync(tmpAbs)) {
+          if (fs.existsSync(newAbs)) {
+            /* Something appeared in the slot after the check above. Never
+             * rename over it: keep this photo under a name of its own and
+             * point the row there, so both files survive. */
+            const keptName = `${path.posix.basename(m.newName, path.extname(m.newName))}-kept-${crypto.randomUUID().slice(0, 8)}${path.extname(m.newName)}`;
+            const keptRel = path.posix.join(dir, keptName);
+            fs.renameSync(tmpAbs, path.join(assetsRoot, keptRel));
+            process.stderr.write(`[images.renumber] ${m.newRel} was taken; kept ${m.id} as ${keptRel}\n`);
+            upd.run(keptRel, keptName, m.id);
+            continue;
+          }
           fs.renameSync(tmpAbs, newAbs);
         }
       }
@@ -192,51 +262,30 @@ function renumberFiles(productId) {
  *
  * Used by the IPC handlers for `images:importForProduct`, the auto-match
  * pipeline, the AI promote-to-product flow, and tests.
+ *
+ * Runs in the product's image queue (see withProductImageLock), so two adds
+ * into one product cannot pick the same slot. The order index is read again
+ * at insert time rather than reused from before the encode: a remove that ran
+ * meanwhile would otherwise leave a gap.
  */
-async function addFromSource(productId, sourcePath, { originalFilepath } = {}) {
-  const { product, dir } = dirForProduct(productId);
-  const existing = listByProduct(productId);
-  const baseName = productImageBasename(product, existing.length);
-
-  const im = getImageManager();
-  const hashLookup = (h) => findByHashForProduct(productId, h);
-  const { relativePath, hash, skipped } = await im.importProductImage(sourcePath, {
-    destDirRel: dir,
-    baseName,
-    existingHashLookup: hashLookup,
-  });
-
-  if (skipped) {
-    const reused = getByFilepath(productId, relativePath);
-    return { image: reused, skipped: true };
-  }
-
-  const id = crypto.randomUUID();
-  const ts = Date.now();
-  const order = existing.length;
-  const filename = path.posix.basename(relativePath);
-  getDb()
-    .prepare(
-      `INSERT INTO product_images
-       (id, product_id, filename, filepath, original_filepath, order_index, is_processed, processed_filepath, workspace_settings, content_hash, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, NULL, '{}', ?, ?)`,
-    )
-    .run(id, productId, filename, relativePath, originalFilepath ?? null, order, hash ?? null, ts);
-
-  return {
-    image: rowToImage(getDb().prepare('SELECT * FROM product_images WHERE id = ?').get(id)),
-    skipped: false,
-  };
+function addFromSource(productId, sourcePath, { originalFilepath } = {}) {
+  return withProductImageLock(productId, () => addImage(productId, originalFilepath, (im, opts) =>
+    im.importProductImage(sourcePath, opts)));
 }
 
-async function addFromBytes(productId, buffer, ext, { originalFilepath } = {}) {
+function addFromBytes(productId, buffer, ext, { originalFilepath } = {}) {
+  return withProductImageLock(productId, () => addImage(productId, originalFilepath, (im, opts) =>
+    im.importProductImageFromBytes(buffer, ext, opts)));
+}
+
+async function addImage(productId, originalFilepath, importFn) {
   const { product, dir } = dirForProduct(productId);
   const existing = listByProduct(productId);
   const baseName = productImageBasename(product, existing.length);
 
   const im = getImageManager();
   const hashLookup = (h) => findByHashForProduct(productId, h);
-  const { relativePath, hash, skipped } = await im.importProductImageFromBytes(buffer, ext, {
+  const { relativePath, hash, skipped } = await importFn(im, {
     destDirRel: dir,
     baseName,
     existingHashLookup: hashLookup,
@@ -249,7 +298,7 @@ async function addFromBytes(productId, buffer, ext, { originalFilepath } = {}) {
 
   const id = crypto.randomUUID();
   const ts = Date.now();
-  const order = existing.length;
+  const order = nextOrderIndex(productId);
   const filename = path.posix.basename(relativePath);
   getDb()
     .prepare(
@@ -280,17 +329,42 @@ async function addFromBytes(productId, buffer, ext, { originalFilepath } = {}) {
  */
 function remove(productId, filepath) {
   const db = getDb();
-  const dataDir = getDataDir();
-  // filepath is relative to <dataDir>/assets/ — prepend that segment.
-  const abs = path.join(dataDir, 'assets', filepath);
+  // Throws for a path that would leave <dataDir>/assets — checked even though
+  // the row lookup below would also miss it, so no future edit can reach disk
+  // with one.
+  assetAbsPath(filepath);
 
-  let rawRow = null;
+  const rawRow = db.prepare('SELECT * FROM product_images WHERE product_id = ? AND filepath = ?').get(productId, filepath);
+  /* No row, no disk. This used to unlink `<assets>/<filepath>` anyway, so a
+   * stale screen (the photo already renumbered or deleted elsewhere) erased
+   * another product's or another position's file, and a crafted path erased
+   * the database. A path this product does not own is never touched. */
+  if (!rawRow) {
+    throw new Error('That photo is not on this product any more (it may have been moved or deleted already). Refresh and try again.');
+  }
+
+  /* Hold the file BEFORE the row goes and before the renumber: holding renames
+   * it into the recycle bin, and the renumber right after promotes `003` into
+   * the freed slot. If the hold fails, nothing is deleted — the photo and its
+   * row stay exactly as they were and the caller gets the reason. */
+  const product = db.prepare('SELECT company_id FROM products WHERE id = ?').get(productId);
+  let heldId;
   try {
-    rawRow = db.prepare('SELECT * FROM product_images WHERE product_id = ? AND filepath = ?').get(productId, filepath);
-  } catch (_) { /* best-effort */ }
+    heldId = require('../deletedItems').holdImage({
+      imageRow: rawRow,
+      fileRelpath: filepath,
+      companyId: product?.company_id ?? null,
+      userId: getCallerUserId(),
+    });
+  } catch (err) {
+    throw new Error(
+      `The photo could not be moved to Recently deleted, so it was not deleted (${err.message}).`,
+      { cause: err },
+    );
+  }
 
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM product_images WHERE product_id = ? AND filepath = ?').run(productId, filepath);
+    db.prepare('DELETE FROM product_images WHERE id = ?').run(rawRow.id);
     // Reindex order_index to keep it contiguous.
     const remaining = db
       .prepare('SELECT id FROM product_images WHERE product_id = ? ORDER BY order_index ASC')
@@ -298,35 +372,23 @@ function remove(productId, filepath) {
     const update = db.prepare('UPDATE product_images SET order_index = ? WHERE id = ?');
     remaining.forEach((r, i) => update.run(i, r.id));
   });
-  tx();
-
-  // Hold it for restore, outside the tx so the DB stays the truth-of-record.
-  // If holding fails, fall back to the old behaviour (delete the file) rather
-  // than leaving it on disk unreferenced with no record of why.
-  if (rawRow) {
-    try {
-      const product = db.prepare('SELECT company_id FROM products WHERE id = ?').get(productId);
-      require('../deletedItems').holdImage({
-        imageRow: rawRow,
-        fileRelpath: filepath,
-        companyId: product?.company_id ?? null,
-        userId: getCallerUserId(),
-      });
-    } catch (err) {
-      process.stderr.write(`[images.remove] could not hold ${filepath} for restore: ${err.message}\n`);
-      try {
-        if (fs.existsSync(abs)) fs.unlinkSync(abs);
-      } catch (_) { /* best-effort */ }
-    }
-  } else {
-    try {
-      if (fs.existsSync(abs)) fs.unlinkSync(abs);
-    } catch (_) { /* best-effort */ }
+  try {
+    tx();
+  } catch (err) {
+    // The row is still there, so the photo goes back to it.
+    require('../deletedItems').releaseImageHold(heldId);
+    throw err;
   }
 
   // Renumber surviving files to close the gap. If the deleted file was
-  // 002, then 003 → 002, 004 → 003, etc.
-  renumberFiles(productId);
+  // 002, then 003 → 002, 004 → 003, etc. The delete itself is done by now, so
+  // a renumber that refuses (a stranger's file in a slot) is logged rather
+  // than reported as a failed delete; every row still points at its own file.
+  try {
+    renumberFiles(productId);
+  } catch (err) {
+    process.stderr.write(`[images.remove] renumber after delete skipped: ${err.message}\n`);
+  }
 }
 
 /**
@@ -345,14 +407,21 @@ function reorder(productId, newOrderFilepaths) {
   if (setA.size !== setB.size || [...setA].some((x) => !setB.has(x))) {
     throw new Error('Reorder must be a permutation of existing images');
   }
-  const tx = db.transaction(() => {
+  const writeOrder = db.transaction((order) => {
     const upd = db.prepare('UPDATE product_images SET order_index = ? WHERE product_id = ? AND filepath = ?');
-    newOrderFilepaths.forEach((fp, idx) => upd.run(idx, productId, fp));
+    order.forEach((fp, idx) => upd.run(idx, productId, fp));
   });
-  tx();
+  writeOrder(newOrderFilepaths);
 
-  // Rewrite on-disk filenames to match the new order.
-  renumberFiles(productId);
+  // Rewrite on-disk filenames to match the new order. A refused renumber has
+  // moved nothing, so put the old order back too: otherwise the user is told
+  // it failed while the database already holds the new main / order.
+  try {
+    renumberFiles(productId);
+  } catch (err) {
+    if (err?.code === 'RENUMBER_REFUSED') writeOrder(current);
+    throw err;
+  }
 }
 
 function setMain(productId, filepath) {
@@ -360,6 +429,14 @@ function setMain(productId, filepath) {
   if (!current.includes(filepath)) throw new Error('Image not on product');
   const next = [filepath, ...current.filter((p) => p !== filepath)];
   reorder(productId, next);
+}
+
+/** Make the image with this row id the main one. Prefer this over `setMain`
+ *  after an await: the id survives a renumber, the filepath does not. */
+function setMainById(productId, imageId) {
+  const img = getById(productId, imageId);
+  if (!img) throw new Error('Image not on product');
+  setMain(productId, img.filepath);
 }
 
 function setProcessed(productId, filepath, { isProcessed, processedFilepath, workspaceSettings }) {
@@ -476,6 +553,60 @@ function setContentHash(productId, filepath, hash) {
 }
 
 /**
+ * Replace an image's bytes with a finished file, landing on the row's CURRENT
+ * path.
+ *
+ * Every in-place editor (crop overwrite, reframe, auto-crop, auto-enhance,
+ * compress/convert, flip, overlay overwrite) reads the photo, spends a while
+ * encoding, then writes back. If a set-main, reorder or delete renumbered the
+ * product meanwhile, the path it read now holds a different photo, and writing
+ * there replaced that photo while stamping the hash onto the wrong row. So the
+ * caller carries the row id and the content_hash it started from, and this
+ * re-reads the row: gone → refuse; hash moved on (someone else edited it) →
+ * refuse; otherwise write to wherever that row lives now.
+ *
+ * Synchronous on purpose: the lookup, the rename and the row update happen in
+ * one JS turn, and every renumber is synchronous too, so nothing can move the
+ * file between them. `tmpAbs` must already be fully written (in the product's
+ * folder, so the rename stays on one disk). On a refusal it is left for the
+ * caller to clean up.
+ *
+ * `newExt` (with dot) is for a format conversion: the file is renamed to that
+ * extension and the old file is removed only after the row points at the new
+ * one — the same contract the converter always had. A slot already taken by
+ * another file is refused rather than overwritten.
+ */
+function replaceImageFile(productId, imageId, { tmpAbs, newHash, expectedHash, newExt = null }) {
+  const cur = getById(productId, imageId);
+  if (!cur) {
+    throw new Error('That photo was removed while it was being edited, so the edit was not saved. Refresh and try again.');
+  }
+  if (expectedHash != null && cur.contentHash != null && cur.contentHash !== expectedHash) {
+    throw new Error('That photo was changed by another edit while this one was running, so this edit was not saved. Refresh and try again.');
+  }
+  const oldAbs = assetAbsPath(cur.filepath);
+  const oldExt = path.extname(cur.filepath);
+  const changingExt = !!newExt && newExt.toLowerCase() !== oldExt.toLowerCase();
+  const targetRel = changingExt ? cur.filepath.slice(0, cur.filepath.length - oldExt.length) + newExt : cur.filepath;
+  const targetAbs = assetAbsPath(targetRel);
+  if (changingExt && fs.existsSync(targetAbs)) {
+    throw new Error(`${path.posix.basename(targetRel)} already exists next to this photo, so it was not converted (nothing was replaced).`);
+  }
+
+  fs.renameSync(tmpAbs, targetAbs);
+  let size = null;
+  try { size = fs.statSync(targetAbs).size; } catch (_) {}
+  getDb()
+    .prepare('UPDATE product_images SET filepath = ?, filename = ?, content_hash = ?, file_size = ? WHERE id = ? AND product_id = ?')
+    .run(targetRel, path.posix.basename(targetRel), newHash ?? null, size, imageId, productId);
+  if (changingExt) {
+    // Superseded by the converted file the row now points at.
+    try { fs.unlinkSync(oldAbs); } catch (_) { /* a leftover is harmless; the row is right */ }
+  }
+  return getById(productId, imageId);
+}
+
+/**
  * v0.49.28: update a row's stored filepath. Used by the re-encode flow when
  * the format conversion changes the file extension (e.g. PNG → JPEG); the
  * file on disk gets a new name and the row needs to follow it. Returns the
@@ -529,6 +660,10 @@ function countByFilepath(filepath) {
 }
 
 module.exports = {
+  withProductImageLock,
+  assetAbsPath,
+  replaceImageFile,
+  setMainById,
   listByProduct,
   getById,
   addFromSource,

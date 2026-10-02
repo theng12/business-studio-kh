@@ -40,27 +40,27 @@ function recentBrands(companyId, limit = 5) {
       name: r.name,
       color: r.color,
       icon: r.icon,
+      // Cache-bust stamp for the icon (§12): replacing an icon rewrites the same path.
+      updatedAt: r.updated_at,
       productCount: r.product_count ?? 0,
     }));
 }
 
 function recentProducts(companyId, limit = 8) {
   if (!companyId) return [];
-  // Use grouped joins instead of per-row correlated subqueries: one pass for
-  // image counts and one pass for the first-image path (order_index = 0).
+  // LIMIT first: idx_products_company_updated hands back this company's most
+  // recent rows in order, so only those `limit` products reach the
+  // correlated lookups below (each an index probe on product_images). The
+  // earlier grouped join counted every image of every company to show 8.
   return getDb()
     .prepare(
       `SELECT p.id, p.sku, p.name, p.updated_at,
-         COALESCE(ic.cnt, 0)   AS image_count,
-         mi.filepath           AS main_image_path
+         (SELECT COUNT(*) FROM product_images pi
+            WHERE pi.product_id = p.id)                         AS image_count,
+         (SELECT mi.filepath FROM product_images mi
+            WHERE mi.product_id = p.id AND mi.order_index = 0
+            LIMIT 1)                                            AS main_image_path
        FROM products p
-       LEFT JOIN (
-         SELECT product_id, COUNT(*) AS cnt
-         FROM product_images
-         GROUP BY product_id
-       ) ic ON ic.product_id = p.id
-       LEFT JOIN product_images mi
-         ON mi.product_id = p.id AND mi.order_index = 0
        WHERE p.company_id = ?
        ORDER BY p.updated_at DESC
        LIMIT ?`,
@@ -78,8 +78,10 @@ function recentProducts(companyId, limit = 8) {
 
 /**
  * v0.35.0: catalog-completeness counts for the Dashboard "needs attention"
- * panel. One pass over the company's products with a grouped LEFT JOIN for
- * image counts (no per-row subquery — same perf shape as products.list).
+ * panel. One pass over the company's products; "has no images" is an EXISTS
+ * probe on the product_images(product_id) index, so only this company's
+ * images are touched (a grouped subquery over product_images used to count
+ * every company's images first).
  */
 function completenessFor(companyId) {
   const empty = { total: 0, missingImages: 0, missingBarcode: 0, missingPrice: 0, notExported: 0 };
@@ -88,13 +90,12 @@ function completenessFor(companyId) {
     .prepare(`
       SELECT
         COUNT(*) AS total,
-        SUM(CASE WHEN COALESCE(ic.n, 0) = 0 THEN 1 ELSE 0 END) AS missingImages,
+        SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id = p.id)
+                 THEN 1 ELSE 0 END) AS missingImages,
         SUM(CASE WHEN p.barcode IS NULL OR TRIM(p.barcode) = '' THEN 1 ELSE 0 END) AS missingBarcode,
         SUM(CASE WHEN p.price_retail IS NULL THEN 1 ELSE 0 END) AS missingPrice,
         SUM(CASE WHEN p.process_status IS NULL OR p.process_status <> 'exported' THEN 1 ELSE 0 END) AS notExported
       FROM products p
-      LEFT JOIN (SELECT product_id, COUNT(*) AS n FROM product_images GROUP BY product_id) ic
-        ON ic.product_id = p.id
       WHERE p.company_id = ?
     `)
     .get(companyId);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../store/index.js';
 // v0.1.22: shared with Settings — see renderer/lib/capabilities.js.
 import { hasCap, hasAnyCap } from '../lib/capabilities.js';
@@ -127,6 +128,23 @@ function capsToTier(caps) {
   return 'viewer';
 }
 
+const ALL_CAPS = ['*'];
+
+/**
+ * The current user's capability array, with a stable identity. In client mode
+ * the server attaches it to the connection; the host Mac (standalone / server)
+ * is the implicit owner → all access, as is a client whose whoami is still
+ * loading (so the nav doesn't briefly hide modules a connected admin / editor
+ * gets back a moment later). `useShallow` keeps the same array across the
+ * connection pushes main sends on every RPC, so consumers keyed on it — the
+ * App's shortcut listener, this sidebar — do not re-run per request.
+ */
+export function useUserCaps() {
+  const appMode = useAppStore((s) => s.appMode);
+  const caps = useAppStore(useShallow((s) => s.clientConnection?.user?.caps || ALL_CAPS));
+  return appMode === 'client' ? caps : ALL_CAPS;
+}
+
 export function Sidebar() {
   const activeModule = useAppStore((s) => s.activeModule);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
@@ -143,7 +161,11 @@ export function Sidebar() {
   const appMode = useAppStore((s) => s.appMode);
   // v0.14.3: live client-mode connection state (green/red dot). Updated
   // by the main-process ping loop and pushed via `client:connectionState`.
-  const clientConnection = useAppStore((s) => s.clientConnection);
+  // Select only the fields the chip shows — the object itself is replaced on
+  // connection pushes, and subscribing to it re-rendered the sidebar per RPC.
+  const connStatus = useAppStore((s) => s.clientConnection?.status);
+  const connServerVersion = useAppStore((s) => s.clientConnection?.serverVersion);
+  const connLastError = useAppStore((s) => s.clientConnection?.lastError);
   // v0.17.0: currently-connected users (server + clients with an open
   // WebSocket). Updated via the `users:presence` push event from main.
   // Only meaningful in server / client modes; in standalone it's [].
@@ -181,9 +203,7 @@ export function Sidebar() {
   // server) is the implicit owner → all access. Default to all-access
   // while whoami is still loading so the nav doesn't briefly hide modules
   // a connected admin / editor will get back a moment later.
-  const caps = appMode === 'client'
-    ? (clientConnection?.user?.caps || ['*'])
-    : ['*'];
+  const caps = useUserCaps();
   // Legacy tier for the body[data-role] CSS that hides write affordances.
   const role = capsToTier(caps);
 
@@ -314,16 +334,16 @@ export function Sidebar() {
               // a "Test connection now" button.
               <button
                 type="button"
-                className={`sidebar__storage-tag sidebar__storage-tag--client sidebar__storage-tag--conn-${clientConnection?.status || 'unknown'}`}
+                className={`sidebar__storage-tag sidebar__storage-tag--client sidebar__storage-tag--conn-${connStatus || 'unknown'}`}
                 onClick={() => setConnLegendOpen(true)}
                 title={(() => {
-                  const s = clientConnection?.status;
-                  if (s === 'connected') return `Connected to server${clientConnection?.serverVersion ? ` (v${clientConnection.serverVersion})` : ''}. Click for details.`;
-                  if (s === 'disconnected') return `Disconnected: ${clientConnection?.lastError || 'check Server URL / Token in Settings.'} Click for help.`;
+                  const s = connStatus;
+                  if (s === 'connected') return `Connected to server${connServerVersion ? ` (v${connServerVersion})` : ''}. Click for details.`;
+                  if (s === 'disconnected') return `Disconnected: ${connLastError || 'check Server URL / Token in Settings.'} Click for help.`;
                   // v0.26.38: 'degraded' — server returned a 5xx on
                   // /api/ping. Connection is up but the server had a
                   // transient hiccup. Distinct from disconnected.
-                  if (s === 'degraded') return `Server is reachable but returned an error: ${clientConnection?.lastError || 'unknown'}. Click for details.`;
+                  if (s === 'degraded') return `Server is reachable but returned an error: ${connLastError || 'unknown'}. Click for details.`;
                   return 'Checking connection to server… click for details.';
                 })()}
               >
@@ -527,10 +547,27 @@ function NetworkChip() {
 
   // Tick once a second so the "X seconds ago" text doesn't go stale
   // between RPC calls. setInterval over setTimeout because we want
-  // it always running, not stop-on-quiet.
+  // it always running, not stop-on-quiet — except while the window is
+  // hidden, where nobody can read it: the timer stops, and coming back
+  // ticks at once so the text is current on the first visible frame.
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
+    let t = null;
+    const start = () => {
+      if (t) return;
+      setNow(Date.now());
+      t = setInterval(() => setNow(Date.now()), 1000);
+    };
+    const stop = () => {
+      if (t) clearInterval(t);
+      t = null;
+    };
+    const onVisibility = () => (document.visibilityState === 'hidden' ? stop() : start());
+    onVisibility();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, []);
 
   if (!stats) return null;

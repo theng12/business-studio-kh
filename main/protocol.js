@@ -84,6 +84,9 @@ function registerClientImageProtocol(getClient) {
       const queryAt = stripped.indexOf('?');
       const noQuery = queryAt === -1 ? stripped : stripped.slice(0, queryAt);
       const query = queryAt === -1 ? '' : stripped.slice(queryAt);
+      // `query` is forwarded verbatim, so a list view's `?w=96` thumbnail
+      // request reaches the server's serveAsset, which answers with the small
+      // cached copy (main/util/thumbCache.js) instead of the full photo.
       const decoded = decodeURIComponent(noQuery);
       if (path.isAbsolute(decoded) || decoded.includes('..')) {
         return new Response(null, { status: 403 });
@@ -144,7 +147,9 @@ function registerImageProtocol(dataDir) {
       return await runTrackedOperation('protocol:app-image', async () => {
         const stripped = request.url.replace(/^app-image:\/\/local\//, '');
         // Drop cache-bust querystring (e.g. ?v=3) before resolving on disk.
-        const noQuery = stripped.split('?')[0];
+        const queryAt = stripped.indexOf('?');
+        const noQuery = queryAt === -1 ? stripped : stripped.slice(0, queryAt);
+        const params = new URLSearchParams(queryAt === -1 ? '' : stripped.slice(queryAt + 1));
         const decoded = decodeURIComponent(noQuery);
 
         // Renderer always supplies a relative path. We deliberately do NOT
@@ -182,6 +187,19 @@ function registerImageProtocol(dataDir) {
         // downloaded it; now only this handler's promise waits.
         if (!(await fileExists(normalized))) {
           return new Response(null, { status: 404 });
+        }
+        // Thumbnail tier: `?w=` asks for a small cached copy (list / grid
+        // views). Only reached AFTER every containment check above, and any
+        // failure falls through to the original — never a broken image.
+        if (params.has('w')) {
+          const thumbs = require('./util/thumbCache');
+          const thumbPath = await thumbs.getThumbnail(normalized, { v: params.get('v'), w: params.get('w') });
+          if (thumbPath) {
+            try {
+              const res = await net.fetch(url.pathToFileURL(thumbPath).toString());
+              if (res.ok) return res;
+            } catch (_) { /* evicted between generation and read — serve the original */ }
+          }
         }
         return net.fetch(url.pathToFileURL(normalized).toString());
       }, { trackResponseBody: true });

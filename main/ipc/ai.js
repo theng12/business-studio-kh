@@ -270,7 +270,9 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
       // and try to set as main." Crash-recovery on next boot
       // will reconcile any tmp files left over.
       try {
-        productImages.setMain(productId, relativePath);
+        // By row id: the add's await let other image work run, so the
+        // path it returned may already belong to a renumbered neighbour.
+        productImages.setMainById(productId, addedImage.id);
       } catch (err) {
         process.stderr.write(`[ai:promote asMain] setMain failed for ${relativePath}: ${err.message}\n`);
         throw new Error(`Image was added, but setting it as main failed: ${err.message}`, { cause: err });

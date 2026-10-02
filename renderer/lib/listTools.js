@@ -18,9 +18,15 @@ export function filterRows(rows, query, keys) {
   return rows.filter((row) => keys.some((key) => String(row?.[key] ?? '').toLowerCase().includes(q)));
 }
 
+/* One collator for every comparison. `localeCompare` with an options object
+ * builds a fresh collator per call, which is most of the cost of sorting a
+ * long list; `Intl.Collator#compare` with the same options gives the same
+ * order without it. */
+const NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 /** Name order, ignoring case, and numeric so "Brand 2" sorts before "Brand 10". */
 export const byName = (a, b) =>
-  String(a?.name ?? '').localeCompare(String(b?.name ?? ''), undefined, { numeric: true, sensitivity: 'base' });
+  NAME_COLLATOR.compare(String(a?.name ?? ''), String(b?.name ?? ''));
 
 /**
  * Sort a copy by one of the screen's own comparators, falling back to name —

@@ -22,7 +22,7 @@ const { BrowserWindow } = require('electron');
  * are all inlined by the renderer that builds it — so nothing depends on where
  * it is loaded from.
  */
-async function withWindow(html, options, task) {
+function createRenderWindow(options) {
   const win = new BrowserWindow({
     show: false,
     useContentSize: true,
@@ -35,6 +35,14 @@ async function withWindow(html, options, task) {
   // stall the animation frames `waitForPaint()` below depends on. Nothing is
   // being conserved here — the window lives for milliseconds.
   win.webContents.setBackgroundThrottling(false);
+  return win;
+}
+
+/**
+ * Load `html` into `win`, wait until it is painted, run `task(win)`. The temp
+ * file outlives the task, as it always has, and is removed afterwards.
+ */
+async function renderIn(win, html, options, task) {
   const tmpPath = path.join(os.tmpdir(), `msk-render-${crypto.randomUUID()}.html`);
   try {
     if (options?.zoomFactor) win.webContents.setZoomFactor(options.zoomFactor);
@@ -44,8 +52,35 @@ async function withWindow(html, options, task) {
     await waitForPaint(win);
     return await task(win);
   } finally {
-    if (!win.isDestroyed()) win.destroy();
     try { await fs.promises.unlink(tmpPath); } catch (_) { /* best effort */ }
+  }
+}
+
+async function withWindow(html, options, task) {
+  const win = createRenderWindow(options);
+  try {
+    return await renderIn(win, html, options, task);
+  } finally {
+    if (!win.isDestroyed()) win.destroy();
+  }
+}
+
+/**
+ * One offscreen window for a run of same-sized documents.
+ *
+ * `body` receives `render(html, task)`, which loads `html` into the shared
+ * window exactly as `withWindow` would (same size, zoom, font and paint
+ * waits) and hands the window to `task`. A per-label image export used to
+ * create and destroy a BrowserWindow — a new renderer process — for every
+ * label; a batch now pays for that once. Every document must want the
+ * window `options` describe: the size is fixed for the run.
+ */
+async function withReusedWindow(options, body) {
+  const win = createRenderWindow(options);
+  try {
+    return await body((html, task) => renderIn(win, html, options, task));
+  } finally {
+    if (!win.isDestroyed()) win.destroy();
   }
 }
 
@@ -112,14 +147,34 @@ async function toPdf(html, outputPath, options = {}) {
   return outputPath;
 }
 
+async function captureImage(win, outputPath, options = {}) {
+  const image = await win.webContents.capturePage();
+  const bytes = options.format === 'jpeg' ? image.toJPEG(options.quality || 92) : image.toPNG();
+  await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.promises.writeFile(outputPath, bytes);
+  return outputPath;
+}
+
 async function toImage(html, outputPath, options = {}) {
-  return withWindow(html, options, async (win) => {
-    const image = await win.webContents.capturePage();
-    const bytes = options.format === 'jpeg' ? image.toJPEG(options.quality || 92) : image.toPNG();
-    await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
-    await fs.promises.writeFile(outputPath, bytes);
-    return outputPath;
+  return withWindow(html, options, (win) => captureImage(win, outputPath, options));
+}
+
+/**
+ * Several image files, one window. `next(i)` resolves the i-th job as
+ * `{ html, outputPath }` and is called just before it renders, so only one
+ * document is in memory at a time; `onDone(i, outputPath)` follows each
+ * write. Same output as calling `toImage` per job with the same `options`.
+ */
+async function toImages(count, next, options = {}, onDone = null) {
+  const written = [];
+  await withReusedWindow(options, async (render) => {
+    for (let i = 0; i < count; i += 1) {
+      const { html, outputPath } = await next(i);
+      written.push(await render(html, (win) => captureImage(win, outputPath, options)));
+      if (onDone) onDone(i, outputPath);
+    }
   });
+  return written;
 }
 
 async function listPrinters() {
@@ -139,4 +194,4 @@ async function printHtml(html, options = {}) {
  * memory and then hand the raw pixels to sharp for exact-size normalization.
  * Going through toImage() would mean writing a temp PNG, reading it back and
  * deleting it — a file round-trip per image, for no benefit. */
-module.exports = { toPdf, toPdfBuffer, toImage, listPrinters, printHtml, withWindow };
+module.exports = { toPdf, toPdfBuffer, toImage, toImages, listPrinters, printHtml, withWindow, withReusedWindow };

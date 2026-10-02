@@ -14,6 +14,7 @@
 
 const companies = require('../db/companies');
 const products = require('../db/products');
+const { getDb } = require('../db');
 
 function register({ expose, emitCatalogChange, assertEntityInActiveCompany }) {
   expose('products:list', ({ companyId, filters } = {}) => {
@@ -93,20 +94,31 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany }) {
     }
     let updated = 0;
     const failed = [];
-    for (const id of ids) {
-      try {
-        const p = products.get(id);
-        if (!p) { failed.push({ id, error: 'Product not found' }); continue; }
-        if (p.companyId !== companies.getActiveId()) {
-          failed.push({ id, sku: p.sku, error: 'Cross-company' });
-          continue;
+    const updateAll = () => {
+      for (const id of ids) {
+        try {
+          const p = products.get(id);
+          if (!p) { failed.push({ id, error: 'Product not found' }); continue; }
+          if (p.companyId !== companies.getActiveId()) {
+            failed.push({ id, sku: p.sku, error: 'Cross-company' });
+            continue;
+          }
+          products.update(id, cleanPatch);
+          updated += 1;
+        } catch (err) {
+          failed.push({ id, error: err.message });
         }
-        products.update(id, cleanPatch);
-        updated += 1;
-      } catch (err) {
-        failed.push({ id, error: err.message });
       }
-    }
+    };
+    // One transaction for the batch instead of one commit (and one fsync)
+    // per row. update() opens its own transaction, which better-sqlite3 nests
+    // as a savepoint: a row that throws rolls back only itself and lands in
+    // `failed`, exactly as before. Not for a brand change, though — that
+    // moves the product's image folder on disk right after update()'s write,
+    // and update() is written so the move follows a COMMITTED row. Inside an
+    // outer transaction the folder would move before anything was durable.
+    if ('brandId' in cleanPatch) updateAll();
+    else getDb().transaction(updateAll)();
     // Emit ONE catalog event for the whole batch instead of N
     // individual events. Other clients refetch their product list
     // once when this arrives, which is far less chatty than N

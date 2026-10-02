@@ -431,16 +431,26 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
     const MAX = require('./imageManager').MAX_IMAGES_PER_PRODUCT;
     for (const [pid, files] of toLibrary) {
       let mainSet = false;
+      let added = 0;
       for (const f of files) {
         try {
           if (productImages.listByProduct(pid).length >= MAX) break; // respect cap
-          const { image: added, skipped: addSkipped } = await productImages.addFromSource(pid, f, { originalFilepath: f });
-          if (added && !addSkipped) {
-            try { productImages.setDedupExempt(added.id, true); } catch (err) { logSoftFailure('exportRunner', 'flag imported copy dedup-exempt', err); }
+          const { image, skipped: addSkipped } = await productImages.addFromSource(pid, f, { originalFilepath: f });
+          if (image && !addSkipped) {
+            try { productImages.setDedupExempt(image.id, true); } catch (err) { logSoftFailure('exportRunner', 'flag imported copy dedup-exempt', err); }
             savedToLibrary++;
-            if (!mainSet) { try { productImages.setMain(pid, added.filepath); } catch (err) { logSoftFailure('exportRunner', 'set main image on import-back', err); } mainSet = true; }
+            added++;
+            // By id: the add awaited, so the path it returned may be stale.
+            if (!mainSet) { try { productImages.setMainById(pid, image.id); } catch (err) { logSoftFailure('exportRunner', 'set main image on import-back', err); } mainSet = true; }
           }
         } catch (_) { /* per-image best-effort; don't fail the whole export */ }
+      }
+      /* The add and the set-main renumber the product's files, so the bytes
+       * behind `<sku>-001.jpg` changed while its URL did not. Bump the stamp
+       * the Library's thumbnails cache-bust on (AGENTS.md §12), the same way
+       * every image IPC handler does. */
+      if (added > 0) {
+        try { products.touchUpdated(pid); } catch (err) { logSoftFailure('exportRunner', 'refresh product stamp after import-back', err); }
       }
     }
   }

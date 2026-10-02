@@ -9,8 +9,39 @@
  * Re-renders on a 60s timer so "5 min ago" graduates to "6 min ago"
  * without the parent component needing to know.
  */
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import { useAppStore } from '../store/index.js';
+
+/* One minute ticker shared by every chip on screen. Each chip used to start
+ * its own 60s interval, so a 200-row Library page ran 200 timers firing out
+ * of step. Now there is one interval while at least one chip is mounted and
+ * none otherwise, and every chip updates in the same render pass. */
+const minuteListeners = new Set();
+let minuteTick = 0;
+let minuteTimer = null;
+
+function subscribeMinute(listener) {
+  minuteListeners.add(listener);
+  if (!minuteTimer) {
+    minuteTimer = setInterval(() => {
+      minuteTick += 1;
+      for (const fn of minuteListeners) fn();
+    }, 60_000);
+  }
+  return () => {
+    minuteListeners.delete(listener);
+    if (minuteListeners.size === 0 && minuteTimer) {
+      clearInterval(minuteTimer);
+      minuteTimer = null;
+    }
+  };
+}
+
+const getMinuteTick = () => minuteTick;
+
+function useMinuteTick() {
+  return useSyncExternalStore(subscribeMinute, getMinuteTick);
+}
 
 function relativeTime(ts) {
   if (!ts) return '';
@@ -33,13 +64,8 @@ function relativeTime(ts) {
 
 export function Attribution({ updatedAt, updatedByUserId, prefix = 'Edited' }) {
   const attributionUsers = useAppStore((s) => s.attributionUsers);
-  // Force a re-render once a minute so the relative time stays fresh.
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (!updatedAt) return undefined;
-    const t = setInterval(() => tick((x) => x + 1), 60_000);
-    return () => clearInterval(t);
-  }, [updatedAt]);
+  // Re-render once a minute so the relative time stays fresh.
+  useMinuteTick();
 
   if (!updatedAt) return null;
   const name = updatedByUserId ? (attributionUsers?.[updatedByUserId] ?? null) : null;
@@ -63,17 +89,12 @@ export function Attribution({ updatedAt, updatedByUserId, prefix = 'Edited' }) {
  * table cell or a one-line grid card footer where the regular
  * Attribution component would be too tall.
  *
- * Shares the 60-second tick from above so a Library page open in the
+ * Shares the one minute ticker above so a Library page open in the
  * background keeps "5 min ago" honest as the minute hand turns.
  */
 export function CompactAttribution({ updatedAt, updatedByUserId }) {
   const attributionUsers = useAppStore((s) => s.attributionUsers);
-  const [, tick] = useState(0);
-  useEffect(() => {
-    if (!updatedAt) return undefined;
-    const t = setInterval(() => tick((x) => x + 1), 60_000);
-    return () => clearInterval(t);
-  }, [updatedAt]);
+  useMinuteTick();
 
   if (!updatedAt) return null;
   const name = updatedByUserId ? (attributionUsers?.[updatedByUserId] ?? null) : null;
