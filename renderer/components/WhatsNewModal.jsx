@@ -2,6 +2,14 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.90',
+    date: '2026-10-02',
+    items: [
+      'FIX — the Dashboard layout: on a busy catalog the "Needs attention" and "Operations" cards were squeezed until their chips were cut off under the next card. Every Dashboard section now keeps its full height and the page scrolls instead.',
+      'Internal — `.page--dashboard > * { flex-shrink: 0 }`: the page is a height-bounded scroll box laid out as a column flexbox, and the 0.1.89 restyle gave those two cards `min-height: 0`, so they shrank whenever the dashboard was taller than the window. Pinned by test/dashboardLayout.test.js.',
+    ],
+  },
+  {
     version: '0.1.89',
     date: '2026-10-02',
     items: [
