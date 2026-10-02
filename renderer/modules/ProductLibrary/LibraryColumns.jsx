@@ -134,7 +134,14 @@ export function ColumnsControl({
         setOpen(false);
       }
     };
-    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    // Esc closes the popover only — not the dialog it sits in (the bulk-edit
+    // table's Modal listens on window, which this document listener precedes).
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {

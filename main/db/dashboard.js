@@ -1,4 +1,16 @@
 const { getDb } = require('./index');
+const { priceEntry } = require('../util/prices');
+
+/** True when the product row has ANY price — retail, wholesale or a price
+ *  group — read through priceEntry (HANDOFF: prices are never read off the
+ *  column or the map directly). */
+function rowHasAnyPrice(row) {
+  let prices;
+  try { prices = JSON.parse(row.prices || '{}') || {}; } catch (_) { prices = {}; }
+  const product = { priceRetail: row.price_retail, priceWholesale: row.price_wholesale, prices };
+  const sources = ['retail', 'wholesale', ...Object.keys(prices && typeof prices === 'object' ? prices : {})];
+  return sources.some((src) => priceEntry(product, src).amount != null);
+}
 
 function statsFor(companyId) {
   if (!companyId) {
@@ -93,17 +105,26 @@ function completenessFor(companyId) {
         SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM product_images pi WHERE pi.product_id = p.id)
                  THEN 1 ELSE 0 END) AS missingImages,
         SUM(CASE WHEN p.barcode IS NULL OR TRIM(p.barcode) = '' THEN 1 ELSE 0 END) AS missingBarcode,
-        SUM(CASE WHEN p.price_retail IS NULL THEN 1 ELSE 0 END) AS missingPrice,
         SUM(CASE WHEN p.process_status IS NULL OR p.process_status <> 'exported' THEN 1 ELSE 0 END) AS notExported
       FROM products p
       WHERE p.company_id = ?
     `)
     .get(companyId);
+  // "No price" means no price ANYWHERE — a product sold only at wholesale or
+  // through a price group is priced. Only rows with neither column set can
+  // be missing one, so just those have their price-group map parsed.
+  const missingPrice = getDb()
+    .prepare(`
+      SELECT price_retail, price_wholesale, prices FROM products
+       WHERE company_id = ? AND price_retail IS NULL AND price_wholesale IS NULL
+    `)
+    .all(companyId)
+    .filter((r) => !rowHasAnyPrice(r)).length;
   return {
     total: Number(row?.total ?? 0),
     missingImages: Number(row?.missingImages ?? 0),
     missingBarcode: Number(row?.missingBarcode ?? 0),
-    missingPrice: Number(row?.missingPrice ?? 0),
+    missingPrice,
     notExported: Number(row?.notExported ?? 0),
   };
 }

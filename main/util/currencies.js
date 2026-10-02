@@ -44,6 +44,16 @@ function symbolFor(code) {
   return row ? row.symbol : '';
 }
 
+/** The bare amount in the currency's own style: `1,234.50` for USD,
+ *  `41,000` for KHR (whole-number currencies have no decimals). No symbol. */
+function formatAmount(amount, code) {
+  if (amount == null || amount === '') return '';
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return '';
+  const decimals = WHOLE_NUMBER.has(normalizeCurrency(code)) ? 0 : 2;
+  return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
 /** `formatPrice(1234.5, 'USD')` → `$1,234.50`; blank/invalid amount → ''. */
 function formatPrice(amount, code) {
   if (amount == null || amount === '') return '';
@@ -55,4 +65,4 @@ function formatPrice(amount, code) {
   return `${symbolFor(cur)}${num}`;
 }
 
-module.exports = { CURRENCIES, DEFAULT_CURRENCY, isCurrency, normalizeCurrency, symbolFor, formatPrice };
+module.exports = { CURRENCIES, DEFAULT_CURRENCY, isCurrency, normalizeCurrency, symbolFor, formatAmount, formatPrice };

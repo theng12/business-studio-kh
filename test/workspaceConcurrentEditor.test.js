@@ -188,6 +188,12 @@ function settingsPanel(hook) {
   return findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
 }
 
+/* UI pass, 2026-10: the save state and the explicit Save live in the header's
+ * shared SaveStatus (`status` + `onSave`), no longer on the settings panel. */
+function saveBadge(hook) {
+  return findNode(hook.getOutput(), (node) => node.type?.name === 'SaveStatus');
+}
+
 function seed(store, image) {
   store.setState({
     activeProductId: 'product-1',
@@ -467,7 +473,7 @@ async function runConflictChoice(choice) {
   await hook.settle(workspace.Component);
   settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, brightness: 9 });
   await hook.settle(workspace.Component);
-  await settingsPanel(hook).props.onSave();
+  await saveBadge(hook).props.onSave();
   await hook.settle(workspace.Component);
   return { ...workspace, hook, calls };
 }
@@ -477,7 +483,7 @@ test('ImageWorkspace Cancel keeps the dirty draft after an explicit-save conflic
   try {
     assert.equal(settingsPanel(result.hook).props.settings.brightness, 9);
     assert.equal(result.calls.length, 1);
-    assert.equal(settingsPanel(result.hook).props.saveStatus.state, 'error');
+    assert.equal(saveBadge(result.hook).props.status.state, 'error');
   } finally {
     result.hook.cleanup();
   }
@@ -489,7 +495,7 @@ test('ImageWorkspace Refresh adopts fresh settings and revision after an explici
     assert.equal(settingsPanel(result.hook).props.settings.brightness, 7);
     settingsPanel(result.hook).props.onChange({ ...settingsPanel(result.hook).props.settings, brightness: 8 });
     await result.hook.settle(result.Component);
-    await settingsPanel(result.hook).props.onSave();
+    await saveBadge(result.hook).props.onSave();
     assert.equal(result.calls[1][4], 11, 'the next save starts from the refreshed revision');
   } finally {
     result.hook.cleanup();
@@ -527,9 +533,9 @@ test('ImageWorkspace exposes explicit conflict recovery after processing the cur
     await hook.settle(Component);
     await settingsPanel(hook).props.onApplyThis();
     await hook.settle(Component);
-    assert.equal(settingsPanel(hook).props.saveStatus.state, 'error');
+    assert.equal(saveBadge(hook).props.status.state, 'error');
 
-    await settingsPanel(hook).props.onSave();
+    await saveBadge(hook).props.onSave();
     await hook.settle(Component);
 
     assert.equal(calls.length, 1, 'Save retries with the acknowledged revision before offering recovery');
@@ -737,9 +743,9 @@ test('review: a source flip must not leave an unreachable dirty context blocking
     // hash's failure in the global navigation barrier.
     settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, brightness: 8 });
     await hook.settle(Component);
-    await settingsPanel(hook).props.onSave();
+    await saveBadge(hook).props.onSave();
     await hook.settle(Component);
-    assert.equal(settingsPanel(hook).props.saveStatus.state, 'saved');
+    assert.equal(saveBadge(hook).props.status.state, 'saved');
     const selected = await findNode(hook.getOutput(), (node) => node.type?.name === 'ImageStrip').props.onSelect(1);
     assert.equal(selected, true, 'valid current image is saved, but stale original-hash context blocks the strip');
     await Promise.all([...flushers].map((flush) => flush()));
@@ -819,12 +825,12 @@ test('review follow-up: a restored dirty context retries its draft and surfaces 
     await store.getState().refreshWorkspaceImages('product-1');
     await hook.settle(Component);
     assert.equal(settingsPanel(hook).props.settings.brightness, 9);
-    assert.equal(settingsPanel(hook).props.saveStatus.state, 'saving');
+    assert.equal(saveBadge(hook).props.status.state, 'saving');
     // The retry fails (same rejection), and the failure must surface as an
     // error while the draft stays on screen for explicit recovery.
     await delay(600);
     await hook.settle(Component);
-    assert.equal(settingsPanel(hook).props.saveStatus.state, 'error');
+    assert.equal(saveBadge(hook).props.status.state, 'error');
     assert.equal(settingsPanel(hook).props.settings.brightness, 9, 'a failed retry must keep the draft');
   } finally { hook.cleanup(); }
 });
@@ -875,15 +881,15 @@ test('review: cancelling old conflict after remote image removal does not poison
     await hook.settle(Component);
     settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, brightness: 9 });
     await hook.settle(Component);
-    const saving = settingsPanel(hook).props.onSave();
+    const saving = saveBadge(hook).props.onSave();
     await delay(0);
     api.images.listByProduct = async () => [second];
     await store.getState().refreshWorkspaceImages('product-1');
     await hook.settle(Component);
-    assert.equal(settingsPanel(hook).props.saveStatus.state, 'idle');
+    assert.equal(saveBadge(hook).props.status.state, 'idle');
     choice.resolve('cancel');
     await saving;
     await hook.settle(Component);
-    assert.equal(settingsPanel(hook).props.saveStatus.state, 'idle', 'old modal cancellation must leave image B status alone');
+    assert.equal(saveBadge(hook).props.status.state, 'idle', 'old modal cancellation must leave image B status alone');
   } finally { choice.resolve('cancel'); hook.cleanup(); }
 });

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { useAppStore } from '../../store/index.js';
-import { Button, Badge, EmptyState, Modal, Pagination, paginate } from '../../components/ui.jsx';
+import { Button, Badge, EmptyState, Modal, Pagination, paginate, Select } from '../../components/ui.jsx';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { ProfileForm } from './ProfileForm.jsx';
@@ -232,6 +233,26 @@ export function ExportCenter() {
   // null means "no decision pending". Run resumes via runWithMode().
   const [collisionPrompt, setCollisionPrompt] = useState(null);
 
+  // v0.1.89: Cancel for a running export. The store picks the run id before
+  // the run starts and sends it with the request, so Cancel always targets
+  // this screen's own run (never another Mac's).
+  const runId = useAppStore((s) => s.exportRunId);
+  const [cancelling, setCancelling] = useState(false);
+  useEffect(() => {
+    if (!running) setCancelling(false);
+  }, [running]);
+
+  async function handleCancelRun() {
+    if (!runId || cancelling) return;
+    setCancelling(true);
+    try {
+      await window.api.exports.cancel(runId);
+    } catch (err) {
+      setCancelling(false);
+      addToast(err.message, 'error');
+    }
+  }
+
   async function handleRun() {
     try {
       // v0.26.24: ask the backend whether the output folder already
@@ -253,6 +274,10 @@ export function ExportCenter() {
     try {
       const result = await runExport(onExisting);
       const parts = [];
+      if (result.cancelled) {
+        addToast(`Export cancelled — ${result.exported} image${result.exported === 1 ? '' : 's'} written before it stopped`, 'info');
+        return;
+      }
       parts.push(`Exported ${result.exported} image${result.exported === 1 ? '' : 's'}`);
       if (result.replaced > 0) parts.push(`replaced ${result.replaced}`);
       if (result.skippedExisting > 0) parts.push(`kept ${result.skippedExisting} existing`);
@@ -282,56 +307,59 @@ export function ExportCenter() {
       .map((p) => p.id));
   }
 
+  // Why Run export is greyed out, for its tooltip (§18: say what to change).
+  const runBlockedReason = running
+    ? null
+    : !outputRoot ? 'Pick an output folder first'
+      : queueIds.length === 0 ? 'Tick at least one product below'
+        : null;
+  const filterActive = !!(queueSearch || categoryFilter);
+
   return (
     noCompanySelected ? (
       <div className="page">
         <PageHeader title="Export Center" />
-        <EmptyState
-          title="No company selected"
-          body="Create or select a company before exporting."
-          action={<Button variant="primary" onClick={() => setActiveModule('company')}>Go to Company</Button>}
-        />
+        <NoCompanyState purpose="export its product photos" />
       </div>
     ) : (
       <>
     <div className="page page--export">
       <PageHeader
         title="Export Center"
-        subtitle="One profile per run. Unprocessed images are skipped and reported in the summary."
+        subtitle="One profile per run. Each photo uses its processed version when it has one, and the original otherwise."
+        actions={<Button variant="primary" onClick={() => setEditing({})}>+ New profile</Button>}
       />
 
+      {profiles.length === 0 ? (
+        <EmptyState
+          title="No export profiles yet"
+          body="A profile sets the output size, format, colour and file naming. Start from a marketplace preset."
+          action={<Button variant="primary" onClick={() => setEditing({})}>+ New profile</Button>}
+        />
+      ) : (
       <div className="export-layout">
         <aside className="export-profiles">
-          <header className="export-profiles__head">
-            <span className="filter-group__label">Profiles</span>
-            <Button variant="ghost" onClick={() => setEditing({})}>+ New</Button>
-          </header>
-          {profiles.length === 0 ? (
-            <div className="export-profiles__empty">
-              No profiles yet. Create one to set output size, format, and naming.
-            </div>
-          ) : (
-            <ul className="export-profiles__list">
-              {profiles.map((p) => (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    className={`export-profile-card${p.id === selectedId ? ' is-active' : ''}`}
-                    onClick={() => setSelected(p.id)}
-                  >
-                    <div className="export-profile-card__name">{p.name}</div>
-                    <div className="export-profile-card__meta">
-                      {p.width}×{p.height} · {p.format.toUpperCase()} · {p.colorProfile}
-                    </div>
-                  </button>
-                  <div className="export-profile-card__actions">
-                    <button type="button" className="row-action" onClick={() => setEditing(p)}>Edit</button>
-                    <button type="button" className="row-action" onClick={() => handleDuplicate(p.id)}>Duplicate</button>
+          <h2 className="section-title">Profiles</h2>
+          <ul className="export-profiles__list">
+            {profiles.map((p) => (
+              <li key={p.id}>
+                <button
+                  type="button"
+                  className={`export-profile-card${p.id === selectedId ? ' is-active' : ''}`}
+                  onClick={() => setSelected(p.id)}
+                >
+                  <div className="export-profile-card__name">{p.name}</div>
+                  <div className="export-profile-card__meta">
+                    {p.width}×{p.height} · {p.format.toUpperCase()} · {p.colorProfile}
                   </div>
-                </li>
-              ))}
-            </ul>
-          )}
+                </button>
+                <div className="export-profile-card__actions">
+                  <Button variant="ghost" size="sm" onClick={() => setEditing(p)}>Edit</Button>
+                  <Button variant="ghost" size="sm" onClick={() => handleDuplicate(p.id)}>Duplicate</Button>
+                </div>
+              </li>
+            ))}
+          </ul>
         </aside>
 
         <section className="export-main">
@@ -341,7 +369,7 @@ export function ExportCenter() {
                 <div className="export-detail__row">
                   <ProfilePreview profile={selected} products={products} queueSet={queueSet} />
                   <div className="export-detail__title">
-                    <h2>{selected.name}</h2>
+                    <h2 className="section-title">{selected.name}</h2>
                     <div className="export-detail__cards">
                       <DetailCard label="Size"           value={`${selected.width} × ${selected.height}`} />
                       <DetailCard label="Format"         value={`${selected.format.toUpperCase()}${selected.format !== 'png' ? ` · q${selected.quality}` : ''}`} />
@@ -367,8 +395,8 @@ export function ExportCenter() {
                 </div>
                 <div className="export-runbar__folder">
                   <span className="muted">Output folder:</span>{' '}
-                  {outputRoot ? <code>{outputRoot}</code> : <span className="muted">— not set —</span>}
-                  <Button onClick={handlePickOutputFolder}>{outputRoot ? 'Change…' : 'Pick…'}</Button>
+                  {outputRoot ? <code>{outputRoot}</code> : <span className="muted">not set</span>}
+                  <Button size="sm" onClick={handlePickOutputFolder}>{outputRoot ? 'Change…' : 'Pick…'}</Button>
                 </div>
                 {/* v0.31.0: also append the exported (web-size) copy back
                     onto each product as its main image. Flagged dedup-exempt
@@ -381,35 +409,53 @@ export function ExportCenter() {
                   />
                   <span>Also save to product library</span>
                 </label>
+                {running ? (
+                  <Button
+                    onClick={handleCancelRun}
+                    disabled={!runId || cancelling}
+                    title="Stop after the photo being written now. Files already written stay in the folder."
+                  >
+                    {cancelling ? 'Stopping…' : 'Cancel'}
+                  </Button>
+                ) : null}
                 <Button
                   variant="primary"
                   onClick={handleRun}
                   disabled={running || !outputRoot || queueIds.length === 0}
+                  title={runBlockedReason || undefined}
                 >
                   {running ? 'Exporting…' : 'Run export'}
                 </Button>
               </div>
 
               <div className="export-queue">
-                <div className="export-queue__head">
-                  <span className="filter-group__label">
-                    Products ({queueIds.length} / {filteredProducts.length}
-                    {(queueSearch || categoryFilter) ? ' in filter' : ''} selected)
-                  </span>
-                  <div className="export-queue__head-spacer" />
-                  {/* v0.26.28: category filter dropdown. Sits next to
-                      the search box so the two filters compose into the
-                      same `filteredProducts`. "All categories" = no
-                      filter; otherwise products are limited to that
-                      category. The "Select all" button below picks up
-                      the filtered subset automatically — there's no
-                      separate "select filtered" action because
-                      "Select all" already operates on the filtered
-                      list (correct mental model: the toolbar shows
-                      what you're working on, the button selects what
-                      you can see). */}
-                  <select
-                    className="search-input export-queue__cat-filter"
+                <div className="section-head">
+                  <h2 className="section-title">Products</h2>
+                  <p className="section-hint">
+                    {queueIds.length} of {filteredProducts.length}{filterActive ? ' in filter' : ''} selected
+                  </p>
+                </div>
+                <div className="toolbar">
+                  <div className="search-wrap">
+                    <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                      <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
+                      <path d="M9 9l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      type="search"
+                      className="search-input"
+                      aria-label="Search products"
+                      placeholder="Search SKU or name…"
+                      value={queueSearch}
+                      onChange={(e) => { setQueueSearch(e.target.value); setQueuePage(0); }}
+                      spellCheck={false}
+                    />
+                  </div>
+                  {/* v0.26.28: category filter. It composes with the search
+                      into the same `filteredProducts`, and "Select all"
+                      selects what the filter shows. */}
+                  <Select
+                    className="export-queue__cat-filter"
                     value={categoryFilter}
                     onChange={(e) => { setCategoryFilter(e.target.value); setQueuePage(0); }}
                     aria-label="Filter by category"
@@ -418,51 +464,30 @@ export function ExportCenter() {
                     {categories.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
-                  </select>
-                  <div className="search-wrap export-queue__search">
-                    <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <circle cx="6" cy="6" r="4" stroke="currentColor" strokeWidth="1.4" />
-                      <path d="M9 9l3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-                    </svg>
-                    <input
-                      type="text"
-                      className="search-input"
-                      placeholder="Search SKU or name…"
-                      value={queueSearch}
-                      onChange={(e) => { setQueueSearch(e.target.value); setQueuePage(0); }}
-                      spellCheck={false}
-                    />
-                  </div>
-                  <div className="export-queue__actions">
-                    {/* v0.26.28: clearer labels + tooltip on Ready
-                        explaining the rule. Previously the user said
-                        "I don't understand what 'ready' means" — now
-                        the tooltip spells it out, and "Select all"
-                        explicitly says "in filter" when one is active
-                        so the user knows the count reflects their
-                        category/search choices. */}
-                    <Button
-                      variant="ghost"
-                      onClick={selectAll}
-                      title={(queueSearch || categoryFilter)
-                        ? `Select the ${filteredProducts.length} product${filteredProducts.length === 1 ? '' : 's'} matching the current filter`
-                        : `Select every product in the company catalog (${products.length})`}
-                    >
-                      {(queueSearch || categoryFilter) ? `Select all in filter (${filteredProducts.length})` : 'Select all'}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      onClick={selectReadyOnly}
-                      title='"Ready" = has at least one image AND its processing status is "done" (Workspace finished) or "exported" (already exported once). Skips products that are still raw / unprocessed / missing images.'
-                    >Ready only</Button>
-                    {queueIds.length ? (
-                      <Button variant="ghost" onClick={clearExportQueue}>Clear</Button>
-                    ) : null}
-                  </div>
+                  </Select>
+                  <div className="toolbar__spacer" />
+                  {/* v0.26.28: "Ready" is explained in its tooltip, and
+                      "Select all" says "in filter" when one is active. */}
+                  <Button
+                    variant="ghost"
+                    onClick={selectAll}
+                    title={filterActive
+                      ? `Select the ${filteredProducts.length} product${filteredProducts.length === 1 ? '' : 's'} matching the current filter`
+                      : `Select every product in the company catalog (${products.length})`}
+                  >
+                    {filterActive ? `Select all in filter (${filteredProducts.length})` : 'Select all'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={selectReadyOnly}
+                    title='"Ready" = has at least one image AND its processing status is "done" (Workspace finished) or "exported" (already exported once). Skips products that are still raw / unprocessed / missing images.'
+                  >Ready only</Button>
+                  {queueIds.length ? (
+                    <Button variant="ghost" onClick={clearExportQueue}>Clear</Button>
+                  ) : null}
                 </div>
                 {/* Top pagination — keeps page nav accessible without scrolling
-                    past N items first. Same component instance as bottom would
-                    be visually redundant, so the bottom pagination is removed. */}
+                    past N items first. */}
                 {filteredProducts.length > 0 ? (
                   <Pagination
                     total={filteredProducts.length}
@@ -477,60 +502,81 @@ export function ExportCenter() {
                   />
                 ) : null}
                 {products.length === 0 ? (
-                  <div className="export-queue__empty">
-                    No products in this company yet.
-                  </div>
+                  <EmptyState
+                    title="No products yet"
+                    body="Add products in the Product Library, then come back to export their photos."
+                    action={<Button variant="primary" onClick={() => setActiveModule('library')}>Go to Product Library</Button>}
+                  />
                 ) : filteredProducts.length === 0 ? (
-                  <div className="export-queue__empty">
-                    No products match “{queueSearch}”.
-                  </div>
+                  <EmptyState
+                    title="Nothing matches"
+                    body={emptyFilterMessage(queueSearch, categories.find((c) => c.id === categoryFilter)?.name)}
+                    action={<Button onClick={() => { setQueueSearch(''); setCategoryFilter(''); setQueuePage(0); }}>Clear filters</Button>}
+                  />
                 ) : (
-                  <>
-                    <ul className="export-queue__list">
-                      {visibleProducts.map((p) => {
-                        const checked = queueSet.has(p.id);
-                        const total = p.imageCount ?? 0;
-                        const proc = p.processedImageCount ?? 0;
-                        return (
-                          <li key={p.id} className={`export-queue__row${checked ? ' is-selected' : ''}`}>
-                            <input
-                              type="checkbox"
-                              className="export-queue__checkbox"
-                              checked={checked}
-                              onChange={() => toggleQueueProduct(p.id)}
-                              aria-label={`Include ${p.sku} in run`}
-                            />
-                            <div className="export-queue__thumb">
-                              {p.mainImagePath
-                                // v0.1.27: cache-bust (§12) — a re-exported or
-                                // edited main image kept showing the old pixels here.
-                                ? <img src={appImageSrc(p.mainImagePath, p.contentHash || p.updatedAt, { w: 96 })} alt="" loading="lazy" decoding="async" />
-                                : <div className="thumb-placeholder">·</div>}
-                            </div>
-                            <div className="export-queue__col">
-                              <span className="col-sku">{p.sku}</span>
-                              {p.name ? <span className="muted">{p.name}</span> : null}
-                            </div>
-                            <span className="export-queue__count">{p.imageCount}/50</span>
-                            {/* Badge shows what this product will produce on export:
-                                  - Ready: all images already processed (Workspace step done)
-                                  - Mixed: some processed, some raw — exports both
-                                  - Raw:   no processed images, exports raw source as-is
-                                  - No images: genuine skip */}
-                            {total === 0 ? (
-                              <Badge tone="slate">No images</Badge>
-                            ) : proc === total ? (
-                              <Badge tone="emerald">Ready</Badge>
-                            ) : proc > 0 ? (
-                              <Badge tone="amber">Mixed · {proc}/{total} processed</Badge>
-                            ) : (
-                              <Badge tone="amber">Raw</Badge>
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </>
+                  <div className="data-table-wrap">
+                    <table className="data-table export-queue__table">
+                      <thead>
+                        <tr>
+                          <th className="is-check" aria-label="Include" />
+                          <th className="export-queue__thumb-col" aria-label="Image" />
+                          <th>Product</th>
+                          <th className="is-num">Images</th>
+                          <th>Export uses</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleProducts.map((p) => {
+                          const checked = queueSet.has(p.id);
+                          const total = p.imageCount ?? 0;
+                          const proc = p.processedImageCount ?? 0;
+                          return (
+                            <tr key={p.id} className={checked ? 'is-selected' : undefined}>
+                              <td className="is-check">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleQueueProduct(p.id)}
+                                  aria-label={`Include ${p.sku} in run`}
+                                />
+                              </td>
+                              <td className="export-queue__thumb-col">
+                                <div className="export-queue__thumb">
+                                  {p.mainImagePath
+                                    // v0.1.27: cache-bust (§12) — a re-exported or
+                                    // edited main image kept showing the old pixels here.
+                                    ? <img src={appImageSrc(p.mainImagePath, p.contentHash || p.updatedAt, { w: 96 })} alt="" loading="lazy" decoding="async" />
+                                    : <div className="thumb-placeholder">·</div>}
+                                </div>
+                              </td>
+                              <td>
+                                <div className="export-queue__col">
+                                  <span className="col-sku">{p.sku}</span>
+                                  {p.name ? <span className="muted">{p.name}</span> : null}
+                                </div>
+                              </td>
+                              <td className="is-num">{p.imageCount}/50</td>
+                              <td>
+                                {/* What this product will produce on export:
+                                      Ready = all images processed; Mixed = some
+                                      processed, some raw (exports both); Raw = exports
+                                      the source as-is; No images = genuine skip. */}
+                                {total === 0 ? (
+                                  <Badge tone="slate">No images</Badge>
+                                ) : proc === total ? (
+                                  <Badge tone="emerald">Ready</Badge>
+                                ) : proc > 0 ? (
+                                  <Badge tone="amber">Mixed · {proc}/{total} processed</Badge>
+                                ) : (
+                                  <Badge tone="amber">Raw</Badge>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
               </div>
 
@@ -546,17 +592,13 @@ export function ExportCenter() {
             </>
           ) : (
             <EmptyState
-              title={profiles.length === 0 ? 'No export profile yet' : 'Select a profile'}
-              body={profiles.length === 0
-                ? 'Profiles define output size, format, color, and file naming. Start from a marketplace preset.'
-                : 'Pick a profile from the list to configure the queue.'}
-              action={profiles.length === 0
-                ? <Button variant="primary" onClick={() => setEditing({})}>+ New profile</Button>
-                : null}
+              title="Select a profile"
+              body="Pick a profile from the list to set up the export queue."
             />
           )}
         </section>
       </div>
+      )}
 
       <ProfileForm
         open={editing !== null}
@@ -718,6 +760,16 @@ function fmtBytes(n) {
   return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
 }
 
+/** v0.1.89: the empty-list line names whichever filter emptied it. With only
+ *  a category chosen it used to read: No products match “”. */
+export function emptyFilterMessage(search, categoryName) {
+  const q = String(search || '').trim();
+  if (q && categoryName) return `No products in “${categoryName}” match “${q}”.`;
+  if (q) return `No products match “${q}”.`;
+  if (categoryName) return `No products in the category “${categoryName}”.`;
+  return 'No products match these filters.';
+}
+
 function ExportResultPanel({ result }) {
   const grouped = useMemo(() => {
     const m = new Map();
@@ -744,6 +796,18 @@ function ExportResultPanel({ result }) {
         Exported {result.exported} image{result.exported === 1 ? '' : 's'}
         {result.outputPath ? <> to <code>{result.outputPath}</code></> : null}.
       </strong>
+      {result.cancelled ? (
+        <div className="export-result__note">
+          Cancelled before the end. The files listed here were written and stay in the folder; the rest of the queue was not exported.
+        </div>
+      ) : null}
+      {result.renamedInRun > 0 ? (
+        <div className="export-result__note">
+          {result.renamedInRun} file name{result.renamedInRun === 1 ? ' was' : 's were'} used twice in this run, so the later
+          {result.renamedInRun === 1 ? ' copy was' : ' copies were'} saved with -2, -3 … rather than overwriting. Add {'{INDEX}'} to the
+          naming pattern to give each photo its own name.
+        </div>
+      ) : null}
       {total > 0 ? (
         <div className="export-result__size">
           <strong>{fmtBytes(total)}</strong> total

@@ -73,7 +73,10 @@ function findAll(node, predicate, found = []) {
   if (Array.isArray(node)) { for (const child of node) findAll(child, predicate, found); return found; }
   if (typeof node !== 'object') return found;
   if (predicate(node)) found.push(node);
-  findAll(node.props?.children, predicate, found);
+  // `<Field>{({ id }) => <Input id={id} />}</Field>`: the shallow harness never
+  // renders Field, so expand its render-prop child here to reach the control.
+  const children = typeof node.props?.children === 'function' ? node.props.children({ id: 'field' }) : node.props?.children;
+  findAll(children, predicate, found);
   for (const [key, value] of Object.entries(node.props || {})) {
     if (key !== 'children') findAll(value, predicate, found);
   }

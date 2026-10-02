@@ -18,8 +18,10 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Input, Select, EmptyState } from '../../components/ui.jsx';
+import { Input, Select } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
+import { priceEntry, formatPriceEntry } from '../../lib/prices.js';
 
 export function CostCalculator() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
@@ -103,7 +105,8 @@ export function CostCalculator() {
       const m = Number(targetMarginPct) || 0;
       if (m >= 100) { setRetailUsd(''); return; }
       const r = m <= 0 ? cost : cost / (1 - m / 100);
-      setRetailUsd(r.toFixed(4));
+      // A price, so cents — four decimals here read as a typo.
+      setRetailUsd(r.toFixed(2));
     } else if (lastEdited === 'retail') {
       const r = Number(retailUsd) || 0;
       if (r <= 0) { setTargetMarginPct(''); return; }
@@ -123,19 +126,20 @@ export function CostCalculator() {
     }).slice(0, 50);
   }, [products, productSearch]);
 
+  const selectedProduct = productId ? products.find((p) => p.id === productId) || null : null;
   const margin = Number(targetMarginPct) || 0;
   const cost = Number(landedCostUsd) || 0;
   const retail = Number(retailUsd) || 0;
   const profit = retail - cost;
+  // Nothing to report until there is both a cost and a price: before that,
+  // "Realized margin 40.00%" just echoed the target back.
+  const priced = cost > 0 && retail > 0;
 
   if (!activeCompanyId) {
     return (
       <div className="page page--costcalc">
         <PageHeader title="Cost Calculator" />
-        <EmptyState
-          title="No company selected"
-          body="Pick a company from the sidebar to use the cost calculator."
-        />
+        <NoCompanyState purpose="price its products" />
       </div>
     );
   }
@@ -149,16 +153,19 @@ export function CostCalculator() {
 
       <div className="costcalc__layout">
         <section className="po-section">
-          <h3 className="po-section__title">1. Pick a product (optional)</h3>
+          <h2 className="section-title">1. Pick a product <span className="section-hint">optional</span></h2>
           <Input
+            type="search"
+            aria-label="Search products"
             placeholder="Search SKU or name…"
             value={productSearch}
             onChange={(e) => setProductSearch(e.target.value)}
           />
-            <Select
-              value={productId}
-              onChange={(e) => setProductId(e.target.value)}
-            style={{ marginTop: 8 }}
+          <Select
+            className="costcalc__picker"
+            aria-label="Product"
+            value={productId}
+            onChange={(e) => setProductId(e.target.value)}
           >
             <option value="">— manual entry —</option>
             {filteredProducts.map((p) => (
@@ -172,15 +179,28 @@ export function CostCalculator() {
               <CostStat label="12-mo avg" value={fmtUsd(costData.avgLandedCostUsd12mo)} />
             </div>
           )}
+          {selectedProduct && (
+            <div className="costcalc__prices">
+              {['retail', 'wholesale'].map((src) => {
+                const entry = priceEntry(selectedProduct, src);
+                const label = src === 'retail' ? 'Retail' : 'Wholesale';
+                const m = marginAgainst(entry, Number(landedCostUsd) || 0);
+                return [
+                  <CostStat key={`${src}-price`} label={`Current ${label.toLowerCase()}`} value={entry.amount == null ? '—' : formatPriceEntry(entry)} />,
+                  <CostStat key={`${src}-margin`} label={`Margin at ${label.toLowerCase()}`} value={m.text} tone={m.tone} />,
+                ];
+              })}
+            </div>
+          )}
           {productId && !costData && (
-            <p className="muted" style={{ marginTop: 12 }}>
+            <p className="section-hint costcalc__note">
               No received-PO cost history for this product yet — enter the landed cost manually below.
             </p>
           )}
         </section>
 
         <section className="po-section">
-          <h3 className="po-section__title">2. Landed cost</h3>
+          <h2 className="section-title">2. Landed cost</h2>
           <label className="field">
             <span className="field__label">Landed cost per unit (USD) *</span>
             <Input
@@ -200,7 +220,7 @@ export function CostCalculator() {
         </section>
 
         <section className="po-section">
-          <h3 className="po-section__title">3. Margin ↔ Retail</h3>
+          <h2 className="section-title">3. Margin and retail price</h2>
           <div className="form-grid">
             <label className="field">
               <span className="field__label">Target margin %</span>
@@ -229,20 +249,19 @@ export function CostCalculator() {
           </div>
 
           <div className="costcalc__summary">
-            <CostStat label="Profit per unit" value={fmtUsd(profit)} tone={profit >= 0 ? 'emerald' : 'rose'} />
-            <CostStat label="Realized margin" value={`${margin.toFixed(2)}%`} />
+            <CostStat label="Profit per unit" value={priced ? fmtUsd(profit) : '—'} tone={priced ? (profit >= 0 ? 'emerald' : 'rose') : null} />
+            <CostStat label="Realized margin" value={priced ? `${margin.toFixed(2)}%` : '—'} />
             <CostStat
               label="Markup over cost"
-              value={cost > 0 ? `${(((retail - cost) / cost) * 100).toFixed(2)}%` : '—'}
+              value={priced ? `${(((retail - cost) / cost) * 100).toFixed(2)}%` : '—'}
             />
           </div>
         </section>
 
         <section className="po-section">
-          <h3 className="po-section__title">Quick what-ifs</h3>
-          <p className="muted">
-            Try common margin targets against this landed cost — useful when you’re
-            sanity-checking a wholesale vs retail split.
+          <h2 className="section-title">4. Quick what-ifs</h2>
+          <p className="section-hint costcalc__lead">
+            Common margin targets against this landed cost. Click one to use it.
           </p>
           <div className="costcalc__whatif">
             {[20, 25, 30, 35, 40, 45, 50, 55, 60].map((m) => {
@@ -255,7 +274,7 @@ export function CostCalculator() {
                   onClick={() => { setTargetMarginPct(String(m)); setLastEdited('margin'); }}
                 >
                   <span>{m}%</span>
-                  <strong>{fmtUsd(r)}</strong>
+                  <strong>{cost > 0 ? fmtUsd(r) : '—'}</strong>
                 </button>
               );
             })}
@@ -268,11 +287,25 @@ export function CostCalculator() {
 
 function CostStat({ label, value, tone }) {
   return (
-    <div className={`po-stat${tone ? '' : ''}`}>
+    <div className="po-stat">
       <div className="po-stat__label">{label}</div>
       <div className={`po-stat__value${tone ? ` po-stat__value--${tone}` : ''}`}>{value}</div>
     </div>
   );
+}
+
+/**
+ * Margin of a stored price over the landed cost (USD). Landed cost is always
+ * USD, so a price in another currency cannot be compared without a rate —
+ * say so instead of printing a wrong percentage. A price with no currency
+ * (rows from before v0.1.55) is taken as USD, as the rest of the app does.
+ */
+function marginAgainst(entry, cost) {
+  if (!entry || entry.amount == null || entry.amount <= 0) return { text: '—', tone: null };
+  if (entry.currency && entry.currency !== 'USD') return { text: `— (price in ${entry.currency})`, tone: null };
+  if (!(cost > 0)) return { text: '—', tone: null };
+  const pct = ((entry.amount - cost) / entry.amount) * 100;
+  return { text: `${pct.toFixed(1)}%`, tone: pct >= 0 ? 'emerald' : 'rose' };
 }
 
 function fmtUsd(n) {

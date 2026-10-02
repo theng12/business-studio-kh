@@ -1,22 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { Button, EmptyState } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { useCostingCaps } from '../PurchaseOrders/costingCaps.js';
+import { formatDate, timeAgo } from '../../lib/format.js';
 
-function fmtAgo(ts) {
-  if (!ts) return '';
-  const seconds = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (seconds < 60) return 'just now';
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  const months = Math.round(days / 30);
-  return `${months}mo ago`;
-}
+// UI pass, 2026-10: every block on this page is the same card (`.dash-panel`)
+// with the house `.section-title`; times come from lib/format.js.
 
 export function Dashboard() {
   const stats = useAppStore((s) => s.dashboardStats);
@@ -31,6 +22,7 @@ export function Dashboard() {
   const openProductInWorkspace = useAppStore((s) => s.openProductInWorkspace);
   const donateDismissed = useAppStore((s) => s.donateBannerDismissed);
   const dismissDonateBanner = useAppStore((s) => s.dismissDonateBanner);
+  const { canView: canViewCosting } = useCostingCaps();
 
   // Refresh stats whenever the user opens this module.
   useEffect(() => {
@@ -84,8 +76,8 @@ export function Dashboard() {
           the others are at-a-glance counts (no matching filter yet). */}
       {completeness && completeness.total > 0 ? (
         (completeness.missingImages + completeness.missingBarcode + completeness.missingPrice + completeness.notExported) > 0 ? (
-          <section className="dash-attention">
-            <h2 className="dash-attention__title">Needs attention</h2>
+          <section className="dash-panel dash-attention">
+            <h2 className="section-title">Needs attention</h2>
             <div className="dash-attention__row">
               <button
                 type="button"
@@ -100,16 +92,24 @@ export function Dashboard() {
             </div>
           </section>
         ) : (
-          <section className="dash-attention dash-attention--ok">
-            ✓ All {completeness.total} products have an image, barcode, price, and have been exported.
+          <section className="dash-panel dash-attention dash-attention--ok">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M5 8.2l2 2 4-4.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <span>All {completeness.total} products have an image, barcode and price, and have been exported.</span>
           </section>
         )
+      ) : null}
+
+      {canViewCosting ? (
+        <OperationsCard companyId={activeCompanyId} onOpen={() => setActiveModule('purchaseorders')} />
       ) : null}
 
       <div className="dash-grid">
         <section className="dash-panel">
           <header className="dash-panel__head">
-            <h2 className="dash-panel__title">Recent brands</h2>
+            <h2 className="section-title">Recent brands</h2>
             <button type="button" className="dash-panel__link" onClick={() => setActiveModule('brands')}>
               View all →
             </button>
@@ -147,7 +147,7 @@ export function Dashboard() {
 
         <section className="dash-panel">
           <header className="dash-panel__head">
-            <h2 className="dash-panel__title">Recent products</h2>
+            <h2 className="section-title">Recent products</h2>
             <button type="button" className="dash-panel__link" onClick={() => setActiveModule('library')}>
               View all →
             </button>
@@ -176,7 +176,7 @@ export function Dashboard() {
                       {p.name ? <span className="dash-list__name muted">{p.name}</span> : null}
                     </div>
                     <span className="dash-list__meta">{p.imageCount}/50</span>
-                    <span className="dash-list__time">{fmtAgo(p.updatedAt)}</span>
+                    <span className="dash-list__time">{timeAgo(p.updatedAt)}</span>
                   </li>
                 );
               })}
@@ -196,17 +196,85 @@ export function Dashboard() {
             support development with a donation — every bit keeps the app maintained and the
             bugs fixed.
           </span>
-          <Button variant="primary" onClick={() => setActiveModule('support')}>Donate</Button>
+          <Button onClick={() => setActiveModule('support')}>Support this app</Button>
           <button
             type="button"
             className="donate-banner__close"
             aria-label="Dismiss for 7 days"
             title="Dismiss for 7 days"
             onClick={dismissDonateBanner}
-          >×</button>
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+          </button>
         </aside>
       ) : null}
     </div>
+  );
+}
+
+const OPEN_STATUSES = ['draft', 'ordered', 'in_transit'];
+
+/**
+ * F5: what is on order. Reads the existing `pos:list` (costing.view), so it
+ * needs no channel of its own, and refetches when a PO changes anywhere.
+ * Hidden when the company has no purchase orders at all.
+ *
+ * "Owed to suppliers" is each ordered-or-later PO's goods value minus what
+ * has been paid, in the PO's currency, converted at that PO's own rate —
+ * a draft is not a commitment yet, so it is left out.
+ */
+function OperationsCard({ companyId, onOpen }) {
+  const [rows, setRows] = useState(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!window.api?.events?.onCatalogChanged) return undefined;
+    const off = window.api.events.onCatalogChanged((evt) => {
+      if (evt?.kind === 'purchaseOrder') setTick((t) => t + 1);
+    });
+    return typeof off === 'function' ? off : undefined;
+  }, []);
+
+  useEffect(() => {
+    if (!companyId || !window.api?.purchaseOrders?.list) { setRows(null); return undefined; }
+    let cancelled = false;
+    Promise.resolve(window.api.purchaseOrders.list(companyId, { status: 'all' }))
+      .then((list) => { if (!cancelled) setRows(Array.isArray(list) ? list : []); })
+      .catch(() => { if (!cancelled) setRows(null); });
+    return () => { cancelled = true; };
+  }, [companyId, tick]);
+
+  if (!rows || rows.length === 0) return null;
+  const open = rows.filter((po) => OPEN_STATUSES.includes(po.status));
+  const inTransit = rows.filter((po) => po.status === 'in_transit');
+  const etas = inTransit.map((po) => Number(po.eta)).filter((t) => t > 0);
+  const nextEta = etas.length ? Math.min(...etas) : null;
+  const owedUsd = rows
+    .filter((po) => po.status !== 'draft')
+    .reduce((sum, po) => {
+      const outstanding = (Number(po.totalValueSupplier) || 0) - (Number(po.totalPaidSupplier) || 0);
+      return sum + Math.max(0, outstanding) * (Number(po.exchangeRateToUsd) || 0);
+    }, 0);
+
+  return (
+    <section className="dash-panel dash-attention dash-ops">
+      <h2 className="section-title">Operations</h2>
+      <div className="dash-attention__row">
+        <button type="button" className="dash-attention__chip" onClick={onOpen}>
+          <strong>{open.length}</strong> open purchase order{open.length === 1 ? '' : 's'}
+        </button>
+        <button type="button" className="dash-attention__chip" onClick={onOpen}>
+          <strong>{inTransit.length}</strong> in transit
+          {nextEta ? <> · next ETA {formatDate(nextEta)}</> : null}
+        </button>
+        <button type="button" className="dash-attention__chip" onClick={onOpen}>
+          <strong>${owedUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> owed to suppliers
+        </button>
+      </div>
+      <p className="dash-ops__note">Owed is goods value minus payments, at each PO’s own exchange rate.</p>
+    </section>
   );
 }
 

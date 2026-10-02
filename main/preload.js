@@ -364,8 +364,9 @@ contextBridge.exposeInMainWorld('api', {
     duplicateProfile:(id)                => invoke('exports:duplicateProfile', id),
     filenamePreview: (profileId, productId, imageIndex) =>
       invoke('exports:filenamePreview', { profileId, productId, imageIndex }),
-    run: (profileId, productIds, outputRoot, onExisting, saveToLibrary) =>
-      invoke('exports:run', { profileId, productIds, outputRoot, onExisting, saveToLibrary }),
+    // `runId` is chosen by the caller so Cancel can target exactly this run.
+    run: (profileId, productIds, outputRoot, onExisting, saveToLibrary, runId) =>
+      invoke('exports:run', { profileId, productIds, outputRoot, onExisting, saveToLibrary, runId }),
     // v0.26.24: dry-run collision check. Returns
     // { totalExpected, collisionCount, sampleCollisions: [{name, sku}] }
     // The renderer calls this BEFORE run so it can pop a modal
@@ -373,6 +374,9 @@ contextBridge.exposeInMainWorld('api', {
     checkCollisions: (profileId, productIds, outputRoot) =>
       invoke('exports:checkCollisions', { profileId, productIds, outputRoot }),
     listRuns: (limit) => invoke('exports:listRuns', limit),
+    // v0.1.89: stop a running export after the image in progress. `runId`
+    // is the id the caller passed to `run`.
+    cancel: (runId) => invoke('exports:cancel', runId),
     // v0.36.0: catalog CSV/feed export. Returns { csv, count, filename }.
     catalogCsv: (companyId, format) => invoke('exports:catalogCsv', { companyId, format }),
   },
@@ -478,6 +482,7 @@ contextBridge.exposeInMainWorld('api', {
     duplicateTemplate: (id) => invoke('catalogStudio:duplicateTemplate', { id }),
     previewTemplate: (config, name, sampleLimit) => invoke('catalogStudio:previewTemplate', { config, name, sampleLimit }),
     exportPdf: (id, outputFolder) => invoke('catalogStudio:export', { id, outputFolder }),
+    print: (id) => invoke('catalogStudio:print', { id }),
   },
   /* v0.1.25: Social Grid — square product-grid images for social posts.
    * These channel names are what the server-mode reachability test reads out

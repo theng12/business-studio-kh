@@ -46,6 +46,7 @@ const MUST_BE_LOCAL = [
   'labels:openOutput',         // opens a file in Finder
   'labels:generate',           // writes outputFolder (and can print)
   'labels:print',              // prints on this Mac's printer
+  'catalogStudio:print',       // prints on this Mac's printer
   'catalogStudio:export',      // writes outputFolder
   'socialGrid:export',         // writes outputFolder
   'templates:applyToExternal', // reads inputPaths, writes outputFolder

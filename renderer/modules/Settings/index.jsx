@@ -272,11 +272,11 @@ export function Settings() {
 
         {tab === 'multi-mac' && (
         <div className="settings-page">
-        <h2 className="settings-section-heading">Multi-Mac (beta)</h2>
+        <h2 className="section-title">Multi-Mac (beta)</h2>
 
         <SettingRow
           label="Mode"
-          hint="Standalone: this Mac only (default). Server: this Mac hosts data for other Macs over the network. Client: this Mac is a thin frontend for a remote server. Changing mode restarts the app. Networking ships across v0.14.x — v0.14.0 is the foundation only."
+          hint="Standalone: this Mac only (the default). Server: this Mac keeps the data and shares it with your other Macs and the phone viewer. Client: this Mac works on another Mac's data over the network. Changing mode restarts the app."
         >
           <ModeSegment config={config} addToast={addToast} />
         </SettingRow>
@@ -295,7 +295,7 @@ export function Settings() {
            * token. They are always shown now; this heading appears only
            * outside client mode so the two cases don't look duplicated. */
           <div id="client-connection">
-            <h3 className="settings-subsection-heading">Client connection</h3>
+            <h2 className="section-title">Client connection</h2>
             <p className="settings-note" role="note">
               Fill in the server address and user token here <strong>before</strong> switching
               Mode to Client — client mode cannot start without them. These fields are
@@ -315,7 +315,7 @@ export function Settings() {
             from per-mode setup. */}
         {config.mode !== 'client' ? (
           <>
-            <h3 className="settings-subsection-heading">Migration</h3>
+            <h2 className="section-title">Migration</h2>
             <MigrationPanel config={config} addToast={addToast} />
           </>
         ) : null}
@@ -324,7 +324,7 @@ export function Settings() {
 
         {tab === 'general' && (
         <div className="settings-page">
-        <h2 className="settings-section-heading">General</h2>
+        <h2 className="section-title">General</h2>
 
         <SettingRow
           label="Theme"
@@ -368,11 +368,6 @@ export function Settings() {
           </Select>
         </SettingRow>
 
-        {/* v0.1.55: custom price groups. This is where a "custom price" is
-            defined — it becomes an extra amount + currency on every product. */}
-        <h3 className="settings-subsection-heading">Price groups</h3>
-        <PriceGroupsPanel />
-
         <SettingRow
           label="Data folder"
           hint="SQLite database and image assets live here. Changing the folder restarts the app. Point at a folder on iCloud Drive (or any cloud-synced folder) to share data across Macs — see notes below."
@@ -388,9 +383,19 @@ export function Settings() {
           <div className="setting-control-row">
             <Input value={config.dataDir} readOnly onChange={() => {}} />
             {config.dataDirIsCloud ? (
-              <span className="data-folder-tag data-folder-tag--cloud" title="This folder is inside iCloud Drive">☁ iCloud</span>
+              <span className="data-folder-tag data-folder-tag--cloud" title="This folder is inside iCloud Drive">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M3.5 9.5a2.25 2.25 0 0 1-.3-4.48A3 3 0 0 1 9 4.6a2.45 2.45 0 0 1-.25 4.9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                </svg>
+                iCloud
+              </span>
             ) : (
-              <span className="data-folder-tag data-folder-tag--local" title="This folder is on local disk only">📁 Local</span>
+              <span className="data-folder-tag data-folder-tag--local" title="This folder is on local disk only">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                  <path d="M1.5 3.5a1 1 0 0 1 1-1h2.3l1 1.2h3.7a1 1 0 0 1 1 1v4.3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+                </svg>
+                Local
+              </span>
             )}
             <Button onClick={() => window.api.app.openDataFolder().catch((e) => addToast(e.message, 'error'))}>Open</Button>
             <Button onClick={handleChangeDataFolder}>Change…</Button>
@@ -408,6 +413,10 @@ export function Settings() {
             </div>
           ) : null}
         </SettingRow>
+
+        {/* UI pass, 2026-10: the background-removal rows are their own
+            section, so they no longer read as more "General" rows. */}
+        <h2 className="section-title">Background removal</h2>
 
         {/* v0.49.33: the "Background removal engine" picker (local vs
             remove.bg API) was removed along with the paid engine
@@ -462,12 +471,20 @@ export function Settings() {
             The local @imgly model is now the only background-removal
             path; it doesn't need an API key or a monthly counter. */}
 
+        {/* v0.1.55: custom price groups. This is where a "custom price" is
+            defined — it becomes an extra amount + currency on every product.
+            UI pass, 2026-10: its own section at the end of the tab; it used
+            to sit between Default export profile and Data folder, so Data
+            folder looked like part of Price groups. */}
+        <h2 className="section-title">Price groups</h2>
+        <PriceGroupsPanel />
+
         </div>
         )}
 
         {tab === 'library' && (
         <div className="settings-page">
-        <h2 className="settings-section-heading">Product Library</h2>
+        <h2 className="section-title">Product Library</h2>
 
         <SettingRow
           label="Hover preview"
@@ -481,7 +498,7 @@ export function Settings() {
 
         {tab === 'categories' && (
         <div className="settings-page">
-          <h2 className="settings-section-heading">Categories</h2>
+          <h2 className="section-title">Categories</h2>
           {/* v0.22.14: dedicated Settings tab. CategoriesBody is the
               same component that used to render as a stand-alone page —
               autofocuses its add input on mount so users immediately
@@ -493,7 +510,7 @@ export function Settings() {
 
         {tab === 'ai' && (
         <div className="settings-page">
-        <h2 className="settings-section-heading">AI Generation</h2>
+        <h2 className="section-title">AI Generation</h2>
 
         {/* v0.1.21: API keys and concurrency belong to whichever Mac RUNS the
             generations — in client mode that is the server Mac, so editing them
@@ -616,12 +633,14 @@ export function Settings() {
 
         {tab === 'roles' && (
         <div className="settings-page">
+          <h2 className="section-title">Roles &amp; permissions</h2>
           <RolesPanel addToast={addToast} />
         </div>
         )}
 
         {tab === 'about' && (
         <div className="settings-page">
+        <h2 className="section-title">About</h2>
         <AboutCard versionInfo={versionInfo} />
         </div>
         )}
@@ -809,7 +828,7 @@ function CustomPresetEditor({ config, onChange }) {
   return (
     <div className="settings-list-control">
       {presets.length === 0 ? (
-        <p className="setting-row__hint" style={{ marginTop: 0 }}>No custom presets yet.</p>
+        <p className="setting-row__hint">No custom presets yet.</p>
       ) : (
         <ul className="settings-list">
           {presets.map((p) => (
@@ -868,7 +887,7 @@ function HoverPreviewSegment() {
     saveHoverPreview(next);
   }
   return (
-    <div className="ws-toolbar__group" style={{ alignSelf: 'flex-start' }}>
+    <div className="segments" style={{ alignSelf: 'flex-start' }}>
       <button
         type="button"
         className={`segment${on ? ' is-active' : ''}`}
@@ -892,7 +911,7 @@ function ThemeSegment() {
     { value: 'system', label: 'System' },
   ];
   return (
-    <div className="ws-toolbar__group" style={{ alignSelf: 'flex-start' }}>
+    <div className="segments" style={{ alignSelf: 'flex-start' }}>
       {opts.map((o) => (
         <button
           key={o.value}

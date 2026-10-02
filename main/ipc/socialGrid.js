@@ -32,7 +32,7 @@ const templates = require('../db/socialGridTemplates');
 const productsDb = require('../db/products');
 const brandsDb = require('../db/brands');
 const companies = require('../db/companies');
-const { buildPageHtml, seriesSlug, fileNameFor } = require('../socialGridRenderer');
+const { buildPageHtml, seriesSlug, freeSeriesSlug, fileNameFor } = require('../socialGridRenderer');
 const { assetDataUri } = require('../studioRenderer');
 const { withWindow } = require('../renderWindow');
 const events = require('../events');
@@ -240,7 +240,11 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     const ext = ctx.config.format === 'jpeg' ? 'jpg' : 'png';
     // One naming implementation, shared with the renderer's own tests: a
     // title if there is one, otherwise the first product's name.
-    const slug = seriesSlug(pages[0], ctx.config);
+    // v0.1.89: never overwrite an earlier export — a second "Export images"
+    // into the same folder used to replace the first set silently. The whole
+    // series moves to `name-2-01.png …` if any of its names is taken.
+    const slug = freeSeriesSlug(seriesSlug(pages[0], ctx.config), pages.length, ext,
+      (name) => fs.existsSync(path.join(outputFolder, name)));
     const opId = `social-${Date.now()}`;
     const made = [];
     events.broadcast('progress:event', { id: opId, kind: 'socialGrid', done: 0, total: pages.length, phase: 'rendering', label: slug });
@@ -248,7 +252,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       for (let i = 0; i < pages.length; i += 1) {
         const bytes = await renderPageBytes(pages[i], ctx.brands, ctx.config, i, pages.length, ctx.config.format, ctx.config.quality);
         const target = path.join(outputFolder, fileNameFor(slug, i, pages.length, ext));
-        await fs.promises.writeFile(target, bytes);
+        // 'wx': refuse rather than overwrite if something appeared meanwhile.
+        await fs.promises.writeFile(target, bytes, { flag: 'wx' });
         made.push(target);
         events.broadcast('progress:event', { id: opId, kind: 'socialGrid', done: i + 1, total: pages.length, phase: 'rendering', label: slug });
       }

@@ -63,6 +63,15 @@ function nullableCompanyId() {
 }
 
 /** Combinator: args must be a string id. Many handlers take just a string. */
+/** v0.1.89: the History page's date-range and text filters. */
+function auditFeedFilters(a) {
+  if (a.since != null && !isNumber(a.since)) return 'since must be a number';
+  if (a.until != null && !isNumber(a.until)) return 'until must be a number';
+  if (a.q     != null && !isString(a.q))     return 'q must be a string';
+  if (isString(a.q) && a.q.length > 200)     return 'q too long (max 200 characters)';
+  return true;
+}
+
 function requireStringArg(label = 'id') {
   return (args) => isString(args) ? true : `${label} must be a string`;
 }
@@ -93,6 +102,13 @@ function requireNonEmptyStringFields(...names) {
     }
     return true;
   };
+}
+
+/** Optional export run id chosen by the renderer (see main/ipc/exports.js). */
+function optionalRunId(v) {
+  if (v == null) return true;
+  if (!isString(v) || !/^[A-Za-z0-9_-]{1,100}$/.test(v)) return 'runId must be 1-100 letters, digits, - or _';
+  return true;
 }
 
 /** Combinator: args must be a string id OR an object with the field. */
@@ -309,11 +325,13 @@ const VALIDATORS = {
   'exports:updateProfile':  requireFields('id', 'patch'),
   'exports:removeProfile':  requireStringArg('profile id'),
   'exports:duplicateProfile': requireStringArg('profile id'),
+  // v0.1.89: the run id is the export's progress-event id.
+  'exports:cancel':         requireStringArg('export run id'),
   'exports:runForClient':   (a) => {
     if (!isObject(a)) return 'expected object';
     if (!isString(a.profileId)) return 'profileId required';
     if (!isArray(a.productIds)) return 'productIds must be an array';
-    return true;
+    return optionalRunId(a.runId);
   },
   // v0.26.40: added during the audit. Collisions check takes a
   // user-controlled outputRoot string — validating shape so a
@@ -496,14 +514,14 @@ const VALIDATORS = {
     if (a.offset != null && !isNumber(a.offset)) return 'offset must be a number';
     if (a.entityType != null && !isString(a.entityType)) return 'entityType must be a string';
     if (a.userId     != null && !isString(a.userId))     return 'userId must be a string';
-    return true;
+    return auditFeedFilters(a);
   },
   'audit:countRecent': (a) => {
     if (a == null) return true;
     if (!isObject(a)) return 'expected object';
     if (a.entityType != null && !isString(a.entityType)) return 'entityType must be a string';
     if (a.userId     != null && !isString(a.userId))     return 'userId must be a string';
-    return true;
+    return auditFeedFilters(a);
   },
 
   /* ─── v0.1.14: domains that previously had NO validation at all ──
@@ -571,6 +589,7 @@ const VALIDATORS = {
   'catalogStudio:duplicate': requireFields('id'),
   'catalogStudio:preview':   requireFields('id'),
   'catalogStudio:export':    requireFields('id', 'outputFolder'),
+  'catalogStudio:print':     requireNonEmptyStringFields('id'),
   // v0.1.63 catalog templates. The config blob is normalized server-side by
   // main/util/catalogModel.js, so only its TYPE is checked here.
   'catalogStudio:listTemplates': (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
@@ -999,7 +1018,10 @@ const VALIDATORS = {
   'images:autoMatchBySku':       requireNonEmptyStringFields('companyId', 'folderPath'),
 
   /* export — runs in-process and writes to a local folder */
-  'exports:run':                 requireNonEmptyStringFields('profileId'),
+  'exports:run': (a) => {
+    const base = requireNonEmptyStringFields('profileId')(a);
+    return base === true ? optionalRunId(a.runId) : base;
+  },
 };
 
 function getValidator(channel) {

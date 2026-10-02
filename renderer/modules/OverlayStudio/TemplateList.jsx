@@ -9,9 +9,9 @@ import { confirm } from '../../components/ConfirmModal.jsx';
  * the Library and Export Center. Each card shows name, size, element
  * count, and tags, plus Edit / Duplicate / Delete actions.
  *
- * Templates are app-global so no per-company scoping here. The "Apply to
- * products" CTA (Phase 3) will live on individual cards once the batch
- * runner ships — leaving a placeholder for now.
+ * Templates are app-global so no per-company scoping here. Applying a
+ * template happens from the editor's "Apply…" or the Library's bulk
+ * actions; the card used to carry a placeholder "Apply…" that did nothing.
  */
 export function TemplateList({ templates, activeCompanyId, onOpen, onDuplicate, onDelete }) {
   const [search, setSearch] = useState('');
@@ -68,7 +68,7 @@ export function TemplateList({ templates, activeCompanyId, onOpen, onDuplicate, 
         <div className="ovl-list__empty">No templates match “{search}”.</div>
       ) : (
         <>
-          <div className="ovl-list__grid">
+          <div className="card-grid card-grid--compact">
             {visible.map((t) => (
               <TemplateCard
                 key={t.id}
@@ -76,7 +76,6 @@ export function TemplateList({ templates, activeCompanyId, onOpen, onDuplicate, 
                 onOpen={() => onOpen(t.id)}
                 onDuplicate={() => onDuplicate(t.id)}
                 onDelete={() => handleDelete(t)}
-                disabledApply={!activeCompanyId}
               />
             ))}
           </div>
@@ -96,17 +95,17 @@ export function TemplateList({ templates, activeCompanyId, onOpen, onDuplicate, 
   );
 }
 
-function TemplateCard({ template, onOpen, onDuplicate, onDelete, disabledApply }) {
+function TemplateCard({ template, onOpen, onDuplicate, onDelete }) {
   const elementCount = Array.isArray(template.elements) ? template.elements.length : 0;
   const typeCounts = (template.elements ?? []).reduce((acc, el) => {
     acc[el.type] = (acc[el.type] ?? 0) + 1;
     return acc;
   }, {});
   return (
-    <div className="ovl-card">
+    <div className="card">
       <button
         type="button"
-        className="ovl-card__preview"
+        className="card__media ovl-card__preview"
         onClick={onOpen}
         title="Edit template"
         style={{ aspectRatio: `${template.canvasWidth} / ${template.canvasHeight}` }}
@@ -126,33 +125,24 @@ function TemplateCard({ template, onOpen, onDuplicate, onDelete, disabledApply }
           )}
         </div>
       </button>
-      <div className="ovl-card__body">
-        <div className="ovl-card__name">{template.name}</div>
-        <div className="ovl-card__meta">
+      <div className="card__body">
+        <h3 className="card__title">{template.name}</h3>
+        <p className="card__meta">
           {template.canvasWidth} × {template.canvasHeight}
           {' · '}
           {elementCount} element{elementCount === 1 ? '' : 's'}
-        </div>
+        </p>
         {Array.isArray(template.tags) && template.tags.length > 0 ? (
           <div className="ovl-card__tags">
             {template.tags.map((tag) => <span key={tag} className="ovl-card__tag">{tag}</span>)}
           </div>
         ) : null}
       </div>
-      <div className="ovl-card__actions">
-        <Button onClick={onOpen}>Edit</Button>
-        <Button onClick={onDuplicate}>Duplicate</Button>
-        <Button
-          disabled={disabledApply}
-          title={disabledApply ? 'Pick a company first' : 'Apply to products (Phase 3)'}
-        >Apply…</Button>
-        <button
-          type="button"
-          className="row-action ovl-card__delete"
-          onClick={onDelete}
-          title="Delete"
-          aria-label="Delete template"
-        >×</button>
+      {/* docs/UI_GUIDE.md cards: primary first, outlined next, danger last. */}
+      <div className="card__actions">
+        <Button variant="primary" size="sm" onClick={onOpen}>Edit</Button>
+        <Button size="sm" onClick={onDuplicate}>Duplicate</Button>
+        <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>
       </div>
     </div>
   );

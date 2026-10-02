@@ -5,7 +5,7 @@ const { getDataDir } = require('./db');
 const products = require('./db/products');
 const productImages = require('./db/productImages');
 const brands = require('./db/brands');
-const { slugify } = require('./util/slug');
+const { slugifyUnicode } = require('./util/slug');
 const { formatIndexToken } = require('./util/exportIndex');
 const { logSoftFailure } = require('./util/softFailure');
 
@@ -13,9 +13,14 @@ const { logSoftFailure } = require('./util/softFailure');
 
 // Export-filename tokens want empty-string when the source value is missing
 // so the surrounding separator collapses naturally — keep that semantics
-// by passing fallback '' (the default) through to the shared slugify.
+// by passing fallback '' (the default) through.
+//
+// v0.1.89: Unicode-aware. The ASCII-only `slugify` turned a Khmer {NAME} or
+// {BRAND} into an empty string, so `{NAME}-{INDEX}` became `001.jpg` for
+// every product in the run. Asset folders keep the ASCII rule; only the
+// names a person reads use this one.
 function slugifyFilename(value) {
-  return slugify(value, '');
+  return slugifyUnicode(value, '');
 }
 
 function todayStr() {
@@ -70,10 +75,17 @@ function buildFilename(pattern, ctx) {
   return name;
 }
 
-function uniqueOutputPath(dir, base, ext) {
+/** Key for the in-run "already written" set. The Mac's disk is
+ *  case-insensitive, so `A.jpg` and `a.jpg` are the same file. */
+function claimKey(absPath) {
+  return path.resolve(absPath).normalize('NFC').toLowerCase();
+}
+
+function uniqueOutputPath(dir, base, ext, claimed = null, exists = fs.existsSync) {
+  const taken = (p) => exists(p) || (claimed ? claimed.has(claimKey(p)) : false);
   let candidate = path.join(dir, `${base}${ext}`);
   let i = 2;
-  while (fs.existsSync(candidate)) {
+  while (taken(candidate)) {
     candidate = path.join(dir, `${base}-${i}${ext}`);
     i += 1;
   }
@@ -97,13 +109,25 @@ function uniqueOutputPath(dir, base, ext) {
  * Default mode 'keepBoth' preserves the pre-v0.26.24 behaviour so the
  * exporter is backward-compatible if a caller forgets to specify.
  */
-function resolveOutputPath(dir, base, ext, mode = 'keepBoth') {
+/*
+ * v0.1.89: `claimed` is the set of paths THIS run has already written
+ * (see claimKey). The collision policy is about files that were in the folder
+ * before the run started; a name this run produced twice — a pattern with no
+ * {INDEX}, or two products whose names slug the same — is never a "replace"
+ * or a "skip". Before this, image 2 overwrote image 1 under Replace, and was
+ * dropped under Skip. A repeat inside the run is always kept, with a suffix,
+ * and reported as `inRun: true`.
+ */
+function resolveOutputPath(dir, base, ext, mode = 'keepBoth', claimed = null, exists = fs.existsSync) {
   const direct = path.join(dir, `${base}${ext}`);
-  if (!fs.existsSync(direct)) return { outPath: direct, action: 'write' };
+  if (claimed && claimed.has(claimKey(direct))) {
+    return { outPath: uniqueOutputPath(dir, base, ext, claimed, exists), action: 'keepBoth', inRun: true };
+  }
+  if (!exists(direct)) return { outPath: direct, action: 'write' };
   if (mode === 'replace') return { outPath: direct, action: 'replace' };
   if (mode === 'skip')    return { outPath: direct, action: 'skip' };
   // keepBoth: suffix until free
-  return { outPath: uniqueOutputPath(dir, base, ext), action: 'keepBoth' };
+  return { outPath: uniqueOutputPath(dir, base, ext, claimed, exists), action: 'keepBoth' };
 }
 
 /**
@@ -144,6 +168,11 @@ function expectedOutputs({ profile, productIds }) {
             : '.jpg';
   const dateStr = todayStr();
   const entries = [];
+  // Names this run would produce more than once get the same `-2`, `-3`
+  // suffix the real run gives them, so the preview never reports a
+  // "collision" with a file the run itself is about to write.
+  const claimed = new Set();
+  const never = () => false;
   for (const productId of productIds) {
     const product = products.get(productId);
     if (!product) continue;
@@ -152,7 +181,9 @@ function expectedOutputs({ profile, productIds }) {
     for (let i = 0; i < images.length; i++) {
       const ctx = { product, brand, imageIndex: i, dateStr, profile };
       const base = buildFilename(profile.namingPattern || '{SKU}-{INDEX}', ctx);
-      const filename = `${base}${ext}`;
+      const { outPath } = resolveOutputPath('/', base, ext, 'keepBoth', claimed, never);
+      claimed.add(claimKey(outPath));
+      const filename = path.basename(outPath);
       const rel = subfolder ? path.join(subfolder, filename) : filename;
       entries.push({ rel, sku: product.sku });
     }
@@ -259,7 +290,7 @@ async function processOneImage({ sourceAbs, profile, outPath }) {
  *   backward compatibility with callers that haven't been updated.
  * @returns {Promise<{exported: number, skipped: number, replaced: number, products: number, outputPath: string, skips: Array<{sku, reason}>}>}
  */
-async function runExport({ profile, productIds, outputRoot, onProgress, onExisting = 'keepBoth', saveToLibrary = false }) {
+async function runExport({ profile, productIds, outputRoot, onProgress, onExisting = 'keepBoth', saveToLibrary = false, isCancelled = null }) {
   if (!profile) throw new Error('Profile is required');
   if (!outputRoot) throw new Error('Output folder is required');
   if (!Array.isArray(productIds) || productIds.length === 0) {
@@ -297,8 +328,21 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
   // mid-loop would renumber on-disk files and invalidate the source paths
   // we still need to read). Map: productId → [outFile, …] in export order.
   const toLibrary = saveToLibrary ? new Map() : null;
+  // v0.1.89: paths written by this run, and how many names repeated inside it.
+  const claimed = new Set();
+  let renamedInRun = 0;
+  // v0.1.89: Cancel. Checked before each image, so the image being encoded
+  // finishes (a half-written file is worse than one more image) and nothing
+  // after it starts. What was written stays written and is reported.
+  let cancelled = false;
+  let productsDone = 0;
+  const cancelRequested = () => {
+    if (!cancelled && typeof isCancelled === 'function' && isCancelled()) cancelled = true;
+    return cancelled;
+  };
 
   for (let p = 0; p < productIds.length; p++) {
+    if (cancelRequested()) break;
     const productId = productIds[p];
     const product = products.get(productId);
     if (!product) {
@@ -318,6 +362,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
     }
 
     for (let i = 0; i < images.length; i++) {
+      if (cancelRequested()) break;
       const img = images[i];
 
       // Export is now pass-through: use the processed file when one exists,
@@ -362,7 +407,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       const base = buildFilename(profile.namingPattern || '{SKU}-{INDEX}', ctx);
       // v0.26.24: collision-aware resolver. Returns { outPath, action }
       // where action drives the per-iteration branch below.
-      const { outPath: outFile, action } = resolveOutputPath(outputPath, base, ext, onExisting);
+      const { outPath: outFile, action, inRun } = resolveOutputPath(outputPath, base, ext, onExisting, claimed);
 
       if (action === 'skip') {
         // File already exists at the canonical path and user chose
@@ -379,6 +424,10 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
         continue;
       }
 
+      // Claimed before the encode, so a failed write still reserves the
+      // name and the next image does not try to land on a half-written file.
+      claimed.add(claimKey(outFile));
+      if (inRun) renamedInRun++;
       try {
         await processOneImage({ sourceAbs, profile, outPath: outFile });
         exported++;
@@ -407,6 +456,10 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
         });
       }
     }
+
+    // A product cut short by Cancel is not "exported".
+    if (cancelled) break;
+    productsDone++;
 
     // Flip the product to "exported" if it had processed images.
     if (images.some((im) => im.isProcessed)) {
@@ -468,6 +521,12 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
     products: productIds.length,
     outputPath,
     skips,
+    // v0.1.89: names this run produced twice, kept with a -2, -3 suffix.
+    renamedInRun,
+    // v0.1.89: Cancel. `productsDone` = products whose images all went
+    // through before the stop; `exported` is still the count of files written.
+    cancelled,
+    productsDone,
     // v0.30.0: output size summary (bytes). avg = totalBytes / exported.
     totalBytes,
     minBytes: Number.isFinite(minBytes) ? minBytes : 0,
@@ -475,4 +534,4 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
   };
 }
 
-module.exports = { runExport, buildFilename, slugifyFilename, previewCollisions, expectedOutputs };
+module.exports = { runExport, buildFilename, slugifyFilename, previewCollisions, expectedOutputs, resolveOutputPath, claimKey };

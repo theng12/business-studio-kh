@@ -23,6 +23,7 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button } from '../../components/ui.jsx';
+import { timeAgo } from '../../lib/format.js';
 import { confirm } from '../../components/ConfirmModal.jsx';
 
 // Pretty-print helpers — only used by this panel.
@@ -32,21 +33,6 @@ function formatBytesShort(n) {
   let i = 0; let v = n;
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
-}
-function formatAgo(ts) {
-  if (!ts) return '—';
-  const diff = Date.now() - Number(ts);
-  if (diff < 0) return 'just now';
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min} min ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} hr ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
-  const mo = Math.floor(day / 30);
-  return `${mo} mo ago`;
 }
 
 export function BgModelCachePanel() {
@@ -136,7 +122,7 @@ export function BgModelCachePanel() {
         <div className="bg-cache-panel__stat">
           <div className="bg-cache-panel__stat-label">Last activity</div>
           <div className="bg-cache-panel__stat-value">
-            {loading ? '…' : formatAgo(info?.mostRecentMtime)}
+            {loading ? '…' : (info?.mostRecentMtime ? timeAgo(info.mostRecentMtime) : '—')}
           </div>
         </div>
       </div>

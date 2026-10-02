@@ -21,6 +21,7 @@ const path = require('node:path');
 const config = require('../config');
 const companies = require('../db/companies');
 const { logSoftFailure } = require('../util/softFailure');
+const { trashPathInBackground } = require('../util/fileTrash');
 const products = require('../db/products');
 const productImages = require('../db/productImages');
 const aiTasks = require('../db/aiTasks');
@@ -198,13 +199,17 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
     if (!entry) throw new Error('Gallery entry not found');
     if (entry.productId) assertProductInActiveCompany(entry.productId);
     else if (entry.companyId !== companies.getActiveId()) throw new Error('Cross-company access denied');
-    // Also unlink the file on disk (best-effort) so deleted bulk
-    // results don't pile up untouched in ai-gallery/_bulk/.
-    try {
+    // The row goes first; the file then moves to the Mac's Trash so deleted
+    // results don't pile up in ai-gallery/_bulk/ — but it is never erased
+    // (HANDOFF: "A delete in this app moves files to the Trash"). Finder's
+    // Put Back recovers a picture deleted by mistake. A promoted copy is
+    // unaffected: promoting imports its own copy of the bytes.
+    const removed = aiGallery.remove(id);
+    if (entry.filepath) {
       const abs = path.join(getDataDir(), entry.filepath);
-      if (fs.existsSync(abs)) fs.unlinkSync(abs);
-    } catch (_) { /* swallow — DB row removal is the source of truth */ }
-    return aiGallery.remove(id);
+      trashPathInBackground(abs);
+    }
+    return removed;
   });
 
   /**

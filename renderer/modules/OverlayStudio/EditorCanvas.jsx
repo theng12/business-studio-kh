@@ -5,15 +5,40 @@ import { renderBarcodeSVG, formatBarcodeText } from './barcodePreview.js';
 import {
   fitForElement, BACKDROP_FIT, INSET_BLUR_FIT, INSET_FOREGROUND_FIT,
 } from './overlayFit.js';
+import { previewMaxPx, createLatestGuard } from './overlayCanvas.js';
 
 /**
- * v0.1.4: longest side of the server-rendered "truthful" preview, in px.
- * The editor displays the canvas at roughly 450–700px depending on the
- * window, so rendering beyond ~800px buys nothing visible while costing
- * real time (compose scales with pixel count). Exports are unaffected —
- * they never go through this path.
+ * Text ink width in px, measured with a canvas 2D context — the editor's
+ * counterpart of the server's measureTextInk (main/templateRenderer.js), so the
+ * selection box and the drawn text are as wide as the exported text. Returns
+ * null where there is no canvas (tests) and elementBox falls back to its
+ * estimate. Cached: the same few strings are measured on every render.
  */
-const PREVIEW_MAX_PX = 800;
+const inkCache = new Map();
+let measureCtx;
+function measureTextInk(text, el) {
+  const size = Math.max(8, Number(el?.font?.size ?? 48));
+  const font = `${el?.font?.italic ? 'italic ' : ''}${el?.font?.weight ?? 'normal'} ${size}px ${el?.font?.family ?? 'Inter, "Helvetica Neue", Arial, sans-serif'}`;
+  const key = `${font}\u0000${text}`;
+  if (inkCache.has(key)) return inkCache.get(key);
+  let width = null;
+  try {
+    if (measureCtx === undefined) {
+      measureCtx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
+    }
+    if (measureCtx) {
+      measureCtx.font = font;
+      const m = measureCtx.measureText(String(text));
+      const ink = (m.actualBoundingBoxLeft ?? 0) + (m.actualBoundingBoxRight ?? 0);
+      width = ink > 0 ? ink : m.width;
+    }
+  } catch (_) {
+    width = null;
+  }
+  if (inkCache.size > 500) inkCache.clear();
+  inkCache.set(key, width);
+  return width;
+}
 
 /**
  * Editor canvas. Renders the template's elements as absolutely-positioned
@@ -91,68 +116,95 @@ export function EditorCanvas({
    * transparent and exist purely to receive clicks and to draw the
    * selection outline, resize handles and rotation knob.
    *
-   * During a drag the PNG is one frame behind. That is deliberate: it is
-   * re-rendered as soon as the interaction ends, and refreshing mid-drag
-   * would mean a server round-trip per pointer-move.
+   * During a drag the PNG is one frame behind (refreshing mid-drag would be a
+   * server round-trip per pointer-move). So the element being dragged,
+   * resized or rotated is drawn LIVE on top of it — the HTML drawing, sized
+   * with the same pixel scale as the render — until a render that includes
+   * the move lands. Before that, the element looked frozen and then jumped.
    *
    *   - `truthfulPng` holds the latest rendered PNG blob URL (or null
-   *     before the first render lands).
-   *   - `isInteracting` still tracks drags, but only to defer the render —
-   *     it no longer changes WHAT is drawn.
-   *   - `previewBusy` shows a small "Updating preview…" indicator in
-   *     the meta line so users know the visible result is mid-update.
+   *     before the first render lands, and again after the product or
+   *     template changes — a stale picture of another product is worse
+   *     than none).
+   *   - `isInteracting` tracks drags, to defer the render.
+   *   - `liveId` is the element drawn live over the PNG.
+   *   - `previewBusy` shows "Updating preview…" from the moment an edit is
+   *     made until the render that includes it is on screen.
    *
    * The PNG is added/removed via a CSS class on the canvas div
    * (`ovl-canvas--truthful`), which also hides the HTML content of every
-   * ElementOverlay so only the selection rect + handles remain visible.
+   * ElementOverlay except the live one.
    */
   const [truthfulPng, setTruthfulPng] = useState(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [isInteracting, setIsInteracting] = useState(false);
+  const isInteractingRef = useRef(false);
+  isInteractingRef.current = isInteracting;
+  const [liveId, setLiveId] = useState(null);
   const previewTimerRef = useRef(null);
   // Latest blob URL — kept in a ref too so we can revoke the previous
   // URL when a new render lands, without racing with React state.
   const truthfulPngRef = useRef(null);
+  // Only the newest preview request may land (see createLatestGuard).
+  const previewGuardRef = useRef(null);
+  if (!previewGuardRef.current) previewGuardRef.current = createLatestGuard();
 
-  // Pointer-up anywhere on the window ends interaction. Capture-phase
-  // because the canvas's own children sometimes setPointerCapture and
-  // swallow bubbles — we still want the up to register.
+  // What the preview is OF. When this changes the old picture is wrong, not
+  // merely old: drop it, and drop every reply still in flight.
+  const previewKey = `${template?.id ?? ''}|${backdropProductId ?? ''}|${backdropSrc ?? ''}`;
+  const lastKeyRef = useRef(previewKey);
+  if (lastKeyRef.current !== previewKey) {
+    lastKeyRef.current = previewKey;
+    previewGuardRef.current.invalidate();
+  }
+  useEffect(() => {
+    const prev = truthfulPngRef.current;
+    truthfulPngRef.current = null;
+    setTruthfulPng(null);
+    setLiveId(null);
+    if (prev) URL.revokeObjectURL(prev);
+  }, [previewKey]);
+
+  // Interaction ends on pointer-up ANYWHERE, on pointer-cancel, and when the
+  // window loses focus (a drag that ends over another app, a Cmd-Tab mid-drag,
+  // a system dialog) — otherwise the editor could stay "interacting" forever
+  // and never re-render. Capture-phase because the canvas's own children
+  // setPointerCapture and can swallow bubbles.
   useEffect(() => {
     function onUp() { setIsInteracting(false); }
+    function onHidden() { if (document.visibilityState === 'hidden') onUp(); }
     window.addEventListener('pointerup', onUp, true);
     window.addEventListener('pointercancel', onUp, true);
+    window.addEventListener('blur', onUp);
+    document.addEventListener('visibilitychange', onHidden);
     return () => {
       window.removeEventListener('pointerup', onUp, true);
       window.removeEventListener('pointercancel', onUp, true);
+      window.removeEventListener('blur', onUp);
+      document.removeEventListener('visibilitychange', onHidden);
     };
   }, []);
 
+  // Preview resolution: the canvas as shown, in device pixels (≤ 1600).
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+  const maxPx = previewMaxPx(canvasSize.w, canvasSize.h, dpr);
+
   // Debounced truthful render. Re-fires whenever the template, the
-  // backdrop product, or the canvas dimensions change, but only after
-  // the user has been idle. During interaction we DON'T bother firing —
-  // the in-flight render would just be wasted work (its output would be
-  // stale by the time it arrived). Once interaction ends, the next
-  // template change (or this effect's re-run from `isInteracting`
-  // flipping) schedules a render.
-  //
-  // v0.1.4: two changes to make the preview feel responsive.
-  //   1. `maxPx` — the server used to compose at the template's full
-  //      design size (2000×2000) for a canvas we display at a few hundred
-  //      px. Capping the long side to PREVIEW_MAX_PX cuts the pixel count
-  //      ~7× and the measured compose time from ~150-480 ms to a few tens
-  //      of ms. Layout is unaffected: element geometry is fractional, so a
-  //      smaller base scales the whole design proportionally.
-  //   2. Debounce down from 400 ms. That value was chosen when each render
-  //      was expensive; at the new cost a shorter idle window makes the
-  //      preview track edits much more closely.
+  // backdrop product, or the preview size change, but only after the user
+  // has been idle. During interaction we DON'T fire — the render would be
+  // stale by the time it arrived. Once interaction ends, this effect's
+  // re-run from `isInteracting` flipping schedules a render.
   useEffect(() => {
     if (!template || !backdropProductId) return undefined;
     if (isInteracting) return undefined;
     if (typeof window?.api?.templates?.renderPreview !== 'function') return undefined;
 
+    // An edit is pending from now until its render is on screen.
+    setPreviewBusy(true);
+    const guard = previewGuardRef.current;
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     previewTimerRef.current = setTimeout(async () => {
-      setPreviewBusy(true);
+      const stamp = guard.next();
       try {
         const result = await window.api.templates.renderPreview({
           // Pass the FULL in-progress template inline so the server
@@ -161,8 +213,11 @@ export function EditorCanvas({
           // — see main/ipc/templates.js.
           template,
           productId: backdropProductId,
-          maxPx: PREVIEW_MAX_PX,
+          maxPx,
         });
+        // A newer request (or a product / template switch) superseded this
+        // one while it was out — showing it would put an older picture back.
+        if (!guard.isLatest(stamp)) return;
         const bytes = result?.bytes;
         if (!bytes) return;
         // bytes is a Buffer (standalone) or a Buffer reconstructed
@@ -175,22 +230,24 @@ export function EditorCanvas({
         const prev = truthfulPngRef.current;
         truthfulPngRef.current = url;
         setTruthfulPng(url);
+        // This render includes the last drag — the live drawing can go.
+        if (!isInteractingRef.current) setLiveId(null);
         if (prev) {
           // Defer to next tick — the same paint cycle that swaps the
           // src may still reference the prev URL briefly.
           setTimeout(() => URL.revokeObjectURL(prev), 0);
         }
       } catch (_err) {
-        // Non-fatal — keep the last good preview if any. The HTML
-        // approximation is still there during interaction either way.
+        // Non-fatal — keep the last good preview if any.
       } finally {
-        setPreviewBusy(false);
+        // Only the newest request may say the preview is up to date.
+        if (guard.isLatest(stamp)) setPreviewBusy(false);
       }
     }, 250);
     return () => {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     };
-  }, [template, backdropProductId, isInteracting]);
+  }, [template, backdropProductId, isInteracting, maxPx, previewKey]);
 
   // Cleanup blob URL on unmount so we don't leak memory across editor
   // open/close cycles.
@@ -201,10 +258,7 @@ export function EditorCanvas({
   }, []);
 
   // v0.1.8: the truthful PNG is ALWAYS the visible picture whenever one has
-  // landed. It no longer disappears during interaction — that swap was what
-  // made the canvas look like it had two disagreeing modes. While dragging,
-  // the previous frame stays on screen for a beat until the debounced
-  // re-render replaces it.
+  // landed; only the element being moved is drawn live on top of it.
   const showTruthful = !!truthfulPng && !!backdropProductId && !placeholders;
 
   // v0.26.2: compute canvas DOM size from the WRAP's available area
@@ -348,6 +402,10 @@ export function EditorCanvas({
               />
             </div>
           ) : (
+            // The photo is contained in the template-shaped canvas on the
+            // canvas's white — exactly the letterbox the export bakes
+            // (main/templateRenderer.js outputCanvasSize): same centring,
+            // same white bands, never cropped or squashed.
             <img
               className="ovl-canvas__backdrop"
               src={backdropSrc}
@@ -388,9 +446,14 @@ export function EditorCanvas({
             element={el}
             canvasW={canvasSize.w}
             canvasH={canvasSize.h}
+            // Font size, padding and radius are DESIGN pixels: the canvas
+            // shows the design at canvasW / designW, and so does the export
+            // (templateRenderer designPixelScale), on any photo.
             designW={template.canvasWidth}
             designH={template.canvasHeight}
             selected={el.id === selectedId}
+            live={el.id === liveId}
+            onInteractStart={() => setLiveId(el.id)}
             onSelect={() => onSelectElement(el.id)}
             onChange={(patch) => onChangeElement(el.id, patch)}
             productContext={productContext}
@@ -428,9 +491,11 @@ export function EditorCanvas({
           <span className="ovl-canvas__preview-status">
             {previewBusy
               ? <>· <span className="ovl-canvas__preview-dot ovl-canvas__preview-dot--busy" /> Updating preview…</>
-              : showTruthful
-                ? <>· <span className="ovl-canvas__preview-dot ovl-canvas__preview-dot--live" /> Preview matches export</>
-                : <>· <span className="ovl-canvas__preview-dot ovl-canvas__preview-dot--approx" /> Approximation (interacting)</>}
+              : showTruthful && !liveId
+                // True as worded: this is the export's own render of this
+                // product (same compose(), same template shape), scaled to fit.
+                ? <>· <span className="ovl-canvas__preview-dot ovl-canvas__preview-dot--live" /> Showing the export render (scaled)</>
+                : <>· <span className="ovl-canvas__preview-dot ovl-canvas__preview-dot--approx" /> Approximate — the export render follows</>}
           </span>
         ) : (
           <span className="ovl-canvas__preview-status muted">
@@ -480,11 +545,11 @@ export function EditorCanvas({
  * renderer applies the same rotation via `sharp().rotate()` so the
  * baked output matches the editor preview.
  */
-function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected, onSelect, onChange, productContext, placeholders, snapToGrid, siblings, onGuides }) {
+function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected, live = false, onInteractStart, onSelect, onChange, productContext, placeholders, snapToGrid, siblings, onGuides }) {
   const filledContent = (element.type === 'text' || element.type === 'barcode')
     ? fillTokens(element.content ?? '', productContext)
     : null;
-  const box = elementBox(element, canvasW, canvasH, filledContent, designW, designH);
+  const box = elementBox(element, canvasW, canvasH, filledContent, designW, designH, measureTextInk);
   const dragState = useRef(null);
   const rotation = Number(element.rotation ?? 0);
   // v0.26.0: layer flags. `visible: false` greys the element in the
@@ -534,6 +599,7 @@ function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected,
     onSelect();
     if (!canvasW) return;
     if (isLocked) return;
+    onInteractStart?.();
     const wrapper = e.currentTarget;
     wrapper.setPointerCapture(e.pointerId);
     const canvasRect = wrapper.parentElement.getBoundingClientRect();
@@ -556,6 +622,7 @@ function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected,
     e.stopPropagation();
     e.preventDefault();
     if (!canvasW) return;
+    onInteractStart?.();
     const wrapper = e.currentTarget.parentElement;
     wrapper.setPointerCapture(e.pointerId);
     const canvasRect = wrapper.parentElement.getBoundingClientRect();
@@ -579,6 +646,7 @@ function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected,
     e.stopPropagation();
     e.preventDefault();
     if (!canvasW) return;
+    onInteractStart?.();
     const wrapper = e.currentTarget.parentElement;
     wrapper.setPointerCapture(e.pointerId);
     const canvasRect = wrapper.parentElement.getBoundingClientRect();
@@ -699,8 +767,11 @@ function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected,
   }
 
   function onPointerUp(e) {
+    // Also bound to pointercancel and lostpointercapture: a drag whose
+    // capture is taken away (window blur, a system gesture) must END here, or
+    // the next plain hover would keep moving the element.
+    if (!dragState.current) return;
     dragState.current = null;
-      // way — the drag state below is reset regardless.
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
     // v0.24.0: drop any live alignment guides as soon as the drag ends.
     onGuides?.([]);
@@ -708,7 +779,7 @@ function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected,
 
   return (
     <div
-      className={`ovl-element${selected ? ' is-selected' : ''}${isHidden ? ' is-hidden' : ''}${isLocked ? ' is-locked' : ''}`}
+      className={`ovl-element${selected ? ' is-selected' : ''}${live ? ' is-live' : ''}${isHidden ? ' is-hidden' : ''}${isLocked ? ' is-locked' : ''}`}
       style={{
         left: box.left,
         top: box.top,
@@ -723,6 +794,7 @@ function ElementOverlay({ element, canvasW, canvasH, designW, designH, selected,
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
+      onLostPointerCapture={onPointerUp}
     >
       <ElementContent element={element} box={box} productContext={productContext} canvasW={canvasW} canvasH={canvasH} designW={designW} designH={designH} filledContent={filledContent} placeholders={placeholders} />
       {selected && !isLocked ? (
@@ -987,22 +1059,20 @@ export function ElementContent({ element, box, productContext, canvasW, canvasH,
     // sizing computed by elementBox() — keeps the bg pill and the text
     // perfectly synchronized.
     const filled = filledContent ?? fillTokens(element.content ?? '', productContext);
-    // v0.1.8: font size, padding and radius are ABSOLUTE design pixels —
-    // no `canvasW / 2000` scaling factor.
+    // Font size, padding and radius are pixels of the template's DESIGN
+    // canvas, which the editor shows at `canvasW / designW` — and the export
+    // draws them at outputW / designW (templateRenderer designPixelScale), so
+    // a template looks the same on every photo. Drawn at that same scale as
+    // the selection box (elementBox) around them.
     //
-    // That factor was the source of a real preview-vs-export bug. The
-    // server renderer (main/templateRenderer.js renderTextElement) has
-    // always used `el.font.size`, `el.bg.padding` and `el.bg.radius`
-    // verbatim, with no canvas-width term. The canvas multiplied all three
-    // by `canvasW / 2000`, so on the default 2000px canvas the two agreed
-    // and nobody noticed — but on a 3000px canvas the editor drew text 50%
-    // larger than the exported file, and the selection box (sized from the
-    // same numbers as the renderer) no longer matched the text inside it.
-    // Because the divisor was a hardcoded 2000, widening the canvas also
-    // silently inflated every font by the same ratio.
-    const fontPx = (element.font?.size ?? 48);
-    const padding = (element.bg?.padding ?? 0);
-    const radius  = (element.bg?.radius  ?? 0);
+    // History: v0.1.8 removed a hardcoded `canvasW / 2000` factor (wrong on
+    // any canvas not 2000 wide) but then drew the sizes UNSCALED — a 96 px
+    // font on a 600 px canvas showing a 2000 px design came out ~3× too
+    // large and spilled out of its own box.
+    const k = designW > 0 && canvasW > 0 ? canvasW / designW : 1;
+    const fontPx = Math.max(8, Number(element.font?.size ?? 48)) * k;
+    const padding = (element.bg?.padding ?? 0) * k;
+    const radius  = (element.bg?.radius  ?? 0) * k;
     const align = element.align ?? 'left';
     const bgColor = element.bg?.color ?? null;
     return (
@@ -1046,9 +1116,13 @@ export function ElementContent({ element, box, productContext, canvasW, canvasH,
     const svg = renderBarcodeSVG(content, format, { showText: element.showText !== false });
     const showText = element.showText !== false;
     const humanText = showText ? formatBarcodeText(content, format) : '';
-    // v0.1.8: absolute, matching renderBarcodeElement on the server.
-    const padding = (element.bg?.padding ?? 0);
-    const radius  = (element.bg?.radius  ?? 0);
+    // Design pixels, drawn at the canvas scale (see the text branch above) —
+    // matching renderBarcodeElement on the server.
+    // The export only insets the symbol by the padding when there IS a
+    // background pill (no colour = no pill = the symbol fills the box).
+    const k = designW > 0 && canvasW > 0 ? canvasW / designW : 1;
+    const padding = element.bg?.color ? (element.bg?.padding ?? 0) * k : 0;
+    const radius  = (element.bg?.radius  ?? 0) * k;
     const bgColor = element.bg?.color ?? '#fff';
     // v0.1.8: derive the human-readable label's size the same way the
     // export does, instead of a hardcoded 18px base.
@@ -1067,7 +1141,7 @@ export function ElementContent({ element, box, productContext, canvasW, canvasH,
     // the entire Overlay Studio editor into its error boundary the moment
     // anyone added a barcode. `box.height` IS this element's on-screen
     // height, so no extra prop is needed.
-    const boxH = box.height;
+    const boxH = Math.max(0, box.height - padding * 2);
     const textPx = showText
       ? Math.max(8, Math.round(Math.max(0, boxH - Math.round(boxH * 0.78)) * 0.7))
       : 0;

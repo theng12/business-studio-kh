@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Button, EmptyState } from '../../components/ui.jsx';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Badge, Button, EmptyState, Pagination, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { useAppStore } from '../../store/index.js';
+import { requestLabelRerun } from './labelRerun.js';
+import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
+import { formatDateTime, timeAgo } from '../../lib/format.js';
 
 /**
  * Label History.
@@ -16,7 +19,10 @@ import { useAppStore } from '../../store/index.js';
 export function LabelJobs() {
   const companyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
+  const setActiveModule = useAppStore((s) => s.setActiveModule);
   const [runs, setRuns] = useState([]);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50);
   const [thisMac, setThisMac] = useState(null);
   const requestSeq = useRef(0);
 
@@ -47,6 +53,21 @@ export function LabelJobs() {
     return () => { cancelled = true; };
   }, []);
 
+  // §10: up to 200 runs come back, so the list pages. A shrinking list (a
+  // removed run, a company switch) clamps rather than showing an empty page.
+  const pageInfo = useMemo(() => paginate(runs.length, page, pageSize), [runs.length, page, pageSize]);
+  useEffect(() => { if (page !== pageInfo.currentPage) setPage(pageInfo.currentPage); }, [page, pageInfo.currentPage]);
+  useEffect(() => { setPage(0); }, [companyId, pageSize]);
+  const visibleRuns = runs.slice(pageInfo.pageStart, pageInfo.pageEnd);
+
+  /** Open Generate & Print with this run's template, products and layout. */
+  function runAgain(run) {
+    const request = requestLabelRerun(run);
+    if (!request) return;
+    if (!request.productIds.length) addToast('This run did not record its products — pick them again on Generate & Print.', 'info');
+    setActiveModule('labelgenerate');
+  }
+
   /** The Mac that produced this run's files, or null when unknown / this one. */
   function otherMacFor(run) {
     const origin = run?.settings?.originHost;
@@ -58,48 +79,73 @@ export function LabelJobs() {
     <section className="page">
       <PageHeader title="Label History" subtitle="Open generated files and repeat production with confidence." />
       {runs.length ? (
-        <div className="run-list">
-          {runs.map((run) => {
-            const otherMac = otherMacFor(run);
-            return (
-              <article key={run.id}>
-                <div className={`run-icon run-icon--${run.format}`}>
-                  {run.format === 'print' ? 'P' : run.format.toUpperCase().slice(0, 3)}
-                </div>
-                <div>
-                  <strong>{run.templateName || 'Deleted template'}</strong>
-                  <span>
-                    {run.productCount} product{run.productCount === 1 ? '' : 's'} · {run.layoutMode} · {new Date(run.createdAt).toLocaleString()}
-                    {otherMac ? <> · <em>made on {otherMac}</em></> : null}
-                  </span>
-                  <small>{run.outputPath || 'Sent directly to printer'}</small>
-                </div>
-                <div className="run-list__actions">
-                  {run.outputPath && !otherMac ? (
-                    <Button
-                      variant="ghost"
-                      onClick={() => window.api.labels.openOutput(run.outputPath).catch((e) => addToast(e.message, 'error'))}
-                    >
-                      Open
-                    </Button>
-                  ) : null}
-                  {otherMac ? (
-                    <Button
-                      variant="ghost"
-                      disabled
-                      title={`These files are on ${otherMac}, not this Mac. Open them there, or run Generate & Print again from here.`}
-                    >
-                      On {otherMac}
-                    </Button>
-                  ) : null}
-                  <Button variant="ghost" onClick={async () => { try { await window.api.labels.deleteRun(run.id); load(); } catch (e) { addToast(e.message, 'error'); } }}>Remove</Button>
-                </div>
-              </article>
-            );
-          })}
+        <>
+        <div className="data-table-wrap">
+          <table className="data-table label-runs">
+            <thead>
+              <tr>
+                <th>Format</th>
+                <th>Template</th>
+                <th className="is-num">Products</th>
+                <th>Layout</th>
+                <th>Made</th>
+                <th>Output</th>
+                <th className="is-actions" aria-label="Actions" />
+              </tr>
+            </thead>
+            <tbody>
+              {visibleRuns.map((run) => {
+                const otherMac = otherMacFor(run);
+                return (
+                  <tr key={run.id}>
+                    <td><Badge tone="slate">{run.format === 'print' ? 'Print' : String(run.format || '').toUpperCase()}</Badge></td>
+                    <td><strong>{run.templateName || 'Deleted template'}</strong></td>
+                    <td className="is-num">{run.productCount}</td>
+                    <td>{run.layoutMode === 'sheet' ? 'Sheet' : run.layoutMode === 'single' ? 'One per page' : run.layoutMode}</td>
+                    <td title={timeAgo(run.createdAt)}>
+                      {formatDateTime(run.createdAt)}
+                      {otherMac ? <div className="muted label-runs__origin">made on {otherMac}</div> : null}
+                    </td>
+                    <td className="label-runs__path">{run.outputPath || <span className="muted">Sent directly to printer</span>}</td>
+                    <td className="is-actions">
+                      {run.outputPath && !otherMac ? (
+                        <Button
+                          size="sm"
+                          onClick={() => window.api.labels.openOutput(run.outputPath).catch((e) => addToast(e.message, 'error'))}
+                        >
+                          Open
+                        </Button>
+                      ) : null}
+                      {otherMac ? (
+                        <Button
+                          size="sm"
+                          disabled
+                          title={`These files are on ${otherMac}, not this Mac. Open them there, or run Generate & Print again from here.`}
+                        >
+                          On {otherMac}
+                        </Button>
+                      ) : null}
+                      {run.templateId ? (
+                        <Button size="sm" onClick={() => runAgain(run)} title="Open Generate & Print with this run's template, products and layout">Run again</Button>
+                      ) : null}
+                      <Button variant="danger" size="sm" onClick={async () => { try { await window.api.labels.deleteRun(run.id); load(); } catch (e) { addToast(e.message, 'error'); } }}>Remove</Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
+        <Pagination total={runs.length} pageStart={pageInfo.pageStart} pageEnd={pageInfo.pageEnd} currentPage={pageInfo.currentPage} maxPage={pageInfo.maxPage} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+        </>
+      ) : !companyId ? (
+        <NoCompanyState purpose="see its label runs" />
       ) : (
-        <EmptyState title="No label jobs yet" body="Generated files and print jobs will appear here." />
+        <EmptyState
+          title="No label runs yet"
+          body="Files you generate and print jobs you send will be listed here."
+          action={<Button variant="primary" onClick={() => setActiveModule('labelgenerate')}>Go to Generate & Print</Button>}
+        />
       )}
     </section>
   );

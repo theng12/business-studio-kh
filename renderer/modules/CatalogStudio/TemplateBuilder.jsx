@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Input } from '../../components/ui.jsx';
+import { Button, Field, Input } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { SaveStatus } from '../../components/SaveStatus.jsx';
+import { confirm } from '../../components/ConfirmModal.jsx';
 import { DesignControls } from './DesignControls.jsx';
 import { CATALOG_THEMES } from './catalogThemes.js';
 import { blankCatalogDesign } from '../../lib/catalogDesign.js';
@@ -28,7 +30,7 @@ import { useAppStore } from '../../store/index.js';
  *     lets the same screen be opened from four places: New template, Edit on a
  *     card, Start from a proven layout, and Save-as-template from a project.
  */
-export function CatalogTemplateBuilder({ draft, onClose, onSaved }) {
+export function CatalogTemplateBuilder({ draft, onClose, onSaved, backLabel = 'Catalog templates' }) {
   const addToast = useAppStore((s) => s.addToast);
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const companies = useAppStore((s) => s.companies) ?? [];
@@ -78,6 +80,20 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved }) {
     setConfig((c) => ({ ...c, ...patch }));
   }
 
+  /* The builder does not autosave (a template is committed with its Save
+   * button), so leaving it with changes asks first — "← Catalog templates" and
+   * Cancel used to drop them without a word. */
+  async function leave() {
+    if (dirty && !(await confirm({
+      title: 'Discard your changes to this template?',
+      message: `You have changes that are not saved. Press ${isExisting ? 'Save template' : 'Create template'} to keep them.`,
+      confirmLabel: 'Discard changes',
+      cancelLabel: 'Keep editing',
+      danger: true,
+    }))) return;
+    onClose?.();
+  }
+
   async function save({ asCopy = false } = {}) {
     const trimmed = name.trim();
     if (!trimmed) { addToast('Give the template a name', 'error'); return; }
@@ -105,18 +121,18 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved }) {
     }
   }
 
+  /* The dirty state is the §6 pill in the header (slate "Unsaved changes"),
+   * not a strip above the panel that pushed the whole editor down. */
   return (
     <section className="page catalog-editor-page">
-      <div className="catalog-editor-back">
-        <Button variant="ghost" onClick={onClose}>← Catalog templates</Button>
-        <span>{isExisting ? 'Editing template' : 'New template'}</span>
-      </div>
       <PageHeader
         title={name.trim() || 'Untitled template'}
-        subtitle={isExisting ? 'Catalog template' : 'New catalog template'}
+        subtitle="A template keeps the look only — each catalog picks its own products."
+        backTo={{ label: backLabel, onClick: leave }}
         actions={(
           <>
-            <Button onClick={onClose} disabled={saving}>Cancel</Button>
+            {dirty || saving ? <SaveStatus state={saving ? 'saving' : 'dirty'} /> : null}
+            <Button onClick={leave} disabled={saving}>Cancel</Button>
             {isExisting ? <Button onClick={() => save({ asCopy: true })} disabled={saving}>Save as copy</Button> : null}
             <Button variant="primary" onClick={() => save()} disabled={saving || !name.trim()}>
               {saving ? 'Saving…' : isExisting ? 'Save template' : 'Create template'}
@@ -124,27 +140,26 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved }) {
           </>
         )}
       />
-      {dirty ? <p className="catalog-builder__dirty">Unsaved changes — press {isExisting ? 'Save template' : 'Create template'} to keep them.</p> : null}
       <div className="catalog-editor">
-        <aside className="catalog-controls">
-          <section>
-            <h3>Template</h3>
-            <label>Name<Input autoFocus value={name} onChange={(e) => { setDirty(true); setName(e.target.value); }} placeholder="e.g. 2026 Wholesale — 4 column" /></label>
-            <label>Description<Input value={description} onChange={(e) => { setDirty(true); setDescription(e.target.value); }} placeholder="What is this layout for?" /></label>
-            <p className="catalog-controls__note">
-              A template keeps the look only. Which products appear is chosen in each catalog,
-              so this design can be reused for as many catalogs as you like.
-            </p>
+        <aside className="catalog-sidebar">
+          <section className="catalog-sidebar__section">
+            <h3 className="section-title">Template</h3>
+            <Field label="Name" required>
+              {({ id }) => <Input id={id} autoFocus value={name} onChange={(e) => { setDirty(true); setName(e.target.value); }} placeholder="e.g. 2026 Wholesale — 4 column" />}
+            </Field>
+            <Field label="Description">
+              {({ id }) => <Input id={id} value={description} onChange={(e) => { setDirty(true); setDescription(e.target.value); }} placeholder="What is this layout for?" />}
+            </Field>
           </section>
           <DesignControls config={config} onChange={patchConfig} priceGroups={priceGroups} />
         </aside>
         <main className="catalog-preview">
-          <div className="catalog-preview__bar">
+          <div className="catalog-preview__head">
             <span>
               Live preview — {theme.name}
               {sample ? ` · ${sample.count} of ${sample.total} product${sample.total === 1 ? '' : 's'} shown` : ''}
             </span>
-            <Button variant="ghost" onClick={refreshPreview}>Refresh</Button>
+            <Button size="sm" onClick={refreshPreview}>Refresh</Button>
           </div>
           {previewError
             ? <div className="preview-placeholder preview-placeholder--error">{previewError}</div>

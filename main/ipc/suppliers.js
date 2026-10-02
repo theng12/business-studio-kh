@@ -10,7 +10,7 @@
 
 const suppliers = require('../db/suppliers');
 
-function register({ expose }) {
+function register({ expose, emitCatalogChange = () => {} }) {
   // Read paths — safe for any authenticated client. The renderer
   // gates the OPERATIONS sidebar entries via util/permissions.js so
   // photographer / viewer users don't see this data even though the
@@ -23,12 +23,18 @@ function register({ expose }) {
 
   // Mutation paths — server-side ACL in util/permissions.js rejects
   // these from photographer / viewer tokens. The renderer-side gate is
-  // belt; this is braces.
-  expose('suppliers:create',    (input) => suppliers.create(input ?? {}));
-  expose('suppliers:update',    ({ id, patch } = {}) => suppliers.update(id, patch ?? {}));
-  expose('suppliers:archive',   (id) => suppliers.archive(id));
-  expose('suppliers:unarchive', (id) => suppliers.unarchive(id));
-  expose('suppliers:remove',    (id) => suppliers.remove(id));
+  // belt; this is braces. Each one emits a `catalog:changed` event of kind
+  // 'supplier' so the Suppliers / PO screens on other Macs refetch.
+  const emitting = (op, fn, idOf) => (args) => {
+    const result = fn(args);
+    try { emitCatalogChange('supplier', op, idOf(args, result) ?? null); } catch (_) { /* best effort */ }
+    return result;
+  };
+  expose('suppliers:create',    emitting('create',    (input) => suppliers.create(input ?? {}), (_a, r) => r?.id));
+  expose('suppliers:update',    emitting('update',    ({ id, patch } = {}) => suppliers.update(id, patch ?? {}), (a) => a?.id));
+  expose('suppliers:archive',   emitting('archive',   (id) => suppliers.archive(id), (id) => id));
+  expose('suppliers:unarchive', emitting('unarchive', (id) => suppliers.unarchive(id), (id) => id));
+  expose('suppliers:remove',    emitting('remove',    (id) => suppliers.remove(id), (id) => id));
 }
 
 module.exports = { register };

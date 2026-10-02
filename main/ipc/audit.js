@@ -34,11 +34,12 @@ function register({ expose }) {
    * same release. Filters by entityType + userId; renderer paginates.
    * Same read-only contract as the per-entity channels.
    */
-  expose('audit:listRecent', ({ limit, offset, entityType, userId } = {}) => {
-    return auditLog.listRecent({ limit, offset, entityType, userId });
+  // v0.1.89: + since / until (epoch ms) and q (text) for the History filters.
+  expose('audit:listRecent', ({ limit, offset, entityType, userId, since, until, q } = {}) => {
+    return auditLog.listRecent({ limit, offset, entityType, userId, since, until, q });
   });
-  expose('audit:countRecent', ({ entityType, userId } = {}) => {
-    return auditLog.countRecent({ entityType, userId });
+  expose('audit:countRecent', ({ entityType, userId, since, until, q } = {}) => {
+    return auditLog.countRecent({ entityType, userId, since, until, q });
   });
 
   // v0.33.0: history retention. stats() backs the "X events · oldest N

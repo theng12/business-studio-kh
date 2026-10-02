@@ -1101,8 +1101,8 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
           </fieldset>
 
           <div className="bulk-table__imagectl">
-            <span className="bulk-table__imagectl-label">Add · Make main</span>
-            <div className="ws-toolbar__group">
+            <span className="bulk-table__imagectl-label">Pasted photo</span>
+            <div className="segments" role="group" aria-label="Pasted photo">
               <button
                 type="button"
                 className={`segment${imageMode === 'add' ? ' is-active' : ''}`}

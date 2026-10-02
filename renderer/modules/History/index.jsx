@@ -29,9 +29,39 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { PageHeader } from '../../components/PageHeader.jsx';
-import { Button, EmptyState, Pagination, Select } from '../../components/ui.jsx';
+import { Button, EmptyState, Input, Pagination, Select } from '../../components/ui.jsx';
 import { HistoryModal } from '../../components/HistoryModal.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
+import { useUserCaps } from '../../components/Sidebar.jsx';
+import { hasCap } from '../../lib/capabilities.js';
+import { formatDateTime, timeAgo } from '../../lib/format.js';
+
+/** v0.1.89: the "Who" filter's value for rows written with no account —
+ *  this Mac itself (standalone / server admin). Mirrors NO_USER in
+ *  main/db/auditLog.js. */
+export const NO_USER = '@local';
+
+/**
+ * v0.1.89: the feed filters as the IPC wants them. Dates come from
+ * <input type="date"> as YYYY-MM-DD in the viewer's own time zone; "to" is
+ * inclusive, so it becomes the start of the NEXT day.
+ */
+export function historyQuery({ entityType = '', userId = '', from = '', to = '', q = '' } = {}) {
+  const out = {};
+  if (entityType) out.entityType = entityType;
+  if (userId) out.userId = userId;
+  const day = (v) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || ''));
+    return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+  };
+  const f = day(from);
+  if (f) out.since = f.getTime();
+  const t = day(to);
+  if (t) { t.setDate(t.getDate() + 1); out.until = t.getTime(); }
+  const text = String(q || '').trim();
+  if (text) out.q = text;
+  return out;
+}
 
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -65,22 +95,8 @@ const ACTION_LABELS = {
 };
 function actionLabel(action) { return ACTION_LABELS[action] ?? action; }
 
-function relativeTime(ts) {
-  if (!ts) return '';
-  const diff = Date.now() - Number(ts);
-  if (diff < 0) return 'just now';
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60)  return 'just now';
-  const min = Math.floor(sec / 60);
-  if (min < 60)  return `${min} min ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24)   return `${hr} hr ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30)  return `${day} day${day === 1 ? '' : 's'} ago`;
-  const mo = Math.floor(day / 30);
-  if (mo < 12)   return `${mo} mo ago`;
-  return `${Math.floor(mo / 12)} yr ago`;
-}
+// Sentence-case names for the entity chip (it used to read PROD / IMG).
+const KIND_LABELS = { product: 'Product', image: 'Image', brand: 'Brand', category: 'Category' };
 
 export function History() {
   const attributionUsers = useAppStore((s) => s.attributionUsers);
@@ -94,6 +110,26 @@ export function History() {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [entityType, setEntityType] = useState('');
+  // v0.1.89: who / when / text filters.
+  const [userFilter, setUserFilter] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  // Clearing history is a System & data settings action on the server
+  // (audit:clearHistory → system.manage); the control is hidden from anyone
+  // the server would refuse.
+  const canClear = hasCap(useUserCaps(), 'system.manage');
+  const filters = useMemo(
+    () => historyQuery({ entityType, userId: userFilter, from: fromDate, to: toDate, q: debouncedSearch }),
+    [entityType, userFilter, fromDate, toDate, debouncedSearch],
+  );
+  const filtersKey = JSON.stringify(filters);
+  const anyFilter = Object.keys(filters).length > 0;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   // Per-entity drilldown — clicking the entity cell opens the existing
@@ -104,17 +140,16 @@ export function History() {
   const [reloadNonce, setReloadNonce] = useState(0);
 
   // Reset to page 1 when the filter changes.
-  useEffect(() => { setPage(0); }, [entityType]);
+  useEffect(() => { setPage(0); }, [filtersKey]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    const opts = { limit: pageSize, offset: page * pageSize };
-    if (entityType) opts.entityType = entityType;
+    const opts = { ...filters, limit: pageSize, offset: page * pageSize };
     Promise.all([
       window.api?.audit.listRecent(opts) ?? Promise.resolve([]),
-      window.api?.audit.countRecent(entityType ? { entityType } : {}) ?? Promise.resolve(0),
+      window.api?.audit.countRecent(filters) ?? Promise.resolve(0),
     ])
       .then(([rows, count]) => {
         if (cancelled) return;
@@ -128,7 +163,8 @@ export function History() {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [page, pageSize, entityType, addToast, reloadNonce]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- filtersKey stands for filters
+  }, [page, pageSize, filtersKey, addToast, reloadNonce]);
 
   // v0.33.0: clear / retention. days > 0 deletes entries older than that
   // many days; days === 0 wipes the whole log. Runs server-side, so it
@@ -180,13 +216,16 @@ export function History() {
       if (p) return { kind: et === 'image' ? 'image' : 'product', text: p.sku || '(no SKU)', subtitle: p.name || null, productId: p.id };
       return { kind: et === 'image' ? 'image' : 'product', text: '(deleted product)', subtitle: null, productId: null };
     }
+    // A deleted brand/category is named from its own audit row when the
+    // row carries the name (create/delete snapshots do).
+    const recorded = entry.before?.name || entry.after?.name || null;
     if (et === 'brand') {
       const b = brandById.get(entityId);
-      return { kind: 'brand', text: b?.name || '(deleted brand)', subtitle: null };
+      return { kind: 'brand', text: b?.name || (recorded ? `${recorded} (deleted)` : '(deleted brand)'), subtitle: null };
     }
     if (et === 'category') {
       const c = categoryById.get(entityId);
-      return { kind: 'category', text: c?.name || '(deleted category)', subtitle: null };
+      return { kind: 'category', text: c?.name || (recorded ? `${recorded} (deleted)` : '(deleted category)'), subtitle: null };
     }
     return { kind: et, text: String(entityId ?? ''), subtitle: null };
   }
@@ -216,6 +255,10 @@ export function History() {
     }
   }
 
+  function clearFilters() {
+    setEntityType(''); setUserFilter(''); setFromDate(''); setToDate(''); setSearch(''); setDebouncedSearch('');
+  }
+
   const lastPage = Math.max(0, Math.ceil(total / pageSize) - 1);
   const pageStart = total === 0 ? 0 : page * pageSize + 1;
   const pageEnd = Math.min(total, (page + 1) * pageSize);
@@ -224,27 +267,14 @@ export function History() {
     <div className="page page--history">
       <PageHeader
         title="History"
-        subtitle="Every edit anyone made, across all companies. Audit log is append-only — read here, not editable."
+        subtitle="Every edit anyone made, across all companies. Entries can't be edited; an admin can clear old ones."
         actions={
           <>
-            <Select
-              value={entityType}
-              onChange={(e) => setEntityType(e.target.value)}
-              aria-label="Filter by entity type"
-            >
-              {ENTITY_TYPE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </Select>
-            <Button onClick={() => {
-              // Soft refresh — just bump the load by re-setting page.
-              const cur = page;
-              setPage(-1);
-              setTimeout(() => setPage(cur), 0);
-            }}>Refresh</Button>
+            <Button onClick={() => setReloadNonce((n) => n + 1)}>Refresh</Button>
             {/* v0.33.0: retention / clear. Picking an option confirms then
                 deletes; the Select snaps back to its placeholder so the
                 same option can be re-picked. */}
+            {canClear ? (
             <Select
               value=""
               aria-label="Clear history"
@@ -262,9 +292,49 @@ export function History() {
               <option value="90">Older than 90 days</option>
               <option value="all">Everything</option>
             </Select>
+            ) : null}
           </>
         }
       />
+
+      {/* v0.1.89: what, who, when, and free text. */}
+      <div className="toolbar history-page__filters">
+        <Select
+          value={entityType}
+          onChange={(e) => setEntityType(e.target.value)}
+          aria-label="Filter by entity type"
+        >
+          {ENTITY_TYPE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </Select>
+        <Select value={userFilter} onChange={(e) => setUserFilter(e.target.value)} aria-label="Filter by who made the change">
+          <option value="">Everyone</option>
+          <option value={NO_USER}>Server admin (this Mac)</option>
+          {Object.entries(attributionUsers ?? {})
+            .sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+            .map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        </Select>
+        <label className="history-page__date">
+          <span>From</span>
+          <Input type="date" value={fromDate} max={toDate || undefined} onChange={(e) => setFromDate(e.target.value)} aria-label="From date" />
+        </label>
+        <label className="history-page__date">
+          <span>To</span>
+          <Input type="date" value={toDate} min={fromDate || undefined} onChange={(e) => setToDate(e.target.value)} aria-label="To date" />
+        </label>
+        <Input
+          type="search"
+          className="history-page__search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search SKU, name or a changed value"
+          aria-label="Search history"
+        />
+        {anyFilter || search ? (
+          <Button variant="ghost" onClick={clearFilters}>Clear filters</Button>
+        ) : null}
+      </div>
 
       {error ? (
         <div className="history-page__error">{error}</div>
@@ -272,8 +342,9 @@ export function History() {
 
       {!loading && entries.length === 0 ? (
         <EmptyState
-          title="No history yet"
-          body={entityType ? `No ${ENTITY_TYPE_OPTIONS.find((o) => o.value === entityType)?.label.toLowerCase()} events yet. Try a different filter.` : "Make an edit anywhere in the app — products, brands, images, settings — and it'll show up here."}
+          title={anyFilter ? 'Nothing matches these filters' : 'No history yet'}
+          body={anyFilter ? 'Widen the dates, pick everyone, or clear the search.' : "Make an edit anywhere in the app — products, brands, categories, images — and it'll show up here."}
+          action={anyFilter ? <Button onClick={clearFilters}>Clear filters</Button> : null}
         />
       ) : (
         <>
@@ -285,8 +356,8 @@ export function History() {
                 : `Showing ${pageStart}–${pageEnd} of ${total.toLocaleString()} event${total === 1 ? '' : 's'}`}
           </div>
 
-          <div className="history-page__table-wrap">
-            <table className="history-page__table">
+          <div className="data-table-wrap">
+            <table className="data-table history-page__table">
               <thead>
                 <tr>
                   <th>When</th>
@@ -301,8 +372,8 @@ export function History() {
                   const drillable = lbl.kind === 'product' || lbl.kind === 'image' || lbl.kind === 'brand' || lbl.kind === 'category';
                   return (
                     <tr key={entry.id}>
-                      <td title={new Date(Number(entry.createdAt)).toLocaleString()}>
-                        {relativeTime(entry.createdAt)}
+                      <td className="history-page__when" title={formatDateTime(entry.createdAt)}>
+                        {timeAgo(entry.createdAt)}
                       </td>
                       <td>{userLabel(entry)}</td>
                       <td>
@@ -314,7 +385,7 @@ export function History() {
                             title={`Open full history for ${lbl.text}`}
                           >
                             <span className={`history-page__entity-kind history-page__entity-kind--${lbl.kind}`}>
-                              {lbl.kind === 'image' ? 'IMG' : lbl.kind.slice(0, 4).toUpperCase()}
+                              {KIND_LABELS[lbl.kind] || lbl.kind}
                             </span>
                             <span className="history-page__entity-text">
                               {lbl.text}

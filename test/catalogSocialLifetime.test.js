@@ -25,7 +25,9 @@ function findAll(node, predicate, found = []) {
   if (Array.isArray(node)) { for (const child of node) findAll(child, predicate, found); return found; }
   if (typeof node !== 'object') return found;
   if (predicate(node)) found.push(node);
-  for (const value of Object.values(node.props || {})) findAll(value, predicate, found);
+  // Expand a `<Field>{({ id }) => <Input id={id} />}</Field>` render prop: the
+  // shallow harness never renders Field itself.
+  for (const [key, value] of Object.entries(node.props || {})) findAll(key === 'children' && typeof value === 'function' ? value({ id: 'field' }) : value, predicate, found);
   return found;
 }
 
@@ -238,8 +240,10 @@ for (const [kind, exported] of [['catalog', 'CatalogEditor'], ['social', 'Preset
     let backs = 0;
     const session = await openEditor(kind, Editor, harness, 'draft-1', () => { backs += 1; });
     editName(session, 'Original', 'Saved before Back');
-    const back = findAll(session.output, (node) => node.type?.name === 'Button' && textOf(node).startsWith('←'))[0];
-    const leaving = back.props.onClick();
+    // Both editors go back through the house header (`PageHeader backTo`,
+    // docs/UI_GUIDE.md) instead of a "← …" ghost Button in the page body.
+    const header = findAll(session.output, (node) => node.type?.name === 'PageHeader' && node.props.backTo)[0];
+    const leaving = header.props.backTo.onClick();
     assert.equal(backs, 0);
     assert.equal(updates.length, 1);
     updates[0].gate.resolve();

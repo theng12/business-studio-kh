@@ -1,28 +1,51 @@
 import { useEffect, useId, useRef, useState } from 'react';
 
-export function Button({ variant = 'default', children, ...props }) {
-  const cls = ['btn'];
-  if (variant === 'primary') cls.push('btn--primary');
-  if (variant === 'ghost') cls.push('btn--ghost');
-  if (variant === 'danger') cls.push('btn--danger');
+/**
+ * Join class names, skipping falsy parts. Exported so screens that build a
+ * className from flags don't each grow their own copy.
+ */
+export function cx(...parts) {
+  return parts.filter(Boolean).join(' ');
+}
+
+/*
+ * UI pass, 2026-10: the four form primitives MERGE a caller's `className` with their
+ * base classes. They used to spread `{...props}` after `className`, so any
+ * caller that passed one (e.g. `<Button variant="primary" className="x">`)
+ * silently lost `btn btn--primary` and rendered as a bare browser button —
+ * the unstyled "Save all" in the Bulk table and the Support CTA.
+ *
+ * Button sizes: `size="sm"` for dense rows (table rows, card footers);
+ * `block` stretches it to the container's width (label stays centred).
+ */
+export function Button({ variant = 'default', size, block = false, className, children, ...props }) {
+  const cls = cx(
+    'btn',
+    variant === 'primary' && 'btn--primary',
+    variant === 'ghost' && 'btn--ghost',
+    variant === 'danger' && 'btn--danger',
+    size === 'sm' && 'btn--sm',
+    block && 'btn--block',
+    className,
+  );
   return (
-    <button className={cls.join(' ')} {...props}>
+    <button className={cls} {...props}>
       {children}
     </button>
   );
 }
 
-export function Input({ invalid, ...props }) {
-  return <input className={`input${invalid ? ' is-invalid' : ''}`} {...props} />;
+export function Input({ invalid, className, ...props }) {
+  return <input className={cx('input', invalid && 'is-invalid', className)} {...props} />;
 }
 
-export function Textarea({ invalid, rows = 3, ...props }) {
-  return <textarea className={`input input--textarea${invalid ? ' is-invalid' : ''}`} rows={rows} {...props} />;
+export function Textarea({ invalid, rows = 3, className, ...props }) {
+  return <textarea className={cx('input', 'input--textarea', invalid && 'is-invalid', className)} rows={rows} {...props} />;
 }
 
-export function Select({ invalid, children, ...props }) {
+export function Select({ invalid, className, children, ...props }) {
   return (
-    <select className={`input input--select${invalid ? ' is-invalid' : ''}`} {...props}>
+    <select className={cx('input', 'input--select', invalid && 'is-invalid', className)} {...props}>
       {children}
     </select>
   );
@@ -147,7 +170,9 @@ export function Modal({
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => {
-      if (e.key === 'Escape') {
+      // A control inside the dialog that already used this Esc (a popover,
+      // a picker's list) marks it defaultPrevented; that Esc is not ours.
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         e.stopPropagation();
         onClose?.();
       }
@@ -234,12 +259,24 @@ export function Modal({
   );
 }
 
-export function EmptyState({ title, body, action }) {
+/**
+ * Short, kind, one action (§18): "No brands yet." + "+ New brand".
+ *
+ * Always full-width: `.empty` spans every column when it lands inside a card
+ * grid, so it is never squeezed into the first cell. `secondaryAction` is an
+ * optional quieter second button (e.g. "Import from Excel") after the main one.
+ */
+export function EmptyState({ title, body, action, secondaryAction, className }) {
   return (
-    <div className="empty">
+    <div className={cx('empty', className)}>
       <p className="empty__title">{title}</p>
       {body ? <p className="empty__body">{body}</p> : null}
-      {action ?? null}
+      {action || secondaryAction ? (
+        <div className="empty__actions">
+          {action ?? null}
+          {secondaryAction ?? null}
+        </div>
+      ) : null}
     </div>
   );
 }

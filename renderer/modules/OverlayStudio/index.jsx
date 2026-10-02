@@ -109,23 +109,13 @@ export function OverlayStudio() {
     }
   }
 
-  // Header subtitle differs per view so users always know what state they're in.
   const subtitleList = 'Reusable text + barcode + logo overlays you can apply to many products at once. Templates are shared across companies — design once, use everywhere.';
-  const editingTemplate = templates.find((t) => t.id === editingId);
-  const subtitleEditor = editingTemplate
-    ? `Editing "${editingTemplate.name}" · ${editingTemplate.canvasWidth}×${editingTemplate.canvasHeight}`
-    : 'Editing template…';
 
   if (editingId) {
+    // The editor renders its own PageHeader: its save status and actions
+    // live in the header (docs/UI_GUIDE.md), and only the editor has them.
     return (
       <div className="page page--overlay">
-        <PageHeader
-          title="Overlay Studio"
-          subtitle={subtitleEditor}
-          backTo={{ module: 'overlay', label: 'All templates' }}
-          // Custom back handler: stay in the module, just leave the editor.
-          onBackOverride={() => setEditingId(null)}
-        />
         <TemplateEditor
           templateId={editingId}
           onClose={() => { setEditingId(null); refresh(); }}
@@ -141,16 +131,16 @@ export function OverlayStudio() {
         title="Overlay Studio"
         subtitle={subtitleList}
         actions={
-          <div style={{ display: 'flex', gap: 8 }}>
+          <>
             {templates.length > 0 && (
-              <Button variant="ghost" onClick={() => setExternalOpen(true)}>
+              <Button onClick={() => setExternalOpen(true)}>
                 Watermark external photos…
               </Button>
             )}
             <Button variant="primary" onClick={() => setCreateOpen(true)}>
               + New template
             </Button>
-          </div>
+          </>
         }
       />
 

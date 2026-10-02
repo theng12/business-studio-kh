@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Button } from './ui.jsx';
 import { confirm } from './ConfirmModal.jsx';
 import { useAppStore } from '../store/index.js';
+import { timeAgo } from '../lib/format.js';
 
 /**
  * v0.49.31: a small, self-contained "last backup was…" + "Create
@@ -84,17 +85,10 @@ export function formatBytes(n) {
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+/* Times come from renderer/lib/format.js (docs/UI_GUIDE.md). This export
+   stays as a thin wrapper for any caller that still imports it; "never"
+   is the one wording format.js has no reason to know. */
 export function relativeTime(ts) {
   if (!ts) return 'never';
-  const diff = Date.now() - Number(ts);
-  if (!Number.isFinite(diff)) return 'unknown';
-  if (diff < 0) return 'just now';
-  const min = Math.floor(diff / 60000);
-  if (min < 1) return 'just now';
-  if (min < 60) return `${min} min ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
-  try { return new Date(Number(ts)).toLocaleDateString(); } catch { return `${day} days ago`; }
+  return timeAgo(ts);
 }

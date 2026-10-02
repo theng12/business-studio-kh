@@ -140,7 +140,7 @@ export function RolesPanel({ addToast }) {
 
   return (
     <div className="roles-panel">
-      <p className="muted" style={{ marginBottom: 'var(--s-3)' }}>
+      <p className="roles-panel__intro">
         Roles control what each user can do. Pick a role to edit its capabilities, or
         create a new one. <strong>Admin</strong> always has full access and can’t be changed.
         Changes take effect on the server (clients pick them up on their next reconnect).
@@ -158,7 +158,14 @@ export function RolesPanel({ addToast }) {
             >
               <div className="role-card__name">
                 {r.name}
-                {r.isSystem ? <span className="role-card__lock" title="Locked">🔒</span> : null}
+                {r.isSystem ? (
+                  <span className="role-card__lock" title="Locked" aria-label="Locked">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                      <rect x="2.5" y="5.5" width="7" height="5" rx="1" stroke="currentColor" strokeWidth="1.2" />
+                      <path d="M4 5.5V4a2 2 0 0 1 4 0v1.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                    </svg>
+                  </span>
+                ) : null}
                 {r.isBuiltin && !r.isSystem ? <span className="role-card__tag">built-in</span> : null}
               </div>
               <div className="role-card__meta">{permCount(r)}</div>
@@ -218,10 +225,11 @@ export function RolesPanel({ addToast }) {
                 {draft.mode === 'edit' && selected && (
                   <Button variant="ghost" onClick={() => startCreate(selected)}>Clone</Button>
                 )}
-                {draft.mode === 'edit' && selected && !selected.isBuiltin && (
-                  <Button variant="ghost" onClick={() => remove(selected)}>Delete role</Button>
-                )}
                 <Button variant="ghost" onClick={() => { setDraft(null); setSelectedKey(null); }}>Cancel</Button>
+                {/* UI pass, 2026-10: destructive action last, in the danger style. */}
+                {draft.mode === 'edit' && selected && !selected.isBuiltin && (
+                  <Button variant="danger" className="roles-editor__delete" onClick={() => remove(selected)}>Delete role</Button>
+                )}
               </div>
             </div>
           )}
