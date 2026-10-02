@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Input, Select, EmptyState } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { priceEntry, formatPriceEntry } from '../../lib/prices.js';
 
 export function CostCalculator() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
@@ -103,7 +104,8 @@ export function CostCalculator() {
       const m = Number(targetMarginPct) || 0;
       if (m >= 100) { setRetailUsd(''); return; }
       const r = m <= 0 ? cost : cost / (1 - m / 100);
-      setRetailUsd(r.toFixed(4));
+      // A price, so cents — four decimals here read as a typo.
+      setRetailUsd(r.toFixed(2));
     } else if (lastEdited === 'retail') {
       const r = Number(retailUsd) || 0;
       if (r <= 0) { setTargetMarginPct(''); return; }
@@ -123,6 +125,7 @@ export function CostCalculator() {
     }).slice(0, 50);
   }, [products, productSearch]);
 
+  const selectedProduct = productId ? products.find((p) => p.id === productId) || null : null;
   const margin = Number(targetMarginPct) || 0;
   const cost = Number(landedCostUsd) || 0;
   const retail = Number(retailUsd) || 0;
@@ -170,6 +173,19 @@ export function CostCalculator() {
               <CostStat label="Latest landed" value={fmtUsd(costData.latestLandedCostUsd)} />
               <CostStat label="3-mo avg" value={fmtUsd(costData.avgLandedCostUsd3mo)} />
               <CostStat label="12-mo avg" value={fmtUsd(costData.avgLandedCostUsd12mo)} />
+            </div>
+          )}
+          {selectedProduct && (
+            <div className="costcalc__prices">
+              {['retail', 'wholesale'].map((src) => {
+                const entry = priceEntry(selectedProduct, src);
+                const label = src === 'retail' ? 'Retail' : 'Wholesale';
+                const m = marginAgainst(entry, Number(landedCostUsd) || 0);
+                return [
+                  <CostStat key={`${src}-price`} label={`Current ${label.toLowerCase()}`} value={entry.amount == null ? '—' : formatPriceEntry(entry)} />,
+                  <CostStat key={`${src}-margin`} label={`Margin at ${label.toLowerCase()}`} value={m.text} tone={m.tone} />,
+                ];
+              })}
             </div>
           )}
           {productId && !costData && (
@@ -273,6 +289,20 @@ function CostStat({ label, value, tone }) {
       <div className={`po-stat__value${tone ? ` po-stat__value--${tone}` : ''}`}>{value}</div>
     </div>
   );
+}
+
+/**
+ * Margin of a stored price over the landed cost (USD). Landed cost is always
+ * USD, so a price in another currency cannot be compared without a rate —
+ * say so instead of printing a wrong percentage. A price with no currency
+ * (rows from before v0.1.55) is taken as USD, as the rest of the app does.
+ */
+function marginAgainst(entry, cost) {
+  if (!entry || entry.amount == null || entry.amount <= 0) return { text: '—', tone: null };
+  if (entry.currency && entry.currency !== 'USD') return { text: `— (price in ${entry.currency})`, tone: null };
+  if (!(cost > 0)) return { text: '—', tone: null };
+  const pct = ((entry.amount - cost) / entry.amount) * 100;
+  return { text: `${pct.toFixed(1)}%`, tone: pct >= 0 ? 'emerald' : 'rose' };
 }
 
 function fmtUsd(n) {

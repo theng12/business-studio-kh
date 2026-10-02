@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, EmptyState, Input, Modal } from '../../components/ui.jsx';
+import { Button, EmptyState, Input, Modal, Pagination, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
@@ -10,6 +10,9 @@ import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { DesignControls } from './DesignControls.jsx';
 import { CatalogTemplateBuilder } from './TemplateBuilder.jsx';
+import { catalogIdLists, idsInSortOrder, mergeCatalogIds, moveToEdge } from './catalogSelection.js';
+import { keepTypedName } from '../LabelStudio/editorRules.js';
+import { appImageSrc } from '../../lib/imageUrl.js';
 
 /* v0.1.63: the design controls, the theme list and the card-field defaults all
  * moved out of this file so the template builder can share them. The five
@@ -125,36 +128,74 @@ function ProjectCard({ project, onOpen, onDuplicate, onDelete }) {
   </article>;
 }
 
+function ProductThumb({ product }) {
+  const src = product.mainImagePath ? appImageSrc(product.mainImagePath, product.contentHash || product.updatedAt, { w: 96 }) : null;
+  return <div className="catalog-product-avatar">{src ? <img src={src} alt="" loading="lazy" decoding="async" /> : String(product.sku || 'P').slice(0, 2).toUpperCase()}</div>;
+}
+
+const SORT_NAMES = { sku: 'SKU', name: 'product name' };
+
 function ProductManager({ products, config, onChange }) {
   const [query, setQuery] = useState('');
-  const activeProducts = useMemo(() => products.filter((p) => p.status !== 'inactive'), [products]);
-  const productMap = useMemo(() => new Map(activeProducts.map((p) => [p.id, p])), [activeProducts]);
-  const includedIds = useMemo(() => {
-    if (config.selectionMode === 'explicit') return (config.productIds || []).filter((id) => productMap.has(id));
-    if (config.productIds?.length) return config.productIds.filter((id) => productMap.has(id));
-    return activeProducts.map((p) => p.id);
-  }, [config.selectionMode, config.productIds, productMap, activeProducts]);
+  const [availablePage, setAvailablePage] = useState(0); const [availableSize, setAvailableSize] = useState(50);
+  const [includedPage, setIncludedPage] = useState(0); const [includedSize, setIncludedSize] = useState(50);
+  const productList = useMemo(() => (Array.isArray(products) ? products : []), [products]);
+  const allById = useMemo(() => new Map(productList.map((p) => [p.id, p])), [productList]);
+  const activeProducts = useMemo(() => productList.filter((p) => p.status !== 'inactive'), [productList]);
+  // includedIds: what prints. hiddenIds: saved ids that are inactive (or gone)
+  // — kept in place on every edit, see catalogSelection.js.
+  const { storedIds, includedIds, hiddenIds } = useMemo(() => catalogIdLists(config, productList), [config, productList]);
   const includedSet = useMemo(() => new Set(includedIds), [includedIds]);
   const normalized = query.trim().toLowerCase();
   const available = useMemo(() => activeProducts.filter((p) => !includedSet.has(p.id) && (!normalized || `${p.sku} ${p.name || ''} ${p.barcode || ''}`.toLowerCase().includes(normalized))), [activeProducts, includedSet, normalized]);
-  const included = includedIds.map((id) => productMap.get(id)).filter(Boolean);
-  function commit(ids, manual = false) {
-    onChange({ productIds: ids, selectionMode: 'explicit', brandIds: [], categoryIds: [], ...(manual ? { sortBy: 'manual' } : {}) });
+  const included = includedIds.map((id) => allById.get(id)).filter(Boolean);
+  const inactive = hiddenIds.map((id) => allById.get(id)).filter(Boolean);
+  // §10 pagination, one pager per list.
+  const availableInfo = paginate(available.length, availablePage, availableSize);
+  const includedInfo = paginate(included.length, includedPage, includedSize);
+  useEffect(() => { if (availablePage !== availableInfo.currentPage) setAvailablePage(availableInfo.currentPage); }, [availablePage, availableInfo.currentPage]);
+  useEffect(() => { if (includedPage !== includedInfo.currentPage) setIncludedPage(includedInfo.currentPage); }, [includedPage, includedInfo.currentPage]);
+  useEffect(() => { setAvailablePage(0); }, [normalized, availableSize]);
+  useEffect(() => { setIncludedPage(0); }, [includedSize]);
+  const availableShown = available.slice(availableInfo.pageStart, availableInfo.pageEnd);
+  const includedShown = included.slice(includedInfo.pageStart, includedInfo.pageEnd);
+  const sortBy = config.sortBy || 'manual';
+
+  function commit(visibleIds, { manual = false, dropHidden = false, keepHiddenIds = hiddenIds } = {}) {
+    const productIds = dropHidden ? [...visibleIds] : mergeCatalogIds(storedIds, visibleIds, keepHiddenIds);
+    onChange({ productIds, selectionMode: 'explicit', brandIds: [], categoryIds: [], ...(manual ? { sortBy: 'manual' } : {}) });
   }
   function move(id, direction) {
     const index = includedIds.indexOf(id); const target = index + direction;
     if (index < 0 || target < 0 || target >= includedIds.length) return;
-    const next = [...includedIds]; [next[index], next[target]] = [next[target], next[index]]; commit(next, true);
+    const next = [...includedIds]; [next[index], next[target]] = [next[target], next[index]]; commit(next, { manual: true });
+  }
+  async function removeAll() {
+    const count = included.length + inactive.length;
+    if (!count) return;
+    const ok = await confirm({
+      title: `Remove all ${count} product${count === 1 ? '' : 's'} from this catalog?`,
+      message: inactive.length
+        ? `That is ${included.length} shown and ${inactive.length} inactive. The catalog's order is lost, and there is no undo. Products in the library are not affected.`
+        : "The catalog's order is lost, and there is no undo. Products in the library are not affected.",
+      confirmLabel: 'Remove all',
+      danger: true,
+    });
+    if (ok) commit([], { dropHidden: true });
+  }
+  function applySortAsOrder() {
+    commit(idsInSortOrder(includedIds, allById, sortBy), { manual: true });
   }
   return <section className="catalog-product-manager">
-    <div className="catalog-product-manager__heading"><div><span>Catalog contents</span><strong>{included.length} product{included.length === 1 ? '' : 's'} included</strong><p>Pick products from the shared library, then arrange their catalog order.</p></div><Button variant="ghost" onClick={() => commit([])}>Remove all</Button></div>
+    <div className="catalog-product-manager__heading"><div><span>Catalog contents</span><strong>{included.length} product{included.length === 1 ? '' : 's'} included</strong><p>Pick products from the shared library, then arrange their catalog order.</p></div><div className="catalog-product-manager__actions">{sortBy !== 'manual' && included.length > 1 ? <Button variant="ghost" onClick={applySortAsOrder} title={`Save the ${SORT_NAMES[sortBy] || sortBy} order as this catalog's own order, then switch Sort by to Catalog order`}>Use {SORT_NAMES[sortBy] || sortBy} order as catalog order</Button> : null}<Button variant="ghost" disabled={!included.length && !inactive.length} onClick={removeAll}>Remove all</Button></div></div>
     <div className="catalog-product-columns">
       <section className="catalog-product-panel"><header><div><strong>Product Library</strong><span>{available.length} available</span></div><Button variant="ghost" disabled={!available.length} onClick={() => commit([...includedIds, ...available.map((p) => p.id)])}>Add all shown</Button></header><div className="catalog-product-search"><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search SKU, name or barcode" /></div><div className="catalog-product-list">
-        {available.length ? available.map((p) => <article key={p.id}><div className="catalog-product-avatar">{String(p.sku || 'P').slice(0, 2).toUpperCase()}</div><div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div><Button variant="ghost" onClick={() => commit([...includedIds, p.id])}>Add</Button></article>) : <div className="catalog-product-empty">{normalized ? 'No matching products outside this catalog.' : 'Every active product is already included.'}</div>}
-      </div></section>
-      <section className="catalog-product-panel catalog-product-panel--included"><header><div><strong>Included in catalog</strong><span>Shown in this order</span></div></header><div className="catalog-product-list">
-        {included.length ? included.map((p, index) => <article key={p.id}><span className="catalog-order-number">{index + 1}</span><div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div><div className="catalog-product-row-actions"><button type="button" aria-label={`Move ${p.sku} up`} disabled={index === 0} onClick={() => move(p.id, -1)}>↑</button><button type="button" aria-label={`Move ${p.sku} down`} disabled={index === included.length - 1} onClick={() => move(p.id, 1)}>↓</button><button type="button" onClick={() => commit(includedIds.filter((id) => id !== p.id))}>Remove</button></div></article>) : <div className="catalog-product-empty"><strong>No products added yet</strong><span>Add products from the library to build this catalog.</span></div>}
-      </div></section>
+        {availableShown.length ? availableShown.map((p) => <article key={p.id}><ProductThumb product={p} /><div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div><Button variant="ghost" onClick={() => commit([...includedIds, p.id])}>Add</Button></article>) : <div className="catalog-product-empty">{normalized ? 'No matching products outside this catalog.' : 'Every active product is already included.'}</div>}
+      </div><Pagination total={available.length} pageStart={availableInfo.pageStart} pageEnd={availableInfo.pageEnd} currentPage={availableInfo.currentPage} maxPage={availableInfo.maxPage} pageSize={availableSize} onPageChange={setAvailablePage} onPageSizeChange={setAvailableSize} /></section>
+      <section className="catalog-product-panel catalog-product-panel--included"><header><div><strong>Included in catalog</strong><span>{sortBy === 'manual' ? 'Shown in this order' : `Printed sorted by ${SORT_NAMES[sortBy] || sortBy}; this order applies with Catalog order`}</span></div></header><div className="catalog-product-list">
+        {includedShown.length ? includedShown.map((p, i) => { const index = includedInfo.pageStart + i; return <article key={p.id}><span className="catalog-order-number">{index + 1}</span><div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div><div className="catalog-product-row-actions"><button type="button" aria-label={`Move ${p.sku} to the top`} title="Move to top" disabled={index === 0} onClick={() => commit(moveToEdge(includedIds, p.id, 'top'), { manual: true })}>⤒</button><button type="button" aria-label={`Move ${p.sku} up`} disabled={index === 0} onClick={() => move(p.id, -1)}>↑</button><button type="button" aria-label={`Move ${p.sku} down`} disabled={index === included.length - 1} onClick={() => move(p.id, 1)}>↓</button><button type="button" aria-label={`Move ${p.sku} to the bottom`} title="Move to bottom" disabled={index === included.length - 1} onClick={() => commit(moveToEdge(includedIds, p.id, 'bottom'), { manual: true })}>⤓</button><button type="button" onClick={() => commit(includedIds.filter((id) => id !== p.id))}>Remove</button></div></article>; }) : <div className="catalog-product-empty"><strong>No products added yet</strong><span>Add products from the library to build this catalog.</span></div>}
+        {inactive.length ? <div className="catalog-product-hidden"><p>{inactive.length} inactive — hidden from the catalog. They keep their place and print again if reactivated.</p>{inactive.map((p) => <article key={p.id} className="is-inactive"><ProductThumb product={p} /><div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'} · inactive — hidden from the catalog</span></div><div className="catalog-product-row-actions"><button type="button" onClick={() => commit(includedIds, { keepHiddenIds: hiddenIds.filter((id) => id !== p.id) })}>Remove</button></div></article>)}</div> : null}
+      </div><Pagination total={included.length} pageStart={includedInfo.pageStart} pageEnd={includedInfo.pageEnd} currentPage={includedInfo.currentPage} maxPage={includedInfo.maxPage} pageSize={includedSize} onPageChange={setIncludedPage} onPageSizeChange={setIncludedSize} /></section>
     </div>
   </section>;
 }
@@ -174,6 +215,9 @@ export function CatalogEditor({ projectId, onBack }) {
   const catalogPriceGroups = (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [];
   const [project, setProject] = useState(null); const [preview, setPreview] = useState(''); const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null);
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [tab, setTab] = useState('products'); const timer = useRef(null);
+  // The PDF this session exported last, for the "Open PDF" button.
+  const [lastExport, setLastExport] = useState(null);
+  const [printing, setPrinting] = useState(false);
   // v0.1.63: the template builder, opened from this project's design.
   const [templateDraft, setTemplateDraft] = useState(null);
   /* v0.1.27: the pending edit is FLUSHED on unmount, not thrown away. The
@@ -197,7 +241,9 @@ export function CatalogEditor({ projectId, onBack }) {
           if (generation !== editorGeneration.current) return;
           acknowledgedRevision.current = row.updatedAt;
           if (latest.current !== value) return;
-          setProject(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
+          // Keep a typed trailing space in the name box (see keepTypedName).
+          const adopted = keepTypedName(value, row);
+          setProject(adopted); latest.current = adopted; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
         },
         onError: (e) => {
           if (generation !== editorGeneration.current) return;
@@ -293,6 +339,7 @@ export function CatalogEditor({ projectId, onBack }) {
       const baselineRevision = acknowledgedRevision.current;
       const res = await window.api.catalogStudio.exportPdf(exportDraft.id, folder);
       setProgress(100);
+      setLastExport(res.outputPath);
       addToast(`Catalog exported to ${res.outputPath}`, 'success');
       const row = await window.api.catalogStudio.get(exportDraft.id);
       const ownsBaseline = generation === editorGeneration.current
@@ -313,6 +360,22 @@ export function CatalogEditor({ projectId, onBack }) {
       }
     }
     catch (e) { addToast(parseConflictError(e) ? 'This catalog changed elsewhere. Use Save to review it before exporting.' : e.message, 'error'); } finally { if (pulse) clearInterval(pulse); setWorking(false); }
+  }
+  async function openExport() {
+    if (!lastExport) return;
+    // The same open-a-file channel Label History uses; it runs on this Mac,
+    // which is where the export was written.
+    try { await window.api.labels.openOutput(lastExport); } catch (e) { addToast(e.message, 'error'); }
+  }
+  async function printCatalog() {
+    setPrinting(true);
+    try {
+      if (dirty.current) await flushPending();
+      const res = await window.api.catalogStudio.print((latest.current || project).id);
+      if (res?.openedPdf) addToast('The catalog PDF is open in Preview — print it from there (⌘P).', 'info');
+    } catch (e) {
+      addToast(parseConflictError(e) ? 'This catalog changed elsewhere. Use Save to review it before printing.' : e.message, 'error');
+    } finally { setPrinting(false); }
   }
   if (!project) return <div className="page-loading">Loading catalog…</div>;
   if (templateDraft) {
@@ -339,7 +402,7 @@ export function CatalogEditor({ projectId, onBack }) {
         title="Open this catalog's layout in the template builder — the products stay with the catalog."
       >
         Save as template
-      </Button><Button onClick={exportPdf}>Export PDF</Button></>} />
+      </Button><Button variant="ghost" onClick={printCatalog} disabled={printing || working}>{printing ? 'Preparing…' : 'Print…'}</Button>{lastExport ? <Button variant="ghost" onClick={openExport} title={lastExport}>Open PDF</Button> : null}<Button onClick={exportPdf}>Export PDF</Button></>} />
     <div className="catalog-editor-tabs"><button type="button" className={tab === 'products' ? 'is-active' : ''} onClick={() => setTab('products')}><span>1</span><div><strong>Products</strong><small>Choose and arrange catalog items</small></div></button><button type="button" className={tab === 'design' ? 'is-active' : ''} onClick={() => setTab('design')}><span>2</span><div><strong>Layout & design</strong><small>Style pages and product cards</small></div></button></div>
     {tab === 'products' ? <div className="catalog-product-workspace"><ProductManager products={products} config={c} onChange={updateConfig} /><LivePreview preview={preview} onRefresh={refreshPreview} /></div> :
       <div className="catalog-editor"><aside className="catalog-controls"><section><h3>Project</h3><label>Name<Input value={project.name} onChange={(e) => change({ name: e.target.value })} /></label><label>Description<Input value={project.description || ''} onChange={(e) => change({ description: e.target.value })} /></label></section>

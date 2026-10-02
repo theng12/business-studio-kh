@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Input, Modal, Select } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
+import { confirm } from '../../components/ConfirmModal.jsx';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
@@ -10,6 +11,7 @@ import { DesignerCanvas } from './DesignerCanvas.jsx';
 import { DesignerLayers } from './DesignerLayers.jsx';
 import { useDesignerHistory } from './useDesignerHistory.js';
 import { alignPatches, distributePatches, normalizeElements } from './designerGeometry.js';
+import { keepTypedName } from './editorRules.js';
 
 const TYPES = [
   ['text', 'Text'], ['sku', 'SKU'], ['price', 'Price'], ['barcode', 'Barcode'], ['qr', 'QR code'],
@@ -70,7 +72,9 @@ const ALIGN_MODES = [
   ['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom'],
 ];
 
-function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, onRemove, onPickImage, onDuplicate, onLayer }) {
+const NON_TEXT_TYPES = ['rect', 'colorbar', 'divider', 'productImage', 'logo', 'image', 'cert', 'barcode', 'qr'];
+
+function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, onFieldFocus, onRemove, onPickImage, onDuplicate, onLayer }) {
   if (!element && selectionCount > 1) {
     // v0.1.64: with several elements selected the single-element form would be a
     // lie. Say what is selected and point at the tools that act on a group.
@@ -93,16 +97,24 @@ function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, on
     );
   }
   if (!element) return <aside className="studio-inspector studio-inspector--empty"><div className="inspector-empty-icon">◇</div><strong>Select an element</strong><p>Click any object on the label, or a row in the Layers list, to adjust its content and layout.</p></aside>;
-  const set = (key, value) => onChange({ [key]: value });
-  return <aside className="studio-inspector"><div className="inspector-title"><div><span>{element.type}</span><strong>{TYPES.find(([id]) => id === element.type)?.[1] || element.type}</strong></div><Button variant="ghost" onClick={onRemove}>Remove</Button></div>
+  // `key` travels with the patch so the designer can record ONE undo step per
+  // field edit (see changeFromInspector), not one per keystroke.
+  const set = (key, value) => onChange({ [key]: value }, key);
+  // Any field gaining focus starts a new edit: its first change pushes history.
+  return <aside className="studio-inspector" onFocusCapture={onFieldFocus}><div className="inspector-title"><div><span>{element.type}</span><strong>{TYPES.find(([id]) => id === element.type)?.[1] || element.type}</strong></div><Button variant="ghost" onClick={onRemove}>Remove</Button></div>
     {!['rect', 'colorbar', 'divider', 'productImage', 'logo', 'image', 'cert'].includes(element.type) ? <>
       <label>Product field<Select value={element.field || 'name'} onChange={(e) => set('field', e.target.value)}>{fieldOptions(priceGroups).map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></label>
       <label>Manual text<Input value={element.manualValue || ''} placeholder="Uses product field when empty" onChange={(e) => set('manualValue', e.target.value)} /></label>
     </> : null}
+    {!NON_TEXT_TYPES.includes(element.type) ? <div className="inspector-grid">
+      <label>Prefix<Input value={element.prefix || ''} placeholder="e.g. $" onChange={(e) => set('prefix', e.target.value)} /></label>
+      <label>Suffix<Input value={element.suffix || ''} placeholder="e.g. USD" onChange={(e) => set('suffix', e.target.value)} /></label>
+      {/^(priceRetail|priceWholesale|price\.)/.test(element.field || '') && !element.manualValue ? <p className="ld-inspector-note">Prices print as a plain number, like 1,234.50. Put the currency in Prefix or Suffix.</p> : null}
+    </div> : null}
     {['image', 'cert'].includes(element.type) ? <Button variant="ghost" onClick={onPickImage}>{element.src ? 'Replace image…' : 'Choose image…'}</Button> : null}
     <div className="inspector-grid"><label>X (mm)<Input type="number" value={element.x} onChange={(e) => set('x', Number(e.target.value))} /></label><label>Y (mm)<Input type="number" value={element.y} onChange={(e) => set('y', Number(e.target.value))} /></label><label>Width<Input type="number" value={element.width} onChange={(e) => set('width', Number(e.target.value))} /></label><label>Height<Input type="number" value={element.height} onChange={(e) => set('height', Number(e.target.value))} /></label></div>
     <label>Rotation<Input type="number" min="-180" max="180" value={element.rotation || 0} onChange={(e) => set('rotation', Number(e.target.value))} /></label>
-    {!['rect', 'colorbar', 'divider', 'productImage', 'logo', 'image', 'cert', 'barcode', 'qr'].includes(element.type) ? <div className="inspector-grid"><label>Font size<Input type="number" value={element.fontSize || 10} onChange={(e) => set('fontSize', Number(e.target.value))} /></label><label>Weight<Select value={element.fontWeight || 400} onChange={(e) => set('fontWeight', Number(e.target.value))}><option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Heavy</option></Select></label><label>Color<Input type="color" value={element.color || '#111827'} onChange={(e) => set('color', e.target.value)} /></label><label>Align<Select value={element.align || 'left'} onChange={(e) => set('align', e.target.value)}><option>left</option><option>center</option><option>right</option></Select></label></div> : null}
+    {!NON_TEXT_TYPES.includes(element.type) ? <div className="inspector-grid"><label>Font size<Input type="number" value={element.fontSize || 10} onChange={(e) => set('fontSize', Number(e.target.value))} /></label><label>Weight<Select value={element.fontWeight || 400} onChange={(e) => set('fontWeight', Number(e.target.value))}><option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Heavy</option></Select></label><label>Color<Input type="color" value={element.color || '#111827'} onChange={(e) => set('color', e.target.value)} /></label><label>Align<Select value={element.align || 'left'} onChange={(e) => set('align', e.target.value)}><option>left</option><option>center</option><option>right</option></Select></label></div> : null}
     {['rect', 'colorbar'].includes(element.type) ? <label>Fill<Input type="color" value={element.fill || '#eef2ff'} onChange={(e) => set('fill', e.target.value)} /></label> : null}
     {element.type === 'barcode' ? <label>Format<Select value={element.format || 'code128'} onChange={(e) => set('format', e.target.value)}><option value="code128">Code 128</option><option value="ean13">EAN-13</option><option value="upca">UPC-A</option><option value="code39">Code 39</option></Select></label> : null}
     <div className="inspector-actions"><Button variant="ghost" onClick={onDuplicate}>Duplicate</Button><Button variant="ghost" onClick={() => onLayer(-1)}>Send back</Button><Button variant="ghost" onClick={() => onLayer(1)}>Bring front</Button></div>
@@ -117,8 +129,13 @@ export function LabelTemplates() {
   const timer = useRef(null);
   // v0.1.64: designer state — zoom, snapping, and undo/redo history.
   const [zoom, setZoom] = useState('fit');
+  // Which product the canvas and its real render preview with. Empty = the
+  // first product, as before; a deleted product falls back the same way.
+  const [sampleId, setSampleId] = useState('');
   const [snap, setSnap] = useState(true);
   const history = useDesignerHistory();
+  const productList = Array.isArray(products) ? products : [];
+  const sample = productList.find((p) => p.id === sampleId) || productList[0];
   const selected = selectedIds.length === 1 ? (draft?.elements?.find((x) => x.id === selectedIds[0]) || null) : null;
   // v0.1.79: this company's price groups, so a label can print one of them.
   const companies = useAppStore((s) => s.companies);
@@ -179,7 +196,9 @@ export function LabelTemplates() {
           if (generation !== editorGeneration.current) return;
           acknowledgedRevision.current = row.updatedAt;
           if (latest.current !== value) return;
-          setDraft(row); latest.current = row; dirty.current = false; setEditing(row.id); setSaveState('saved'); setSavedAt(Date.now()); setItems((all) => all.map((x) => x.id === row.id ? row : x));
+          // Keep a typed trailing space in the name box (see keepTypedName).
+          const adopted = keepTypedName(value, row);
+          setDraft(adopted); latest.current = adopted; dirty.current = false; setEditing(row.id); setSaveState('saved'); setSavedAt(Date.now()); setItems((all) => all.map((x) => x.id === row.id ? row : x));
         },
         onError: (e) => {
           if (generation !== editorGeneration.current) return;
@@ -239,6 +258,19 @@ export function LabelTemplates() {
   useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
   const change = useCallback((patch) => { if (companySwitching) return; remoteSeq.current += 1; const next = { ...draft, ...patch }; setDraft(next); latest.current = next; dirty.current = true; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }, [companySwitching, draft, save]);
   const changeElement = useCallback((id, patch) => { change({ elements: draft.elements.map((x) => x.id === id ? { ...x, ...patch } : x) }); }, [draft, change]);
+  /* Inspector edits are undoable. The first change to a field after it gains
+   * focus records the pre-edit elements; the rest of that edit (each keystroke
+   * in "Font size", a colour-picker drag) folds into the same step. Focusing
+   * any field, changing the selection, or undo/redo starts a new step. */
+  const inspectorEditKey = useRef(null);
+  const changeFromInspector = useCallback((patch, key = Object.keys(patch).join(',')) => {
+    const id = selectedIds[0];
+    if (!id || !draft) return;
+    const editKey = `${id}:${key}`;
+    if (inspectorEditKey.current !== editKey) { history.push(draft.elements); inspectorEditKey.current = editKey; }
+    changeElement(id, patch);
+  }, [selectedIds, draft, history, changeElement]);
+  useEffect(() => { inspectorEditKey.current = null; }, [selectedIds]);
   /* v0.1.64: every structural edit goes through these, so each one pushes a
    * single history entry and the selection follows the change. */
   function setElements(updater) {
@@ -319,10 +351,12 @@ export function LabelTemplates() {
     setElements(draft.elements.map((el) => (byId.has(el.id) ? { ...el, ...byId.get(el.id) } : el)));
   }
   function undo() {
+    inspectorEditKey.current = null;
     const previous = history.undo(draft.elements);
     if (previous) { change({ elements: previous }); setSelectedIds([]); }
   }
   function redo() {
+    inspectorEditKey.current = null;
     const next = history.redo(draft.elements);
     if (next) { change({ elements: next }); setSelectedIds([]); }
   }
@@ -339,7 +373,7 @@ export function LabelTemplates() {
     return undefined;
   }
 
-  async function pickElementImage() { try { const source = await window.api.files.pickImageFile(); if (!source) return; const imported = await window.api.labels.importAsset(source, draft.name); changeElement(selected.id, { src: imported.relativePath }); } catch (e) { addToast(e.message, 'error'); } }
+  async function pickElementImage() { try { const source = await window.api.files.pickImageFile(); if (!source) return; const imported = await window.api.labels.importAsset(source, draft.name); history.push(draft.elements); changeElement(selected.id, { src: imported.relativePath }); } catch (e) { addToast(e.message, 'error'); } }
   async function createTemplate() { try { const row = await window.api.labels.createTemplate({ companyId, name: newName || 'Untitled label', widthMm: 60, heightMm: 40, backgroundColor: '#ffffff', elements: [] }); editorGeneration.current += 1; saveQueue.current = null; latest.current = row; acknowledgedRevision.current = row.updatedAt; dirty.current = false; setItems((x) => [row, ...x]); setDraft(row); setEditing(row.id); setSelectedIds([]); history.reset(); setNewOpen(false); setNewName(''); } catch (e) { addToast(e.message, 'error'); } }
   /* v0.1.27: fetch BEFORE switching which template the editor shows.
    * `setEditing(item.id)` used to run first, so if the fetch failed the editor
@@ -415,6 +449,14 @@ export function LabelTemplates() {
           actions={(
             <>
               <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
+              {productList.length ? (
+                <label className="ld-sample-picker" title="The product the canvas and preview are drawn with">
+                  <span>Preview with</span>
+                  <Select value={sample?.id || ''} onChange={(e) => setSampleId(e.target.value)}>
+                    {productList.map((p) => <option key={p.id} value={p.id}>{p.sku ? `${p.sku} — ` : ''}{p.name || 'Unnamed product'}</option>)}
+                  </Select>
+                </label>
+              ) : null}
               <Button variant="ghost" onClick={undo} disabled={!history.canUndo} title="Undo (⌘Z)">Undo</Button>
               <Button variant="ghost" onClick={redo} disabled={!history.canRedo} title="Redo (⇧⌘Z)">Redo</Button>
               <Button variant="ghost" onClick={leaveEditor}>Back to templates</Button>
@@ -491,7 +533,7 @@ export function LabelTemplates() {
               onZoomChange={setZoom}
               snap={snap}
               onSnapChange={setSnap}
-              sample={products[0]}
+              sample={sample}
               onAction={handleCanvasAction}
             />
             <DesignerLayers
@@ -505,7 +547,8 @@ export function LabelTemplates() {
             element={selected}
             selectionCount={selectedIds.length}
             priceGroups={priceGroups}
-            onChange={(patch) => changeElement(selectedIds[0], patch)}
+            onChange={changeFromInspector}
+            onFieldFocus={() => { inspectorEditKey.current = null; }}
             onRemove={() => removeElements()}
             onPickImage={pickElementImage}
             onDuplicate={() => duplicateElement()}

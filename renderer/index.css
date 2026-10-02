@@ -17,9 +17,26 @@
   /* Layout */
   --sidebar-width: 220px;
   --titlebar-height: 38px;
+  /* Radii — THE scale (UI pass, 2026-10). The later "studio shell" block
+     hard-codes 7/9/11/12/13/15/16/17px; page packages map those onto these:
+       sm  6  — buttons, inputs, chips, small swatches
+       md  8  — cards, tables, toolbars, empty states
+       lg 10  — modals, large panels
+       xl 14  — feature/hero cards (the studio's 15–17px cards)
+       pill   — status pills, segmented controls */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+
+  /* Type scale. Nothing in the app goes below --fs-xs; the studio block's
+     8–10.5px labels move up to 11px when their page is converted. */
+  --fs-xs: 11px;   /* uppercase table headers, meta, badges */
+  --fs-sm: 12px;   /* hints, secondary text, small buttons */
+  --fs-md: 13px;   /* body UI text, buttons, inputs, section titles */
+  --fs-lg: 15px;   /* modal titles, card titles, empty-state titles */
+  --fs-xl: 22px;   /* page titles */
 
   /* Shadows */
   --shadow-modal: 0 12px 32px rgba(20, 20, 28, 0.18), 0 2px 6px rgba(20, 20, 28, 0.08);
@@ -41,6 +58,15 @@
   --c-active-bg: #eeeef1;
   --c-hover-bg:  #f1f1f4;
   --c-logo-bg:   #f7f7f8;
+
+  /* Brand = the near-black primary. There is ONE accent: primary buttons,
+     the selected card ring, the focus ring and the active segment all use
+     it. The studio block's indigo (#6366f1 / #4f46e5) is retired — page
+     packages replace it with these two tokens. --c-brand-soft is the
+     selection / active fill (same grey as the active sidebar item, §1). */
+  --c-brand:      #1c1c1f;
+  --c-brand-fg:   #ffffff;
+  --c-brand-soft: #eeeef1;
 
   --c-emerald:   #047857;
   --c-amber:     #b45309;
@@ -66,6 +92,10 @@
   --c-active-bg: #24242a;
   --c-hover-bg:  #1d1d22;
   --c-logo-bg:   #e8e8ea;   /* logos still sit on a near-white plate */
+
+  --c-brand:      #f0f0f3;
+  --c-brand-fg:   #17171b;
+  --c-brand-soft: #24242a;
 
   --c-emerald:   #34d399;
   --c-amber:     #fbbf24;
@@ -144,16 +174,25 @@ input, textarea, select {
      mode side-by-side windows, etc.) the actions cluster
      (search + view toggle + buttons) used to refuse to shrink and
      pushed everything horizontally. flex-wrap lets the actions
-     fall to a second row instead. */
-  flex-wrap: wrap;
+     fall to a second row instead.
+     UI pass, 2026-10: no longer wraps. With `wrap`, any header whose
+     actions were wider than the free space dropped the WHOLE action block
+     under the title. Now the title keeps >= 300px and the action block
+     shrinks beside it, wrapping its own buttons onto right-aligned rows
+     (`.page__header-right` / `.page__header-actions`). Only a very narrow
+     window (below) stacks the two. */
+  flex-wrap: nowrap;
 }
 
 .page__header-left {
   display: flex;
   align-items: flex-start;
   gap: var(--s-3);
+  /* Never squeezed below 300px by the actions (grow yes, shrink no), so a
+     back button + "Product Library" stays on one line; the action block
+     takes whatever is left and wraps its buttons. */
   min-width: 0;
-  flex: 1 1 280px;
+  flex: 1 0 300px;
 }
 
 .page__header-titles { min-width: 0; }
@@ -200,6 +239,8 @@ input, textarea, select {
   background: var(--c-surface);
   color: var(--c-text-muted);
   font-size: 12.5px;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
 }
 
@@ -646,6 +687,8 @@ button.sidebar__storage-tag:focus-visible { outline: 2px solid #10b981; outline-
   color: var(--c-text-subtle);
   text-align: center;
 }
+/* v0.1.89: a failed search is not "no matches". */
+.palette__empty--error { color: var(--c-rose); }
 
 /* v0.22.1: side-panel toggle button in the Library toolbar.
    Visually distinct from the Table/Grid segmented control so the
@@ -2573,19 +2616,40 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .btn {
   display: inline-flex;
   align-items: center;
+  /* UI pass, 2026-10: a button stretched by a grid/flex parent used to
+     left-align its label, and a squeezed one wrapped "Open in builder"
+     onto two lines. Labels are centred and stay on one line; a row of
+     buttons that can run out of room must wrap the ROW (flex-wrap). */
+  justify-content: center;
+  white-space: nowrap;
   gap: var(--s-2);
   padding: 7px 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--c-border-strong);
   background: var(--c-surface);
   color: var(--c-text);
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 500;
+  line-height: 1.25;
   cursor: pointer;
 }
+.btn > svg { flex-shrink: 0; }
 
 .btn:hover { background: var(--c-hover-bg); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 2px; }
+
+/* Dense rows: table rows, card footers, toolbars inside panels. */
+.btn--sm {
+  padding: 4px 10px;
+  gap: 6px;
+  font-size: var(--fs-sm);
+}
+/* Full width of the container (mobile-style CTA, side-panel actions). */
+.btn--block {
+  display: flex;
+  width: 100%;
+}
 
 .btn--primary {
   background: var(--c-accent);
@@ -2874,9 +2938,26 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
      made this block refuse to shrink — so the actions cluster rendered at
      full intrinsic width and OVERFLOWED the page instead of letting the
      inner `.page__header-actions` (which has flex-wrap) drop buttons to a
-     second line. Allowing shrink + min-width:0 lets the wrap actually fire. */
-  flex: 1 1 auto;
+     second line. Allowing shrink + min-width:0 lets the wrap actually fire.
+     UI pass, 2026-10: was `flex: 1 1 auto` with the default
+     `justify-content: flex-start`, so the block GREW to fill the space
+     next to the title and its buttons sat at its left edge — i.e. in the
+     middle of the page. Now it is only as wide as its buttons (grow 0),
+     packs them to the right edge, and when it must shrink the buttons
+     wrap onto further right-aligned rows beside the title. */
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  margin-left: auto;
   min-width: 0;
+}
+
+/* Only a genuinely narrow window stacks title and actions; the actions row
+   then spans the width and stays right-aligned. Placed after the rules
+   above so its flex-basis wins. */
+@media (max-width: 760px) {
+  .page__header { flex-wrap: wrap; }
+  .page__header-left { flex: 1 1 100%; }
+  .page__header-right { flex: 1 1 100%; }
 }
 
 /* v0.22.16: removed `.company-chip` and friends — the active-company
@@ -3185,6 +3266,8 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .dash-attention__chip:not(.is-static):not(:disabled):hover { border-color: var(--accent, #2563eb); }
 .dash-attention__chip.is-static { cursor: default; }
 .dash-attention__chip:disabled { opacity: 0.5; cursor: default; }
+/* Operations card (costing.view): open POs, in transit, owed to suppliers. */
+.dash-ops__note { margin: 8px 0 0; font-size: 12px; color: var(--c-text-muted); }
 
 .dash-panel {
   background: var(--c-surface);
@@ -3613,6 +3696,11 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   color: var(--c-rose);
 }
 .btn--danger:hover { background: #fff5f5; }
+[data-theme="dark"] .btn--danger:hover { background: rgba(248, 113, 113, 0.12); }
+/* v0.1.89: Company → Edit → "Delete company…": quiet text, red only on hover,
+   so it never reads as the dialog's main action. */
+.company-form__delete { color: var(--c-text-muted); }
+.company-form__delete:hover { color: var(--c-rose); }
 
 /* ─── Modal sizing ──────────────────────────────────────────── */
 
@@ -4020,6 +4108,18 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 /* v0.26.31: global History page. Simple read-only table; cross-entity
    feed. Reuses the per-action border colours from the per-entity
    history modal via the entity-kind chip below. */
+/* v0.1.89: what / who / when / text filters above the table. */
+.page--history .history-page__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.page--history .history-page__filters .input,
+.page--history .history-page__filters select { width: auto; }
+.page--history .history-page__date { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--c-text-muted); }
+.page--history .history-page__search { flex: 1 1 220px; min-width: 180px; }
 .page--history .history-page__count {
   font-size: 12.5px;
   color: var(--c-text-muted);
@@ -4227,6 +4327,251 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   font-size: 13px;
   margin: 0 0 var(--s-4);
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  SHARED PATTERNS — UI pass, 2026-10 (docs/UI_GUIDE.md)
+ *
+ *  The one place page packages pull layout pieces from, instead of each
+ *  screen growing its own card / table / toolbar / heading. Everything
+ *  here is built from the :root tokens (radius, --fs-*, --c-brand), so
+ *  light and dark both follow. New classes only; nothing above is
+ *  restyled except where a comment says so.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* — Empty state: always full width (spans every column of a card grid,
+     fills a flex row), with an optional second action beside the first. */
+.empty {
+  width: 100%;
+  grid-column: 1 / -1;
+}
+.empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-2);
+}
+.empty__body:last-child { margin-bottom: 0; }
+
+/* — Section title: ONE heading style for a block inside a page.
+     Sentence case, 13px / 600, never uppercase. A muted one-line hint may
+     sit beside it, and actions may sit at the right of the row:
+       <div class="section-head">
+         <h2 class="section-title">My templates</h2>
+         <p class="section-hint">Yours to edit and reuse.</p>
+         <div class="section-head__actions">…</div>
+       </div>                                                           */
+.section-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--c-text);
+  text-transform: none;
+  letter-spacing: 0;
+  margin: var(--s-6) 0 var(--s-3);
+}
+.section-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-2);
+  margin: var(--s-6) 0 var(--s-3);
+}
+.section-head > .section-title { margin: 0; }
+.section-head:first-child,
+.section-title:first-child { margin-top: 0; }
+.section-hint {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  margin: 0;
+}
+.section-head__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-left: auto;
+  align-self: center;
+}
+
+/* — Toolbar: the row between the page header and the content.
+     search · sort · count · [spacer] · segmented view switch · buttons.
+     Based on `.list-tools` (Brands / Categories / Suppliers). */
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+  margin: 0 0 var(--s-4);
+}
+.toolbar .search-wrap { flex: 0 1 280px; min-width: 200px; }
+.toolbar .search-wrap .search-input { width: 100%; }
+.toolbar .input { width: auto; }
+.toolbar__spacer { flex: 1; }
+.toolbar__count {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  white-space: nowrap;
+}
+
+/* Segmented control: a track of `.segment` buttons (the existing
+   Table/Grid toggle style). Usable in a toolbar or anywhere else. */
+.segments {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--c-active-bg);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.segments .segment { white-space: nowrap; }
+
+/* — Card: one surface for a thing in a grid (template, project, brand).
+       <article class="card [is-selected]">
+         <div class="card__media">…preview…</div>          optional
+         <div class="card__body">
+           <span class="card__eyebrow">Price focused</span> optional
+           <h3 class="card__title">Wholesale price catalog</h3>
+           <p class="card__meta">Four columns · SKU, unit, price</p>
+         </div>
+         <div class="card__actions">
+           <Button variant="primary">Use</Button>  <Button>Preview</Button>
+           <Button variant="danger">Delete</Button>   ← pushed to the end
+         </div>
+       </article>                                                        */
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.card.is-selected {
+  border-color: var(--c-brand);
+  box-shadow: 0 0 0 1px var(--c-brand);
+}
+.card__media {
+  background: var(--c-bg);
+  border-bottom: 1px solid var(--c-border);
+}
+.card__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  flex: 1;
+  min-width: 0;
+  padding: var(--s-4);
+}
+.card__eyebrow {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-text-subtle);
+}
+.card__title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.card__meta {
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+  line-height: 1.4;
+  margin: 0;
+}
+.card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--c-border);
+  margin-top: auto;
+}
+/* Destructive action always last, at the far end of the row. */
+.card__actions > .btn--danger,
+.card__actions > .card__actions-end { margin-left: auto; }
+
+/* Denser grid for small cards (templates, projects); `.card-grid` stays 360px. */
+.card-grid--compact { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
+/* — Data table: based on `.suppliers-table`, the cleanest existing one.
+       <div class="data-table-wrap"><table class="data-table">…</table></div>
+     Row modifiers: .is-clickable (whole row opens the item), .is-selected,
+     .is-muted (archived). Cell modifiers: .is-num (right, tabular),
+     .is-check (checkbox column), .is-actions (row buttons, right). */
+.data-table-wrap {
+  overflow-x: auto;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-md);
+}
+.data-table thead th {
+  text-align: left;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--c-text-muted);
+  white-space: nowrap;
+  padding: 10px 12px;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+}
+.data-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--c-border);
+  vertical-align: middle;
+}
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table--sticky thead th { position: sticky; top: 0; z-index: 1; }
+.data-table .is-num { text-align: right; font-variant-numeric: tabular-nums; }
+.data-table .is-check { width: 28px; padding-right: 0; }
+.data-table .is-actions { text-align: right; white-space: nowrap; }
+.data-table .is-actions .btn + .btn { margin-left: var(--s-1); }
+.data-table tbody tr.is-clickable { cursor: pointer; transition: background 80ms; }
+.data-table tbody tr.is-clickable:hover { background: var(--c-hover-bg); }
+.data-table tbody tr.is-selected { background: var(--c-brand-soft); }
+.data-table tbody tr.is-muted td { opacity: 0.55; }
+
+/* — Save status: the error state (SaveStatus.jsx). The other states'
+     colours live with the pill in the studio block; these selectors carry
+     two classes so they win regardless of order. When retry is possible
+     the pill is a <button>. */
+.save-status.save-status--error {
+  color: var(--c-rose);
+  background: rgba(185, 28, 28, 0.07);
+  border-color: rgba(185, 28, 28, 0.22);
+}
+.save-status.save-status--error .save-status__dot {
+  background: var(--c-rose);
+  box-shadow: 0 0 0 3px rgba(185, 28, 28, 0.12);
+  animation: none;
+}
+button.save-status { font: inherit; font-size: 12px; cursor: pointer; }
+button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12); }
+.save-status__button:disabled { opacity: 0.6; cursor: default; }
+
+/* — Compatibility for the className merge (ui.jsx). Before the merge,
+     <Select className="…"> dropped `.input`; now it keeps it, and
+     `.input { width: 100% }` would stretch these inline selects across
+     their toolbars. Two classes beat `.input` wherever it sits. */
+.input.list-tools__sort,
+.input.lib-csv-select { width: auto; }
+
+/* `.btn` no longer wraps its label, so this bar (Library bulk actions)
+   wraps its row instead of overflowing a narrow middle column. */
+.lib-bulk-toolbar { flex-wrap: wrap; }
 
 /* What's new list */
 .whats-new-entry {
@@ -7824,6 +8169,16 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .ovl-canvas--truthful .ovl-element__image:has(.ovl-element__image-placeholder) {
   opacity: 1;
 }
+/* The element being dragged, resized or rotated is drawn live over the
+   render (EditorCanvas `liveId`), until a render that includes the move
+   lands. Its drawing uses the same pixel scale as the render, so the hand-off
+   does not jump; without this the element looked frozen mid-drag and then
+   leapt to its new place. */
+.ovl-canvas--truthful .ovl-element.is-live .ovl-element__text,
+.ovl-canvas--truthful .ovl-element.is-live .ovl-element__barcode,
+.ovl-canvas--truthful .ovl-element.is-live .ovl-element__image {
+  opacity: 1;
+}
 
 /* Status indicator dot in the meta line. Three states — busy (amber
    pulse), live (green), approx (slate). Inline-block so it sits on
@@ -9819,6 +10174,8 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .suppliers-row.is-selected {
   background: var(--c-active-bg, rgba(37, 99, 235, 0.06));
 }
+/* View-only (costing.view without costing.manage): rows do not open the editor. */
+.suppliers-row.is-readonly { cursor: default; }
 
 /* Form sections inside the supplier modal — visually group the Contact
  * fields so the modal doesn't read as one long undifferentiated list. */
@@ -9904,6 +10261,15 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   color: var(--c-text-muted, #71717a);
 }
 .po-section__header .po-section__title { margin-bottom: 0; }
+/* The header fields sit in a <fieldset> so a view-only user gets them all
+ * disabled at once; strip the browser's fieldset frame so it lays out as the
+ * plain .form-grid it replaced. */
+.po-header-fields {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
 
 /* Summary stat grid — totals at a glance. */
 .po-summary__grid {
@@ -10114,6 +10480,12 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   margin-top: var(--s-3);
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  gap: var(--s-2);
+}
+.costcalc__prices {
+  margin-top: var(--s-3);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: var(--s-2);
 }
 .costcalc__summary {
@@ -10466,6 +10838,19 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .catalog-product-empty { min-height: 190px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 20px; color: var(--c-text-muted); font-size: 10px; text-align: center; }
 .catalog-product-empty strong { color: var(--c-text); font-size: 11px; }
 .catalog-product-workspace .catalog-preview { min-width: 0; }
+/* Product manager: thumbnails, the inactive (hidden) list, heading actions. */
+.catalog-product-avatar { overflow: hidden; }
+.catalog-product-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.catalog-product-manager__heading > .catalog-product-manager__actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.catalog-product-hidden { border-top: 1px dashed var(--c-border); }
+.catalog-product-hidden > p { margin: 0; padding: 8px; color: var(--c-text-muted); font-size: 9.5px; }
+.catalog-product-hidden article.is-inactive > div:nth-child(1), .catalog-product-hidden article.is-inactive > div:nth-child(2) { opacity: .6; }
+/* Card-field rows: editable label + up/down. */
+.catalog-field-row { grid-template-columns: 18px minmax(0, 1fr) auto auto auto; align-items: center; }
+.catalog-field-row__label { height: 26px; padding: 2px 6px; font-size: 11px; }
+.catalog-field-row__move { display: flex; gap: 2px; }
+.catalog-field-row__move button { min-width: 20px; height: 22px; padding: 0 4px; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-surface); color: var(--c-text-muted); font-size: 10px; cursor: pointer; }
+.catalog-field-row__move button:disabled { opacity: .3; cursor: default; }
 
 @media (max-width: 1180px) {
   .catalog-product-workspace { grid-template-columns: 1fr; height: auto; overflow: visible; }
@@ -10597,6 +10982,11 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .social-picker__bar input { flex: 1; }
 .social-picker__count { margin: 0; padding: 7px 10px; font-size: 11.5px; color: var(--c-text-muted); background: var(--c-hover-bg); }
 .social-picker__list { max-height: 260px; overflow-y: auto; }
+/* v0.1.89: the picker is paged; the shared pager wraps in this narrow column. */
+.social-picker .pagination { flex-wrap: wrap; gap: 6px; padding: 7px 10px; border-top: 1px solid var(--c-border); font-size: 11.5px; }
+.social-picker .pagination__controls { flex-wrap: wrap; gap: 6px; }
+.social-picker__picked-only { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; cursor: pointer; }
+.social-templates__tip { margin: 8px 0 0; font-size: 12px; }
 .social-picker__row {
   display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center; gap: 9px; padding: 7px 10px;
@@ -10909,6 +11299,11 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 }
 .ld-layers__toggle:hover { background: var(--c-hover-bg); color: var(--c-text); }
 .ld-inspector-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--c-text-muted); }
+.inspector-grid .ld-inspector-note { grid-column: 1 / -1; }
+.ld-sample-picker { display: flex; align-items: center; gap: 6px; color: var(--c-text-muted); font-size: 11px; white-space: nowrap; }
+.ld-sample-picker select { max-width: 220px; }
+.production-note { margin: 0; color: var(--c-text-muted); font-size: 11px; }
+.product-pick-actions button:disabled { opacity: .4; cursor: default; }
 @media(max-width:1100px){ .designer-shell--v2 { grid-template-columns: minmax(0,1fr) 260px; } .ld-stage { padding: 24px; } }
 
 /* ── v0.1.66: the bulk edit table ────────────────────────────────────────

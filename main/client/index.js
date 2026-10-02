@@ -861,6 +861,8 @@ const PROXIED_CHANNELS = [
   // v0.16.2: bytes-back-to-client export. Server zips its temp
   // output, client writes each file under its own outputRoot.
   'exports:runForClient',
+  // v0.1.89: Cancel reaches the run where it happens — on the server.
+  'exports:cancel',
   'workspace:processImage','workspace:saveSettings',
   // v0.15.3 — attribution + presence.
   'users:listForAttribution',
@@ -1394,6 +1396,21 @@ function registerClientFileHandlers() {
     return result;
   });
 
+  handleLocal('catalogStudio:print', async ({ id } = {}) => {
+    // The printer is on THIS Mac, but the catalog's photos are on the server,
+    // and its HTML embeds every one of them — so, as for the export, the
+    // server renders the PDF and only the PDF travels. Electron cannot drive a
+    // print dialog for a PDF document, so the file opens in Preview, where
+    // the user prints it; the renderer says so.
+    const res = await rpc('catalogStudio:exportBytes', { id });
+    const dir = await fsp.mkdtemp(path.join(require('node:os').tmpdir(), 'msk-catalog-print-'));
+    const target = path.join(dir, res.fileName);
+    await fsp.writeFile(target, Buffer.from(res.bytes));
+    const { openPathOrThrow } = require('../util/openPath');
+    await openPathOrThrow(target, 'catalog PDF');
+    return { ok: true, openedPdf: true };
+  });
+
   handleLocal('catalogStudio:export', async ({ id, outputFolder } = {}) => {
     // The catalog is built from server data (and every product image in it), so
     // the server renders the PDF; this Mac writes it where the user asked. The
@@ -1426,10 +1443,21 @@ function registerClientFileHandlers() {
     const files = Array.isArray(res?.files) ? res.files : [];
     if (!files.length) throw new Error('No products match these filters — nothing to export');
     await fsp.mkdir(outputFolder, { recursive: true });
+    // v0.1.89: the same never-overwrite rule as the server's own export
+    // (freeSeriesSlug in main/socialGridRenderer.js), checked against THIS
+    // Mac's folder: the server named the files, but only this Mac can see
+    // what is already in the folder it picked.
+    const { freeSeriesSlug, fileNameFor } = require('../socialGridRenderer');
+    const ext = (path.extname(files[0]?.fileName || '') || '.png').slice(1);
+    const pageCount = files.length;
+    const served = String(files[0]?.fileName || '');
+    const servedBase = pageCount > 1 ? served.replace(/-\d+\.[^.]+$/, '') : served.replace(/\.[^.]+$/, '');
+    const base = freeSeriesSlug(servedBase || 'social-grid', pageCount, ext,
+      (name) => fs.existsSync(path.join(outputFolder, name)));
     const outputPaths = [];
-    for (const file of files) {
-      const target = path.join(outputFolder, file.fileName);
-      await fsp.writeFile(target, Buffer.from(file.bytes));
+    for (let i = 0; i < files.length; i += 1) {
+      const target = path.join(outputFolder, path.basename(fileNameFor(base, i, pageCount, ext)));
+      await fsp.writeFile(target, Buffer.from(files[i].bytes), { flag: 'wx' });
       outputPaths.push(target);
     }
     // 'Last exported' belongs to the preset, which lives on the server.

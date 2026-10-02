@@ -9,7 +9,7 @@ import { ProgressOverlay } from './components/ProgressOverlay.jsx';
 // removed. The sidebar NetworkChip now shows boot-sync progress
 // inline — no more blocking modal.
 import { ConflictModalHost } from './components/ConflictModal.jsx';
-import { ShortcutsModal } from './components/ShortcutsModal.jsx';
+import { ShortcutsModal, shortcutBlocked, modalDialogOpen } from './components/ShortcutsModal.jsx';
 import { SearchPalette } from './components/SearchPalette.jsx';
 // v0.26.44: RemoteChangesBanner removed. Remote events from other
 // Macs now auto-apply silently (debounced via catalogEvents.js so
@@ -209,20 +209,27 @@ export default function App() {
       // with Shift held OR the literal key '?' (some layouts produce
       // it without). `/` is the unshifted physical key on US layout
       // so we also accept Cmd+Shift+/.
+      //
+      // v0.1.89: these two may CLOSE their own panel from anywhere, but do
+      // not open on top of another modal dialog.
+      const dialogOpen = modalDialogOpen(document);
       if (e.key === '?' || (e.shiftKey && (e.key === '/' || e.key === '?'))) {
         e.preventDefault();
-        setShortcutsOpen((v) => !v);
+        setShortcutsOpen((v) => (v ? false : !dialogOpen));
         return;
       }
       // v0.18.2: Cmd/Ctrl + K opens the search palette.
       if (e.key === 'k' || e.key === 'K') {
         e.preventDefault();
-        setSearchOpen((v) => !v);
+        setSearchOpen((v) => (v ? false : !dialogOpen));
         return;
       }
       if (e.shiftKey) return;
       const shortcut = SHORTCUTS[e.key];
       if (!shortcut) return;
+      // v0.1.89: never switch pages under an open dialog or while typing —
+      // the page change unmounts the form and the typing is lost.
+      if (shortcutBlocked(e.target, document)) return;
       const { module: target, caps } = shortcut;
       if (!isModuleAvailable(target)) return;
       // Capability gate, matching the sidebar: a shortcut must not reach a

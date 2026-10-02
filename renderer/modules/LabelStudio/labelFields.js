@@ -1,3 +1,4 @@
+import { formatAmount } from '../../lib/currencies.js';
 /**
  * The label designer's "Product field" list.
  *
@@ -33,4 +34,28 @@ export function fieldOptions(priceGroups = []) {
     groups.push([value, `${label} price`]);
   }
   return [...BASE_FIELDS, ...groups];
+}
+
+/**
+ * The price source a label field names — mirror of `priceSourceFor` in
+ * main/studioRenderer.js. `priceRetail` → retail, `priceWholesale` →
+ * wholesale, `price.<key>` → that group; anything else → null.
+ */
+export function labelPriceSource(field) {
+  if (field === 'priceRetail') return 'retail';
+  if (field === 'priceWholesale') return 'wholesale';
+  if (typeof field === 'string' && field.startsWith('price.')) return field.slice(6);
+  return null;
+}
+
+/**
+ * A label price as the printer draws it: the BARE amount, two decimals,
+ * en-US grouping ("1,234.50"); the currency is the element's own prefix or
+ * suffix (owner's decision, 2026-10-02). Mirror of `labelPriceAmount` in
+ * main/studioRenderer.js — test/labelCatalog.test.js runs both over the same
+ * products. `entry` is what `priceEntry()` returns.
+ */
+export function labelPriceAmount(entry) {
+  if (!entry || entry.amount == null) return '';
+  return formatAmount(entry.amount, entry.currency);
 }

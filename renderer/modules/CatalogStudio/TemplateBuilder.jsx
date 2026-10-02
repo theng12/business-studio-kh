@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Input } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { confirm } from '../../components/ConfirmModal.jsx';
 import { DesignControls } from './DesignControls.jsx';
 import { CATALOG_THEMES } from './catalogThemes.js';
 import { blankCatalogDesign } from '../../lib/catalogDesign.js';
@@ -78,6 +79,20 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved }) {
     setConfig((c) => ({ ...c, ...patch }));
   }
 
+  /* The builder does not autosave (a template is committed with its Save
+   * button), so leaving it with changes asks first — "← Catalog templates" and
+   * Cancel used to drop them without a word. */
+  async function leave() {
+    if (dirty && !(await confirm({
+      title: 'Discard your changes to this template?',
+      message: `You have changes that are not saved. Press ${isExisting ? 'Save template' : 'Create template'} to keep them.`,
+      confirmLabel: 'Discard changes',
+      cancelLabel: 'Keep editing',
+      danger: true,
+    }))) return;
+    onClose?.();
+  }
+
   async function save({ asCopy = false } = {}) {
     const trimmed = name.trim();
     if (!trimmed) { addToast('Give the template a name', 'error'); return; }
@@ -108,7 +123,7 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved }) {
   return (
     <section className="page catalog-editor-page">
       <div className="catalog-editor-back">
-        <Button variant="ghost" onClick={onClose}>← Catalog templates</Button>
+        <Button variant="ghost" onClick={leave}>← Catalog templates</Button>
         <span>{isExisting ? 'Editing template' : 'New template'}</span>
       </div>
       <PageHeader
@@ -116,7 +131,7 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved }) {
         subtitle={isExisting ? 'Catalog template' : 'New catalog template'}
         actions={(
           <>
-            <Button onClick={onClose} disabled={saving}>Cancel</Button>
+            <Button onClick={leave} disabled={saving}>Cancel</Button>
             {isExisting ? <Button onClick={() => save({ asCopy: true })} disabled={saving}>Save as copy</Button> : null}
             <Button variant="primary" onClick={() => save()} disabled={saving || !name.trim()}>
               {saving ? 'Saving…' : isExisting ? 'Save template' : 'Create template'}

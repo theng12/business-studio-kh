@@ -451,8 +451,8 @@ export function AIStudio() {
   async function handleRemoveGallery(entryId) {
     const ok = await confirm({
       title: 'Delete this generation?',
-      message: 'The image file is removed from disk.',
-      detail: 'This cannot be undone.',
+      message: 'It leaves the AI gallery, and its image file moves to the Trash on the Mac that holds the data.',
+      detail: 'To get it back, open the Trash in Finder and choose Put Back — the gallery entry itself is not restored.',
       danger: true,
       confirmLabel: 'Delete generation',
     });
@@ -849,7 +849,10 @@ export function AIStudio() {
             ) : (
               <div className="ai-gallery">
                 {gallery.map((g) => {
-                  const src = `app-image://local/${encodeURIComponent(g.filepath)}`;
+                  // Stamped by the gallery row id (a path is never reused across
+                  // rows, but the stamp keeps that a guarantee) and asked for
+                  // as a thumbnail — the tile is small; the preview is not.
+                  const src = appImageSrc(g.filepath, g.id, { w: 320 });
                   return (
                     <div key={g.id} className={`ai-gallery__tile${g.isFavorite ? ' is-fav' : ''}${g.promotedToProduct ? ' is-promoted' : ''}`}>
                       <button

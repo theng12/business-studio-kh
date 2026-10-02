@@ -153,7 +153,11 @@ const CHANNEL_RULES = [
   [/^settings:(setOne|setMany)$/,                       'system.manage'],
   [/^servers:/,                                         'system.manage'],
   [/^backups:/,                                         'system.manage'],
-  [/^companies:(create|update|remove)$/,                'system.manage'],
+  // Deleting a company drops every product, brand and category under it in
+  // one statement, with no Recently deleted entry — deleting for good, so
+  // admin only (the 2026-10-02 rule). Must sit before the broad rule below.
+  [/^companies:remove$/,                                ADMIN_ONLY],
+  [/^companies:(create|update)$/,                       'system.manage'],
   [/^app:(relaunch|clearCache)$/,                       'system.manage'],
 ];
 

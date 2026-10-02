@@ -66,6 +66,10 @@ export function createProductsSlice(set, get) {
   return {
     // — Product data
     products: [],
+    // Bumped when a purchase order or supplier changes (here or on another
+    // Mac): the Library's Cost column refetches on it.
+    poRevision: 0,
+    bumpPoRevision() { set((s) => ({ poRevision: s.poRevision + 1 })); },
     // v0.17.0: start true so the Library shows the loading spinner on
     // first paint, not a flash of "No products yet" before the first
     // refresh resolves (especially noticeable in client mode where the

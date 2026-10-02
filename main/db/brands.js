@@ -9,6 +9,16 @@ function getImageManager() { return _imageManager ?? (_imageManager = require('.
 let _companies;
 function getCompanies() { return _companies ?? (_companies = require('./companies')); }
 
+// v0.1.89: audit log (History → Brands/Categories filters were always empty
+// because only products and images were logged). Late-required, the same
+// way main/db/products.js does it: auditLog.js requires getDb().
+let _audit;
+function getAudit() { return _audit ?? (_audit = require('./auditLog')); }
+/** Audit failures never break the write they describe. */
+function audit(fn) {
+  try { fn(getAudit()); } catch (_) { /* best-effort */ }
+}
+
 function rowToBrand(row) {
   if (!row) return null;
   return {
@@ -85,7 +95,12 @@ function create({ companyId, name, color, icon }) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(id, companyId, trimmed, color ?? null, icon ?? null, ts, ts, getCallerUserId());
-  return get(id);
+  const created = get(id);
+  audit((a) => a.log({
+    entityType: 'brand', entityId: id, action: 'create',
+    after: { name: created.name, color: created.color ?? null, icon: created.icon ?? null },
+  }));
+  return created;
 }
 
 /**
@@ -191,11 +206,26 @@ function update(id, patch) {
     }
   }
 
+  // Only the keys that changed (diffPatch drops the rest; a no-op logs nothing).
+  const auditPatch = {};
+  if ('name' in params) auditPatch.name = params.name;
+  if ('color' in params) auditPatch.color = params.color;
+  if ('icon' in params) auditPatch.icon = params.icon;
+  audit((a) => a.logUpdate({ entityType: 'brand', entityId: id, beforeRow: existing, patch: auditPatch }));
+
   return get(id);
 }
 
 function remove(id) {
-  return getDb().prepare(`DELETE FROM brands WHERE id = ?`).run(id).changes > 0;
+  const before = get(id);
+  const removed = getDb().prepare(`DELETE FROM brands WHERE id = ?`).run(id).changes > 0;
+  if (removed) {
+    audit((a) => a.log({
+      entityType: 'brand', entityId: id, action: 'delete',
+      before: before ? { name: before.name, color: before.color ?? null, icon: before.icon ?? null } : null,
+    }));
+  }
+  return removed;
 }
 
 module.exports = { list, get, getByName, create, update, remove };

@@ -318,23 +318,22 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
     const product = productId ? products.get(productId) : null;
     if (!product && productId) throw new Error('Product not found');
 
-    /* v0.1.4: bounded preview resolution.
+    /* v0.1.4: bounded preview resolution — `maxPx` caps the LONGEST side of
+     * the preview, because composing at full size for a canvas a few hundred
+     * px wide was pure waste (and paid again after every debounced edit).
      *
-     * The editor canvas is a few hundred px wide, but this handler used to
-     * always compose at the template's full design size (typically
-     * 2000×2000). Measured cost of that compose: ~150-480 ms, producing a
-     * ~49 KB PNG across IPC, for an image the canvas then scales down to
-     * ~600px. Compose cost and memory scale with pixel count, so rendering
-     * an 11× larger image than can be displayed was pure waste — and it is
-     * paid again after every debounced edit, which is what made the
-     * preview feel laggy.
+     * The cap is applied INSIDE compose(), not by shrinking the photo first.
+     * Shrinking the photo first was a real bug: element positions are
+     * fractional so they scaled with it, but a font size, padding or radius is
+     * in pixels, so on an 800 px preview of a 1600 px photo every text was
+     * drawn twice as large as the export draws it. compose() now draws the
+     * whole composition — photo and pixel sizes together — at one scale, so the
+     * preview is the export, smaller. Omit `maxPx` (every export path does) and
+     * nothing is scaled.
      *
-     * `maxPx` lets the caller cap the LONGEST side. Every element position
-     * and size is fractional (resolved against the base image's own
-     * width/height inside templateRenderer.compose), so rendering a
-     * smaller base scales the whole design proportionally — the preview is
-     * pixel-identical in layout, just lower resolution. Omit `maxPx` (as
-     * the real export paths do) and this behaves exactly as before. */
+     * The reply also carries the full-size output's dimensions (`fullWidth` ×
+     * `fullHeight`) so the editor can size its own drawing of pixel-sized
+     * things against the picture the export will actually produce. */
     const capPx = Number.isFinite(Number(maxPx)) && Number(maxPx) >= 64
       ? Math.round(Number(maxPx))
       : null;
@@ -361,37 +360,20 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
         if (fs.existsSync(abs)) inputImage = abs;
       }
     }
-    if (!inputImage) {
-      // Build a transparent canvas at the template's design size so
-      // the user still sees their elements rendered for
-      // editor/preview work.
-      const sharp = require('sharp');
-      const designW = template.canvasWidth || 2000;
-      const designH = template.canvasHeight || 2000;
-      // Shrink the synthetic canvas too, preserving aspect, so the
-      // no-product preview gets the same speed-up.
-      let w = designW, h = designH;
-      if (capPx && Math.max(designW, designH) > capPx) {
-        const s = capPx / Math.max(designW, designH);
-        w = Math.max(32, Math.round(designW * s));
-        h = Math.max(32, Math.round(designH * s));
-      }
-      inputImage = await sharp({
-        create: { width: w, height: h, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } },
-      }).png().toBuffer();
-    } else if (capPx) {
-      // Downscale the source photo to the preview bound before compositing.
-      // `withoutEnlargement` keeps small sources at their natural size.
-      const sharp = require('sharp');
-      inputImage = await sharp(inputImage, { failOn: 'none' })
-        .resize({ width: capPx, height: capPx, fit: 'inside', withoutEnlargement: true })
-        .png()
-        .toBuffer();
-    }
+    // No photo → compose() draws onto a white canvas of the design size
+    // (`inputImage: null`), already at the preview scale.
 
     const ctx = product ? buildTemplateContext(product) : {};
-    const bytes = await templateRenderer.compose({ inputImage, template, context: ctx });
-    return { bytes };
+    const result = await templateRenderer.composeDetailed({
+      inputImage, template, context: ctx, maxPx: capPx,
+    });
+    return {
+      bytes: result.bytes,
+      width: result.width,
+      height: result.height,
+      fullWidth: result.fullWidth,
+      fullHeight: result.fullHeight,
+    };
   });
 
   /**

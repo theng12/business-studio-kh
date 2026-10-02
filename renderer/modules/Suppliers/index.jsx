@@ -26,6 +26,7 @@ import { Button, Input, Modal, Field, Select, EmptyState, Pagination, paginate, 
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { allIds, nextSelection, sortRows } from '../../lib/listTools.js';
+import { useCostingCaps } from '../PurchaseOrders/costingCaps.js';
 
 const COMMON_CURRENCIES = ['USD', 'CNY', 'THB', 'VND', 'KHR', 'EUR', 'JPY', 'KRW', 'INR', 'IDR', 'MYR', 'SGD'];
 const INCOTERMS = [
@@ -61,6 +62,8 @@ export function Suppliers() {
   const addToast = useAppStore((s) => s.addToast);
   // v0.49.48: jump to the PO list filtered by this supplier.
   const openPurchaseOrdersForSupplier = useAppStore((s) => s.openPurchaseOrdersForSupplier);
+  // A costing.view-only client sees suppliers but cannot create, edit or delete them.
+  const { canManage } = useCostingCaps();
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -100,6 +103,19 @@ export function Suppliers() {
     setEditing(null);
     setPage(0);
   }, [activeCompanyId]);
+
+  // A supplier or PO changed on another Mac (or another screen): refetch the
+  // list and the PO spend rollup. The list fetch is debounced 200 ms.
+  useEffect(() => {
+    if (!window.api?.events?.onCatalogChanged) return undefined;
+    const off = window.api.events.onCatalogChanged((evt) => {
+      if (evt?.kind !== 'supplier' && evt?.kind !== 'purchaseOrder') return;
+      listRequestRef.current += 1;
+      spendRequestRef.current += 1;
+      setRefreshTick((tick) => tick + 1);
+    });
+    return typeof off === 'function' ? off : undefined;
+  }, []);
 
   // Fetch whenever the company / status filter / search changes. The
   // search runs server-side (LIKE on name + country + contact, so the
@@ -372,9 +388,9 @@ export function Suppliers() {
       <PageHeader
         title="Suppliers"
         subtitle="Vendors you buy stock from. Used by Purchase Orders for cost tracking + landed-cost calc."
-        actions={
+        actions={canManage ? (
           <Button variant="primary" onClick={() => setEditing('new')}>+ New supplier</Button>
-        }
+        ) : null}
       />
 
       <div className="suppliers-toolbar">
@@ -419,7 +435,7 @@ export function Suppliers() {
         </div>
       </div>
 
-      {selected.length > 0 ? (
+      {canManage && selected.length > 0 ? (
         <div className="list-bulk-bar">
           <span className="list-bulk-bar__count">{selected.length} selected</span>
           <div className="list-bulk-bar__spacer" />
@@ -439,7 +455,7 @@ export function Suppliers() {
             ? `Nothing matches "${search}". Try a shorter search.`
             : statusFilter === 'archived'
               ? 'Suppliers you archive will be listed here.'
-              : 'Add your first supplier to attach Purchase Orders to it.'}
+              : canManage ? 'Add your first supplier to attach Purchase Orders to it.' : 'Suppliers added for this company will be listed here.'}
         />
       ) : (
         <>
@@ -471,8 +487,8 @@ export function Suppliers() {
                   return (
                   <tr
                     key={s.id}
-                    onClick={() => setEditing(s)}
-                    className={`suppliers-row${s.status === 'archived' ? ' is-archived' : ''}${isSelected ? ' is-selected' : ''}`}
+                    onClick={canManage ? () => setEditing(s) : undefined}
+                    className={`suppliers-row${s.status === 'archived' ? ' is-archived' : ''}${isSelected ? ' is-selected' : ''}${canManage ? '' : ' is-readonly'}`}
                   >
                     <td className="suppliers-check" onClick={(e) => e.stopPropagation()}>
                       <input

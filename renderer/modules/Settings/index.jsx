@@ -276,7 +276,7 @@ export function Settings() {
 
         <SettingRow
           label="Mode"
-          hint="Standalone: this Mac only (default). Server: this Mac hosts data for other Macs over the network. Client: this Mac is a thin frontend for a remote server. Changing mode restarts the app. Networking ships across v0.14.x — v0.14.0 is the foundation only."
+          hint="Standalone: this Mac only (the default). Server: this Mac keeps the data and shares it with your other Macs and the phone viewer. Client: this Mac works on another Mac's data over the network. Changing mode restarts the app."
         >
           <ModeSegment config={config} addToast={addToast} />
         </SettingRow>

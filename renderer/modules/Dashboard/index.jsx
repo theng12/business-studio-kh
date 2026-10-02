@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { Button, EmptyState } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { useCostingCaps } from '../PurchaseOrders/costingCaps.js';
 
 function fmtAgo(ts) {
   if (!ts) return '';
@@ -31,6 +32,7 @@ export function Dashboard() {
   const openProductInWorkspace = useAppStore((s) => s.openProductInWorkspace);
   const donateDismissed = useAppStore((s) => s.donateBannerDismissed);
   const dismissDonateBanner = useAppStore((s) => s.dismissDonateBanner);
+  const { canView: canViewCosting } = useCostingCaps();
 
   // Refresh stats whenever the user opens this module.
   useEffect(() => {
@@ -104,6 +106,10 @@ export function Dashboard() {
             ✓ All {completeness.total} products have an image, barcode, price, and have been exported.
           </section>
         )
+      ) : null}
+
+      {canViewCosting ? (
+        <OperationsCard companyId={activeCompanyId} onOpen={() => setActiveModule('purchaseorders')} />
       ) : null}
 
       <div className="dash-grid">
@@ -207,6 +213,70 @@ export function Dashboard() {
         </aside>
       ) : null}
     </div>
+  );
+}
+
+const OPEN_STATUSES = ['draft', 'ordered', 'in_transit'];
+
+/**
+ * F5: what is on order. Reads the existing `pos:list` (costing.view), so it
+ * needs no channel of its own, and refetches when a PO changes anywhere.
+ * Hidden when the company has no purchase orders at all.
+ *
+ * "Owed to suppliers" is each ordered-or-later PO's goods value minus what
+ * has been paid, in the PO's currency, converted at that PO's own rate —
+ * a draft is not a commitment yet, so it is left out.
+ */
+function OperationsCard({ companyId, onOpen }) {
+  const [rows, setRows] = useState(null);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!window.api?.events?.onCatalogChanged) return undefined;
+    const off = window.api.events.onCatalogChanged((evt) => {
+      if (evt?.kind === 'purchaseOrder') setTick((t) => t + 1);
+    });
+    return typeof off === 'function' ? off : undefined;
+  }, []);
+
+  useEffect(() => {
+    if (!companyId || !window.api?.purchaseOrders?.list) { setRows(null); return undefined; }
+    let cancelled = false;
+    Promise.resolve(window.api.purchaseOrders.list(companyId, { status: 'all' }))
+      .then((list) => { if (!cancelled) setRows(Array.isArray(list) ? list : []); })
+      .catch(() => { if (!cancelled) setRows(null); });
+    return () => { cancelled = true; };
+  }, [companyId, tick]);
+
+  if (!rows || rows.length === 0) return null;
+  const open = rows.filter((po) => OPEN_STATUSES.includes(po.status));
+  const inTransit = rows.filter((po) => po.status === 'in_transit');
+  const etas = inTransit.map((po) => Number(po.eta)).filter((t) => t > 0);
+  const nextEta = etas.length ? Math.min(...etas) : null;
+  const owedUsd = rows
+    .filter((po) => po.status !== 'draft')
+    .reduce((sum, po) => {
+      const outstanding = (Number(po.totalValueSupplier) || 0) - (Number(po.totalPaidSupplier) || 0);
+      return sum + Math.max(0, outstanding) * (Number(po.exchangeRateToUsd) || 0);
+    }, 0);
+
+  return (
+    <section className="dash-attention dash-ops">
+      <h2 className="dash-attention__title">Operations</h2>
+      <div className="dash-attention__row">
+        <button type="button" className="dash-attention__chip" onClick={onOpen}>
+          <strong>{open.length}</strong> open purchase order{open.length === 1 ? '' : 's'}
+        </button>
+        <button type="button" className="dash-attention__chip" onClick={onOpen}>
+          <strong>{inTransit.length}</strong> in transit
+          {nextEta ? <> · next ETA {new Date(nextEta).toLocaleDateString()}</> : null}
+        </button>
+        <button type="button" className="dash-attention__chip" onClick={onOpen}>
+          <strong>${owedUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> owed to suppliers
+        </button>
+      </div>
+      <p className="dash-ops__note">Owed is goods value minus payments, at each PO’s own exchange rate.</p>
+    </section>
   );
 }
 

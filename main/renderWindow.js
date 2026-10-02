@@ -147,9 +147,43 @@ async function toPdf(html, outputPath, options = {}) {
   return outputPath;
 }
 
+/**
+ * The target size and density for a captured image, or null to keep the raw
+ * capture. Pure, so test/labelCatalog.test.js can pin it.
+ *
+ * `capturePage()` returns DEVICE pixels: on a Retina Mac a 60×40 mm label at
+ * 203 dpi came out at twice the size it does on a plain screen, so the same
+ * export differed per Mac. The window is sized `width`×`height` CSS pixels for
+ * exactly the label's mm at the chosen dpi, so that is the size the file must
+ * have. The density is the dpi (`dpi`, or `zoomFactor × 96` for a caller that
+ * only passes the zoom — client mode does), so a label printer or layout app
+ * places the image at its true physical size.
+ */
+function captureTarget(options = {}) {
+  const width = Math.round(Number(options.width));
+  const height = Math.round(Number(options.height));
+  if (!(width > 0) || !(height > 0)) return null;
+  const dpi = Number(options.dpi) || (Number(options.zoomFactor) ? Number(options.zoomFactor) * 96 : 0);
+  return { width, height, density: dpi > 0 ? Math.round(dpi) : null };
+}
+
 async function captureImage(win, outputPath, options = {}) {
   const image = await win.webContents.capturePage();
-  const bytes = options.format === 'jpeg' ? image.toJPEG(options.quality || 92) : image.toPNG();
+  const target = captureTarget(options);
+  let bytes;
+  if (target) {
+    // Same normalisation Social Grid does (main/ipc/socialGrid.js): resize the
+    // capture to the exact pixel size with sharp. `fill` cannot distort — the
+    // capture has the target's aspect ratio, only its scale differs.
+    const sharp = require('sharp');
+    let pipeline = sharp(image.toPNG()).resize(target.width, target.height, { fit: 'fill' });
+    if (target.density) pipeline = pipeline.withMetadata({ density: target.density });
+    bytes = options.format === 'jpeg'
+      ? await pipeline.flatten({ background: '#ffffff' }).jpeg({ quality: options.quality || 92 }).toBuffer()
+      : await pipeline.png().toBuffer();
+  } else {
+    bytes = options.format === 'jpeg' ? image.toJPEG(options.quality || 92) : image.toPNG();
+  }
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
   await fs.promises.writeFile(outputPath, bytes);
   return outputPath;
@@ -194,4 +228,4 @@ async function printHtml(html, options = {}) {
  * memory and then hand the raw pixels to sharp for exact-size normalization.
  * Going through toImage() would mean writing a temp PNG, reading it back and
  * deleting it — a file round-trip per image, for no benefit. */
-module.exports = { toPdf, toPdfBuffer, toImage, toImages, listPrinters, printHtml, withWindow, withReusedWindow };
+module.exports = { toPdf, toPdfBuffer, toImage, toImages, listPrinters, printHtml, withWindow, withReusedWindow, captureTarget };

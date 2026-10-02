@@ -59,11 +59,16 @@ export function renderBarcodeSVG(content, format = 'code128', { showText = true 
       paddingheight: 0,
       backgroundcolor: 'FFFFFF',
     });
-    // Force preserveAspectRatio="none" so the SVG stretches to fill
-    // whatever box we give it. bwip-js does not set this attribute by
+    // Force preserveAspectRatio="none" so a 1-D barcode's SVG stretches to
+    // fill whatever box we give it. bwip-js does not set this attribute by
     // default, so the SVG inherits the SVG-default "xMidYMid meet"
     // which letterboxes. Patch it in.
-    svg = svg.replace(/<svg /, '<svg preserveAspectRatio="none" ');
+    //
+    // A QR code is the exception: it has a fixed square shape, and the
+    // exported render CONTAINS it in the box on its white plate
+    // (main/templateRenderer.js, TWO_D_BARCODES) instead of squashing it.
+    // "meet" is the SVG spelling of the same rule.
+    svg = svg.replace(/<svg /, `<svg preserveAspectRatio="${format === 'qrcode' ? 'xMidYMid meet' : 'none'}" `);
   } catch (err) {
     // Friendly inline placeholder so the editor stays usable while the
     // user fixes their content (e.g. EAN-13 requires 12 digits + check).

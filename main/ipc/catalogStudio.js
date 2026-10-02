@@ -7,7 +7,7 @@ const brands = require('../db/brands');
 const categories = require('../db/categories');
 const companies = require('../db/companies');
 const { buildCatalogHtml } = require('../studioRenderer');
-const { toPdf, toPdfBuffer } = require('../renderWindow');
+const { toPdf, toPdfBuffer, printHtml } = require('../renderWindow');
 const { slugify } = require('../util/slug');
 const { normalizeCatalogConfig, applyCatalogDesign } = require('../util/catalogModel');
 const events = require('../events');
@@ -43,6 +43,17 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       emitCatalogChange('catalogStudio', 'update', id);
       return { outputPath: target };
     } finally { events.broadcast('progress:event', { id: opId, complete: true }); }
+  });
+
+  /* Print a catalog on THIS Mac's printer — the same document the PDF export
+   * renders (full photos and fonts, not the preview), through the system print
+   * dialog. Local-only: the printer is attached to the Mac running it. Client
+   * mode has its own handler in main/client/index.js. */
+  exposeLocal('catalogStudio:print', async ({ id } = {}) => {
+    const project = projects.get(id); if (!project) throw new Error('Catalog project not found');
+    assertEntityInActiveCompany(project, 'Catalog project');
+    await printHtml(buildCatalogHtml(context(project)), {});
+    return { ok: true };
   });
 
   /* ── reusable templates (v0.1.63) ────────────────────────────────

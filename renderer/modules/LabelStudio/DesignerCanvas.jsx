@@ -5,7 +5,8 @@ import {
   resizeElement, rotatedBounds, scaleSelection, snapMm, smartGuides, toggleSelected,
 } from './designerGeometry.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
-import { priceEntry, formatPriceEntry } from '../../lib/prices.js';
+import { priceEntry } from '../../lib/prices.js';
+import { labelPriceAmount, labelPriceSource } from './labelFields.js';
 
 /**
  * Keep a pointer gesture alive even when the finger/stylus leaves the element
@@ -671,9 +672,12 @@ function ElementPreview({ element, pxPerMm, sample }) {
     /* v0.1.79: a `price.<group>` field is not a flat key on the product, so
        `sample[field]` was always undefined and every group price previewed as
        the hardcoded sample below — the canvas disagreed with the printed
-       label. Resolve it exactly as main/studioRenderer.js productValue does. */
-    const fromSample = field.startsWith('price.')
-      ? formatPriceEntry(priceEntry(sample, field.slice(6)), '$')
+       label. Every price field (retail, wholesale, a group) now resolves
+       exactly as main/studioRenderer.js productValue does: a bare
+       "1,234.50", the currency being the element's prefix/suffix. */
+    const priceSource = labelPriceSource(field);
+    const fromSample = priceSource
+      ? labelPriceAmount(priceEntry(sample, priceSource))
       : sample?.[field];
     if (fromSample != null && fromSample !== '') return fromSample;
     if (element.type === 'date') return '2027-12-31';

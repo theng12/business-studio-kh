@@ -1,6 +1,9 @@
+import { useMemo } from 'react';
 import { Input, Select } from '../../components/ui.jsx';
 import { CATALOG_THEMES } from './catalogThemes.js';
 import { CATALOG_FIELD_KEYS, catalogFieldRows } from '../../lib/catalogDesign.js';
+import { useAppStore } from '../../store/index.js';
+import { extraFieldRows } from './catalogSelection.js';
 
 /**
  * v0.1.63: the catalog design controls, in ONE place.
@@ -17,8 +20,12 @@ import { CATALOG_FIELD_KEYS, catalogFieldRows } from '../../lib/catalogDesign.js
  */
 export function DesignControls({ config, onChange, priceGroups = [], coverTitle = null, coverSubtitle = null }) {
   const c = config || {};
-  const fields = catalogFieldRows(c.fields);
+  const products = useAppStore((s) => s.products);
+  const extras = useMemo(() => extraFieldRows(priceGroups, products ?? []), [priceGroups, products]);
+  const baseRows = catalogFieldRows(c.fields);
+  const fields = [...baseRows, ...extras.filter((x) => !baseRows.some((f) => f.key === x.key))];
   const included = new Set((c.fields || []).map((f) => f.key));
+  const includedOrder = (c.fields || []).map((f) => f.key);
 
   /** Toggle a field on/off, keeping the config's own order and per-field flags. */
   function toggleField(key, on) {
@@ -36,9 +43,21 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
     onChange({ fields: current.map((f) => (f.key === key ? { ...f, ...patch } : f)) });
   }
 
+  /** Move an included field one place up (-1) or down (+1) on the card. */
+  function moveField(key, direction) {
+    const current = Array.isArray(c.fields) ? [...c.fields] : [];
+    const index = current.findIndex((f) => f.key === key);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= current.length) return;
+    [current[index], current[target]] = [current[target], current[index]];
+    onChange({ fields: current });
+  }
+
   function labelFor(key) {
     const known = CATALOG_FIELD_KEYS.find((f) => f.key === key);
     if (known) return known.label;
+    const extra = extras.find((f) => f.key === key);
+    if (extra) return extra.label;
     return String(key).replace(/^(custom|price)\./, '').replace(/[_-]+/g, ' ');
   }
 
@@ -144,7 +163,7 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
       <section>
         <h3>Card fields</h3>
         <p className="catalog-controls__note">
-          Tick what each product card prints. Included fields appear in the order below.
+          Tick what each product card prints. Included fields print in the order below — use the arrows to move them, and edit the text to rename a field's label.
         </p>
         <div className="catalog-field-list">
           {fields.map((f) => {
@@ -158,13 +177,25 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
                   aria-label={`Show ${entry.label || f.label}`}
                   onChange={(e) => toggleField(f.key, e.target.checked)}
                 />
-                <span>{entry.label || f.label}</span>
+                {on ? (
+                  <Input
+                    className="catalog-field-row__label"
+                    value={entry.label ?? ''}
+                    aria-label={`Label for ${f.label}`}
+                    placeholder={f.label}
+                    onChange={(e) => patchField(f.key, { label: e.target.value })}
+                  />
+                ) : <span>{entry.label || f.label}</span>}
                 <label>
                   <input type="checkbox" disabled={!on} checked={!!entry.bold} onChange={(e) => patchField(f.key, { bold: e.target.checked })} /> Bold
                 </label>
                 <label>
                   <input type="checkbox" disabled={!on} checked={entry.showLabel !== false} onChange={(e) => patchField(f.key, { showLabel: e.target.checked })} /> Label
                 </label>
+                <span className="catalog-field-row__move">
+                  <button type="button" aria-label={`Move ${entry.label || f.label} up`} disabled={!on || includedOrder.indexOf(f.key) <= 0} onClick={() => moveField(f.key, -1)}>↑</button>
+                  <button type="button" aria-label={`Move ${entry.label || f.label} down`} disabled={!on || includedOrder.indexOf(f.key) >= includedOrder.length - 1} onClick={() => moveField(f.key, 1)}>↓</button>
+                </span>
               </div>
             );
           })}
