@@ -1,8 +1,16 @@
 # AI Studio — Provider integration notes
 
 **OpenAI Images API only.** The kie.ai and fal.ai adapters were removed in the
-OpenAI rework; this document is the implementation reference for
-`main/ai/providers/openai.js`.
+OpenAI rework (0.1.46); this document is the implementation reference for
+`main/ai/providers/openai.js`, `main/ai/pricing.js` and `main/ai/queueRunner.js`.
+Checked against the code on 2026-10-02 (0.1.90); the code wins if they disagree.
+
+**Where the key lives.** The OpenAI API key and the concurrency limit are stored in
+the app's `config.json` (`~/Library/Application Support/Media Studio KH/`) on the
+Mac that runs the generations — the server Mac in multi-Mac mode. The key is never
+in the repository. Settings → AI Generation holds both; the "Test" button
+(`ai:testOpenai`) is local to the Mac you are on and is not available from a client
+Mac.
 
 ---
 
@@ -53,7 +61,7 @@ The API does not publish per-model size / quality / source support, so
 |---|---|---|---|---|---|
 | `gpt-image-2.5-*` | 12 ratios: `auto`, `1:1`, `3:2`, `2:3`, `4:3`, `3:4`, `16:9`, `9:16`, `7:4`, `4:7`, `21:9`, `9:21` | `auto` + `WxH` (e.g. `1536x864`, `2016x864`) | `auto`, `low`, `medium`, `high`, `xhigh`, `max` | yes | 10 |
 | `gpt-image-2` / `1.5` / `1` / `1-mini` | `auto`, `1:1`, `3:2`, `2:3` | `auto`, `1024x1024`, `1536x1024`, `1024x1536` | `auto`, `low`, `medium`, `high` | yes | 10 |
-| `dall-e-3` / `dall-e-2` | retained for safety only — OpenAI removed both on 2026-05-12 | — | — | — | — |
+| `dall-e-3` / `dall-e-2` | kept only so old tasks still read; OpenAI removed both on 2026-05-12 | `dall-e-3`: `1024x1024`, `1792x1024`, `1024x1792` | `standard`, `hd` | `dall-e-3` no | 1 (`dall-e-3`) |
 
 Only the 2.5 models accept custom dimensions (multiples of 16, aspect 1:3–3:1,
 no edge over 3840, 655,360–8,294,400 px), which is how the extra ratios are
@@ -103,6 +111,10 @@ Source: <https://developers.openai.com/api/docs/pricing>. Verified 2026-09-22.
 | `gpt-image-1.5` | $5.00 | $8.00 | $32.00 |
 | `gpt-image-1-mini` | $2.00 | $2.50 | $8.00 |
 | `gpt-image-1` | $5.00 | $10.00 | $40.00 |
+| `chatgpt-image-*` | $5.00 | $8.00 | $32.00 |
+
+An unknown OpenAI image model is priced at the current flagship rates
+($5 / $8 / $30, `DEFAULT_RATES`).
 
 ### Output tokens per image
 
@@ -140,7 +152,7 @@ text is the cheapest input, so the approximation is invisible in the total.
 
 ## Queue runner behaviour
 
-- Concurrency is a single global limit (`config.openaiConcurrency`, 1–10).
+- Concurrency is a single global limit (`config.openaiConcurrency`, 1–10, default 3).
 - A generation that is still in flight when the app quits is drained by
   `queueRunner.stop()` before the database closes.
 - Because there is no provider-side task, **Repair re-submits the task** and
@@ -148,3 +160,10 @@ text is the cheapest input, so the approximation is invisible in the total.
   boot so Repair has a clear starting point.
 - Cancelling a task while its request is in flight drops the result when it
   arrives rather than resurrecting a task the user stopped.
+- A task from before the OpenAI rework names a model that no longer exists; it
+  fails with a message pointing at Queue fresh.
+- The estimate is stored on the task, and the actual cost from `usage` is stored
+  beside it (`ai_tasks.cost_actual`, `ai_tasks.usage_json`).
+- Deleting an AI Studio image sends the file to the Mac's Trash (0.1.89); deleted
+  products bring their AI Studio images back when restored from Recently deleted
+  (0.1.87).

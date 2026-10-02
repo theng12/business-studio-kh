@@ -1,138 +1,143 @@
 # Media Studio KH
 
-A multi-purpose product media workspace for macOS, built with Electron.
+A macOS desktop app (Electron) for the media side of a product business: product photos, labels,
+catalogs, social posts, and the supplier and cost records behind them.
 
-Media Studio KH keeps one shared Product Library at the center of three focused workspaces: image production, label design and printing, and catalog creation. Product details are entered once and can then drive edited images, AI variations, barcodes, multilingual labels, shelf cards, and print-ready catalogs. The app works standalone and retains the existing multi-Mac server/client foundation for collaborative image workflows.
+One shared Product Library sits at the centre. Product details are entered once and then drive
+edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
+app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-## Development status
+Current release: **0.1.90** (2026-10-02). It is built for home use — the owner's Macs and his
+brother's — and is not publicly distributed.
 
-See [the development status](docs/Media%20Studio%20KH%20Project%20Status.md) for the current baseline, verified results, stable findings and remaining limits. Historical migration notes are clearly marked and are not assigned work. The source is in the private [GitHub repository](https://github.com/theng12/media-studio-kh); DMGs, live data, and credentials are not included in a clone.
+## Where to read next
 
-## Install (beta)
+| Document | What it is for |
+|---|---|
+| [`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md) | The current truth for a working session: versions, commands, paths, traps, open gaps. Read first. |
+| [`docs/Media Studio KH Project Status.md`](docs/Media%20Studio%20KH%20Project%20Status.md) | Short status page: current release, checks, release process, closed decisions. |
+| [`AGENTS.md`](AGENTS.md) (also `CLAUDE.md`) | Engineering rules for this codebase. |
+| [`docs/UI_GUIDE.md`](docs/UI_GUIDE.md) | The one UI pattern every screen follows. |
+| [`MEDIA_STUDIO_KH_BRIEFING.md`](MEDIA_STUDIO_KH_BRIEFING.md) | Product overview: areas, data model, storage layout. |
+| [`AI_INTEGRATION.md`](AI_INTEGRATION.md) | How AI Studio talks to OpenAI and estimates cost. |
+| [`SIGNING.md`](SIGNING.md) | Why builds are unsigned, and what signing would take. |
+| [`docs/HARDWARE_VALIDATION_RUNBOOK.md`](docs/HARDWARE_VALIDATION_RUNBOOK.md) | Checks that need real hardware (not yet performed). |
+| [`docs/PICK_AND_PACK_PLAN.md`](docs/PICK_AND_PACK_PLAN.md) | A design plan awaiting the owner's review. Not built. |
+| [`docs/archive/`](docs/archive/README.md) | Dated audits, plans and specs. Historical only. |
 
-The app isn't code-signed yet, so macOS Gatekeeper will refuse to open it out of the box.
+The source is in the private [GitHub repository](https://github.com/theng12/media-studio-kh).
+DMGs, live data and credentials are not in the repository.
 
-1. Download the DMG.
-2. Drag **Media Studio KH** into Applications.
-3. In Terminal, strip the quarantine attribute Gatekeeper added on download:
+## Install
+
+Builds are not code-signed, so macOS refuses to open a downloaded copy until the quarantine flag
+is cleared.
+
+1. Open the DMG (`Media Studio KH-<version>-arm64.dmg`) and drag **Media Studio KH** into
+   Applications.
+2. In Terminal:
 
    ```bash
    xattr -cr "/Applications/Media Studio KH.app"
    ```
 
-4. Open the app. You're good.
+3. Open the app.
 
-If you don't run step 3 you'll see "Media Studio KH is damaged and can't be opened" — that's not a virus, it's Gatekeeper refusing to launch an unsigned app. Step 3 tells macOS the app came from you (it did — you literally just installed it).
+Without step 2 macOS says the app "is damaged and can't be opened". That is Gatekeeper refusing an
+unsigned app, not a fault in the file. Requires macOS 12 or newer on Apple Silicon.
 
-## Features
+## What it does
 
-**Shared workspace**
-- One Product Library for Image Studio, Label Studio, and Catalog Studio.
-- Collapsible left navigation keeps the studios distinct without splitting them into separate apps.
-- Product fields cover identity, pricing, tax, inventory, variants, origin, expiry dates, images, and custom values.
-- Existing products auto-save after edits and still provide an explicit Save action and visible save status.
+The sidebar has seven sections. Pages outside Workspace and Settings are shown only to accounts
+whose role has the matching permission.
 
-**Label Studio**
-- Starter templates for retail labels, compact barcode labels, and shelf cards.
-- Physical-size visual designer with draggable and layered text, price, barcode, QR, image, shape, divider, date, and country elements.
-- Live product-field binding, multilingual print rendering, image/logo imports, rotation, keyboard nudging, duplication, and explicit layer controls.
-- Generate PDF label sheets or individual PDF/PNG/JPEG files, control copies/margins/gaps, and print directly through a selected macOS printer.
-- Standalone barcode maker for Code 128, EAN-13, UPC-A, Code 39, and QR codes, plus a persistent label job history.
+- **Workspace** — Company (one app, many companies, each with its own brands, categories,
+  products and files), Dashboard, Brands, and the **Product Library**: table and grid views,
+  search, filters, pagination, a side panel that auto-saves (with an explicit Save button too),
+  bulk edit in a table, Excel/CSV import with column mapping, folder import that matches image
+  files to SKUs, up to 50 images per product, and bulk image operations (convert, compress,
+  resize, auto-crop, enhance, remove background, apply overlay, AI).
+- **Image Studio** — Image Workspace (crop and straighten, canvas presets, background removal,
+  enhance, watermark, before/after view); AI Studio (OpenAI image edits and generation with cost
+  estimates, see `AI_INTEGRATION.md`); Overlay Studio (templates of text, price, barcode/QR and
+  logo elements composited onto product photos, plus a tool to watermark a folder of outside
+  photos); Export Center (per-company export profiles and a batch runner).
+- **Label Studio** — a physical-size label designer, Generate & Print (PDF sheets or single
+  PDF/PNG/JPEG files, or direct printing), a barcode maker (Code 128, EAN-13, UPC-A, Code 39, QR)
+  and label history.
+- **Catalog Studio** — catalog templates and projects with live preview and print-ready PDF output.
+- **Social** — Social Grid: multi-image posts with text/logo watermark overlays.
+- **Operations** — suppliers, purchase orders (lines, cost components, payments, currencies) and
+  a landed-cost calculator.
+- **System** — History (an audit log of who changed what) and Settings (data folder, categories,
+  price groups, AI keys, backups, Recently deleted, multi-Mac, roles and permissions, About).
 
-**Catalog Studio**
-- Separate Catalog Templates and Catalog Projects workspaces, with modern grid, wholesale price-list, minimal lookbook, retail promotion, and specification-sheet starting layouts.
-- Explicit product composer showing both the shared Product Library and the products already included in the project, with search, add/remove, counts, and manual ordering.
-- Live catalog preview with cover design, A4/Letter and portrait/landscape layouts, one-to-five-column grids, grouping, sorting, and field visibility controls.
-- Auto-save plus explicit Save, project duplication, and print-ready PDF export.
+Background removal runs locally (`@imgly/background-removal`); the only cloud service is the
+OpenAI account you configure for AI Studio. Deleted products and photos wait in
+**Settings → Recently deleted** (30 days by default) and can be restored; deleting them for good
+is for the admin account only.
 
-**Catalog management**
-- Multi-tenant: one app, many companies. Each company has its own brands, categories, products, and asset tree.
-- Brand-grouped products with optional icons that follow through to exports and Overlay Studio templates.
-- Per-product image lists (up to 50) with reorder, set-as-main, content-based dedup.
-- Excel / CSV import with column mapping, sample workbook download, dry-run preview, merge-or-overwrite policy on conflict.
+## Multi-Mac and the phone viewer
 
-**Product Library**
-- Table + Grid views (both sortable, both searchable, both paginated).
-- Multi-select rows → bulk edit Brand / Category / Status / prices across many products.
-- Cmd+K global search across SKU / name / barcode / brand / category.
-- Side panel for inline edit with auto-save + explicit Save button. Edit attribution shows who last touched each row.
-- Smart filename matching: scan a folder, auto-import matching files into existing products by SKU.
+- **Standalone** is the normal mode. **Server** mode makes one Mac hold the data and serve it over
+  HTTP + WebSocket (default port 13180). **Client** mode connects another Mac to that server with a
+  per-user token; edits appear on the other Macs as live updates, and simultaneous edits to the
+  same record get a Refresh / Overwrite choice instead of silently overwriting.
+- A browser viewer for phones and tablets is served at `http://<server address>:13180/m`. It can
+  browse the catalog, apply overlays and save results to the device.
+- The intended network is plain HTTP over Tailscale; HTTPS was considered and declined (see the
+  status page).
 
-**Image Workspace**
-- Background removal via a local ONNX model (`@imgly/background-removal`) — runs on this Mac, no cloud service and no API key. (corrected 2026-09-19: this line used to offer a remove.bg cloud fallback, which was removed from the app.)
-- Sharp pipeline: rotate, crop, resize-to-preset, format-convert, color-profile, watermark composite.
-- Per-image processed-vs-raw view with split slider, alignment guides, zoom controls.
-- Auto-save per-image settings; explicit "Process" button commits the run.
+## Storage
 
-**AI Studio**
-- OpenAI Images integration: image-to-image edits (`/v1/images/edits`) and text-to-image generation (`/v1/images/generations`). The model list is fetched live from `/v1/models`, so new `gpt-image-*` models appear without an app release.
-- Per-product flow: pick a source image + a prompt template → queue → review the gallery → promote to product (with optional "set as main").
-- Bulk / Folder flow: scan a folder of source images, batch-queue with a shared prompt, gallery shows all results.
-- Capability-driven aspect ratio, quality and image count; GPT Image 2.5 exposes 12 ratios and the xhigh/max tiers.
-- Token-based cost estimates (prompt + reference image + output), with the actual cost recorded from OpenAI's usage after each run.
-- Live queue updates (WebSocket-driven in multi-Mac mode).
-
-**Overlay Studio**
-- Visual editor for global templates that composite text + barcode + image elements onto product photos.
-- Token substitution from product fields (`{SKU}`, `{NAME}`, `{BRAND}`, etc.).
-- Renderer probe + Phase 3 batch runner against the catalog.
-
-**Export Center**
-- Per-company export profiles (size, format, color profile, watermark, naming pattern).
-- Run against a multi-select of products → output to a chosen folder with skip-reason categorization.
-- Export history per company.
-
-**Multi-Mac (server / client mode)**
-- Set one Mac as "server" — hosts the data, runs an HTTP+WebSocket server (default port 13180).
-- Set another Mac as "client" — connects with a per-user bearer token, browses the same catalog.
-- Live updates: edits on one Mac show up on the others within ~250ms.
-- Per-user active company, edit attribution, presence ("Theng, Sarah are online").
-- Conflict detection: if two clients edit the same row at the same time, get a Refresh / Overwrite dialog instead of silent last-write-wins.
-
-**Storage**
-- Default data folder is `~/Pictures/Media Studio KH/` (configurable in Settings).
-- Asset tree: `<dataDir>/assets/<company>/<brand-or-_unassigned>/<sku>/<SKU>-NNN.<ext>`.
-- Content-based dedup; product images use numbered filenames, while imported artwork uses clean names with numeric collision suffixes.
-- iCloud Drive support: detected automatically, switches SQLite to DELETE journal mode for safe sync.
+- Data folder: `~/Pictures/Media Studio KH` by default, changeable in Settings. It holds
+  `database.sqlite` (SQLite) and the `assets/`, `processed/`, `ai-gallery/`, `overlays/` and
+  `backups/` folders.
+- Product photos live at `assets/<company>/<brand or _unassigned>/<sku>/<sku>-001.<ext>`, numbered
+  by position (001 is the main image) and renumbered when the order changes.
+- App settings and the crash log live in `~/Library/Application Support/Media Studio KH/`; list
+  thumbnails are cached there too, never in the data folder.
+- A data folder inside iCloud Drive is detected and SQLite switches to a sync-safe journal mode.
 
 ## Keyboard shortcuts
 
-Press `Cmd+?` (or `Ctrl+?`) inside the app for the full list. Highlights:
+Press `Cmd+?` in the app for the full list. The main ones:
 
-- `Cmd+1..6` — switch modules
+- `Cmd+1`–`Cmd+9` — jump to the pages that show a number in the sidebar
 - `Cmd+,` — Settings
-- `Cmd+K` — global search palette
-- `Cmd+?` — show this shortcuts list
-- `Esc` — close any modal
+- `Cmd+K` — search everything
+- `Esc` — close any dialog
 
 ## Development
 
-Use an Apple Silicon Mac running macOS 12 or newer, Node 24 (the version the checkout was verified with: 24.15.0), and Xcode Command Line Tools for native dependencies. The machine that ran the 0.1.72 checks reports Node v26.8.2 / npm 11.19.1, and `npm run check` passes there too. Do not copy `node_modules` from another computer.
+Apple Silicon Mac, macOS 12 or newer, Node 24 (verified with 24.15.0; the checks also pass on
+Node 26.8.2), and Xcode Command Line Tools for the native modules. Do not copy `node_modules`
+between computers.
 
 ```bash
 npm ci
-npm run dev    # Vite + Electron with HMR
-npm run dist   # build the macOS arm64 DMG into dist/ (npm run dist:x64 for Intel, on request)
+npm run dev           # Vite + Electron with hot reload
+npm run check         # lint + pure-JS tests
+npm run test:native   # database tests under Electron's Node
+npm run dist          # build the arm64 DMG into dist/ (npm run dist:x64 for Intel, on request)
 ```
 
-The packaged build skips code signing (`identity: null` in package.json) so any team member can rebuild without an Apple Developer account. Once you have a Developer ID cert, see `SIGNING.md` for the wire-up.
-
-Source layout:
+The handoff lists the full check order (including the Electron probes and the UI crawl) and the
+release steps.
 
 ```
-main/            # main process (CommonJS, Electron API surface)
-main/db/         # SQLite schema + per-table modules
-main/server/     # HTTP + WebSocket server for multi-Mac mode
-main/client/     # Client-mode runtime (RPC proxy, file bridges)
-main/ai/         # AI provider modules + queue runner
-renderer/        # React + Vite + Zustand UI
-renderer/modules/<Name>/   # one folder per feature module
-assets/          # bundled fonts (ships in DMG)
-data/            # userData runtime (gitignored)
+main/                 main process (CommonJS): IPC, SQLite, image pipeline, server/client
+  db/  ipc/  util/    one file per table / per domain / helpers
+  server/  client/    multi-Mac server and client-mode proxy
+  ai/                 OpenAI adapter, pricing, queue runner
+renderer/             React 18 + Vite + Zustand UI (ESM)
+  modules/<Name>/     one folder per feature
+webclient/index.html  the phone viewer (bundled into main/webclientHtml.js)
+test/                 node --test suites
+scripts/              build helpers and Electron probes
+assets/               fonts bundled into the DMG
 ```
-
-`AGENTS.md` at the repo root documents the durable engineering conventions used throughout this codebase.
 
 ## License
 
-Private build — not yet open source. Contact the maintainer for distribution questions.
+Private build, not open source.
