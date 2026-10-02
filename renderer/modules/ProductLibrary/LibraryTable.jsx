@@ -157,7 +157,9 @@ const TableRow = memo(function TableRow({
           // same but the bytes inside change when the user makes a
           // different image the main one; without the version stamp
           // the table thumb shows stale pixels.
-          <img src={appImageSrc(p.mainImagePath, p.updatedAt)} alt="" />
+          // w=96: the cell is 36 px, so a small cached WebP covers retina
+          // without decoding the full-size original for every row.
+          <img src={appImageSrc(p.mainImagePath, p.updatedAt, { w: 96 })} alt="" loading="lazy" decoding="async" />
         ) : (
           <div className="thumb-placeholder" aria-hidden>·</div>
         )}

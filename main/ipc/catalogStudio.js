@@ -25,7 +25,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
   expose('catalogStudio:update', ({ id, patch } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const row = projects.update(id, patch); emitCatalogChange('catalogStudio', 'update', id); return row; });
   expose('catalogStudio:delete', ({ id } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const ok = projects.remove(id); emitCatalogChange('catalogStudio', 'delete', id); return ok; });
   expose('catalogStudio:duplicate', ({ id } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const row = projects.duplicate(id); emitCatalogChange('catalogStudio', 'create', row.id); return row; });
-  expose('catalogStudio:preview', ({ id } = {}) => { const project = assertEntityInActiveCompany(projects.get(id), 'Catalog project'); return { html: buildCatalogHtml(context(project)) }; });
+  expose('catalogStudio:preview', ({ id } = {}) => { const project = assertEntityInActiveCompany(projects.get(id), 'Catalog project'); return { html: buildCatalogHtml(context(project), { preview: true }) }; });
   exposeLocal('catalogStudio:export', async ({ id, outputFolder } = {}) => {
     const project = projects.get(id); if (!project) throw new Error('Catalog project not found');
     assertEntityInActiveCompany(project, 'Catalog project');
@@ -112,7 +112,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
         brands: brands.list(companyId),
         categories: categories.list(companyId),
         company,
-      }),
+      }, { preview: true }),
       sampleCount: selected.length,
       total: all.length,
     };

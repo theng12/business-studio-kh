@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Field, Input, Select, Textarea } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
@@ -145,7 +145,10 @@ function buildPrices(map) {
   return out;
 }
 
-export function ProductForm({ product, isCreating = false, createKey = 0, onClose, onStartCreate, onProcess, onPreview }) {
+/* Memoized: every prop the Library passes is stable (state, or a useCallback /
+ * useMemo there), so typing in the Library's search box or ticking a row no
+ * longer re-renders this ~1,500-line form. Store subscriptions still update it. */
+export const ProductForm = memo(function ProductForm({ product, isCreating = false, createKey = 0, onClose, onStartCreate, onProcess, onPreview, onDuplicated }) {
   // The panel is persistently mounted (per the user's request to keep the
   // detail view always visible). There are three modes:
   //   - `product` truthy            → edit-existing form
@@ -238,15 +241,60 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
   const lastSavedUpdatedAt = useRef(null);
   /** Mirrors activeProductId for the unmount flush, which cannot read state. */
   const activeProductIdRef = useRef(null);
+  /* Bumped every time the panel is re-pointed at another product (or at the
+   * blank / create form). The panel is never remounted on a switch — the
+   * Library renders it without a `key` — so a save or image fetch started for
+   * product A can resolve while B is on screen. Anything that awaits captures
+   * this first and drops its state/ref writes when it has moved: otherwise B
+   * inherited A's concurrency token (every later B autosave was a CONFLICT), or
+   * a finished create re-pointed the panel id at the new row while B was shown,
+   * so Delete removed the wrong product. */
+  const selectionGen = useRef(0);
+  /** One "changed elsewhere" toast per conflict, not one per pause in typing. */
+  const conflictToasted = useRef(false);
+
+  /* Write a pending autosave NOW, to the product it was typed into.
+   *
+   * The payload carries its own id and token (captured when it was built), so
+   * a flush never reads the refs after they have been re-pointed. It used to:
+   * switching rows within 500 ms dropped A's edit, left the payload owed, and
+   * the unmount flush later sent A's fields to B with B's token — B was
+   * overwritten with A's data. Called before the refs move to another product
+   * and on unmount. Goes through the store so the list (and the token the next
+   * open of this product reads) is refreshed behind it. */
+  const flushOwed = useCallback(() => {
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = null;
+    const owed = autoSavePayload.current;
+    autoSavePayload.current = null;
+    if (!owed || !owed.id || !owed.payload.sku || !owed.payload.sku.trim()) return;
+    updateProduct(owed.id, { ...owed.payload, expectedUpdatedAt: owed.expectedUpdatedAt })
+      .catch(() => { /* the panel has moved on; a toast here would be noise */ });
+  }, [updateProduct]);
 
   useEffect(() => {
+    flushOwed();
+    selectionGen.current += 1;
+    const gen = selectionGen.current;
     if (product) {
+      /* `product` is the Library's snapshot from when the row was clicked; the
+       * store's list is refreshed after every write. Re-showing the panel (⌘B
+       * remounts it) used to load that old snapshot, so the first autosave was
+       * a false "changed elsewhere". Start from whichever copy is newer — the
+       * fields AND the token together, so a newer edit from another Mac is
+       * never overwritten by a form that has not seen it. */
+      const { products: listed, allProducts } = useAppStore.getState();
+      const stored = (listed || []).find((p) => p.id === product.id)
+        || (allProducts || []).find((p) => p.id === product.id);
+      const source = stored && Number(stored.updatedAt) > Number(product.updatedAt) ? stored : product;
       skipNextAutoSave.current = true;
-      setForm(productToForm(product));
-      lastSavedUpdatedAt.current = product.updatedAt ?? null;
+      setForm(productToForm(source));
+      lastSavedUpdatedAt.current = source.updatedAt ?? null;
       setActiveProductId(product.id);
       activeProductIdRef.current = product.id;
-      window.api?.images.listByProduct(product.id).then(setImages).catch(() => setImages([]));
+      window.api?.images.listByProduct(product.id)
+        .then((rows) => { if (gen === selectionGen.current) setImages(rows); })
+        .catch(() => { if (gen === selectionGen.current) setImages([]); });
     } else {
       // Either creating a new product or showing the empty state — either
       // way we want a clean form so the next interaction starts fresh.
@@ -257,6 +305,10 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
       lastSavedUpdatedAt.current = null;
     }
     setSkuError(null);
+    // The pill belongs to the product now on screen, not to a save of the last one.
+    setSaveState('saved');
+    setSavedAt(null);
+    conflictToasted.current = false;
     // v0.49.39: drop any per-image selection when the displayed product
     // changes. Filepaths reference rows of the OLD product; carrying
     // them over would either match nothing or (worse) match a same-
@@ -266,7 +318,7 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
     // createKey changes when the user asks for ANOTHER new product while the
     // panel is already in create mode; without it the effect would not re-run
     // and the previously created product would stay on screen. */
-  }, [product, isCreating, createKey]);
+  }, [product, isCreating, createKey, flushOwed]);
 
   // v0.49.48: load this company's suppliers for the sourcing dropdown.
   // Includes archived (status 'all') so a product attached to a now-
@@ -334,8 +386,9 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
       // product, falling back to a refetch on null so a bulk batch
       // refresh still reaches us.
       if (evt.id != null && evt.id !== activeProductId) return;
+      const gen = selectionGen.current;
       window.api.images.listByProduct(activeProductId)
-        .then(setImages)
+        .then((rows) => { if (gen === selectionGen.current) setImages(rows); })
         .catch(() => { /* keep stale list rather than blank */ });
     });
     return off;
@@ -414,18 +467,49 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
     };
   }
 
+  /* Record a write's new concurrency token, but only while the panel still
+   * shows the product the write was for (see selectionGen). A payload typed
+   * while that write was in flight was captured with the old token, so it is
+   * advanced too. Returns false when the selection has moved on, and the
+   * caller then skips its own state writes. */
+  function noteSaved(gen, id, updatedAt) {
+    if (gen !== selectionGen.current) return false;
+    lastSavedUpdatedAt.current = updatedAt ?? null;
+    if (autoSavePayload.current?.id === id) {
+      autoSavePayload.current.expectedUpdatedAt = lastSavedUpdatedAt.current;
+    }
+    conflictToasted.current = false;
+    return true;
+  }
+
   async function handleSave() {
     if (!skuValid) {
       setSkuError('SKU is required');
       return;
     }
+    // Save writes the same payload the debounce would, so it supersedes it —
+    // leaving the timer armed meant a second write right behind this one, sent
+    // with the token this one is about to replace (a CONFLICT).
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = null;
+    autoSavePayload.current = null;
+    const gen = selectionGen.current;
+    const current = () => gen === selectionGen.current;
+    const id = activeProductId;
     setSaving(true);
     setSaveState('saving');
     try {
       if (isCreate) {
         const created = await createProduct(buildPayload());
-        setActiveProductId(created.id);
         addToast(`Created ${created.sku}`, 'success');
+        if (!current()) return;
+        // The refs move with the state: the autosave and the unmount flush
+        // read them, and the token is the created row's own.
+        setActiveProductId(created.id);
+        activeProductIdRef.current = created.id;
+        lastSavedUpdatedAt.current = created.updatedAt ?? null;
+        setSaveState('saved');
+        setSavedAt(Date.now());
         setSkuError(null);
       } else {
         // v0.17.2: optimistic concurrency. We send the product's
@@ -435,19 +519,26 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
         // refresh the form, overwrite (retry without the token), or
         // bail out leaving their pending edits intact in the form.
         try {
-          const updated = await updateProduct(activeProductId, {
+          const updated = await updateProduct(id, {
             ...buildPayload(),
             expectedUpdatedAt: lastSavedUpdatedAt.current,
           });
-          lastSavedUpdatedAt.current = updated?.updatedAt ?? null;
           addToast(`Saved ${updated.sku}`, 'success');
+          if (!noteSaved(gen, id, updated?.updatedAt)) return;
           setSaveState('saved');
           setSavedAt(Date.now());
           setSkuError(null);
         } catch (err) {
           const conflict = parseConflictError(err);
           if (!conflict) throw err;
+          // The panel has moved to another product: a Refresh here would load
+          // this row into THAT product's form.
+          if (!current()) {
+            addToast(`${form.sku || 'That product'} changed elsewhere, so the save was not applied. Open it again to review.`, 'error');
+            return;
+          }
           const choice = await showConflict(conflict);
+          if (!current()) return;
           if (choice === 'refresh') {
             /* v0.1.27: actually re-read the row.
              *
@@ -458,27 +549,34 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
              * form, changed nothing on screen, and left the stale token in
              * place. The next save conflicted again. Fetch the row and reset
              * the form and token from it. */
-            const fresh = await window.api.products.get(activeProductId);
-            if (fresh) {
+            const fresh = await window.api.products.get(id);
+            if (fresh && current()) {
               skipNextAutoSave.current = true;
               setForm(productToForm(fresh));
               lastSavedUpdatedAt.current = fresh.updatedAt ?? null;
+              conflictToasted.current = false;
+              setSaveState('saved');
             }
             await refreshProducts();
             addToast('Form refreshed with the latest data', 'info');
           } else if (choice === 'overwrite') {
-            const updated = await updateProduct(activeProductId, buildPayload());
-            lastSavedUpdatedAt.current = updated?.updatedAt ?? null;
+            const updated = await updateProduct(id, buildPayload());
             addToast(`Overwrote ${updated.sku}`, 'success');
+            if (!noteSaved(gen, id, updated?.updatedAt)) return;
+            setSaveState('saved');
+            setSavedAt(Date.now());
             setSkuError(null);
           } else {
-            // 'cancel' — leave form unchanged, no further action.
+            // 'cancel' — leave form unchanged; the edits are still unsaved.
+            setSaveState('dirty');
           }
         }
       }
     } catch (err) {
-      setSkuError(err.message);
-      setSaveState('dirty');
+      if (current()) {
+        setSkuError(err.message);
+        setSaveState('dirty');
+      }
       addToast(err.message, 'error');
     } finally {
       setSaving(false);
@@ -495,23 +593,43 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
     /* v0.1.27: hold the payload so leaving the panel can FLUSH it. Pressing Esc,
      * clicking another row, hiding the panel or navigating away within 500 ms
      * used to discard the edit — the cleanup below only cleared the timer, and
-     * the next effect run then skipped via skipNextAutoSave. */
-    autoSavePayload.current = buildPayload();
+     * the next effect run then skipped via skipNextAutoSave.
+     *
+     * The id and token travel WITH the payload (see flushOwed): whoever writes
+     * it — this timer, a switch, an unmount — writes it to the product it was
+     * typed into. */
+    const gen = selectionGen.current;
+    autoSavePayload.current = {
+      id: activeProductId,
+      expectedUpdatedAt: lastSavedUpdatedAt.current,
+      payload: buildPayload(),
+    };
     autoSaveTimer.current = setTimeout(async () => {
       const owed = autoSavePayload.current;
       autoSavePayload.current = null;      // claim it — the unmount flush must not repeat it
-      if (!owed || !owed.sku || !owed.sku.trim()) return;
+      if (!owed || !owed.payload.sku || !owed.payload.sku.trim()) return;
       setSaveState('saving');
       try {
-        const updated = await updateProduct(activeProductId, {
-          ...owed, expectedUpdatedAt: lastSavedUpdatedAt.current,
+        const updated = await updateProduct(owed.id, {
+          ...owed.payload, expectedUpdatedAt: owed.expectedUpdatedAt,
         });
-        lastSavedUpdatedAt.current = updated?.updatedAt ?? null;
+        if (!noteSaved(gen, owed.id, updated?.updatedAt)) return;
         setSaveState('saved');
         setSavedAt(Date.now());
       } catch (err) {
-        setSaveState('dirty');
-        addToast(err.message, 'error');
+        if (gen === selectionGen.current) setSaveState('dirty');
+        if (parseConflictError(err)) {
+          // Same handling as ImageWorkspace / SocialGrid: never show the raw
+          // CONFLICT| sentinel. Save opens the Refresh / Overwrite choice; say
+          // so once rather than on every pause in typing.
+          const stale = gen !== selectionGen.current;
+          if (stale || !conflictToasted.current) {
+            if (!stale) conflictToasted.current = true;
+            addToast(`${owed.payload.sku} changed elsewhere, so the last edit is not saved yet. Click Save to review it.`, 'error');
+          }
+        } else {
+          addToast(err.message, 'error');
+        }
       }
     }, 500);
     return () => clearTimeout(autoSaveTimer.current);
@@ -519,18 +637,10 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form]);
 
-  /* Flush a pending autosave when the panel closes or the product changes.
-   * Empty deps: we want unmount only — an effect re-run triggered by a form
-   * edit must keep debouncing, not fire early. */
-  useEffect(() => () => {
-    const owed = autoSavePayload.current;
-    autoSavePayload.current = null;
-    if (!owed || !owed.sku || !owed.sku.trim()) return;
-    const id = activeProductIdRef.current;
-    if (!id) return;
-    window.api.products.update(id, { ...owed, expectedUpdatedAt: lastSavedUpdatedAt.current })
-      .catch(() => { /* the panel is closing; a toast here would be noise */ });
-  }, []);
+  /* Flush a pending autosave when the panel closes. Unmount only — an effect
+   * re-run triggered by a form edit must keep debouncing, not fire early (a
+   * product switch flushes from the product-change effect instead). */
+  useEffect(() => () => flushOwed(), [flushOwed]);
 
   /**
    * v0.1.85: delete moved off the footer into the "⋯" menu, and now needs the
@@ -600,8 +710,11 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
       useAppStore.getState().refreshProducts();
       useAppStore.getState().refreshAllProducts?.();
       // Jump the side panel to the new product so the user can edit
-      // its SKU / name without hunting for it in the table.
-      useAppStore.getState().setActiveProductId(created.id);
+      // its SKU / name without hunting for it in the table. The panel's
+      // product is the Library's own selection, so the Library does the
+      // jump; the store's activeProductId it used to set here is the Image
+      // Workspace's product, and the panel stayed on the original.
+      onDuplicated?.(created);
     } catch (err) {
       addToast(err.message, 'error');
     } finally {
@@ -900,17 +1013,24 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
    * component mounted first. (Lightbox uses stopImmediatePropagation for the
    * same reason, but that only works when it is registered FIRST; this is the
    * robust direction.) */
+  /* A control that already handled Esc (a SearchableSelect closing its list,
+   * the brand / category / supplier pickers) marks it defaultPrevented; that
+   * Esc must not also close the panel. onClose lives in a ref so the listener
+   * is registered once, not on every Library render. */
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     if (isEmpty) return undefined;
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
+      if (e.defaultPrevented) return;  // a focused control already used it
       if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;  // a modal owns Esc
       e.stopPropagation();
-      onClose?.();
+      onCloseRef.current?.();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isEmpty, onClose]);
+  }, [isEmpty]);
 
   if (isEmpty) {
     return (
@@ -1396,7 +1516,10 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
         onClose={() => setReframeTarget(null)}
         onSaved={() => {
           if (activeProductId) {
-            window.api.images.listByProduct(activeProductId).then(setImages).catch(() => {});
+            const gen = selectionGen.current;
+            window.api.images.listByProduct(activeProductId)
+              .then((rows) => { if (gen === selectionGen.current) setImages(rows); })
+              .catch(() => {});
           }
         }}
       />
@@ -1452,7 +1575,7 @@ export function ProductForm({ product, isCreating = false, createKey = 0, onClos
       </footer>
     </aside>
   );
-}
+});
 
 function ImageTile({ image, index, total, onSetMain, onMoveLeft, onMoveRight, onRemove, onPreview, onReframe, selected, onToggleSelected }) {
   // v0.22.9: cache-bust strictly. Order of preference for the
@@ -1472,7 +1595,8 @@ function ImageTile({ image, index, total, onSetMain, onMoveLeft, onMoveRight, on
   // differs between the deleted row and the surviving row that
   // takes its filepath slot, so the URL ?v=<id> definitively
   // changes even without a content hash.
-  const src = appImageSrc(image.filepath, image.contentHash || image.id || image.filepath);
+  // Side-panel tiles are ~100 px squares: the 320 tier, never the full photo.
+  const src = appImageSrc(image.filepath, image.contentHash || image.id || image.filepath, { w: 320 });
   const isMain = index === 0;
   // v0.26.13: thumb is now clickable to open the Lightbox. We wrap the
   // <img> in a transparent button so it gets keyboard focus + an ARIA

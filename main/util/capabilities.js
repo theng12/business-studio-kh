@@ -100,6 +100,11 @@ const CHANNEL_RULES = [
   //   new photos is images.add (the photographer's job); everything else
   //   (set-main, reorder, crop, enhance, auto-match) is images.manage.
   [/^images:removeFromProduct$/,                        'products.delete'],
+  // — Recently deleted. Seeing and restoring the bin goes with the right to
+  //   delete. Purging/emptying it is the irreversible step (the files leave
+  //   the data folder for the Mac's Trash), so it needs the strictest key.
+  [/^deleted:(list|restore)$/,                          'products.delete'],
+  [/^deleted:(purge|empty)$/,                           'system.manage'],
   [/^images:(importFromBytes|importForProduct)$/,       'images.add'],
   [/^files:(pickImageFile|pickFolder|readImageThumb)$/, 'images.add'],
   [/^images:/,                                          'images.manage'],

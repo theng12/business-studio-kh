@@ -240,7 +240,10 @@ const GridCard = memo(function GridCard({
   // refreshes after image deletes/reorders/set-main. The Library
   // bumps `updated_at` on the product whenever its image set changes
   // (see touch in main/ipc/images.js).
-  const thumbSrc = activePath ? appImageSrc(activePath, p.updatedAt) : null;
+  // w=640: cards are 160–340 px wide and can stretch (1fr), and the thumb
+  // is cropped with object-fit: cover — 640 on the short side stays sharp at
+  // 2x for every card-size preset while being a fraction of the original.
+  const thumbSrc = activePath ? appImageSrc(activePath, p.updatedAt, { w: 640 }) : null;
 
   // v0.26.48: the card became a <div> with role="button" instead of a
   // <button>. Reason: the new bulk-select checkbox is interactive, and
@@ -304,7 +307,7 @@ const GridCard = memo(function GridCard({
         title={thumbSrc ? (hasMulti ? `Preview images (${p.imageCount})` : 'Preview images') : undefined}
       >
         {thumbSrc ? (
-          <img src={thumbSrc} alt="" loading="lazy" />
+          <img src={thumbSrc} alt="" loading="lazy" decoding="async" />
         ) : (
           // Visually clear placeholder for products without images. Icon
           // comes from the ::before pseudo-element in CSS; the label gives

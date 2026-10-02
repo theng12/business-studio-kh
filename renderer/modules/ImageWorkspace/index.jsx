@@ -441,14 +441,6 @@ export function ImageWorkspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeImageFilepath, activeImageContentHash, activeImageId, activeProductId]);
 
-  // Refresh the "X min ago" display every 30s without re-fetching anything —
-  // matches the AGENTS.md §6 auto-refresh requirement for the indicator.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 30000);
-    return () => clearInterval(id);
-  }, []);
-
   // Compute a renderer-side watermark URL if one is set.
   const watermarkSrc = settings.watermark?.relativePath
     ? `app-image://local/${encodeURIComponent(settings.watermark.relativePath)}`
@@ -1039,10 +1031,17 @@ function ProductNav({ products, activeProductId, onPick, busy = false }) {
 /**
  * Save-status indicator per AGENTS.md §6. Reflects the auto-save state
  * effect's `state` machine: 'idle' | 'saving' | 'saved' | 'error'.
- * Re-renders every 30s (via the parent's tick state) so the relative time
- * ("2 min ago") stays current without re-fetching anything.
+ * Re-renders every 30s (its own tick — matches the AGENTS.md §6 auto-refresh
+ * requirement) so the relative time ("2 min ago") stays current without
+ * re-fetching anything. The timer lives here, not in the page, so only this
+ * badge re-renders rather than the whole workspace.
  */
 function SaveIndicator({ status }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
   if (status.state === 'saving') {
     return <span className="ws-save ws-save--amber">Saving…</span>;
   }

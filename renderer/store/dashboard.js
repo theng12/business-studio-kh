@@ -33,6 +33,12 @@ export function createDashboardSlice(set, get) {
         set({ dashboardStats: null, dashboardRecentBrands: [], dashboardRecentProducts: [], dashboardCompleteness: null });
         return;
       }
+      // Only the Dashboard page reads these, and it refetches every time it
+      // mounts. Fetching them from anywhere else — each product edit's
+      // catalog event, a save in the Library, the boot background pass — was
+      // four calls (four HTTP round-trips in client mode) for a page nobody
+      // was looking at.
+      if (get().activeModule !== 'dashboard') return;
       try {
         const [stats, recentBrands, recentProducts, completeness] = await Promise.all([
           window.api.dashboard.stats(companyId),

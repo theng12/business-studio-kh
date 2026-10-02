@@ -35,16 +35,29 @@ function create(input) {
   return rowToRun(getDb().prepare('SELECT * FROM label_runs WHERE id = ?').get(id));
 }
 
-function addItem(runId, input) {
-  const id = crypto.randomUUID();
-  getDb().prepare(`INSERT INTO label_generation_items
+const ADD_ITEM_SQL = `INSERT INTO label_generation_items
     (id, run_id, product_id, sku, file_path, product_snapshot, template_snapshot, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, runId, input.productId ?? null, input.sku ?? null, input.filePath ?? null,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+
+function insertItem(stmt, runId, input) {
+  const id = crypto.randomUUID();
+  stmt.run(id, runId, input.productId ?? null, input.sku ?? null, input.filePath ?? null,
     JSON.stringify(input.productSnapshot || {}), JSON.stringify(input.templateSnapshot || {}), Date.now());
   return id;
 }
 
+function addItem(runId, input) {
+  return insertItem(getDb().prepare(ADD_ITEM_SQL), runId, input);
+}
+
+/** A whole run's items in one transaction: one commit for the batch rather
+ *  than one per label, and a run never keeps half its items. */
+function addItems(runId, inputs) {
+  const db = getDb();
+  const stmt = db.prepare(ADD_ITEM_SQL);
+  return db.transaction(() => (inputs || []).map((input) => insertItem(stmt, runId, input)))();
+}
+
 function remove(id) { return getDb().prepare('DELETE FROM label_runs WHERE id = ?').run(id).changes > 0; }
 
-module.exports = { list, create, addItem, remove };
+module.exports = { list, create, addItem, addItems, remove };

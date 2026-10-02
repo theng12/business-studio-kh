@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Badge, Button, EmptyState, Field, Input, Modal, Pagination, paginate, Select, Textarea } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { appImageSrc } from '../../lib/imageUrl.js';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { BulkSourcePanel } from './BulkSourcePanel.jsx';
 import { BulkGallery } from './BulkGallery.jsx';
@@ -266,9 +267,9 @@ export function AIStudio() {
     const img = new Image();
     img.onload = () => { if (!cancelled) setSourceDims({ width: img.naturalWidth, height: img.naturalHeight }); };
     img.onerror = () => { if (!cancelled) setSourceDims(null); };
-    img.src = `app-image://local/${encodeURIComponent(sourceImagePath)}`;
+    img.src = appImageSrc(sourceImagePath, sourceImg?.contentHash);
     return () => { cancelled = true; img.onload = null; img.onerror = null; };
-  }, [requiresSource, sourceImagePath]);
+  }, [requiresSource, sourceImagePath, sourceImg?.contentHash]);
 
   /* Pre-flight cost estimate — text input + image input + image output
    * tokens, priced with OpenAI's published rates (main/ai/pricing.js). The
@@ -568,7 +569,7 @@ export function AIStudio() {
                   <p className="muted">This product has no images yet. Add some in the Product Library or use a text-to-image model.</p>
                 ) : (
                   sourceImages.map((img) => {
-                    const src = `app-image://local/${encodeURIComponent(img.filepath)}`;
+                    const src = appImageSrc(img.filepath, img.contentHash);
                     const active = sourceImagePath === img.filepath;
                     return (
                       <button
@@ -595,7 +596,7 @@ export function AIStudio() {
                   title="Click for full-size preview"
                 >
                   <img
-                    src={`app-image://local/${encodeURIComponent(sourceImagePath)}`}
+                    src={appImageSrc(sourceImagePath, sourceImg?.contentHash)}
                     alt="Source preview"
                   />
                   <span className="ai-source-preview__hint">
@@ -1098,7 +1099,7 @@ export function AIStudio() {
         >
           <div className="ai-preview">
             <img
-              src={`app-image://local/${encodeURIComponent(previewingPath)}`}
+              src={appImageSrc(previewingPath, sourceImages.find((i) => i.filepath === previewingPath)?.contentHash)}
               alt=""
             />
           </div>
@@ -1283,7 +1284,7 @@ function ConfirmDialog({ open, model, product, sourceImg, prompt, options, cost,
   const perTaskUsd = cost?.usd ?? null;
   const totalCost = perTaskUsd != null ? (isBulk ? perTaskUsd * bulkCount : perTaskUsd) : null;
   const tokens = cost?.tokens;
-  const srcUrl = sourceImg ? `app-image://local/${encodeURIComponent(sourceImg.filepath)}` : null;
+  const srcUrl = sourceImg ? appImageSrc(sourceImg.filepath, sourceImg.contentHash) : null;
 
   return (
     <Modal

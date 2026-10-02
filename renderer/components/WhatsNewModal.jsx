@@ -2,6 +2,25 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.87',
+    date: '2026-10-02',
+    items: [
+      'FIX — an edit typed just before clicking another product is no longer lost, and can no longer land on the wrong product. Switching rows, pressing Esc or closing the panel within half a second of typing used to drop that edit — and in one case write it onto the NEXT product you opened. The panel now saves the pending edit to the product it was typed into before it moves on.',
+      'FIX — Duplicate now opens the copy. The panel used to stay on the original, so renaming "the copy" as the dialog suggested renamed the original product instead.',
+      'FIX — pressing Esc to close the Brand, Category or Supplier picker no longer closes the whole product panel.',
+      'FIX — photos are much safer when several things happen at once. Editing a photo (crop, reframe, enhance, compress, flip, apply overlay) while another photo of the same product was being moved or deleted could overwrite the wrong picture; two photos added to one product at the same moment could take the same slot and lose one; and the bulk "Remove background" could cut out the wrong photos after the first one became the main image. Each of these now checks the photo it started with and stops with a message rather than touch a different one.',
+      'FIX — two products whose SKUs differ only by capital letters or punctuation (abc-1 and ABC-1) are now refused, the same as an exact duplicate. On a Mac they would have shared one folder and could overwrite each other\'s photos.',
+      'FIX — Recently deleted: a product whose brand or category was deleted since can now be restored (it comes back without that brand/category instead of failing), its AI Studio images come back with it, and a restore that cannot put things back exactly where they were now stops cleanly instead of risking another product\'s folder. After restoring a backup, entries whose files are no longer there are removed from the list rather than offered and then failing.',
+      'FIX — undoing "Merge duplicates" and clearing its history send leftover photos to the Trash instead of erasing them.',
+      'FIX — a few screens fought the user: the OpenAI concurrency box and the API key field now let you type freely and save when you leave the field; the purchase-order FX rate no longer saves 0 when cleared; picking a different product in "Add line" now replaces the previous product\'s carton size and weight; closing the Import window while it is still writing is blocked instead of leaving a stale result behind; Overlay Studio\'s ⌘Z / ⌘⇧Z / ⌘D now act on the latest state.',
+      'FIX — pictures that changed (after a delete, reorder, export back to the library, or a new brand icon) no longer keep showing the old image in AI Studio, Overlay Studio, the Dashboard and the Brands page.',
+      'POLISH — the Product Library is faster and smoother. Tables and grids now show small cached thumbnails instead of decoding every full-size photo, sorting a large catalogue is about 20x quicker, the list no longer flashes "Loading…" after every save, and each edit refreshes the list once instead of up to four times.',
+      'POLISH — catalogue, label and template previews no longer copy every product photo and font file on each keystroke, so previews update quickly even with hundreds of products. Khmer and Thai text in previews now uses the same font as the printed result.',
+      'POLISH — importing a spreadsheet of new products into a large catalogue is dramatically faster; PNG/JPEG label export is about 3x faster; the Dashboard, the edit-in-table grid and Social Grid do less redundant work.',
+      'Internal — thumbnail tier: app-image://…?w=96|320|640 is served from <userData>/thumb-cache (sharp → WebP, capped at 256 MB, never in the data folder or backups) by main/util/thumbCache.js for both the local protocol and the server\'s asset route. productImages: remove() refuses an unknown path and never touches disk; withProductImageLock serializes add/set-main/reorder/remove per product; replaceImageFile/readImageNow re-resolve in-place writers by row id + content hash; renumberFiles refuses to overwrite a file outside its plan. findAssetDirCollision is case-insensitive, cross-company and built once per import. deleted:list|restore need products.delete, deleted:purge|empty need system.manage. The boot recovery sweep sends orphan temp files to the Trash. Additive indexes product_images(filepath) and products(company_id, updated_at DESC); temp_store=MEMORY, cache_size=32 MB; UV_THREADPOOL_SIZE=8. Preview documents use app-image URLs; CSP gains font-src data:. The boot bundle no longer preloads the background-removal chunk.',
+    ],
+  },
+  {
     version: '0.1.86',
     date: '2026-09-28',
     items: [

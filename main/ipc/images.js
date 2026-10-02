@@ -63,6 +63,26 @@ function takeIssuedDragPaths(paths) {
 }
 
 function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAFE_WATERMARK_EXTS, exposeLocal }) {
+  /* Look an image up by row id and read its bytes in the same JS turn.
+   * Renumbers (set-main, reorder, delete) are synchronous, so bytes read this
+   * way are certainly that row's. Reading by a path captured earlier — before
+   * an await, or before a batch's previous image — could pick up whichever
+   * photo a renumber had moved into it, and the edit then stamped that
+   * neighbour's pixels onto this row. Returns null when the file is missing. */
+  function readImageNow(productId, imageId) {
+    const row = productImages.getById(productId, imageId);
+    if (!row) throw new Error('That photo was removed while this was running, so it was skipped.');
+    const absSrc = productImages.assetAbsPath(row.filepath);
+    let bytes;
+    try {
+      bytes = fs.readFileSync(absSrc);
+    } catch (err) {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    }
+    return { row, absSrc, bytes };
+  }
+
   /* ─── Product images ─── */
 
   /* v0.1.70: two call shapes.
@@ -138,7 +158,10 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // These operate on existing DB rows + their on-disk files; no
   // path-on-disk arg crosses the wire, so the RPC envelope
   // handles them cleanly.
-  expose('images:setMainImage', ({ productId, filepath } = {}) => {
+  // Set-main, reorder and remove renumber the product's files, so they wait
+  // for any add still choosing a slot in the same product (see
+  // productImages.withProductImageLock).
+  expose('images:setMainImage', ({ productId, filepath } = {}) => productImages.withProductImageLock(productId, () => {
     assertProductInActiveCompany(productId);
     productImages.setMain(productId, filepath);
     // v0.22.8: bump product.updated_at so the Library list/grid
@@ -149,16 +172,16 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     emitCatalogChange('images', 'setMain', productId);
     auditImage(productId, 'image:set-main', { filename: lastSegment(filepath) });
     return productImages.listByProduct(productId);
-  });
+  }));
 
-  expose('images:reorderImages', ({ productId, newOrder } = {}) => {
+  expose('images:reorderImages', ({ productId, newOrder } = {}) => productImages.withProductImageLock(productId, () => {
     assertProductInActiveCompany(productId);
     productImages.reorder(productId, newOrder);
     products.touchUpdated(productId);
     emitCatalogChange('images', 'reorder', productId);
     auditImage(productId, 'image:reorder', { count: Array.isArray(newOrder) ? newOrder.length : 0 });
     return productImages.listByProduct(productId);
-  });
+  }));
 
   /**
    * v0.26.14: destructive flip of a product image's source file in
@@ -194,14 +217,11 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     }
     assertProductInActiveCompany(productId);
 
-    const row = productImages.getByFilepath(productId, filepath);
-    if (!row) throw new Error('Image not found on product');
-
-    // filepath is relative to `<dataDir>/assets/` — prepend that
-    // segment for the actual filesystem path. Same convention every
-    // other image module in this file uses.
-    const absSrc = path.join(getDataDir(), 'assets', filepath);
-    if (!fs.existsSync(absSrc)) throw new Error('Source file missing on disk: ' + filepath);
+    const found = productImages.getByFilepath(productId, filepath);
+    if (!found) throw new Error('Image not found on product');
+    const src = readImageNow(productId, found.id);
+    if (!src) throw new Error('Source file missing on disk: ' + filepath);
+    const { row, absSrc } = src;
 
     const ext = path.extname(absSrc).toLowerCase();
     const tmpAbs = path.join(
@@ -209,7 +229,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       `__flip-${crypto.randomUUID()}${ext}`,
     );
 
-    let pipeline = sharp(absSrc, { failOn: 'none' });
+    let pipeline = sharp(src.bytes, { failOn: 'none' });
     // .rotate() with no arg honours EXIF orientation FIRST so the
     // flip operates on what the user actually sees, not the raw
     // sensor orientation. Important for photos straight out of a
@@ -230,21 +250,23 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     else if (ext === '.webp')  pipeline = pipeline.webp({ quality: 90 });
     else                       pipeline = pipeline.jpeg({ quality: 92, mozjpeg: true });
 
+    let updated;
     try {
       await pipeline.toFile(tmpAbs);
-      // Same-filesystem rename → atomic. If this throws, the original
-      // file is still intact and the tmp file is the only orphan.
-      await fs.promises.rename(tmpAbs, absSrc);
+      // Recompute hash so the renderer's cache-bust URL changes.
+      const buf = await fs.promises.readFile(tmpAbs);
+      const hash = crypto.createHash('sha1').update(buf).digest('hex');
+      // Lands on the row's CURRENT path: a renumber during the encode must not
+      // send these pixels onto another photo.
+      updated = productImages.replaceImageFile(productId, row.id, {
+        tmpAbs, newHash: hash, expectedHash: row.contentHash,
+      });
     } catch (err) {
-      // Best-effort tmp cleanup if rename failed mid-flow.
+      // Best-effort tmp cleanup; the original file is still intact.
       try { if (fs.existsSync(tmpAbs)) await fs.promises.unlink(tmpAbs); } catch (_) {}
       throw err;
     }
-
-    // Recompute hash so the renderer's cache-bust URL changes.
-    const buf = await fs.promises.readFile(absSrc);
-    const newHash = crypto.createHash('sha1').update(buf).digest('hex');
-    const updated = productImages.setContentHash(productId, filepath, newHash);
+    const newHash = updated?.contentHash ?? null;
 
     products.touchUpdated(productId);
     emitCatalogChange('images', 'flip', productId);
@@ -257,7 +279,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     return updated;
   });
 
-  expose('images:removeFromProduct', ({ productId, filepath } = {}) => {
+  expose('images:removeFromProduct', ({ productId, filepath } = {}) => productImages.withProductImageLock(productId, () => {
     assertProductInActiveCompany(productId);
     productImages.remove(productId, filepath);
     products.recomputeProcessStatus(productId);
@@ -269,7 +291,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     emitCatalogChange('images', 'remove', productId);
     auditImage(productId, 'image:remove', { filename: lastSegment(filepath) });
     return productImages.listByProduct(productId);
-  });
+  }));
 
   exposeLocal('images:autoMatchBySku', async ({ companyId, folderPath }) => {
     if (!companyId) throw new Error('companyId is required');
@@ -529,12 +551,14 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   async function resolveImageForReframe(productId, filepath) {
     if (!productId || !filepath) throw new Error('productId + filepath required');
     assertProductInActiveCompany(productId);
-    const row = productImages.getByFilepath(productId, filepath);
-    if (!row) throw new Error('Image not found on product');
-    const absSrc = path.join(getDataDir(), 'assets', filepath);
-    if (!fs.existsSync(absSrc)) throw new Error('Source file missing on disk: ' + filepath);
-    const meta = await sharp(absSrc, { failOn: 'none' }).metadata();
-    return { row, absSrc, W: meta.width || 2000, H: meta.height || 2000 };
+    const found = productImages.getByFilepath(productId, filepath);
+    if (!found) throw new Error('Image not found on product');
+    // `bytes` is what every caller decodes, so the pixels edited are the
+    // pixels of `row` even if a renumber runs during the awaits below.
+    const src = readImageNow(productId, found.id);
+    if (!src) throw new Error('Source file missing on disk: ' + filepath);
+    const meta = await sharp(src.bytes, { failOn: 'none' }).metadata();
+    return { ...src, W: meta.width || 2000, H: meta.height || 2000 };
   }
 
   function reframeArgs(opts, W, H) {
@@ -557,7 +581,11 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // (cache-bust) + perceptual_hash (keeps dedup accurate). Returns the
   // updated image row. Used by both images:reframeImage and the batch
   // auto-crop pass so the disk-write contract can never drift.
-  async function writeReframedInPlace(absSrc, outPng, productId, filepath, rowId) {
+  //
+  // `row` is the image row as read BEFORE the slow work started; the write
+  // lands on that row's current path and is refused if its bytes changed in
+  // the meantime (productImages.replaceImageFile).
+  async function writeReframedInPlace(absSrc, outPng, productId, row) {
     const ext = path.extname(absSrc).toLowerCase();
     let enc = sharp(outPng, { failOn: 'none' });
     if (ext === '.png')       enc = enc.png({ compressionLevel: 9 });
@@ -566,20 +594,22 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const finalBuf = await enc.toBuffer();
 
     const tmpAbs = path.join(path.dirname(absSrc), `__reframe-${crypto.randomUUID()}${ext}`);
+    const newHash = crypto.createHash('sha1').update(finalBuf).digest('hex');
+    let updated;
     try {
       await fs.promises.writeFile(tmpAbs, finalBuf);
-      await fs.promises.rename(tmpAbs, absSrc);
+      updated = productImages.replaceImageFile(productId, row.id, {
+        tmpAbs, newHash, expectedHash: row.contentHash,
+      });
     } catch (err) {
       try { if (fs.existsSync(tmpAbs)) await fs.promises.unlink(tmpAbs); } catch (_) {}
       throw err;
     }
 
-    const newHash = crypto.createHash('sha1').update(finalBuf).digest('hex');
-    const updated = productImages.setContentHash(productId, filepath, newHash);
     try {
       const { perceptualHash } = require('../util/phash');
-      const ph = await perceptualHash(absSrc);
-      if (ph && rowId) productImages.setPerceptualHashById(rowId, ph);
+      const ph = await perceptualHash(finalBuf);
+      if (ph) productImages.setPerceptualHashById(row.id, ph);
     } catch (_) {}
     return updated;
   }
@@ -587,8 +617,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // Live preview — returns reframed PNG bytes without touching disk.
   expose('images:reframePreview', async (opts = {}) => {
     const { reframeImage } = require('../util/reframe');
-    const { absSrc, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
-    const bytes = await reframeImage({ inputImage: absSrc, ...reframeArgs(opts, W, H) });
+    const { bytes: srcBytes, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
+    const bytes = await reframeImage({ inputImage: srcBytes, ...reframeArgs(opts, W, H) });
     return { bytes };
   });
 
@@ -626,10 +656,10 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // buffer + its new dims so callers can resolve the (normalised) rect
   // against the post-rotation bbox. When angle is 0 returns the source path
   // and (W, H) — no extra sharp pass.
-  async function applyStraighten(absSrc, W, H, angleRaw) {
+  async function applyStraighten(source, W, H, angleRaw) {
     const angle = Math.max(-45, Math.min(45, Number(angleRaw) || 0));
-    if (!angle) return { source: absSrc, W, H };
-    const rotated = await sharp(absSrc, { failOn: 'none' })
+    if (!angle) return { source, W, H };
+    const rotated = await sharp(source, { failOn: 'none' })
       .rotate(angle, { background: { r: 255, g: 255, b: 255, alpha: 1 } })
       .png()
       .toBuffer();
@@ -638,8 +668,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   }
 
   expose('images:cropPreview', async (opts = {}) => {
-    const { absSrc, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
-    const stt = await applyStraighten(absSrc, W, H, opts.straighten);
+    const { bytes: srcBytes, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
+    const stt = await applyStraighten(srcBytes, W, H, opts.straighten);
     const r = resolveCropRect(opts.rect, stt.W, stt.H);
     const bytes = await sharp(stt.source, { failOn: 'none' })
       .extract(r)
@@ -649,10 +679,10 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   });
 
   expose('images:cropImage', async (opts = {}) => {
-    const { row, absSrc, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
+    const { row, absSrc, bytes: srcBytes, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
     const { productId, filepath } = opts;
     const dest = opts.destination === 'overwrite' ? 'overwrite' : 'newImage';
-    const stt = await applyStraighten(absSrc, W, H, opts.straighten);
+    const stt = await applyStraighten(srcBytes, W, H, opts.straighten);
     const r = resolveCropRect(opts.rect, stt.W, stt.H);
 
     // Render once; both destinations consume the same bytes.
@@ -665,7 +695,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       // Atomic in-place write — same contract as reframe / autoCrop. The
       // source\'s extension is preserved (re-encoded if needed) so a .jpg
       // stays a .jpg instead of bloating to .png on every crop.
-      const updated = await writeReframedInPlace(absSrc, outPng, productId, filepath, row.id);
+      const updated = await writeReframedInPlace(absSrc, outPng, productId, row);
       products.touchUpdated(productId);
       emitCatalogChange('images', 'crop', productId);
       auditImage(productId, 'image:crop', {
@@ -702,8 +732,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   expose('images:sampleImageBgColor', async ({ productId, filepath } = {}) => {
     const { sampleBackgroundColor } = require('../util/reframe');
     try {
-      const { absSrc } = await resolveImageForReframe(productId, filepath);
-      return sampleBackgroundColor(absSrc);
+      const { bytes } = await resolveImageForReframe(productId, filepath);
+      return sampleBackgroundColor(bytes);
     } catch (_) { return '#FFFFFF'; }
   });
 
@@ -713,11 +743,11 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // accurate. Output keeps the source's pixel dimensions + format.
   expose('images:reframeImage', async (opts = {}) => {
     const { reframeImage } = require('../util/reframe');
-    const { row, absSrc, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
+    const { row, absSrc, bytes: srcBytes, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
     const { productId, filepath } = opts;
 
-    const outPng = await reframeImage({ inputImage: absSrc, ...reframeArgs(opts, W, H) });
-    const updated = await writeReframedInPlace(absSrc, outPng, productId, filepath, row.id);
+    const outPng = await reframeImage({ inputImage: srcBytes, ...reframeArgs(opts, W, H) });
+    const updated = await writeReframedInPlace(absSrc, outPng, productId, row);
 
     products.touchUpdated(productId);
     emitCatalogChange('images', 'reframe', productId);
@@ -813,14 +843,16 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       let any = false;
       let touchedImages = 0;
       for (const img of imgs) {
-        const absSrc = path.join(getDataDir(), 'assets', img.filepath);
-        if (!fs.existsSync(absSrc)) { missing += 1; continue; }
         try {
-          const meta = await sharp(absSrc, { failOn: 'none' }).metadata();
+          // Re-read by id: earlier images' awaits leave time for a renumber.
+          const src = readImageNow(productId, img.id);
+          if (!src) { missing += 1; continue; }
+          const { absSrc } = src;
+          const meta = await sharp(src.bytes, { failOn: 'none' }).metadata();
           const W = meta.width || 2000;
           const H = meta.height || 2000;
           const outPng = await reframeImage({
-            inputImage: absSrc,
+            inputImage: src.bytes,
             canvasW: W,
             canvasH: H,
             offsetX: 0,
@@ -828,7 +860,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
             autoCrop: true,
             ...args,
           });
-          await writeReframedInPlace(absSrc, outPng, productId, img.filepath, img.id);
+          await writeReframedInPlace(absSrc, outPng, productId, src.row);
           images += 1;
           touchedImages += 1;
           any = true;
@@ -870,8 +902,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // Live preview — enhanced PNG bytes, no disk write. Same shape as reframePreview.
   expose('images:autoEnhancePreview', async (opts = {}) => {
     const { autoEnhance } = require('../util/autoEnhance');
-    const { absSrc } = await resolveImageForReframe(opts.productId, opts.filepath);
-    const bytes = await autoEnhance(absSrc, enhanceArgs(opts));
+    const { bytes: srcBytes } = await resolveImageForReframe(opts.productId, opts.filepath);
+    const bytes = await autoEnhance(srcBytes, enhanceArgs(opts));
     return { bytes };
   });
 
@@ -934,11 +966,12 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       let any = false;
       let touchedImages = 0;
       for (const img of imgs) {
-        const absSrc = path.join(getDataDir(), 'assets', img.filepath);
-        if (!fs.existsSync(absSrc)) { missing += 1; continue; }
         try {
-          const outPng = await autoEnhance(absSrc, args);
-          await writeReframedInPlace(absSrc, outPng, productId, img.filepath, img.id);
+          // Re-read by id: earlier images' awaits leave time for a renumber.
+          const src = readImageNow(productId, img.id);
+          if (!src) { missing += 1; continue; }
+          const outPng = await autoEnhance(src.bytes, args);
+          await writeReframedInPlace(src.absSrc, outPng, productId, src.row);
           images += 1;
           touchedImages += 1;
           any = true;
@@ -1068,10 +1101,12 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       let touchedImages = 0;
       for (const img of imgs) {
         const oldRel = img.filepath;
-        const oldAbs = path.join(getDataDir(), 'assets', oldRel);
-        if (!fs.existsSync(oldAbs)) { missing += 1; continue; }
         try {
-          const oldSize = fs.statSync(oldAbs).size;
+          // Re-read by id: earlier images' awaits leave time for a renumber.
+          const src = readImageNow(productId, img.id);
+          if (!src) { missing += 1; continue; }
+          const oldAbs = src.absSrc;
+          const oldSize = src.bytes.length;
           // Decide target format: 'keep' means infer from source extension.
           const oldExt = path.extname(oldAbs).toLowerCase();
           let outFormat = targetFormat;
@@ -1081,7 +1116,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
             else if (oldExt === '.webp') outFormat = 'webp';
             else outFormat = 'jpeg'; // safe default for anything else (heic etc)
           }
-          let enc = sharp(oldAbs, { failOn: 'none' });
+          let enc = sharp(src.bytes, { failOn: 'none' });
           // v0.49.34: rotate based on EXIF orientation before resize so
           // the W/H the user asked for matches what they see. Without
           // this, a portrait phone photo with `Orientation:6` gets
@@ -1126,57 +1161,38 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
           else if (outFormat === 'webp') enc = enc.webp({ quality });
           const outBuf = await enc.toBuffer();
 
-          // New filepath: same dir + base, new extension. If format unchanged,
-          // newRel === oldRel and we use the existing in-place writer.
+          // Same extension → replace in place. Different extension → the
+          // file is renamed to it and the row follows. Either way the bytes
+          // land on the row's CURRENT path (a renumber during the encode must
+          // not send them onto another photo), and `outBuf` is written as-is:
+          // v0.49.34 stopped routing it through writeReframedInPlace, whose
+          // fixed quality-92 re-encode undid a Compress at quality 60.
           const newExt = extForFormat[outFormat];
-          const newRel = oldRel.replace(/\.[^./]+$/, newExt);
-          const newAbs = path.join(getDataDir(), 'assets', newRel);
-
-          if (newRel === oldRel) {
-            // v0.49.34: write `outBuf` DIRECTLY (atomic tmp+rename) +
-            // bump content_hash + perceptual_hash. Previously this
-            // routed through `writeReframedInPlace`, which RE-ENCODED
-            // the buffer through sharp at a hard-coded quality of 92.
-            // For a Compress operation that meant: the user picks
-            // JPEG quality 60, sharp produces a quality-60 JPEG into
-            // outBuf, writeReframedInPlace re-decodes that buffer and
-            // re-encodes it at quality 92 — so the file on disk had
-            // the visual quality of 60 (lossy step already happened)
-            // at the FILE SIZE of 92 (no compression win). Direct
-            // write fixes the size + preserves the user's chosen
-            // quality without a second lossy pass.
-            const tmpAbs = path.join(path.dirname(oldAbs), `__reencode-${crypto.randomUUID()}${path.extname(oldAbs)}`);
+          const tmpAbs = path.join(path.dirname(oldAbs), `__reencode-${crypto.randomUUID()}${newExt}`);
+          const newHash = crypto.createHash('sha1').update(outBuf).digest('hex');
+          let updatedRow;
+          try {
             await fs.promises.writeFile(tmpAbs, outBuf);
-            await fs.promises.rename(tmpAbs, oldAbs);
-            const newHash = crypto.createHash('sha1').update(outBuf).digest('hex');
-            productImages.setContentHash(productId, oldRel, newHash);
-            try {
-              const { perceptualHash } = require('../util/phash');
-              const ph = await perceptualHash(oldAbs);
-              if (ph && img.id) productImages.setPerceptualHashById(img.id, ph);
-            } catch (_) {}
-          } else {
-            // Extension change → write to new path, update DB filepath, delete old.
-            // tmp+rename so a crash mid-write doesn\'t leave a partial file at the new path.
-            const tmpAbs = path.join(path.dirname(newAbs), `__reencode-${crypto.randomUUID()}${newExt}`);
-            await fs.promises.writeFile(tmpAbs, outBuf);
-            await fs.promises.rename(tmpAbs, newAbs);
-            const newHash = crypto.createHash('sha1').update(outBuf).digest('hex');
-            productImages.setFilepath(productId, oldRel, newRel);
-            productImages.setContentHash(productId, newRel, newHash);
-            try {
-              const { perceptualHash } = require('../util/phash');
-              const ph = await perceptualHash(newAbs);
-              if (ph && img.id) productImages.setPerceptualHashById(img.id, ph);
-            } catch (_) {}
-            // Only delete the old file AFTER the DB row points elsewhere; if
-            // the delete fails we just leak the old file (no data loss).
-            try { await fs.promises.unlink(oldAbs); } catch (_) {}
+            updatedRow = productImages.replaceImageFile(productId, img.id, {
+              tmpAbs,
+              newHash,
+              expectedHash: src.row.contentHash,
+              newExt,
+            });
+          } catch (err) {
+            try { if (fs.existsSync(tmpAbs)) await fs.promises.unlink(tmpAbs); } catch (_) {}
+            throw err;
           }
+          const newAbs = path.join(getDataDir(), 'assets', updatedRow.filepath);
+          try {
+            const { perceptualHash } = require('../util/phash');
+            const ph = await perceptualHash(outBuf);
+            if (ph) productImages.setPerceptualHashById(img.id, ph);
+          } catch (_) {}
 
           // Track size delta for the toast — gives the user a clear sense of
           // how much compression bought them.
-          const newSize = fs.statSync(newAbs).size;
+          const newSize = updatedRow.fileSize ?? fs.statSync(newAbs).size;
           bytesSavedTotal += Math.max(0, oldSize - newSize);
           images += 1;
           touchedImages += 1;
@@ -1230,8 +1246,11 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       throw new Error('productId + filepath are required');
     }
     assertProductInActiveCompany(productId);
-    const absSrc = path.join(getDataDir(), 'assets', filepath);
-    if (!fs.existsSync(absSrc)) {
+    // Only this product's own photos, and never a path outside the library:
+    // the row lookup is the ownership check, assetAbsPath the containment one.
+    const absSrc = productImages.assetAbsPath(filepath);
+    const row = productImages.getByFilepath(productId, filepath);
+    if (!row || !fs.existsSync(absSrc)) {
       return {
         exists: false,
         width: null, height: null, format: null,
@@ -1251,8 +1270,6 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     // re-hashing the file just for the caption. May be null on rows
     // imported before the content_hash column existed; the caller can
     // treat null as "unknown".
-    const all = productImages.listByProduct(productId);
-    const row = all.find((r) => r.filepath === filepath);
     return {
       exists: true,
       width: meta.width ?? null,

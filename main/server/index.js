@@ -238,11 +238,48 @@ async function serveAsset(req, res, urlPath, dataDir) {
     'ETag': etag,
     'Last-Modified': stat.mtime.toUTCString(),
   };
-  if (req.headers['if-none-match'] === etag) {
+
+  // Thumbnail tier (`?w=96` etc. from a client Mac's list views): answer with
+  // a small cached WebP built by the same helper the local app-image://
+  // protocol uses (main/util/thumbCache.js). Reached only after the root
+  // checks above; any failure falls back to the original bytes.
+  let thumbs = null;
+  let thumbW = null;
+  const queryAt = req.url.indexOf('?');
+  const query = new URLSearchParams(queryAt === -1 ? '' : req.url.slice(queryAt + 1));
+  if (query.has('w')) {
+    thumbs = require('../util/thumbCache');
+    thumbW = thumbs.isThumbable(normalized) ? thumbs.snapThumbWidth(query.get('w')) : null;
+  }
+  // The thumbnail is WebP whatever the original's extension — it is labelled
+  // so (HANDOFF: serveAsset's MIME rule) and gets its own validator.
+  const thumbEtag = thumbW ? `"${stat.ino}-${stat.size}-${stat.mtimeMs}-${stat.ctimeMs}-w${thumbW}"` : null;
+  if (req.headers['if-none-match'] === (thumbEtag || etag)) {
     await handle.close();
-    res.writeHead(304, headers);
+    res.writeHead(304, thumbEtag ? { ...headers, 'Content-Type': thumbs.THUMB_MIME, 'ETag': thumbEtag } : headers);
     res.end();
     return;
+  }
+  if (thumbW) {
+    const thumbPath = await thumbs.getThumbnail(normalized, { v: query.get('v'), w: thumbW, stat });
+    if (thumbPath) {
+      let thumbHandle;
+      try {
+        thumbHandle = await fs.promises.open(thumbPath, 'r');
+        const thumbStat = await thumbHandle.stat();
+        const original = handle;
+        handle = thumbHandle;
+        stat = thumbStat;
+        headers['Content-Type'] = thumbs.THUMB_MIME;
+        headers.ETag = thumbEtag;
+        original.close().catch(() => { /* nothing left to read from it */ });
+      } catch (_) {
+        // Evicted between generation and open — serve the original.
+        if (thumbHandle) {
+          try { await thumbHandle.close(); } catch (__) { /* original wins */ }
+        }
+      }
+    }
   }
 
   res.writeHead(200, { ...headers, 'Content-Length': stat.size });

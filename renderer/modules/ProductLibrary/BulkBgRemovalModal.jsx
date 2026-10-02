@@ -119,45 +119,63 @@ export function BulkBgRemovalModal({ open, productIds, onClose, onDone }) {
           return;
         }
         const mainRow = all[0] || null;
+        // The cutout that replaces the main image is promoted only AFTER every
+        // target of this product is done. Setting main renumbers the product's
+        // files, so doing it straight away made the remaining targets' paths
+        // (read once, above) point at different photos — "all" or a position
+        // list then cut out the wrong pictures.
+        let promoteTo = null;
+        const promote = async () => {
+          if (promoteTo) await window.api.images.setMainImage(productId, promoteTo);
+          promoteTo = null;
+        };
 
-        for (const img of targets) {
-          if (cancelRef.current) return;
-          const sku = img.sku || '';
-          setProgress({ i: done, n: count, label: `${sku} · removing background…`.trim() });
+        // `finally`: a cutout already made for the main image is promoted even
+        // when a later target fails or the run is stopped.
+        try {
+          for (const img of targets) {
+            if (cancelRef.current) return;
+            const sku = img.sku || '';
+            setProgress({ i: done, n: count, label: `${sku} · removing background…`.trim() });
 
-          const { blob } = await removeBackground(
-            img.filepath,
-            (stage, ratio) => {
-              if (cancelRef.current) return;
-              // v0.49.33: only the local engine remains. Stages come in as
-              // `fetch:<resource>` while the model downloads on first run,
-              // and as `inference` / friends during the segmentation pass.
-              const label = String(stage).startsWith('fetch:')
-                ? `downloading model… ${Math.round(ratio * 100)}%`
-                : `removing background… ${Math.round(ratio * 100)}%`;
-              setProgress({ i: done, n: count, label: `${sku} · ${label}`.trim() });
-            },
-            // v0.1.27: stamp the cache so a rewritten image cannot reuse an old cutout.
-            img.contentHash || img.id,
-          );
-          if (cancelRef.current) return;
+            const { blob } = await removeBackground(
+              img.filepath,
+              (stage, ratio) => {
+                if (cancelRef.current) return;
+                // v0.49.33: only the local engine remains. Stages come in as
+                // `fetch:<resource>` while the model downloads on first run,
+                // and as `inference` / friends during the segmentation pass.
+                const label = String(stage).startsWith('fetch:')
+                  ? `downloading model… ${Math.round(ratio * 100)}%`
+                  : `removing background… ${Math.round(ratio * 100)}%`;
+                setProgress({ i: done, n: count, label: `${sku} · ${label}`.trim() });
+              },
+              // v0.1.27: stamp the cache so a rewritten image cannot reuse an old cutout.
+              img.contentHash || img.id,
+            );
+            if (cancelRef.current) return;
 
-          const bytes = await matteOnColor(blob, fillColor);
-          if (cancelRef.current) return;
-          const res = await window.api.images.importFromBytes(productId, bytes, '.jpg');
-          const added = res?.added;
-          // Only promote the cutout when the source WAS the main image (the
-          // default scope). For "all" / other positions the new cutouts are
-          // appended and the original main is left alone — a position the
-          // user did not ask to change stays put.
-          // ponytail: promotion is all-or-nothing per product, tied to the
-          // main image being among the targets; per-position promotion would
-          // need a destination control this modal does not have.
-          if (added?.filepath && mainRow && img.filepath === mainRow.filepath) {
-            await window.api.images.setMainImage(productId, added.filepath);
+            const bytes = await matteOnColor(blob, fillColor);
+            if (cancelRef.current) return;
+            const res = await window.api.images.importFromBytes(productId, bytes, '.jpg');
+            const added = res?.added;
+            // Only promote the cutout when the source WAS the main image (the
+            // default scope). For "all" / other positions the new cutouts are
+            // appended and the original main is left alone — a position the
+            // user did not ask to change stays put.
+            // ponytail: promotion is all-or-nothing per product, tied to the
+            // main image being among the targets; per-position promotion would
+            // need a destination control this modal does not have.
+            // Appending does not renumber, so this path stays valid until the
+            // promotion below.
+            if (added?.filepath && mainRow && img.filepath === mainRow.filepath) {
+              promoteTo = added.filepath;
+            }
+            imagesDone += 1;
+            setProgress({ i: done, n: count, label: `${sku} · done` });
           }
-          imagesDone += 1;
-          setProgress({ i: done, n: count, label: `${sku} · done` });
+        } finally {
+          await promote();
         }
         done += 1;
       } catch (err) {

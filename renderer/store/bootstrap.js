@@ -24,6 +24,24 @@ function disposeAll() {
   _clientUnsub = null;
 }
 
+// Main pushes the connection state on EVERY successful RPC, almost always
+// with only `lastOkAt` moved. Storing each one gave every subscriber a new
+// object per call, so the whole shell re-rendered per request. A push that
+// changes anything else is stored at once; a lastOkAt-only push is stored at
+// most once per LAST_OK_REFRESH_MS — the only reader of the timestamp is the
+// connection legend's "Last OK … ago", which this keeps within that window.
+const LAST_OK_REFRESH_MS = 15_000;
+
+export function isConnectionPushWorthStoring(prev, next) {
+  if (!prev || !next) return true;
+  if (prev.status !== next.status) return true;
+  if ((prev.lastError ?? null) !== (next.lastError ?? null)) return true;
+  if ((prev.serverVersion ?? null) !== (next.serverVersion ?? null)) return true;
+  if (JSON.stringify(prev.user ?? null) !== JSON.stringify(next.user ?? null)) return true;
+  if (prev.lastOkAt === next.lastOkAt) return false;
+  return Math.abs((next.lastOkAt || 0) - (prev.lastOkAt || 0)) >= LAST_OK_REFRESH_MS;
+}
+
 function logSoft(what, err) {
   console.warn(`[soft-failure] ${what}:`, err?.message || err);
 }
@@ -76,7 +94,9 @@ function installSubscriptions(set, get) {
     if (typeof off === 'function') _aiUnsubs.push(off);
   }
   if (window.api?.client?.onConnectionState) {
-    _clientUnsub = window.api.client.onConnectionState((clientConnection) => set({ clientConnection }));
+    _clientUnsub = window.api.client.onConnectionState((clientConnection) => {
+      if (isConnectionPushWorthStoring(get().clientConnection, clientConnection)) set({ clientConnection });
+    });
   }
 
   if (window.api?.events?.onCatalogChanged) {

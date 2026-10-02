@@ -26,6 +26,24 @@ export function scheduleSliceRefresh(slice, fn) {
 }
 
 /**
+ * Products refresh for a catalog event, skipped when the list was already
+ * fetched after the event arrived. The usual case is our own edit:
+ * `updateProduct` refreshes the list as soon as the save returns, and the
+ * edit's own `catalog:changed` echo would then refetch the same rows. The
+ * check is against the LATEST event coalesced into this timer, so a second
+ * change landing after that fetch still refreshes; an edit from another Mac
+ * has no local fetch after it and always refreshes.
+ */
+let _productsInvalidation = 0;
+function scheduleProductsRefresh(get) {
+  _productsInvalidation = get().noteProductsInvalidated?.() ?? 0;
+  scheduleSliceRefresh('products', () => {
+    if (_productsInvalidation && get().productsFreshThrough?.(_productsInvalidation)) return;
+    get().refreshProducts();
+  });
+}
+
+/**
  * v0.22.2: route a single `catalog:changed` event to the right
  * refresh actions. Called from two places:
  *
@@ -47,7 +65,7 @@ export function applyCatalogEvent(get, evt) {
   if (!kind) return;
   switch (kind) {
     case 'product':
-      scheduleSliceRefresh('products', () => get().refreshProducts());
+      scheduleProductsRefresh(get);
       scheduleSliceRefresh('dashboard', () => get().refreshDashboard());
       break;
     case 'images':
@@ -69,7 +87,7 @@ export function applyCatalogEvent(get, evt) {
       // Image add/remove/setMain changes the products grid (cover thumb
       // + image count chip) and, if we happen to be viewing the same
       // product in the workspace, the workspace strip too.
-      scheduleSliceRefresh('products', () => get().refreshProducts());
+      scheduleProductsRefresh(get);
       scheduleSliceRefresh('dashboard', () => get().refreshDashboard());
       if (evt.id && evt.id === get().activeProductId) {
         scheduleSliceRefresh('workspaceImages', () => {
@@ -81,11 +99,11 @@ export function applyCatalogEvent(get, evt) {
       scheduleSliceRefresh('brands', () => get().refreshBrands());
       scheduleSliceRefresh('dashboard', () => get().refreshDashboard());
       // Brand rename/delete affects product rows that reference it.
-      scheduleSliceRefresh('products', () => get().refreshProducts());
+      scheduleProductsRefresh(get);
       break;
     case 'category':
       scheduleSliceRefresh('categories', () => get().refreshCategories());
-      scheduleSliceRefresh('products', () => get().refreshProducts());
+      scheduleProductsRefresh(get);
       break;
     case 'company':
       scheduleSliceRefresh('companies', () => get().refreshCompanies());
@@ -102,7 +120,7 @@ export function applyCatalogEvent(get, evt) {
         }
         // Promotion writes a new product image; refresh products too.
         if (evt.op === 'promote') {
-          scheduleSliceRefresh('products', () => get().refreshProducts());
+          scheduleProductsRefresh(get);
         }
       }
       break;

@@ -86,6 +86,12 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // Vite's dynamic-import preload helper is shared by every lazy
+          // route AND by @imgly's own dynamic imports, so Rollup was free to
+          // park it inside vendor-imgly — which made the boot entry import
+          // (and parse) the whole background-removal wrapper just to reach a
+          // 1 KB helper. Pin it to vendor-react, which boot loads anyway.
+          if (id.includes('vite/preload-helper')) return 'vendor-react';
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('node_modules/react')
               || id.includes('node_modules/react-dom')
