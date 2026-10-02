@@ -1,7 +1,7 @@
 # HANDOFF — Media Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.87, commit `dd60f2e`, 2026-10-02**. If it disagrees with the
+that produced it. It was true at **v0.1.88 (PR #100), 2026-10-02**. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,7 +9,7 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Media Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.87** (the performance + data-safety audit), merged to `main` at `dd60f2e` (PR #95) and **installed at `/Applications/Media Studio KH.app` on 2026-10-02** (from the DMG, sha256 `e106c498…922b`; first launch on the live data folder: `db:ready`, `window:shown`, no errors in `crash.log`). The replaced 0.1.86 app is in the owner's `_trash/installed-apps/Media Studio KH-0.1.86.app`. Older replaced apps (0.1.72–0.1.85) were kept in the build worktree's `_trash/` and were erased with it on 2026-10-02 (see the `gh --delete-branch` rule) — replaced apps now go to the owner's `_trash/installed-apps/`. |
+| Current release | **0.1.88** (brand icons never overwrite; deleting for good is admin only), merged to `main` by PR #100, on top of 0.1.87 (the performance + data-safety audit, PR #95, `dd60f2e`). The DMG is in the owner's `dist/`. 0.1.87 was installed in `/Applications` on 2026-10-02 (first launch on the live data folder: `db:ready`, `window:shown`, no errors); check `defaults read "/Applications/Media Studio KH.app/Contents/Info.plist" CFBundleShortVersionString` before assuming which one is installed. Replaced apps go to the owner's `_trash/installed-apps/` — the older ones (0.1.72–0.1.85) were in the build worktree's `_trash/` and were erased with it on 2026-10-02 (see the `gh --delete-branch` rule). |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into the owner's `/Users/vengtheng/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` (the build worktree's own `_trash/` is not the place — it was erased with the worktree on 2026-10-02). |
