@@ -1,17 +1,30 @@
 # Code signing + notarization
 
-This doc covers the future wire-up for distributing Business Studio KH as a signed + notarized macOS app. Until you have an Apple Developer Program membership ($99/year) and a Developer ID cert, the app ships unsigned and beta users run `xattr -cr` per the README.
+## Current state (checked 2026-10-02, at 0.1.90)
 
-When you're ready to sign:
+- **Builds are unsigned.** `package.json` has `build.mac.identity: null`; there is no
+  `hardenedRuntime`, entitlements file, `notarize` block or `publish` block, and no Developer ID
+  certificate exists.
+- **That is the intended setup.** The app is for the owner's Macs and his brother's (AGENTS.md
+  §25.3). Install from the DMG, then run `xattr -cr "/Applications/Business Studio KH.app"` once,
+  as the README says.
+- **Signing, notarization, publishing a release and auto-updates are separate owner decisions**
+  (AGENTS.md §26). None has been made. Do not set the Apple environment variables below or add a
+  `publish` block without that decision. Hosted GitHub Actions stays disabled, so nothing here
+  should run in CI.
 
-## 1. Get the cert
+The rest of this file is the reference for the day signing is wanted.
+
+## When you're ready to sign
+
+### 1. Get the cert
 
 1. Join the [Apple Developer Program](https://developer.apple.com/programs/) — $99/year.
 2. In developer.apple.com → Certificates, Identifiers & Profiles → create a **Developer ID Application** certificate.
 3. Download the `.cer`, double-click to install into Keychain Access. Confirm it shows under "login" keychain with a private key.
 4. Note the exact certificate Common Name — something like `Developer ID Application: Your Name (TEAMID1234)`.
 
-## 2. Update `package.json`
+### 2. Update `package.json`
 
 Replace `mac.identity: null` with the cert name, and add notarization config:
 
@@ -34,7 +47,7 @@ Replace `mac.identity: null` with the cert name, and add notarization config:
 }
 ```
 
-## 3. Add `build/entitlements.mac.plist`
+### 3. Add `build/entitlements.mac.plist`
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -56,7 +69,7 @@ Replace `mac.identity: null` with the cert name, and add notarization config:
 </plist>
 ```
 
-## 4. Notarization credentials
+### 4. Notarization credentials
 
 electron-builder needs an app-specific password to submit to Apple's notary service.
 
@@ -73,11 +86,11 @@ electron-builder needs an app-specific password to submit to Apple's notary serv
 
 The first notarization for a new version can take 5–15 minutes. Subsequent ones are usually faster.
 
-## 5. Update the README
+### 5. Update the README
 
-Once signed builds are flowing, remove the `xattr -cr` step from the README's install section — beta users get a normal "open and run" experience.
+Once signed builds are flowing, remove the `xattr -cr` step from the README's install section, and the matching install step in `docs/tasks/HANDOFF.md`.
 
-## 6. Auto-updates
+### 6. Auto-updates
 
 After signing is in place, the next step is `electron-updater` for auto-updates:
 
@@ -99,4 +112,4 @@ On every launch, the app checks the release host, downloads new versions in the 
 
 ---
 
-Until then, the unsigned-DMG + `xattr -cr` workflow is fine for a small beta circle. It's annoying once but only once per install.
+Until then, the unsigned DMG plus `xattr -cr` is the workflow. It is needed once per install.

@@ -25,8 +25,8 @@ Replace `<wt>` with a worktree that has `node_modules` installed — this projec
 |---|---|---|
 | 1 | `cd <wt> && git switch main && git pull --ff-only` | Start from merged `main`. |
 | 2 | `git switch -c codex/<topic>` | One branch per change or release. |
-| 3 | `npm run check` | `npm run lint && npm test`. **1216 pass** at 0.1.89. Four eslint warnings are pre-existing (unused disable directives in three unrelated test files and `main/util/fileTrash.js`); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flakes, two kinds:** 0–2 tests can fail on a run, and the honest response is always the same — re-run before believing it. (1) Several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output); seen 2026-09-26, clean in four follow-up runs. (2) The client/overlay timeout tests in `test/clientRpc.test.js` ("overlay reconciliation bounds hanging HTTP status reads", the `body` subtest) are wall-clock sensitive and failed twice on a loaded machine during 0.1.85, then passed in three consecutive full runs with no code change. Neither kind has ever reproduced on a quiet re-run. |
-| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **211 pass** at 0.1.89. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
+| 3 | `npm run check` | `npm run lint && npm test`. **1217 pass** at 0.1.90 (1216 at 0.1.89). Four eslint warnings are pre-existing (unused disable directives in three unrelated test files and `main/util/fileTrash.js`); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flakes, two kinds:** 0–2 tests can fail on a run, and the honest response is always the same — re-run before believing it. (1) Several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output); seen 2026-09-26, clean in four follow-up runs. (2) The client/overlay timeout tests in `test/clientRpc.test.js` ("overlay reconciliation bounds hanging HTTP status reads", the `body` subtest) are wall-clock sensitive and failed twice on a loaded machine during 0.1.85, then passed in three consecutive full runs with no code change. Neither kind has ever reproduced on a quiet re-run. |
+| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **211 pass** at 0.1.89 and 0.1.90. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
 | 4b | `node scripts/probe-webclient-context.js` | Real Chromium against `webclient/index.html` with loopback fixtures. **Any web-viewer change should run this** — it is the only check that loads the real page. Not in `package.json`; needs `env -u ELECTRON_RUN_AS_NODE`. |
 | 5 | `npm run check:images`, `check:render`, `check:client-server` | Electron probes. **This shell exports `ELECTRON_RUN_AS_NODE=1` globally**, so GUI probes need `env -u ELECTRON_RUN_AS_NODE npx electron …` or they behave as Node and fail. |
 | 6 | `env -u ELECTRON_RUN_AS_NODE npx electron . --remote-debugging-port=9333 --user-data-dir=/tmp/mskh-ui/userdata` | Launch for the crawl. **Footgun:** with no `config.json` in that user-data dir the app uses the owner's real data folder. Write `/tmp/mskh-ui/userdata/config.json` first: `{"dataDir":"/tmp/mskh-ui/data","firstLaunchHandled":true}`. |
@@ -52,7 +52,8 @@ test profiles out of Git — they are gitignored on purpose.
 | App config + logs | `~/Library/Application Support/Business Studio KH/` (`config.json`, `crash.log`); legacy data at `userData/data` |
 | Build inputs | `main/` (CommonJS), `renderer/` (ESM), `webclient/index.html` → generates `main/webclientHtml.js` via `npm run webclient:bundle` (edit the HTML, never the generated file) |
 | Build outputs | `dist/` (DMGs, `mac-arm64/`, `mac/`), `dist-electron/`, `dist-renderer/` — all gitignored |
-| Status / evidence docs | `docs/Business Studio KH Project Status.md` (**stale — see OPEN**), `docs/HARDWARE_VALIDATION_RUNBOOK.md`, `docs/DISTRIBUTION_AUDIT_2026-09-20.md`, `docs/INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md` |
+| Status / reference docs | Current as of 0.1.90 (docs pass 2026-10-02): `docs/Business Studio KH Project Status.md` (short status page), `README.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `AI_INTEGRATION.md`, `SIGNING.md`, `docs/HARDWARE_VALIDATION_RUNBOOK.md`, `docs/UI_GUIDE.md`. `docs/PICK_AND_PACK_PLAN.md` is a plan awaiting the owner's review (nothing built). |
+| Archive | `docs/archive/` — dated audits, completed plans (`plans/`, formerly `docs/superpowers/plans/`), the old SDD ledger (`progress.md`), the portable *_HANDOFF specs for other projects, and the long 0.1.34–0.1.72 status history. Historical only; `docs/archive/README.md` lists each. |
 | Reference app | `~/Developer/label-studio-kh` — the public sibling app whose designer interaction model this app copies. Another repo: read only. |
 
 ## RULES THAT COST US TIME
@@ -67,7 +68,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 - **A version bump is two edits.** `package.json` alone ships a stale "What's new".
 - **`Modal` focus belongs in an effect keyed `[open]` only.** Any other dependency re-focuses on each keystroke and breaks typing — the v0.1.69 one-letter bug.
 - **The "which images" rule lives once in `main/util/imageScope.js` (`selectImages`).** One-based, position 1 = main; missing positions are skipped and reported, never failed. Do not re-implement it per operation.
-- **Treat `graphify-out/` and the older status docs as stale until re-derived.** Source wins.
+- **Treat `graphify-out/` and everything in `docs/archive/` as stale until re-derived.** Source wins.
 - **`npm test` mounts almost no React screens.** Rendered-UI bugs (a page that throws into the error boundary, a control that stops saving, a `$NaN` price) only show in the CDP crawl — run it for UI changes.
 - **`test:native` must be rerun for DB work**; the pure-JS run reports `skip` and stays green, which hides a broken native path.
 - **The web viewer can only reach Photos through iOS's own share sheet, and only over HTTPS — which this setup does not have, on purpose.** `navigator.share` needs a secure context, so on the viewer's plain-HTTP LAN / Tailscale address it does not exist at all, and the route is the native press-and-hold → Save Image. That missing share sheet is a **decision, not a bug** (AGENTS.md §25.4, 2026-09-27): the viewer already says "Open image to save" instead of "Save to Photos" and opens the result for the press. Never let a Files download be described as "saved to Photos" (v0.1.73, `webclient/index.html`).
@@ -122,7 +123,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 
 ## OPEN / IN FLIGHT
 
-At 0.1.87 nothing is mid-implementation. The honest gaps:
+At 0.1.90 nothing is mid-implementation. The honest gaps:
 
 | Gap | State |
 |---|---|
@@ -146,8 +147,9 @@ At 0.1.87 nothing is mid-implementation. The honest gaps:
 | `@imgly/background-removal` licensing | **Closed — do not raise.** Home use; the only other user is the owner's brother, so the AGPL-3.0 terms and the audit's public-distribution prerequisites are dropped (AGENTS.md §25.3, 2026-09-23). |
 | Rotated label elements | Marquee and guides are rotation-aware; **resize is not** (deliberate `ponytail:` note at `renderer/modules/LabelStudio/designerGeometry.js:234`). A mixed-rotation multi-select can scale slightly off its drawn box. |
 | Overlay `fit: 'fill'` | Data-only per element; no UI sets it, so the owner cannot reach it. |
-| Docs reconciled 2026-09-23 | The status doc, the briefing, README, SIGNING and AI_INTEGRATION were brought back in line with the code in a docs pass on 2026-09-23, and the dated audits/plans now carry "historical" banners. If any doc drifts again, fix it in the change that caused it — the current truth for versions/commands is this file plus `docs/Business Studio KH Project Status.md`. |
-| `docs/HARDWARE_VALIDATION_RUNBOOK.md` | Still accurate ("not performed"); filling its results table is the deliverable when the owner has the hardware. |
+| Docs reconciled 2026-10-02 (0.1.90) | README, the briefing, the status page, AI_INTEGRATION, SIGNING and the hardware runbook were re-checked against the code at 0.1.90, and the dated audits, plans, specs and the long status history moved to `docs/archive/`. The status page is now short and points here rather than repeating this file. If a doc drifts again, fix it in the change that caused it — the current truth for versions/commands is this file. |
+| Pick & Pack plan | `docs/PICK_AND_PACK_PLAN.md` (2026-09-28) — orders, packing evidence, returns. **Awaiting the owner's review; nothing is built.** Do not start it without his go-ahead. |
+| `docs/HARDWARE_VALIDATION_RUNBOOK.md` | Still accurate ("not performed", re-checked 2026-10-02); it now also lists the phone-viewer saves (iOS and the brother's Android) and client thumbnails. Filling its results table is the deliverable when the owner has the hardware. |
 | Owner decisions outstanding | Independent review, a signing purchase, real-data migration — all authorization-gated. Public distribution and licensing are closed decisions (AGENTS.md §25.3). |
 
 ## SECRETS

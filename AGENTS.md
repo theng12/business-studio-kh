@@ -172,8 +172,9 @@ When products / entities can have multiple images:
   house default, so a new app should start there too.
 - Support **clipboard paste** (`⌘V` / `Ctrl+V`): listen for paste events with image MIME types, send `ArrayBuffer` over IPC, write to temp file, run through normal import pipeline.
 - **Filenames on disk get renumbered after a remove or a reorder** — the
-  stored paths stay contiguous (`001.jpg`, `002.jpg`, …) so position N always
-  means the same filename. That is a trap: the browser caches images by URL,
+  stored paths stay contiguous (`<sku-slug>-001.jpg`, `<sku-slug>-002.jpg`, …;
+  `productImageBasename` in `main/util/assetPath.js`, verified 2026-10-02) so
+  position N always means the same filename. That is a trap: the browser caches images by URL,
   and the bytes behind `.../003.jpg` can change while the URL does not. The
   user deletes image C from `[A, B, C, D, E]`, the server reindexes to
   `[A, B, D, E]`, and the cached pixels for position 3 still show C — so it
@@ -287,8 +288,8 @@ Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
 **Note on styling (corrected 2026-09-19).** This table used to say Tailwind
 CSS and Puppeteer. Neither is true of this app and hasn't been for a long
 time: there is no `tailwindcss` dependency and no Tailwind or PostCSS config,
-and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~10k
-lines) plus small per-feature CSS blocks in the same file, and PDFs are
+and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~11.5k
+lines; verified 2026-10-02) plus small per-feature CSS blocks in the same file, and PDFs are
 produced by Electron's own `webContents.printToPDF()` in
 `main/renderWindow.js` — no bundled Chromium, no extra download. Both
 replacements are deliberate: the print path costs nothing extra, and the CSS
@@ -341,13 +342,18 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 144 files — `node --test test/**/*.test.js`
-scripts/                 # build-icon.js, build-webclient.js,
-                         # probe-overlay-renderer.js,
+test/                    # 154 files — `node --test test/**/*.test.js`
+scripts/                 # 13 files: build-icon.js, build-webclient.js,
+                         # prune-dmgs.js           (`npm run dmgs:prune`)
                          # probe-render-paint.js  (`npm run check:render`)
                          # probe-app-image-cors.js (`npm run check:images`)
+                         # probe-server-client.js  (`npm run check:client-server`)
                          # probe-ui-crawl.js       (drive every screen over CDP)
-                         #   — the last three need a real Electron app
+                         # probe-webclient-context.js (phone viewer in Chromium)
+                         # probe-overlay-renderer.js, probe-packaged-client-server.js,
+                         # probe-electron-image-cache.js, measure-client-transport.js,
+                         # setup-web-https.js (kept, unused — §25.4)
+                         #   — the probes need a real Electron app or Chromium
 assets/                  # bundled resources that ship in the DMG (fonts/)
 ```
 

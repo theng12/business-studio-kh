@@ -4,7 +4,7 @@
 > Since fixed: the `users:list` token disclosure (token-bearing management channels now require the `users.manage` capability in `main/util/capabilities.js`; only `users:listForAttribution` is baseline) and the vulnerable runtime dependencies (`package.json` now pins `sharp ^0.35.4`, `ws ^8.21.3`, `electron ^44.4.3`).
 > Still open: signing/notarization (builds remain unsigned, `identity: null`), which is fine for the intended home/family install flow.
 > **Closed 2026-09-23:** the `@imgly/background-removal` AGPL-3.0 licensing question and the rest of this audit's public-distribution prerequisites — the app is home use and the only other user is the owner's brother (AGENTS.md §25.3).
-> Dated evidence, not current status — live status: [`docs/tasks/HANDOFF.md`](tasks/HANDOFF.md).
+> Dated evidence, not current status — live status: [`docs/tasks/HANDOFF.md`](../tasks/HANDOFF.md).
 
 ## Verdict
 

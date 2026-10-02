@@ -4,7 +4,7 @@
 > Live status: [`docs/tasks/HANDOFF.md`](../../tasks/HANDOFF.md).
 
 **Goal:** Complete the owner's internal server/client improvement note while preserving the finished 0.1.32 server-address fixes, existing data, and working workflows.
-**Status:** Implementation and local verification complete. See [the validation record](../../INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md) for results; repository integration is recorded in the final task handoff and Git history.
+**Status:** Implementation and local verification complete. See [the validation record](../INTERNAL_SERVER_CLIENT_VALIDATION_2026-09-20.md) for results; repository integration is recorded in the final task handoff and Git history.
 **Architecture:** Keep existing Electron/React/Zustand/SQLite IPC/RPC architecture. Use existing event paths and native request context/caching primitives. No rewrite, public-distribution work, new paid services, speculative sync layers, or blind dependency upgrades.
 **Spec:** Owner's server-client-improvement-note.md retained in this directory as the input record. This execution plan supersedes its hold; performance candidates require measurement or concrete redundant-work proof before changes.
 **Baseline:** 70449d3 snapshots the completed dirty 0.1.32 work from 2ec2049 without changing the original checkout. Original file hashes recorded externally. Baseline: 343 pure + 16 native tests pass; lint 0 errors, 13 warnings.

@@ -1,6 +1,6 @@
 # Donations — Handoff Spec
 
-> **Reference spec for a NEW project — it does not describe this repository.** The blueprint below was written for Label Studio KH v0.5.2 (2026-05-19). This app's live implementation differs where it counts: the donation page is `https://nowpayments.io/donation/studiokh` (`renderer/modules/Support/index.jsx`), the dismiss flag is stored under `iskh.donationDismissedAt` (`renderer/store/dashboard.js`), and links open through the local `app.openExternal` IPC handler with its scheme allow-list (`main/ipc/app.js`) rather than any backend. Where the spec and the code disagree, the code and `AGENTS.md` win. Live status: [`docs/tasks/HANDOFF.md`](tasks/HANDOFF.md).
+> **Reference spec for a NEW project — it does not describe this repository.** The blueprint below was written for Label Studio KH v0.5.2 (2026-05-19). This app's live implementation differs where it counts: the donation page is `https://nowpayments.io/donation/studiokh` (`renderer/modules/Support/index.jsx`), the dismiss flag is stored under `iskh.donationDismissedAt` (`renderer/store/dashboard.js`), and links open through the local `app.openExternal` IPC handler with its scheme allow-list (`main/ipc/app.js`) rather than any backend. Where the spec and the code disagree, the code and `AGENTS.md` win. Live status: [`docs/tasks/HANDOFF.md`](../tasks/HANDOFF.md).
 
 > _Last revised: 2026-05-19. Reference implementation: Label Studio KH v0.5.2._
 > _For global conventions see `AGENTS.md` in this folder. If anything below contradicts AGENTS.md, AGENTS.md wins._
