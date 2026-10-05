@@ -7,9 +7,9 @@ const brands = require('../db/brands');
 const categories = require('../db/categories');
 const companies = require('../db/companies');
 const { buildCatalogHtml } = require('../studioRenderer');
-const { toPdf, toPdfBuffer, printHtml } = require('../renderWindow');
+const { toPdf, toPdfBuffer } = require('../renderWindow');
 const { slugify } = require('../util/slug');
-const { normalizeCatalogConfig, applyCatalogDesign } = require('../util/catalogModel');
+const { normalizeCatalogConfig, applyCatalogDesign, catalogPdfOptions } = require('../util/catalogModel');
 const events = require('../events');
 
 function context(project) {
@@ -37,7 +37,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       const html = buildCatalogHtml(context(project));
       events.broadcast('progress:event', { id: opId, kind: 'catalog', done: 1, total: 3, phase: 'rendering', label: project.name });
       const target = path.join(outputFolder, `${slugify(project.name, 'catalog')}-${Date.now()}.pdf`);
-      await toPdf(html, target, { orientation: project.config?.orientation });
+      await toPdf(html, target, catalogPdfOptions(project.config));
       events.broadcast('progress:event', { id: opId, kind: 'catalog', done: 3, total: 3, phase: 'complete', label: project.name });
       projects.markExported(id);
       emitCatalogChange('catalogStudio', 'update', id);
@@ -46,14 +46,19 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
   });
 
   /* Print a catalog on THIS Mac's printer — the same document the PDF export
-   * renders (full photos and fonts, not the preview), through the system print
-   * dialog. Local-only: the printer is attached to the Mac running it. Client
+   * renders (full photos and fonts, not the preview), opened in Preview for
+   * printing. Local-only: Preview runs on this Mac. Client
    * mode has its own handler in main/client/index.js. */
   exposeLocal('catalogStudio:print', async ({ id } = {}) => {
     const project = projects.get(id); if (!project) throw new Error('Catalog project not found');
     assertEntityInActiveCompany(project, 'Catalog project');
-    await printHtml(buildCatalogHtml(context(project)), {});
-    return { ok: true };
+    // Match client mode: print the authoritative PDF in Preview, including its
+    // native page numbers and headers, rather than a separate HTML print layout.
+    const dir = await fs.promises.mkdtemp(path.join(require('node:os').tmpdir(), 'msk-catalog-print-'));
+    const target = path.join(dir, `${slugify(project.name, 'catalog')}.pdf`);
+    await toPdf(buildCatalogHtml(context(project)), target, catalogPdfOptions(project.config));
+    await require('../util/openPath').openPathOrThrow(target, 'catalog PDF');
+    return { ok: true, openedPdf: true };
   });
 
   /* ── reusable templates (v0.1.63) ────────────────────────────────
@@ -141,7 +146,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     const project = projects.get(id); if (!project) throw new Error('Catalog project not found');
     assertEntityInActiveCompany(project, 'Catalog project');
     const html = buildCatalogHtml(context(project));
-    const bytes = await toPdfBuffer(html, { orientation: project.config?.orientation });
+    const bytes = await toPdfBuffer(html, catalogPdfOptions(project.config));
     const { slugify } = require('../util/slug');
     return {
       bytes,

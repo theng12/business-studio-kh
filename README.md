@@ -7,7 +7,7 @@ One shared Product Library sits at the centre. Product details are entered once 
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release: **0.1.90** (2026-10-02). It is built for home use — the owner's Macs and his
+Current release: **0.1.91** (2026-10-05). It is built for home use — the owner's Macs and his
 brother's — and is not publicly distributed.
 
 ## Where to read next
@@ -65,7 +65,7 @@ whose role has the matching permission.
 - **Label Studio** — a physical-size label designer, Generate & Print (PDF sheets or single
   PDF/PNG/JPEG files, or direct printing), a barcode maker (Code 128, EAN-13, UPC-A, Code 39, QR)
   and label history.
-- **Catalog Studio** — catalog templates and projects with live preview and print-ready PDF output.
+- **Catalog Studio** — catalog templates and projects with bulk product picking, SKU paste, session undo/redo, reusable print controls, paper preview and print-ready PDF output.
 - **Social** — Social Grid: multi-image posts with text/logo watermark overlays.
 - **Operations** — suppliers, purchase orders (lines, cost components, payments, currencies) and
   a landed-cost calculator.

@@ -137,6 +137,9 @@ function waitForPaint(win) {
 async function toPdfBuffer(html, options = {}) {
   return withWindow(html, options, (win) => win.webContents.printToPDF({
     printBackground: true, preferCSSPageSize: true, landscape: options.orientation === 'landscape',
+    ...(options.pageSize ? { pageSize: options.pageSize } : {}),
+    ...(options.margins ? { margins: options.margins } : {}),
+    ...(options.displayHeaderFooter ? { displayHeaderFooter: true, headerTemplate: options.headerTemplate, footerTemplate: options.footerTemplate } : {}),
   }));
 }
 

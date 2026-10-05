@@ -89,10 +89,8 @@ test('applyDesign puts a selection under a saved look', () => {
 test('cover text is per catalog: a template keeps enabled, not the title', () => {
   const design = model.catalogDesignOnly({ cover: { enabled: true, title: 'Summer 2026', subtitle: 'Wholesale' } });
   assert.equal(design.coverEnabled, true);
-  // The title survives as content-ish data only because `cover` is carried
-  // through; what matters is that creating a project overwrites it. The
-  // builder's draft does exactly that, and this asserts the flag is separate.
-  assert.equal(typeof design.cover.enabled, 'boolean');
+  assert.deepEqual(design.cover, { enabled: true });
+  assert.equal(model.normalizeCatalogConfig({ cover: { title: 'Summer' } }).cover.title, 'Summer');
 });
 
 test('clamping protects the renderer from unusable stored values', () => {
@@ -121,8 +119,9 @@ test('card fields keep known keys, custom fields and named price groups', () => 
   assert.equal(fields[3].visible, false);
 });
 
-test('an empty field list falls back to the default four', () => {
-  assert.deepEqual(model.normalizeFields([]).map((f) => f.key), model.DEFAULT_FIELDS.map((f) => f.key));
+test('an explicit empty field list remains photo-only; missing or invalid lists get defaults', () => {
+  assert.deepEqual(model.normalizeFields([]), []);
+  assert.deepEqual(model.normalizeFields([{ key: 'unknown' }]).map((f) => f.key), model.DEFAULT_FIELDS.map((f) => f.key));
   assert.deepEqual(model.normalizeFields(null).map((f) => f.key), model.DEFAULT_FIELDS.map((f) => f.key));
 });
 
@@ -130,4 +129,49 @@ test('designOnly is stable across repeats', () => {
   const once = model.catalogDesignOnly({ columns: 4, cover: { enabled: true, title: 'X' } });
   const twice = model.catalogDesignOnly(once);
   assert.deepEqual(twice, once);
+});
+
+
+test('print controls normalize bounds and keep intentional zero/false values', () => {
+  const c = model.normalizeCatalogConfig({ layoutMode: 'list', showImages: false, imageHeightMm: 2,
+    imageFit: 'cover', cardPaddingMm: 0, fontSizePt: 8.5, boldFontSizePt: 50, showBrand: false,
+    headerText: 'x'.repeat(250), footerText: 42, pageNumbers: true,
+    fields: [{ key: 'name', align: 'center' }, { key: 'sku', align: 'right' }, { key: 'price', align: 'oops' }] });
+  assert.equal(c.layoutMode, 'list');
+  assert.equal(c.showImages, false);
+  assert.equal(c.imageHeightMm, 10);
+  assert.equal(c.imageFit, 'cover');
+  assert.equal(c.cardPaddingMm, 0);
+  assert.equal(c.fontSizePt, 8.5);
+  assert.equal(c.boldFontSizePt, 32);
+  assert.equal(c.showBrand, false);
+  assert.equal(c.headerText.length, 200);
+  assert.equal(c.footerText, '');
+  assert.equal(c.pageNumbers, true);
+  assert.deepEqual(c.fields.map(f => f.align), ['center', 'right', 'left']);
+  assert.equal(model.normalizeCatalogConfig({ imageHeightMm: 0 }).imageHeightMm, 0);
+  const fallback = model.normalizeCatalogConfig({ layoutMode: 'bad', imageFit: 'bad', fontSizePt: 'bad', imageHeightMm: 'bad' });
+  assert.equal(fallback.layoutMode, 'cards');
+  assert.equal(fallback.imageFit, 'contain');
+  assert.equal(fallback.fontSizePt, 8.5);
+  assert.equal(fallback.imageHeightMm, 0);
+});
+
+test('PDF page templates escape text, omit implicit browser headers and reserve space at zero margin', () => {
+  const plain = model.catalogPdfOptions({ marginMm: 0 });
+  assert.equal(plain.displayHeaderFooter, false);
+  assert.deepEqual(plain.margins, { top: 0, bottom: 0, left: 0, right: 0 });
+  const c = model.catalogPdfOptions({ pageSize: 'Letter', orientation: 'landscape', marginMm: 0,
+    headerText: '<script>unsafe</script>', footerText: 'A & B', pageNumbers: true });
+  assert.equal(c.pageSize, 'Letter');
+  assert.equal(c.orientation, 'landscape');
+  assert.equal(c.displayHeaderFooter, true);
+  assert.match(c.headerTemplate, /&lt;script&gt;unsafe&lt;\/script&gt;/);
+  assert.doesNotMatch(c.headerTemplate, /<script>/);
+  assert.match(c.footerTemplate, /A &amp; B/);
+  assert.match(c.footerTemplate, /class="pageNumber"/);
+  assert.match(c.footerTemplate, /class="totalPages"/);
+  assert.ok(c.margins.top >= 8 / 25.4);
+  assert.ok(c.margins.bottom >= 8 / 25.4);
+  assert.match(model.catalogPdfOptions({ headerText: 'Only header' }).footerTemplate, /<div[^>]*><\/div>/);
 });

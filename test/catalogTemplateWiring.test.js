@@ -118,6 +118,6 @@ test('the designer and the builder share ONE set of controls', () => {
 
 test('creating a project from a template keeps the template and the project separate', () => {
   assert.match(MODULE, /builtIn/, 'the Templates page must tell a saved template from a proven layout');
-  assert.match(MODULE, /cover: \{ \.\.\.\(createTemplate\.config\.cover \|\| \{\}\), title \}/,
+  assert.match(MODULE, /cover: \{ \.\.\.\(createTemplate\.config\.cover \|\| \{\}\), title, subtitle: '' \}/,
     'a catalog made from a template must take its own name for the cover title');
 });
