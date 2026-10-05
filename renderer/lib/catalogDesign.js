@@ -58,6 +58,17 @@ export const CATALOG_DESIGN_DEFAULTS = {
   priceGroup: 'retail',
   currencySymbol: '$',
   coverEnabled: true,
+  layoutMode: 'cards',
+  showImages: true,
+  imageHeightMm: 0,
+  imageFit: 'contain',
+  cardPaddingMm: 4,
+  fontSizePt: 8.5,
+  boldFontSizePt: 11,
+  showBrand: true,
+  headerText: '',
+  footerText: '',
+  pageNumbers: false,
 };
 
 /** A fresh, safe copy — module-level arrays must never be edited in place. */

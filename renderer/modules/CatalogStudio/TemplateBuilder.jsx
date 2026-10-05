@@ -4,6 +4,9 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { DesignControls } from './DesignControls.jsx';
+import { CatalogPreview } from './CatalogPreview.jsx';
+import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
+import { resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { CATALOG_THEMES } from './catalogThemes.js';
 import { blankCatalogDesign } from '../../lib/catalogDesign.js';
 import { useAppStore } from '../../store/index.js';
@@ -25,7 +28,7 @@ import { useAppStore } from '../../store/index.js';
  *     does not match the file — the same reasoning the Social Grid editor and
  *     the catalog project editor already follow.
  *
- *  2. **A draft is just a shape.** `draft` is `{ id?, name, description, config }`
+ *  2. **A draft is just a shape.** `draft` is `{ id?, name, description, config, updatedAt? }`
  *     — no id means "new", an id means "editing that template". That is what
  *     lets the same screen be opened from four places: New template, Edit on a
  *     card, Start from a proven layout, and Save-as-template from a project.
@@ -44,80 +47,143 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved, backLabel = 'C
   const [config, setConfig] = useState(() => ({ ...blankCatalogDesign(), ...(draft?.config || {}) }));
   const [preview, setPreview] = useState('');
   const [previewError, setPreviewError] = useState('');
+  const [previewState, setPreviewState] = useState('refreshing');
   const [sample, setSample] = useState(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const requestSeq = useRef(0);
+  const mounted = useRef(true);
+  const dirtyRef = useRef(false);
+  const savingRef = useRef(false);
+  const revision = useRef(draft?.updatedAt);
+  const latest = useRef({ name, description, config });
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; requestSeq.current += 1; };
+  }, []);
   const isExisting = !!draft?.id;
 
   const refreshPreview = useCallback(async () => {
     const seq = ++requestSeq.current;
+    setPreviewState('refreshing');
+    setPreviewError('');
     try {
-      const res = await window.api.catalogStudio.previewTemplate(config, name || 'Preview');
-      if (seq !== requestSeq.current) return;
+      const value = latest.current;
+      const res = await window.api.catalogStudio.previewTemplate(value.config, value.name || 'Preview');
+      if (!mounted.current || seq !== requestSeq.current) return;
       setPreview(res.html);
       setSample({ count: res.sampleCount, total: res.total });
       setPreviewError('');
+      setPreviewState('idle');
     } catch (e) {
-      if (seq === requestSeq.current) setPreviewError(e.message);
+      if (mounted.current && seq === requestSeq.current) { setPreviewError(e.message); setPreviewState('error'); }
     }
-  }, [config, name]);
+  }, []);
 
   // Debounced: every keystroke in a colour picker or gap box would otherwise
   // start a full page render.
   useEffect(() => {
     const id = setTimeout(refreshPreview, 320);
     return () => clearTimeout(id);
-  }, [refreshPreview]);
+  }, [refreshPreview, config, name]);
 
   const theme = useMemo(
     () => CATALOG_THEMES.find((t) => t.id === (config.theme || 'modern')) ?? CATALOG_THEMES[0],
     [config.theme],
   );
 
-  function patchConfig(patch) {
+  function edit(patch) {
+    if (savingRef.current) return;
+    latest.current = { ...latest.current, ...patch };
+    dirtyRef.current = true;
     setDirty(true);
-    setConfig((c) => ({ ...c, ...patch }));
+    // Invalidate now, before React renders or the preview debounce fires.
+    if ('config' in patch || 'name' in patch) {
+      requestSeq.current += 1;
+      setPreviewState('refreshing');
+      setPreviewError('');
+    }
+    if ('config' in patch) setConfig(patch.config);
+    if ('name' in patch) setName(patch.name);
+    if ('description' in patch) setDescription(patch.description);
   }
 
-  /* The builder does not autosave (a template is committed with its Save
-   * button), so leaving it with changes asks first — "← Catalog templates" and
-   * Cancel used to drop them without a word. */
-  async function leave() {
-    if (dirty && !(await confirm({
+  function patchConfig(patch) {
+    edit({ config: { ...latest.current.config, ...patch } });
+  }
+
+  // One guard covers Back/Cancel, sidebar navigation and company changes.
+  const canLeave = useCallback(async () => {
+    if (savingRef.current) throw new Error('Wait for the template to finish saving before leaving.');
+    if (!dirtyRef.current) return;
+    const discard = await confirm({
       title: 'Discard your changes to this template?',
       message: `You have changes that are not saved. Press ${isExisting ? 'Save template' : 'Create template'} to keep them.`,
       confirmLabel: 'Discard changes',
       cancelLabel: 'Keep editing',
       danger: true,
-    }))) return;
-    onClose?.();
+    });
+    if (!discard) throw new Error('Keep editing this template or save it before leaving.');
+    if (savingRef.current) throw new Error('Wait for the template to finish saving before leaving.');
+  }, [isExisting]);
+
+  useEffect(() => registerCompanySwitchFlusher(canLeave), [canLeave]);
+
+  async function leave() {
+    try { await canLeave(); onClose?.(); }
+    catch (_) { /* Cancel keeps the draft; sidebar navigation surfaces its own error. */ }
   }
 
   async function save({ asCopy = false } = {}) {
-    const trimmed = name.trim();
+    if (savingRef.current) return;
+    const value = latest.current;
+    const trimmed = value.name.trim();
     if (!trimmed) { addToast('Give the template a name', 'error'); return; }
     if (!activeCompanyId) { addToast('Select a company first', 'error'); return; }
+    savingRef.current = true;
     setSaving(true);
     try {
       let row;
+      const patch = { name: trimmed, description: value.description, config: value.config };
       if (isExisting && !asCopy) {
-        row = await window.api.catalogStudio.updateTemplate(draft.id, { name: trimmed, description, config });
+        try {
+          row = await window.api.catalogStudio.updateTemplate(draft.id, { ...patch, expectedUpdatedAt: revision.current });
+        } catch (error) {
+          const result = await resolveSaveConflict(error, {
+            refresh: () => window.api.catalogStudio.getTemplate(draft.id),
+            overwrite: () => window.api.catalogStudio.updateTemplate(draft.id, patch),
+          });
+          if (!mounted.current || result.choice === 'cancel') return;
+          row = result.row;
+          if (result.choice === 'refresh') {
+            revision.current = row.updatedAt;
+            latest.current = { name: row.name, description: row.description ?? '', config: { ...blankCatalogDesign(), ...row.config } };
+            setName(latest.current.name); setDescription(latest.current.description); setConfig(latest.current.config);
+            dirtyRef.current = false; setDirty(false);
+            requestSeq.current += 1; setPreviewState('refreshing');
+            addToast('Template reloaded with the latest changes', 'info');
+            return;
+          }
+        }
       } else {
         row = await window.api.catalogStudio.saveTemplate({
           companyId: activeCompanyId,
           name: asCopy ? `${trimmed} copy` : trimmed,
-          description,
-          config,
+          description: value.description,
+          config: value.config,
         });
       }
-      setDirty(false);
+      if (!mounted.current) return;
+      revision.current = row.updatedAt;
+      dirtyRef.current = false; setDirty(false);
       addToast(isExisting && !asCopy ? `Template “${row.name}” saved` : `Template “${row.name}” created`, 'success');
       onSaved?.(row);
     } catch (e) {
-      addToast(e.message, 'error');
+      if (mounted.current) addToast(e.message, 'error');
     } finally {
-      setSaving(false);
+      savingRef.current = false;
+      if (mounted.current) setSaving(false);
     }
   }
 
@@ -142,31 +208,27 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved, backLabel = 'C
       />
       <div className="catalog-editor">
         <aside className="catalog-sidebar">
+          <fieldset className="catalog-template-form" disabled={saving}>
           <section className="catalog-sidebar__section">
             <h3 className="section-title">Template</h3>
             <Field label="Name" required>
-              {({ id }) => <Input id={id} autoFocus value={name} onChange={(e) => { setDirty(true); setName(e.target.value); }} placeholder="e.g. 2026 Wholesale — 4 column" />}
+              {({ id }) => <Input id={id} autoFocus value={name} onChange={(e) => edit({ name: e.target.value })} placeholder="e.g. 2026 Wholesale — 4 column" />}
             </Field>
             <Field label="Description">
-              {({ id }) => <Input id={id} value={description} onChange={(e) => { setDirty(true); setDescription(e.target.value); }} placeholder="What is this layout for?" />}
+              {({ id }) => <Input id={id} value={description} onChange={(e) => edit({ description: e.target.value })} placeholder="What is this layout for?" />}
             </Field>
           </section>
           <DesignControls config={config} onChange={patchConfig} priceGroups={priceGroups} />
+          </fieldset>
         </aside>
-        <main className="catalog-preview">
-          <div className="catalog-preview__head">
-            <span>
-              Live preview — {theme.name}
-              {sample ? ` · ${sample.count} of ${sample.total} product${sample.total === 1 ? '' : 's'} shown` : ''}
-            </span>
-            <Button size="sm" onClick={refreshPreview}>Refresh</Button>
-          </div>
-          {previewError
-            ? <div className="preview-placeholder preview-placeholder--error">{previewError}</div>
-            : preview
-              ? <iframe title="Catalog template preview" srcDoc={preview} />
-              : <div className="preview-placeholder">Building preview…</div>}
-        </main>
+        <CatalogPreview
+          preview={preview}
+          onRefresh={refreshPreview}
+          config={config}
+          state={previewState}
+          error={previewError}
+          title={`Template preview — ${theme.name}${sample ? ` · ${sample.count} of ${sample.total} product${sample.total === 1 ? '' : 's'} shown` : ''}`}
+        />
       </div>
     </section>
   );

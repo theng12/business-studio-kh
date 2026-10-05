@@ -99,10 +99,10 @@ test('catalog card price fields print with their currency, like the main Price r
     ] } },
     products: [PRODUCT],
   });
-  assert.match(html, /<span>Price<\/span>\$1,234\.50/);
-  assert.match(html, /<span>VIP<\/span>\$1,234\.50/);
-  assert.match(html, /<span>Riel<\/span>៛41,000/);
-  assert.match(html, /<span>Dealer<\/span>\$55/, 'a legacy group falls back to the catalog currency symbol');
+  const rows = [...html.matchAll(/<div class="field [^"]*"[^>]*>(.*?)<\/div>/g)]
+    .map(([, row]) => row.replace(/<[^>]+>/g, ''));
+  assert.deepEqual(rows, ['Price$1,234.50', 'VIP$1,234.50', 'Riel៛41,000', 'Dealer$55'],
+    'each printed field keeps its own currency; a legacy group uses the catalog fallback');
 });
 
 /* ── 9. catalog copy and print CSS ──────────────────────────────────── */
@@ -163,12 +163,12 @@ test('ordering helpers: move to top/bottom and the current sort as manual order'
 });
 
 test('the product manager wires the selection rules, a confirmed Remove all, and pagination', () => {
-  const src = read('renderer/modules/CatalogStudio/index.jsx');
+  const src = read('renderer/modules/CatalogStudio/ProductManager.jsx');
   assert.match(src, /mergeCatalogIds\(storedIds, visibleIds, keepHiddenIds\)/, 'every commit merges, never writes the active-only list');
   assert.doesNotMatch(src, /onClick=\{\(\) => commit\(\[\]\)\}/, 'Remove all no longer empties the catalog in one click');
   assert.match(src, /await confirm\(\{\s*title: `Remove all \$\{count\} product/, 'Remove all asks first, naming the count');
   assert.match(src, /inactive — hidden from the catalog/);
-  assert.equal((src.match(/<Pagination /g) || []).length, 2, 'both product lists page (§10)');
+  assert.equal((src.match(/\{pager\(/g) || []).length, 2, 'both product lists use the shared pager (§10)');
   assert.match(src, /appImageSrc\(product\.mainImagePath, product\.contentHash \|\| product\.updatedAt, \{ w: 96 \}\)/);
 });
 
@@ -255,7 +255,9 @@ test('Run again rebuilds the Generate & Print settings from a recorded run', () 
 
 test('leaving the template builder with unsaved changes asks first', () => {
   const src = read('renderer/modules/CatalogStudio/TemplateBuilder.jsx');
-  assert.match(src, /if \(dirty && !\(await confirm\(/);
+  assert.match(src, /if \(!dirtyRef\.current\) return/);
+  assert.match(src, /const discard = await confirm\(/);
+  assert.match(src, /registerCompanySwitchFlusher\(canLeave\)/, 'sidebar and company changes use the same guard');
   assert.match(src, /backTo=\{\{ label: backLabel, onClick: leave \}\}/, 'the header back button asks first too');
   assert.match(src, /<Button onClick=\{leave\} disabled=\{saving\}>Cancel/);
   assert.doesNotMatch(src, /onClick=\{onClose\}/);

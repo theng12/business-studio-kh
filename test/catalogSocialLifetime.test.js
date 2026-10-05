@@ -51,10 +51,10 @@ async function loadEditors(harness, includeCompanies = false) {
   const { createRequire } = require('node:module');
   const req = createRequire(path.join(ROOT, 'package.json'));
   const source = `
-    import { CatalogEditor } from './renderer/modules/CatalogStudio/index.jsx';
+    import { CatalogEditor, CatalogTemplates } from './renderer/modules/CatalogStudio/index.jsx';
     import { PresetEditor } from './renderer/modules/SocialGrid/index.jsx';
     import { ConflictModalHost } from './renderer/components/ConflictModal.jsx';
-    export { CatalogEditor, PresetEditor };
+    export { CatalogEditor, CatalogTemplates, PresetEditor };
     export function CatalogEditorWithConflict(props) { return [ConflictModalHost(), CatalogEditor(props)]; }
     export function PresetEditorWithConflict(props) { return [ConflictModalHost(), PresetEditor(props)]; }
     ${includeCompanies ? "export { createCompaniesSlice } from './renderer/store/companies.js';" : ''}
@@ -471,4 +471,81 @@ test('catalog ignores a conflict Refresh result after its editor unmounts', asyn
   for (const update of updates.slice(1)) update.gate.resolve();
   await tick();
   assert.equal(server.row.name, 'Remote draft');
+});
+
+test('catalog preview rejects a response superseded by a local edit and waits for its save', async () => {
+  const server = { row: makeRow('catalog'), enforceRevision: true }; const updates = [];
+  const api = makeApi('catalog', server, updates); const previews = [];
+  api.catalogStudio.preview = () => { const gate = deferred(); previews.push(gate); return gate.promise; };
+  global.window = { api };
+  const harness = makeReactHarness(storeState());
+  const { CatalogEditor } = await loadEditors(harness);
+  const session = await openEditor('catalog', CatalogEditor, harness);
+  const previewControl = () => findAll(session.output, (node) => ['LivePreview', 'CatalogPreview'].includes(node.type?.name))[0];
+  const old = previewControl().props.onRefresh(); await tick();
+  assert.equal(previews.length, 1);
+  editName(session, 'Original', 'Fresh draft');
+  previews[0].resolve({ html: 'OLD' }); await old; session.render();
+  assert.notEqual(previewControl().props.preview, 'OLD');
+  const fresh = previewControl().props.onRefresh(); await tick();
+  assert.equal(updates.length, 1, 'preview flushes the latest draft');
+  assert.equal(previews.length, 1, 'preview waits until the save finishes');
+  updates[0].gate.resolve(); await tick();
+  previews[1].resolve({ html: 'NEW' }); await fresh; session.render();
+  assert.equal(previewControl().props.preview, 'NEW');
+  harness.unmount();
+});
+
+test('catalog undo and redo restore local layout without losing the latest save revision', async () => {
+  const server = { row: makeRow('catalog'), enforceRevision: true }; const updates = [];
+  global.window = { api: makeApi('catalog', server, updates) };
+  const harness = makeReactHarness(storeState());
+  const { CatalogEditor } = await loadEditors(harness);
+  const session = await openEditor('catalog', CatalogEditor, harness);
+  editName(session, 'Original', 'Changed');
+  const button = (label) => findAll(session.output, (n) => n.type?.name === 'Button' && textOf(n) === label)[0];
+  assert.ok(button('Undo'), 'history is available in the editor');
+  button('Undo').props.onClick(); session.render();
+  assert.ok(findAll(session.output, (n) => n.type?.name === 'Input' && n.props.value === 'Original').length);
+  button('Redo').props.onClick(); session.render();
+  const saving = findAll(session.output, (n) => n.type?.name === 'SaveStatus')[0].props.onSave();
+  updates[0].gate.resolve(); await saving; session.render();
+  assert.equal(server.row.name, 'Changed');
+  button('Undo').props.onClick(); session.render();
+  const savingUndo = findAll(session.output, (n) => n.type?.name === 'SaveStatus')[0].props.onSave();
+  assert.equal(updates[1].patch.expectedUpdatedAt, server.row.updatedAt, 'undo uses acknowledged revision');
+  updates[1].gate.resolve(); await savingUndo;
+  assert.equal(server.row.name, 'Original'); harness.unmount();
+});
+
+test('wholesale starter creates a catalog that actually uses wholesale prices', async () => {
+  const state = { ...storeState(), openCatalogProject() {} }; let created;
+  global.window = { api: { catalogStudio: { listTemplates: async () => [], create: async (value) => { created = value; return { ...value, id: 'new' }; } } } };
+  const harness = makeReactHarness(state); const { CatalogTemplates } = await loadEditors(harness);
+  harness.render(CatalogTemplates, {}); await tick(); let output = harness.render(CatalogTemplates, {});
+  const card = findAll(output, (n) => n.type === 'article' && textOf(n).includes('Wholesale price catalog'))[0];
+  findAll(card, (n) => n.type?.name === 'Button' && textOf(n) === 'Use template')[0].props.onClick();
+  output = harness.render(CatalogTemplates, {});
+  await findAll(output, (n) => n.type?.name === 'Button' && textOf(n) === 'Create and add products')[0].props.onClick();
+  assert.equal(created.config.priceGroup, 'wholesale');
+  assert.equal(created.config.cover.subtitle, ''); harness.unmount();
+});
+
+test('catalog keeps undo across its own saved event and rejects previews before a remote layout change', async () => {
+  const server = { row: makeRow('catalog'), enforceRevision: true }; const updates = []; const listeners = {};
+  const api = makeApi('catalog', server, updates, listeners); const previews = [];
+  api.catalogStudio.preview = () => { const gate = deferred(); previews.push(gate); return gate.promise; };
+  global.window = { api }; const harness = makeReactHarness(storeState()); const { CatalogEditor } = await loadEditors(harness);
+  const session = await openEditor('catalog', CatalogEditor, harness);
+  editName(session, 'Original', 'Local name', true); updates[0].gate.resolve(); await tick(); session.render();
+  listeners.catalogChanged({ kind: 'catalogStudio', id: 'draft-1', op: 'update' }); await tick(); session.render();
+  const undo = findAll(session.output, (n) => n.type?.name === 'Button' && textOf(n) === 'Undo')[0];
+  assert.equal(Boolean(undo.props.disabled), false, 'an own-save echo must not erase undo');
+  const control = () => findAll(session.output, (n) => n.type?.name === 'CatalogPreview')[0];
+  const pending = control().props.onRefresh(); await tick();
+  server.row = { ...server.row, name: 'Remote name', updatedAt: server.row.updatedAt + 1, config: { ...server.row.config, columns: 5 } };
+  listeners.catalogChanged({ kind: 'catalogStudio', id: 'draft-1', op: 'update' }); await tick(); session.render();
+  previews[0].resolve({ html: 'BEFORE REMOTE' }); await pending; session.render();
+  assert.notEqual(control().props.preview, 'BEFORE REMOTE');
+  assert.equal(control().props.state, 'refreshing'); harness.unmount();
 });

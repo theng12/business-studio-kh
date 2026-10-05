@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.91', date: '2026-10-05',
+    items: [
+      'FIX — Catalog wholesale layouts use wholesale prices. Template edits detect changes from another Mac, and leaving an unsaved template asks before discarding it. Catalog previews wait for your latest save and ignore older replies.',
+      'NEW — Catalog product picking: search both lists, filter by brand or category, select a page or all matches, add or remove selected products, paste SKUs, and move a selected group to a numbered position. Bulk actions show their exact count. Undo and redo keep the last 20 edits while a project stays open.',
+      'NEW — Catalog design: compact price lists, photo visibility, height and fit, card padding, text sizes, brand visibility, field alignment, page headers, footers and page numbers. Full field names remain visible beside editable print labels. Zero margins and gaps and photo-only templates now work as selected.',
+      'NEW — Paper preview with zoom and page navigation, refresh status and retry. Screen page breaks are approximate; the exported PDF is the final layout. Print opens that same PDF in Preview for printing.',
+      'POLISH — Find, sort and page through saved catalogs and templates. Templates keep their design without copying a previous catalog cover title or subtitle.',
+      'Internal — Updated a build-tool cache dependency to address its security advisory. No production dependency changes.',
+    ],
+  },
+  {
     version: '0.1.90',
     date: '2026-10-02',
     items: [
