@@ -43,3 +43,46 @@ test('catalog renderer preserves manual product order', () => {
   });
   assert.ok(html.indexOf('Second source row') < html.indexOf('First source row'));
 });
+
+
+const catalog = (config) => buildCatalogHtml({
+  project: { name: 'Example', config: { selectionMode: 'all', cover: { enabled: false }, ...config } },
+  products: [{ id: 'a', sku: 'SKU-1', name: 'Product name', brandId: 'b' }],
+  brands: [{ id: 'b', name: 'Brand name' }],
+}, { preview: true });
+
+test('catalog output preserves zero gap and margin and deliberately empty fields', () => {
+  const html = catalog({ gapMm: 0, marginMm: 0, fields: [], showBrand: false });
+  assert.match(html, /@page\{[^}]*margin:0mm/);
+  assert.match(html, /gap:0mm/);
+  assert.doesNotMatch(html, />SKU-1<|Product name|Brand name/);
+  assert.match(html, /photo placeholder/);
+  assert.doesNotMatch(html, /<div class="card-body">/);
+});
+
+test('compact list suppresses photos and brands and applies field alignment and type size', () => {
+  const html = catalog({ layoutMode: 'list', showImages: false, showBrand: false, cardPaddingMm: 0,
+    fontSizePt: 9.5, boldFontSizePt: 14, fields: [{ key: 'name', align: 'right', bold: true }] });
+  assert.match(html, /class="grid list"/);
+  assert.match(html, /\.grid\.list \.card-body\{flex:1;display:flex/);
+  assert.doesNotMatch(html, /<img|class="photo|Brand name/);
+  assert.match(html, /font-size:9.5pt/);
+  assert.match(html, /font-size:14pt/);
+  assert.match(html, /class="field bold" style="text-align:right"/);
+  assert.match(html, /Product name/);
+  assert.match(html, /\.card-body\{padding:0mm/);
+});
+
+test('fixed photo height and cover fit reach both preview and print HTML', () => {
+  for (const preview of [true, false]) {
+    const html = buildCatalogHtml({ project: { name: 'Example', config: { selectionMode: 'all', imageHeightMm: 35, imageFit: 'cover' } }, products: [{ id: 'a' }] }, { preview });
+    assert.match(html, /height:35mm/);
+    assert.match(html, /object-fit:cover/);
+  }
+});
+
+test('legacy catalogs without a sort setting retain SKU order', () => {
+  const html = buildCatalogHtml({ project: { name: 'Legacy', config: { cover: { enabled: false } } },
+    products: [{ id: 'b', sku: 'B', name: 'B second' }, { id: 'a', sku: 'A', name: 'A first' }] });
+  assert.ok(html.indexOf('A first') < html.indexOf('B second'));
+});

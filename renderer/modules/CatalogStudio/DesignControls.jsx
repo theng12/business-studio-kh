@@ -89,6 +89,12 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
       <section className="catalog-sidebar__section">
         <h3 className="section-title">Layout</h3>
         <div className="catalog-field-grid">
+          <Field label="Layout mode" span="full">
+            {({ id }) => <Select id={id} value={c.layoutMode ?? 'cards'} onChange={(e) => onChange({ layoutMode: e.target.value })}>
+              <option value="cards">Product cards</option>
+              <option value="list">Compact price list</option>
+            </Select>}
+          </Field>
           <Field label="Page">
             {({ id }) => (
               <Select id={id} value={c.pageSize || 'A4'} onChange={(e) => onChange({ pageSize: e.target.value })}>
@@ -107,16 +113,16 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
           </Field>
           <Field label="Columns">
             {({ id }) => (
-              <Select id={id} value={c.columns || 3} onChange={(e) => onChange({ columns: Number(e.target.value) })}>
+              <Select id={id} disabled={c.layoutMode === 'list'} value={c.columns || 3} onChange={(e) => onChange({ columns: Number(e.target.value) })}>
                 {[1, 2, 3, 4, 5].map((n) => <option key={n}>{n}</option>)}
               </Select>
             )}
           </Field>
           <Field label="Gap (mm)">
-            {({ id }) => <Input id={id} type="number" value={c.gapMm ?? 5} onChange={(e) => onChange({ gapMm: Number(e.target.value) })} />}
+            {({ id }) => <Input id={id} type="number" min={0} max={30} value={c.gapMm ?? 5} onChange={(e) => onChange({ gapMm: Number(e.target.value) })} />}
           </Field>
           <Field label="Page margin (mm)">
-            {({ id }) => <Input id={id} type="number" value={c.marginMm ?? 10} onChange={(e) => onChange({ marginMm: Number(e.target.value) })} />}
+            {({ id }) => <Input id={id} type="number" min={0} max={40} value={c.marginMm ?? 10} onChange={(e) => onChange({ marginMm: Number(e.target.value) })} />}
           </Field>
           <Field label="Group products">
             {({ id }) => (
@@ -152,6 +158,51 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
       </section>
 
       <section className="catalog-sidebar__section">
+        <h3 className="section-title">Photos and text</h3>
+        <label className="catalog-check">
+          <input type="checkbox" aria-label="Show product photos" checked={c.showImages !== false} onChange={(e) => onChange({ showImages: e.target.checked })} />
+          <span>Show product photos</span>
+        </label>
+        <div className="catalog-field-grid">
+          <Field label="Photo height (mm)" hint="0 uses a square; fixed heights are 10–100 mm." span="full">
+            {({ id }) => <Input id={id} type="number" min={0} max={100} disabled={c.showImages === false} value={c.imageHeightMm ?? 0} onChange={(e) => onChange({ imageHeightMm: Number(e.target.value) })} />}
+          </Field>
+          <Field label="Photo fit">
+            {({ id }) => <Select id={id} disabled={c.showImages === false} value={c.imageFit ?? 'contain'} onChange={(e) => onChange({ imageFit: e.target.value })}>
+              <option value="contain">Show whole photo</option><option value="cover">Fill and crop</option>
+            </Select>}
+          </Field>
+          <Field label="Card padding (mm)">
+            {({ id }) => <Input id={id} type="number" min={0} max={20} step={0.5} value={c.cardPaddingMm ?? 4} onChange={(e) => onChange({ cardPaddingMm: Number(e.target.value) })} />}
+          </Field>
+          <Field label="Regular font (pt)">
+            {({ id }) => <Input id={id} type="number" min={6} max={24} step={0.5} value={c.fontSizePt ?? 8.5} onChange={(e) => onChange({ fontSizePt: Number(e.target.value) })} />}
+          </Field>
+          <Field label="Bold font (pt)">
+            {({ id }) => <Input id={id} type="number" min={6} max={32} step={0.5} value={c.boldFontSizePt ?? 11} onChange={(e) => onChange({ boldFontSizePt: Number(e.target.value) })} />}
+          </Field>
+        </div>
+        <label className="catalog-check">
+          <input type="checkbox" aria-label="Show brand" checked={c.showBrand !== false} onChange={(e) => onChange({ showBrand: e.target.checked })} />
+          <span>Show brand</span>
+        </label>
+      </section>
+
+      <section className="catalog-sidebar__section">
+        <h3 className="section-title">Page header and footer</h3>
+        <Field label="Header text" hint="Optional plain text on each page.">
+          {({ id }) => <Input id={id} maxLength={200} value={c.headerText ?? ''} onChange={(e) => onChange({ headerText: e.target.value })} />}
+        </Field>
+        <Field label="Footer text">
+          {({ id }) => <Input id={id} maxLength={200} value={c.footerText ?? ''} onChange={(e) => onChange({ footerText: e.target.value })} />}
+        </Field>
+        <label className="catalog-check">
+          <input type="checkbox" aria-label="Page numbers" checked={!!c.pageNumbers} onChange={(e) => onChange({ pageNumbers: e.target.checked })} />
+          <span>Page numbers</span>
+        </label>
+      </section>
+
+      <section className="catalog-sidebar__section">
         <h3 className="section-title">Style</h3>
         <div className="theme-choices">
           {CATALOG_THEMES.map((t) => (
@@ -176,7 +227,7 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
       <section className="catalog-sidebar__section">
         <h3 className="section-title">Card fields</h3>
         <p className="catalog-sidebar__note">
-          Tick what each product card prints. Included fields print in this order — use the arrows to move them, and edit the text to rename a field.
+          Choose the source fields to print. Edit their print labels and use the arrows to change the order.
         </p>
         <div className="catalog-field-list">
           {fields.map((f) => {
@@ -184,31 +235,35 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
             const entry = (c.fields || []).find((x) => x.key === f.key) || f;
             return (
               <div className={`catalog-field-row${on ? '' : ' is-off'}`} key={f.key}>
-                <input
-                  type="checkbox"
-                  checked={on}
-                  aria-label={`Show ${entry.label || f.label}`}
-                  onChange={(e) => toggleField(f.key, e.target.checked)}
-                />
-                {on ? (
-                  <Input
-                    className="catalog-field-row__label"
-                    value={entry.label ?? ''}
-                    aria-label={`Label for ${f.label}`}
-                    placeholder={f.label}
-                    onChange={(e) => patchField(f.key, { label: e.target.value })}
-                  />
-                ) : <span className="catalog-field-row__name">{entry.label || f.label}</span>}
-                <label className="catalog-check" title="Print this field in bold">
-                  <input type="checkbox" disabled={!on} checked={!!entry.bold} onChange={(e) => patchField(f.key, { bold: e.target.checked })} /> Bold
+                <label className="catalog-field-row__include">
+                  <input type="checkbox" checked={on} aria-label={`Include ${labelFor(f.key)} (${f.key})`} onChange={(e) => toggleField(f.key, e.target.checked)} />
+                  <span className="catalog-field-row__source">
+                    <strong>{labelFor(f.key)}</strong>
+                    <code>{f.key}</code>
+                  </span>
                 </label>
-                <label className="catalog-check" title="Print the field name before its value">
-                  <input type="checkbox" disabled={!on} checked={entry.showLabel !== false} onChange={(e) => patchField(f.key, { showLabel: e.target.checked })} /> Label
-                </label>
-                <span className="catalog-field-row__move">
-                  <button type="button" className="catalog-icon-btn" aria-label={`Move ${entry.label || f.label} up`} disabled={!on || includedOrder.indexOf(f.key) <= 0} onClick={() => moveField(f.key, -1)}>↑</button>
-                  <button type="button" className="catalog-icon-btn" aria-label={`Move ${entry.label || f.label} down`} disabled={!on || includedOrder.indexOf(f.key) >= includedOrder.length - 1} onClick={() => moveField(f.key, 1)}>↓</button>
-                </span>
+                {on ? <>
+                  <Field label="Print label">
+                    {({ id }) => <Input id={id} className="catalog-field-row__label" value={entry.label ?? ''} aria-label={`Print label for ${f.key}`} placeholder={labelFor(f.key)} onChange={(e) => patchField(f.key, { label: e.target.value })} />}
+                  </Field>
+                  <Field label="Alignment">
+                    {({ id }) => <Select id={id} value={entry.align ?? 'left'} aria-label={`Alignment for ${f.key}`} onChange={(e) => patchField(f.key, { align: e.target.value })}>
+                      <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
+                    </Select>}
+                  </Field>
+                  <div className="catalog-field-row__options">
+                    <label className="catalog-check">
+                      <input type="checkbox" checked={!!entry.bold} aria-label={`Print ${f.key} in bold`} onChange={(e) => patchField(f.key, { bold: e.target.checked })} /> Bold
+                    </label>
+                    <label className="catalog-check">
+                      <input type="checkbox" checked={entry.showLabel !== false} aria-label={`Print label before ${f.key} value`} onChange={(e) => patchField(f.key, { showLabel: e.target.checked })} /> Show label
+                    </label>
+                    <span className="catalog-field-row__move">
+                      <button type="button" className="catalog-icon-btn" aria-label={`Move ${labelFor(f.key)} (${f.key}) up`} title="Move field up" disabled={includedOrder.indexOf(f.key) <= 0} onClick={() => moveField(f.key, -1)}>↑</button>
+                      <button type="button" className="catalog-icon-btn" aria-label={`Move ${labelFor(f.key)} (${f.key}) down`} title="Move field down" disabled={includedOrder.indexOf(f.key) >= includedOrder.length - 1} onClick={() => moveField(f.key, 1)}>↓</button>
+                    </span>
+                  </div>
+                </> : null}
               </div>
             );
           })}

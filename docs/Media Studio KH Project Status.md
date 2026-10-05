@@ -1,6 +1,6 @@
 # Media Studio KH — Development Status
 
-Updated: **2026-10-02, at 0.1.90.** This is the short "where is the project" page. The operating
+Updated: **2026-10-05, at 0.1.91.** This is the short "where is the project" page. The operating
 loop, paths, traps and the full list of open gaps live in [the session handoff](tasks/HANDOFF.md),
 which is updated on every release — read that first in a new session. If either document disagrees
 with the code, the code wins.
@@ -18,20 +18,21 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
   been self-review (the same agent, or another agent from the same model family). No human or
   third-party model has reviewed the tree.
 
-## Current release — 0.1.90
+## Current release — 0.1.91
 
 | | |
 |---|---|
-| Version | `0.1.90` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
-| Merged | PR #103 (`69b1cfe`); handoff update PR #104 (`70e1229`) |
-| Installed | `/Applications/Media Studio KH.app` on the owner's Mac, 2026-10-02 |
-| DMG | `dist/Media Studio KH-0.1.90-arm64.dmg` in the owner's checkout (not in Git) |
+| Version | `0.1.91` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
+| Integration | Catalog workflow release; see session handoff and Git history |
+| Installed | Existing installation preserved; use the new DMG to update |
+| DMG | `dist/Media Studio KH-0.1.91-arm64.dmg` in the owner's checkout (not in Git) |
 
 **What changed since the last version of this page (0.1.72).** One line per release; the full
 wording is in the "What's new" changelog.
 
 | Version | Main change |
 |---|---|
+| 0.1.91 | Catalog correctness, bulk picking/SKU paste, session undo, reusable print controls and paper preview |
 | 0.1.73–0.1.78 | Phone viewer: save an overlaid photo to the device, "Save copy only", choose which photo an overlay lands on, overlay several products at once, batch results as one zip, Android-correct save wording, `{price_<group>}` overlay tokens |
 | 0.1.79–0.1.80 | One price rule everywhere (labels, phone viewer, catalog CSV, Google feed, bulk table); History shows price-group changes in words |
 | 0.1.81 | Social Grid text/logo watermark overlays with opacity, size, anchor and rotation |

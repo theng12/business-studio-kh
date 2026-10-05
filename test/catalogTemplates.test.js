@@ -176,3 +176,26 @@ test('a new project gets a complete, clamped config even with no template', { sk
   assert.equal(project.config.cover.title, 'Bare catalog');
   assert.deepEqual(project.config.fields.map((f) => f.key), model.DEFAULT_FIELDS.map((f) => f.key));
 });
+
+
+test('photo-only template and print settings survive storage without carrying project cover text', { skip: skipReason }, () => {
+  const company = freshCompany('Photo only Co');
+  const template = templates.create({ companyId: company.id, name: 'Photos', config: {
+    fields: [], gapMm: 0, marginMm: 0, layoutMode: 'list', showImages: false, imageHeightMm: 35,
+    imageFit: 'cover', cardPaddingMm: 0, fontSizePt: 9.5, boldFontSizePt: 12,
+    showBrand: false, headerText: 'Prices', footerText: 'Trade', pageNumbers: true,
+    cover: { enabled: false, title: 'Old project', subtitle: 'Old subtitle' },
+  } });
+  assert.deepEqual(templates.get(template.id).config.fields, []);
+  assert.deepEqual(template.config.cover, { enabled: false });
+  const project = projects.create({ companyId: company.id, name: 'Fresh', config: template.config });
+  assert.equal(project.config.cover.title, 'Fresh');
+  assert.equal(project.config.cover.subtitle, undefined);
+  assert.equal(project.config.gapMm, 0);
+  assert.equal(project.config.marginMm, 0);
+  assert.equal(project.config.fontSizePt, 9.5);
+  assert.equal(project.config.layoutMode, 'list');
+  assert.equal(project.config.imageFit, 'cover');
+  assert.equal(project.config.pageNumbers, true);
+  assert.deepEqual(project.config.fields, []);
+});
