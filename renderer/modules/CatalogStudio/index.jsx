@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, EmptyState, Field, Input, Modal, Pagination, paginate } from '../../components/ui.jsx';
+import { Button, EmptyState, Field, Input, Modal, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
@@ -10,9 +10,9 @@ import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { DesignControls } from './DesignControls.jsx';
 import { CatalogTemplateBuilder } from './TemplateBuilder.jsx';
-import { catalogIdLists, idsInSortOrder, mergeCatalogIds, moveToEdge } from './catalogSelection.js';
+import { ProductManager } from './ProductManager.jsx';
+import { CatalogPreview } from './CatalogPreview.jsx';
 import { keepTypedName } from '../LabelStudio/editorRules.js';
-import { appImageSrc } from '../../lib/imageUrl.js';
 import { timeAgo } from '../../lib/format.js';
 
 /* v0.1.63: the design controls, the theme list and the card-field defaults all
@@ -42,7 +42,7 @@ const CATALOG_TEMPLATES = [
     eyebrow: 'Price focused',
     description: 'A denser four-column layout that keeps SKU, unit and wholesale price easy to scan.',
     bestFor: 'Dealers, distributors, sales teams',
-    config: { theme: 'retail', columns: 4, primaryColor: '#0f766e', accentColor: '#14b8a6', groupBy: 'category', fields: [
+    config: { theme: 'retail', columns: 4, primaryColor: '#0f766e', accentColor: '#14b8a6', groupBy: 'category', priceGroup: 'wholesale', fields: [
       { key: 'sku', label: 'SKU', visible: true, bold: true }, { key: 'name', label: 'Product', visible: true },
       { key: 'unit', label: 'Unit', visible: true }, { key: 'price', label: 'Wholesale', visible: true, bold: true },
     ] },
@@ -147,139 +147,9 @@ function ProjectCard({ project, onOpen, onDuplicate, onDelete }) {
   </article>;
 }
 
-function ProductThumb({ product }) {
-  const src = product.mainImagePath ? appImageSrc(product.mainImagePath, product.contentHash || product.updatedAt, { w: 96 }) : null;
-  return <div className="catalog-product-avatar">{src ? <img src={src} alt="" loading="lazy" decoding="async" /> : String(product.sku || 'P').slice(0, 2).toUpperCase()}</div>;
-}
-
-const SORT_NAMES = { sku: 'SKU', name: 'product name' };
-
-function ProductManager({ products, config, onChange }) {
-  const [query, setQuery] = useState('');
-  const [availablePage, setAvailablePage] = useState(0); const [availableSize, setAvailableSize] = useState(50);
-  const [includedPage, setIncludedPage] = useState(0); const [includedSize, setIncludedSize] = useState(50);
-  const productList = useMemo(() => (Array.isArray(products) ? products : []), [products]);
-  const allById = useMemo(() => new Map(productList.map((p) => [p.id, p])), [productList]);
-  const activeProducts = useMemo(() => productList.filter((p) => p.status !== 'inactive'), [productList]);
-  // includedIds: what prints. hiddenIds: saved ids that are inactive (or gone)
-  // — kept in place on every edit, see catalogSelection.js.
-  const { storedIds, includedIds, hiddenIds } = useMemo(() => catalogIdLists(config, productList), [config, productList]);
-  const includedSet = useMemo(() => new Set(includedIds), [includedIds]);
-  const normalized = query.trim().toLowerCase();
-  const available = useMemo(() => activeProducts.filter((p) => !includedSet.has(p.id) && (!normalized || `${p.sku} ${p.name || ''} ${p.barcode || ''}`.toLowerCase().includes(normalized))), [activeProducts, includedSet, normalized]);
-  const included = includedIds.map((id) => allById.get(id)).filter(Boolean);
-  const inactive = hiddenIds.map((id) => allById.get(id)).filter(Boolean);
-  // §10 pagination, one pager per list.
-  const availableInfo = paginate(available.length, availablePage, availableSize);
-  const includedInfo = paginate(included.length, includedPage, includedSize);
-  useEffect(() => { if (availablePage !== availableInfo.currentPage) setAvailablePage(availableInfo.currentPage); }, [availablePage, availableInfo.currentPage]);
-  useEffect(() => { if (includedPage !== includedInfo.currentPage) setIncludedPage(includedInfo.currentPage); }, [includedPage, includedInfo.currentPage]);
-  useEffect(() => { setAvailablePage(0); }, [normalized, availableSize]);
-  useEffect(() => { setIncludedPage(0); }, [includedSize]);
-  const availableShown = available.slice(availableInfo.pageStart, availableInfo.pageEnd);
-  const includedShown = included.slice(includedInfo.pageStart, includedInfo.pageEnd);
-  const sortBy = config.sortBy || 'manual';
-
-  function commit(visibleIds, { manual = false, dropHidden = false, keepHiddenIds = hiddenIds } = {}) {
-    const productIds = dropHidden ? [...visibleIds] : mergeCatalogIds(storedIds, visibleIds, keepHiddenIds);
-    onChange({ productIds, selectionMode: 'explicit', brandIds: [], categoryIds: [], ...(manual ? { sortBy: 'manual' } : {}) });
-  }
-  function move(id, direction) {
-    const index = includedIds.indexOf(id); const target = index + direction;
-    if (index < 0 || target < 0 || target >= includedIds.length) return;
-    const next = [...includedIds]; [next[index], next[target]] = [next[target], next[index]]; commit(next, { manual: true });
-  }
-  async function removeAll() {
-    const count = included.length + inactive.length;
-    if (!count) return;
-    const ok = await confirm({
-      title: `Remove all ${count} product${count === 1 ? '' : 's'} from this catalog?`,
-      message: inactive.length
-        ? `That is ${included.length} shown and ${inactive.length} inactive. The catalog's order is lost, and there is no undo. Products in the library are not affected.`
-        : "The catalog's order is lost, and there is no undo. Products in the library are not affected.",
-      confirmLabel: 'Remove all',
-      danger: true,
-    });
-    if (ok) commit([], { dropHidden: true });
-  }
-  function applySortAsOrder() {
-    commit(idsInSortOrder(includedIds, allById, sortBy), { manual: true });
-  }
-  const sortName = SORT_NAMES[sortBy] || sortBy;
-  return <section className="catalog-product-manager">
-    <div className="section-head">
-      <h2 className="section-title">{included.length} product{included.length === 1 ? '' : 's'} included</h2>
-      <p className="section-hint">Pick products from the library, then arrange their order.</p>
-      <div className="section-head__actions">
-        {sortBy !== 'manual' && included.length > 1 ? <Button size="sm" onClick={applySortAsOrder} title={`Save the ${sortName} order as this catalog's own order, then switch Sort by to Catalog order`}>Use {sortName} order</Button> : null}
-        <Button variant="danger" size="sm" disabled={!included.length && !inactive.length} onClick={removeAll}>Remove all</Button>
-      </div>
-    </div>
-    <div className="catalog-product-columns">
-      <section className="catalog-product-panel">
-        <header>
-          <div><strong>Product Library</strong><span>{available.length} available</span></div>
-          <Button size="sm" disabled={!available.length} onClick={() => commit([...includedIds, ...available.map((p) => p.id)])}>Add all shown</Button>
-        </header>
-        <div className="catalog-product-search"><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search SKU, name or barcode" aria-label="Search the product library" /></div>
-        <div className="catalog-product-list">
-          {availableShown.length ? availableShown.map((p) => (
-            <article key={p.id}>
-              <ProductThumb product={p} />
-              <div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div>
-              <Button size="sm" onClick={() => commit([...includedIds, p.id])} aria-label={`Add ${p.sku} to the catalog`}>Add</Button>
-            </article>
-          )) : <div className="catalog-product-empty">{normalized ? 'No matching products outside this catalog.' : 'Every active product is already included.'}</div>}
-        </div>
-        <Pagination total={available.length} pageStart={availableInfo.pageStart} pageEnd={availableInfo.pageEnd} currentPage={availableInfo.currentPage} maxPage={availableInfo.maxPage} pageSize={availableSize} onPageChange={setAvailablePage} onPageSizeChange={setAvailableSize} />
-      </section>
-      <section className="catalog-product-panel catalog-product-panel--included">
-        <header>
-          <div><strong>Included in catalog</strong><span>{sortBy === 'manual' ? 'Shown in this order' : `Printed sorted by ${sortName}; this order applies with Catalog order`}</span></div>
-        </header>
-        <div className="catalog-product-list">
-          {includedShown.length ? includedShown.map((p, i) => {
-            const index = includedInfo.pageStart + i;
-            return <article key={p.id}>
-              <span className="catalog-order-number">{index + 1}</span>
-              <div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div>
-              <div className="catalog-product-row-actions">
-                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the top`} title="Move to top" disabled={index === 0} onClick={() => commit(moveToEdge(includedIds, p.id, 'top'), { manual: true })}>⤒</button>
-                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} up`} title="Move up" disabled={index === 0} onClick={() => move(p.id, -1)}>↑</button>
-                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} down`} title="Move down" disabled={index === included.length - 1} onClick={() => move(p.id, 1)}>↓</button>
-                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the bottom`} title="Move to bottom" disabled={index === included.length - 1} onClick={() => commit(moveToEdge(includedIds, p.id, 'bottom'), { manual: true })}>⤓</button>
-                <Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={() => commit(includedIds.filter((id) => id !== p.id))}>Remove</Button>
-              </div>
-            </article>;
-          }) : <div className="catalog-product-empty"><strong>No products added yet</strong><span>Add products from the library to build this catalog.</span></div>}
-          {inactive.length ? <div className="catalog-product-hidden">
-            <p>{inactive.length} inactive — hidden from the catalog. They keep their place and print again if reactivated.</p>
-            {inactive.map((p) => (
-              <article key={p.id} className="is-inactive">
-                <ProductThumb product={p} />
-                <div><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'} · inactive — hidden from the catalog</span></div>
-                <div className="catalog-product-row-actions">
-                  <Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={() => commit(includedIds, { keepHiddenIds: hiddenIds.filter((id) => id !== p.id) })}>Remove</Button>
-                </div>
-              </article>
-            ))}
-          </div> : null}
-        </div>
-        <Pagination total={included.length} pageStart={includedInfo.pageStart} pageEnd={includedInfo.pageEnd} currentPage={includedInfo.currentPage} maxPage={includedInfo.maxPage} pageSize={includedSize} onPageChange={setIncludedPage} onPageSizeChange={setIncludedSize} />
-      </section>
-    </div>
-  </section>;
-}
-
-function LivePreview({ preview, onRefresh }) {
-  return <main className="catalog-preview">
-    <div className="catalog-preview__head"><span>Live PDF preview</span><Button size="sm" onClick={onRefresh}>Refresh</Button></div>
-    {preview ? <iframe title="Catalog preview" srcDoc={preview} /> : <div className="preview-placeholder">Building preview…</div>}
-  </main>;
-}
-
 export function CatalogEditor({ projectId, onBack }) {
-  const products = useAppStore((s) => s.products); const addToast = useAppStore((s) => s.addToast);
+  const products = useAppStore((s) => s.products);
+  const brands = useAppStore((s) => s.brands) ?? []; const categories = useAppStore((s) => s.categories) ?? []; const addToast = useAppStore((s) => s.addToast);
   const companySwitching = useAppStore((s) => s.companySwitching);
   // v0.1.55: this company's named price groups, so the catalog can print one.
   // `?? []` because the component tests stub the store with only the slices a
@@ -292,6 +162,11 @@ export function CatalogEditor({ projectId, onBack }) {
   // The PDF this session exported last, for the "Open PDF" button.
   const [lastExport, setLastExport] = useState(null);
   const [printing, setPrinting] = useState(false);
+  const [previewState, setPreviewState] = useState('refreshing'); const [previewError, setPreviewError] = useState('');
+  const previewSeq = useRef(0);
+  // ponytail: keep at most 20 local snapshots; durable history would require its own product direction.
+  const history = useRef({ past: [], future: [] }); const [historyVersion, setHistoryVersion] = useState(0);
+  const resetHistory = useCallback(() => { history.current = { past: [], future: [] }; setHistoryVersion((v) => v + 1); }, []);
   // v0.1.63: the template builder, opened from this project's design.
   const [templateDraft, setTemplateDraft] = useState(null);
   /* v0.1.27: the pending edit is FLUSHED on unmount, not thrown away. The
@@ -363,6 +238,7 @@ export function CatalogEditor({ projectId, onBack }) {
         ensureSaveQueue().setRevision(row.updatedAt);
         if (result.choice === 'refresh' || latest.current === overwrittenDraft) {
           setProject(row); latest.current = row; dirty.current = false; setSavedAt(Date.now()); setSaveState('saved');
+          if (result.choice === 'refresh') { resetHistory(); previewSeq.current += 1; setPreviewState('refreshing'); setPreviewError(''); }
           return true;
         }
         await flushPending();
@@ -372,9 +248,9 @@ export function CatalogEditor({ projectId, onBack }) {
         return false;
       }
     }
-  }, [addToast, ensureSaveQueue, flushPending, projectId]);
+  }, [addToast, ensureSaveQueue, flushPending, projectId, resetHistory]);
   useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
-  useEffect(() => { let cancelled = false; const generation = ++editorGeneration.current; saveQueue.current = null; latest.current = null; dirty.current = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled && generation === editorGeneration.current) { setProject(p); latest.current = p; acknowledgedRevision.current = p.updatedAt; setSavedAt(p.updatedAt); } }).catch((e) => { if (!cancelled && generation === editorGeneration.current) addToast(e.message, 'error'); }); return () => { cancelled = true; clearTimeout(timer.current); if (dirty.current && latest.current) void saveRef.current?.(latest.current); editorGeneration.current += 1; }; }, [projectId, addToast]);
+  useEffect(() => { let cancelled = false; const generation = ++editorGeneration.current; previewSeq.current += 1; setProject(null); setPreview(''); resetHistory(); saveQueue.current = null; latest.current = null; dirty.current = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled && generation === editorGeneration.current) { setProject(p); latest.current = p; acknowledgedRevision.current = p.updatedAt; setSavedAt(p.updatedAt); } }).catch((e) => { if (!cancelled && generation === editorGeneration.current) addToast(e.message, 'error'); }); return () => { cancelled = true; clearTimeout(timer.current); if (dirty.current && latest.current) void saveRef.current?.(latest.current); editorGeneration.current += 1; previewSeq.current += 1; }; }, [projectId, addToast, resetHistory]);
   useEffect(() => {
     const offs = [];
     const generation = editorGeneration.current;
@@ -383,17 +259,54 @@ export function CatalogEditor({ projectId, onBack }) {
       if (event.op === 'delete') { onBack(); return; }
       const seq = ++remoteSeq.current;
       window.api.catalogStudio.get(projectId).then((row) => {
-        if (generation === editorGeneration.current && seq === remoteSeq.current && !dirty.current) { setProject(row); latest.current = row; acknowledgedRevision.current = row.updatedAt; saveQueue.current?.setRevision(row.updatedAt); setSavedAt(row.updatedAt); }
+        if (generation !== editorGeneration.current || seq !== remoteSeq.current || dirty.current) return;
+        if (row.updatedAt === acknowledgedRevision.current) return;
+        const changed = JSON.stringify(editableProject(row)) !== JSON.stringify(editableProject(latest.current));
+        if (changed) { resetHistory(); previewSeq.current += 1; setPreviewState('refreshing'); setPreviewError(''); }
+        setProject(row); latest.current = row; acknowledgedRevision.current = row.updatedAt;
+        saveQueue.current?.setRevision(row.updatedAt); setSavedAt(row.updatedAt);
       }).catch((e) => { if (generation === editorGeneration.current && seq === remoteSeq.current) addToast(e.message, 'error'); });
     };
     if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged(refresh));
     if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => refresh({ kind: 'catalogStudio', id: projectId, op: 'update' })));
     return () => offs.forEach((off) => off?.());
-  }, [projectId, onBack, addToast]);
-  const refreshPreview = useCallback(async () => { try { const r = await window.api.catalogStudio.preview(projectId); setPreview(r.html); } catch (e) { addToast(e.message, 'error'); } }, [projectId, addToast]);
-  useEffect(() => { if (!project) return undefined; const id = setTimeout(refreshPreview, 260); return () => clearTimeout(id); }, [project, refreshPreview]);
-  function change(patch) { if (companySwitching) return; remoteSeq.current += 1; const next = { ...project, ...patch }; setProject(next); latest.current = next; dirty.current = true; setSaveState('dirty'); clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550); }
-  function updateConfig(patch) { change({ config: { ...project.config, ...patch } }); }
+  }, [projectId, onBack, addToast, resetHistory]);
+  const refreshPreview = useCallback(async () => {
+    const seq = ++previewSeq.current; const generation = editorGeneration.current;
+    setPreviewState('refreshing'); setPreviewError('');
+    try {
+      await flushPending();
+      if (seq !== previewSeq.current || generation !== editorGeneration.current) return;
+      const r = await window.api.catalogStudio.preview(projectId);
+      if (seq !== previewSeq.current || generation !== editorGeneration.current) return;
+      setPreview(r.html); setPreviewState('idle');
+    } catch (e) {
+      if (seq !== previewSeq.current || generation !== editorGeneration.current) return;
+      setPreviewState('error'); setPreviewError(parseConflictError(e) ? 'This catalog changed elsewhere. Use Save to review it, then refresh the preview.' : e.message);
+    }
+  }, [projectId, flushPending]);
+  useEffect(() => { if (!project) return undefined; const id = setTimeout(refreshPreview, 600); return () => clearTimeout(id); }, [project, refreshPreview]);
+  function applyChange(next) {
+    remoteSeq.current += 1; previewSeq.current += 1; setPreviewState('refreshing'); setPreviewError('');
+    setProject(next); latest.current = next; dirty.current = true; setSaveState('dirty');
+    clearTimeout(timer.current); timer.current = setTimeout(() => save(next), 550);
+  }
+  function change(patch) {
+    if (companySwitching) return;
+    history.current.past.push({ name: latest.current.name, description: latest.current.description, config: structuredClone(latest.current.config) });
+    if (history.current.past.length > 20) history.current.past.shift();
+    history.current.future = []; setHistoryVersion((v) => v + 1);
+    applyChange({ ...latest.current, ...patch });
+  }
+  function stepHistory(direction) {
+    if (companySwitching) return;
+    const from = direction === 'undo' ? history.current.past : history.current.future;
+    const to = direction === 'undo' ? history.current.future : history.current.past;
+    const snapshot = from.pop(); if (!snapshot) return;
+    to.push({ name: latest.current.name, description: latest.current.description, config: structuredClone(latest.current.config) });
+    setHistoryVersion((v) => v + 1); applyChange({ ...latest.current, ...snapshot });
+  }
+  function updateConfig(patch) { change({ config: { ...latest.current.config, ...patch } }); }
   async function leaveEditor() {
     try { await flushPending(); onBack(); }
     catch (error) { if (parseConflictError(error)) addToast('This catalog changed elsewhere. Use Save to review it before leaving.', 'error'); }
@@ -478,7 +391,7 @@ export function CatalogEditor({ projectId, onBack }) {
             // The design only: the products belong to this catalog, and the cover
             // title is its name. Save as template is a starting point the user
             // reviews in the builder, not a silent copy.
-            config: { ...project.config, selectionMode: 'explicit', productIds: [], brandIds: [], categoryIds: [] },
+            config: { ...project.config, cover: { enabled: project.config.cover?.enabled !== false }, selectionMode: 'explicit', productIds: [], brandIds: [], categoryIds: [] },
           })}
           title="Open this catalog's layout in the template builder — the products stay with the catalog."
         >
@@ -489,13 +402,20 @@ export function CatalogEditor({ projectId, onBack }) {
         <Button variant="primary" onClick={exportPdf}>Export PDF</Button>
       </>}
     />
-    <div className="toolbar catalog-editor-toolbar">
-      <div className="segments" role="tablist" aria-label="Catalog editor">
-        <button type="button" role="tab" aria-selected={tab === 'products'} className={`segment${tab === 'products' ? ' is-active' : ''}`} onClick={() => setTab('products')} title="Choose and arrange catalog items">Products</button>
-        <button type="button" role="tab" aria-selected={tab === 'design'} className={`segment${tab === 'design' ? ' is-active' : ''}`} onClick={() => setTab('design')} title="Style pages and product cards">Layout & design</button>
+    <div className="toolbar catalog-editor-toolbar" data-history-version={historyVersion}>
+      <Button size="sm" disabled={!history.current.past.length || companySwitching} onClick={() => stepHistory('undo')}>Undo</Button>
+      <Button size="sm" disabled={!history.current.future.length || companySwitching} onClick={() => stepHistory('redo')}>Redo</Button>
+      <div className="segments" role="tablist" aria-label="Catalog editor" onKeyDown={(e) => {
+        const tabs = [...e.currentTarget.querySelectorAll('[role="tab"]')]; const at = tabs.indexOf(e.target);
+        if (at < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+        e.preventDefault(); const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length - 1 : (at + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        tabs[next].focus(); tabs[next].click();
+      }}>
+        <button type="button" role="tab" tabIndex={tab === 'products' ? 0 : -1} aria-selected={tab === 'products'} className={`segment${tab === 'products' ? ' is-active' : ''}`} onClick={() => setTab('products')} title="Choose and arrange catalog items">Products</button>
+        <button type="button" role="tab" tabIndex={tab === 'design' ? 0 : -1} aria-selected={tab === 'design'} className={`segment${tab === 'design' ? ' is-active' : ''}`} onClick={() => setTab('design')} title="Style pages and product cards">Layout & design</button>
       </div>
     </div>
-    {tab === 'products' ? <div className="catalog-product-workspace"><ProductManager products={products} config={c} onChange={updateConfig} /><LivePreview preview={preview} onRefresh={refreshPreview} /></div> :
+    {tab === 'products' ? <div className="catalog-product-workspace"><ProductManager products={products} brands={brands} categories={categories} config={c} onChange={updateConfig} /><CatalogPreview preview={preview} onRefresh={refreshPreview} config={c} state={previewState} error={previewError} /></div> :
       <div className="catalog-editor">
         <aside className="catalog-sidebar">
           <section className="catalog-sidebar__section">
@@ -511,10 +431,24 @@ export function CatalogEditor({ projectId, onBack }) {
             coverSubtitle={{ value: c.cover?.subtitle || '', onChange: (subtitle) => updateConfig({ cover: { ...c.cover, subtitle } }) }}
           />
         </aside>
-        <LivePreview preview={preview} onRefresh={refreshPreview} />
+        <CatalogPreview preview={preview} onRefresh={refreshPreview} config={c} state={previewState} error={previewError} />
       </div>}
     <GenerationExperience open={working} title="Building your catalog" progress={progress} phase={Math.min(3, Math.floor(progress / 28))} detail={project.name} />
   </section>;
+}
+
+function useCatalogCollection(rows) {
+  const [query, setQuery] = useState(''); const [sort, setSort] = useState('recent');
+  const [page, setPage] = useState(0); const [size, setSize] = useState(50);
+  const filtered = useMemo(() => rows.filter((r) => `${r.name} ${r.description || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => sort === 'name' ? a.name.localeCompare(b.name, undefined, { numeric: true }) : Number(b.updatedAt) - Number(a.updatedAt)), [rows, query, sort]);
+  const info = paginate(filtered.length, page, size);
+  useEffect(() => { setPage(0); }, [query, sort, size]);
+  useEffect(() => { if (page !== info.currentPage) setPage(info.currentPage); }, [page, info.currentPage]);
+  return { rows: filtered.slice(info.pageStart, info.pageEnd), controls: <div className="toolbar catalog-collection-tools">
+    <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or description" aria-label="Search saved catalogs" />
+    <Select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort saved catalogs"><option value="recent">Recently updated</option><option value="name">Name</option></Select>
+  </div>, pager: <Pagination total={filtered.length} pageStart={info.pageStart} pageEnd={info.pageEnd} currentPage={info.currentPage} maxPage={info.maxPage} pageSize={size} onPageChange={setPage} onPageSizeChange={setSize} /> };
 }
 
 export function CatalogTemplates() {
@@ -530,6 +464,7 @@ export function CatalogTemplates() {
   const [templates, setTemplates] = useState([]);
   const [builderDraft, setBuilderDraft] = useState(null);
   const requestSeq = useRef(0);
+  const collection = useCatalogCollection(templates);
 
   const loadTemplates = useCallback(async () => {
     const seq = ++requestSeq.current;
@@ -569,7 +504,7 @@ export function CatalogTemplates() {
           ? projectConfig(createTemplate, title)
           // A saved template already carries a complete design; only the cover
           // title is the project's own.
-          : { ...createTemplate.config, cover: { ...(createTemplate.config.cover || {}), title } },
+          : { ...createTemplate.config, cover: { ...(createTemplate.config.cover || {}), title, subtitle: '' } },
       });
       setCreateTemplate(null);
       setName('');
@@ -619,9 +554,10 @@ export function CatalogTemplates() {
         <h2 className="section-title">My templates</h2>
         <p className="section-hint">Yours to edit, duplicate and reuse in any catalog.</p>
       </div>
+      {templates.length ? collection.controls : null}
       {templates.length ? (
         <div className="card-grid catalog-template-grid">
-          {templates.map((t) => (
+          {collection.rows.map((t) => (
             <article className="card catalog-card" key={t.id}>
               <div className="card__media">
                 <TemplateVisual template={{ id: t.config.theme || 'modern', name: t.name, config: t.config }} />
@@ -638,7 +574,7 @@ export function CatalogTemplates() {
               </div>
               <div className="card__actions">
                 <Button variant="primary" size="sm" onClick={() => begin({ ...t, builtIn: false })}>Use template</Button>
-                <Button size="sm" onClick={() => setBuilderDraft({ id: t.id, name: t.name, description: t.description || '', config: { ...t.config } })}>Edit</Button>
+                <Button size="sm" onClick={() => setBuilderDraft({ id: t.id, updatedAt: t.updatedAt, name: t.name, description: t.description || '', config: { ...t.config } })}>Edit</Button>
                 <Button size="sm" onClick={() => duplicateTemplate(t)}>Duplicate</Button>
                 <Button variant="danger" size="sm" onClick={() => deleteTemplate(t)}>Delete</Button>
               </div>
@@ -651,6 +587,7 @@ export function CatalogTemplates() {
           body="Press + New template to build one, or open a proven layout below in the builder and save your version."
         />
       )}
+      {templates.length ? <>{!collection.rows.length ? <p className="section-hint">No matching templates.</p> : null}{collection.pager}</> : null}
     </section>
 
     {/* ── proven layouts ───────────────────────────────────────────── */}
@@ -709,6 +646,7 @@ export function CatalogProjects() {
   const companyId = useAppStore((s) => s.activeCompanyId); const addToast = useAppStore((s) => s.addToast); const setActiveModule = useAppStore((s) => s.setActiveModule);
   const pendingProjectId = useAppStore((s) => s.pendingCatalogProjectId); const clearPendingCatalogNav = useAppStore((s) => s.clearPendingCatalogNav);
   const [projects, setProjects] = useState([]); const [editing, setEditing] = useState(null); const requestSeq = useRef(0);
+  const collection = useCatalogCollection(projects);
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
     if (!companyId) { setProjects([]); setEditing(null); return; }
@@ -740,9 +678,10 @@ export function CatalogProjects() {
       subtitle="Open a catalog to manage its products, order, layout and PDF."
       actions={<Button variant="primary" onClick={() => setActiveModule('catalogtemplates')}>+ New from template</Button>}
     />
+    {projects.length ? collection.controls : null}
     {projects.length ? (
       <div className="card-grid card-grid--compact">
-        {projects.map((p) => <ProjectCard key={p.id} project={p} onOpen={() => setEditing(p.id)} onDuplicate={() => duplicateProject(p)} onDelete={() => deleteProject(p)} />)}
+        {collection.rows.map((p) => <ProjectCard key={p.id} project={p} onOpen={() => setEditing(p.id)} onDuplicate={() => duplicateProject(p)} onDelete={() => deleteProject(p)} />)}
       </div>
     ) : (
       <EmptyState
@@ -751,6 +690,7 @@ export function CatalogProjects() {
         action={<Button onClick={() => setActiveModule('catalogtemplates')}>Browse templates</Button>}
       />
     )}
+    {projects.length ? <>{!collection.rows.length ? <p className="section-hint">No matching projects.</p> : null}{collection.pager}</> : null}
   </section>;
 }
 

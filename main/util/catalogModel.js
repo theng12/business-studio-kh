@@ -21,7 +21,9 @@ const CATALOG_DESIGN_KEYS = [
   'pageSize', 'orientation', 'columns', 'gapMm', 'marginMm',
   'groupBy', 'sortBy',
   'theme', 'primaryColor', 'accentColor',
-  'fields',
+  'fields', 'layoutMode', 'showImages', 'imageHeightMm', 'imageFit',
+  'cardPaddingMm', 'fontSizePt', 'boldFontSizePt', 'showBrand',
+  'headerText', 'footerText', 'pageNumbers',
   // Which price to print and the fallback symbol are print settings, the same
   // call socialGridModel makes for its priceSource / currencySymbol.
   'priceGroup', 'currencySymbol',
@@ -87,6 +89,17 @@ const DESIGN_DEFAULTS = {
   priceGroup: 'retail',
   currencySymbol: '$',
   coverEnabled: true,
+  layoutMode: 'cards',
+  showImages: true,
+  imageHeightMm: 0, // Auto: square photo.
+  imageFit: 'contain',
+  cardPaddingMm: 4,
+  fontSizePt: 8.5,
+  boldFontSizePt: 11,
+  showBrand: true,
+  headerText: '',
+  footerText: '',
+  pageNumbers: false,
 };
 
 const SELECTION_DEFAULTS = {
@@ -102,6 +115,11 @@ const clampInt = (value, min, max, fallback) => {
   return Math.max(min, Math.min(max, Math.round(n)));
 };
 
+const clampNumber = (value, min, max, fallback) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+};
+
 const pickEnum = (value, allowed, fallback) => (allowed.includes(value) ? value : fallback);
 
 const KNOWN_FIELD_KEYS = new Set(CATALOG_FIELD_KEYS.map((f) => f.key));
@@ -114,7 +132,8 @@ const isKnownFieldKey = (key) => KNOWN_FIELD_KEYS.has(key) || key.startsWith('cu
  * than stored as a row that would print an empty cell forever.
  */
 function normalizeFields(raw) {
-  const source = Array.isArray(raw) && raw.length ? raw : DEFAULT_FIELDS;
+  if (Array.isArray(raw) && raw.length === 0) return [];
+  const source = Array.isArray(raw) ? raw : DEFAULT_FIELDS;
   const seen = new Set();
   const out = [];
   for (const field of source) {
@@ -127,9 +146,10 @@ function normalizeFields(raw) {
       visible: field.visible !== false,
       bold: field.bold === true,
       showLabel: field.showLabel !== false,
+      align: pickEnum(field.align, ['left', 'center', 'right'], 'left'),
     });
   }
-  return out.length ? out : DEFAULT_FIELDS;
+  return out.length ? out : normalizeFields(DEFAULT_FIELDS);
 }
 
 /**
@@ -156,6 +176,18 @@ function normalizeCatalogConfig(raw) {
   out.primaryColor = typeof c.primaryColor === 'string' && c.primaryColor ? c.primaryColor : DESIGN_DEFAULTS.primaryColor;
   out.accentColor = typeof c.accentColor === 'string' && c.accentColor ? c.accentColor : DESIGN_DEFAULTS.accentColor;
   out.fields = normalizeFields(c.fields);
+  out.layoutMode = pickEnum(c.layoutMode, ['cards', 'list'], DESIGN_DEFAULTS.layoutMode);
+  out.showImages = c.showImages !== false;
+  const height = Number(c.imageHeightMm);
+  out.imageHeightMm = height === 0 ? 0 : clampNumber(c.imageHeightMm, 10, 100, DESIGN_DEFAULTS.imageHeightMm);
+  out.imageFit = pickEnum(c.imageFit, ['contain', 'cover'], DESIGN_DEFAULTS.imageFit);
+  out.cardPaddingMm = clampNumber(c.cardPaddingMm, 0, 20, DESIGN_DEFAULTS.cardPaddingMm);
+  out.fontSizePt = clampNumber(c.fontSizePt, 6, 24, DESIGN_DEFAULTS.fontSizePt);
+  out.boldFontSizePt = clampNumber(c.boldFontSizePt, 6, 32, DESIGN_DEFAULTS.boldFontSizePt);
+  out.showBrand = c.showBrand !== false;
+  out.headerText = typeof c.headerText === 'string' ? c.headerText.slice(0, 200) : '';
+  out.footerText = typeof c.footerText === 'string' ? c.footerText.slice(0, 200) : '';
+  out.pageNumbers = c.pageNumbers === true;
   out.priceGroup = typeof c.priceGroup === 'string' && c.priceGroup ? c.priceGroup : DESIGN_DEFAULTS.priceGroup;
   out.currencySymbol = typeof c.currencySymbol === 'string' && c.currencySymbol ? c.currencySymbol : DESIGN_DEFAULTS.currencySymbol;
 
@@ -186,6 +218,7 @@ function catalogDesignOnly(rawConfig) {
   const normalized = normalizeCatalogConfig(rawConfig);
   const out = { ...normalized };
   for (const key of CATALOG_SELECTION_KEYS) out[key] = SELECTION_DEFAULTS[key];
+  out.cover = { enabled: normalized.coverEnabled };
   return out;
 }
 
@@ -194,8 +227,34 @@ function applyCatalogDesign(design, selection = {}) {
   return normalizeCatalogConfig({ ...design, ...selection });
 }
 
+/** PDF and screen pagination share the same reserved header/footer space. */
+function catalogPageMarginsMm(rawConfig) {
+  const c = normalizeCatalogConfig(rawConfig);
+  return {
+    top: Math.max(c.marginMm, c.headerText ? 10 : 0),
+    bottom: Math.max(c.marginMm, c.footerText || c.pageNumbers ? 10 : 0),
+    left: c.marginMm, right: c.marginMm,
+  };
+}
+
+/** Native Chromium page counters: the exported PDF is also the print document. */
+function catalogPdfOptions(rawConfig) {
+  const c = normalizeCatalogConfig(rawConfig);
+  const escape = text => text.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+  const margins = catalogPageMarginsMm(c);
+  const style = `font-family:Arial,sans-serif;font-size:8px;color:#475569;width:100%;padding:0 ${Math.max(2, c.marginMm)}mm;box-sizing:border-box;`;
+  return {
+    pageSize: c.pageSize, orientation: c.orientation,
+    margins: Object.fromEntries(Object.entries(margins).map(([key, mm]) => [key, mm / 25.4])),
+    displayHeaderFooter: !!(c.headerText || c.footerText || c.pageNumbers),
+    // Empty templates suppress Chromium's automatic title, URL and date.
+    headerTemplate: `<div style="${style}">${escape(c.headerText)}</div>`,
+    footerTemplate: !c.footerText && !c.pageNumbers ? `<div style="${style}"></div>` : `<div style="${style}display:flex;gap:4mm;"><span style="flex:1">${escape(c.footerText)}</span>${c.pageNumbers ? '<span style="white-space:nowrap"><span class="pageNumber"></span> / <span class="totalPages"></span></span>' : ''}</div>`,
+  };
+}
+
 module.exports = {
   CATALOG_DESIGN_KEYS, CATALOG_SELECTION_KEYS, CATALOG_FIELD_KEYS,
   DESIGN_DEFAULTS, SELECTION_DEFAULTS, DEFAULT_FIELDS,
-  normalizeCatalogConfig, catalogDesignOnly, applyCatalogDesign, normalizeFields, isKnownFieldKey,
+  normalizeCatalogConfig, catalogDesignOnly, applyCatalogDesign, normalizeFields, isKnownFieldKey, catalogPdfOptions, catalogPageMarginsMm,
 };

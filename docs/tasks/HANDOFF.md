@@ -1,7 +1,7 @@
 # HANDOFF — Media Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.90, 2026-10-02**. If it disagrees with the
+that produced it. It was true at **v0.1.91, 2026-10-05**. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,12 +9,25 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Media Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.90** (Dashboard cards no longer squeezed shut) merged by PR #103 (`69b1cfe`) and **installed at `/Applications/Media Studio KH.app` on 2026-10-02** (DMG sha256 `3db40a5f…eb45c` in the owner's `dist/`; first launch on the live data folder: `db:ready`, `window:shown`, no errors). It sits on 0.1.89 (PR #101: one consistent UI per `docs/UI_GUIDE.md`, Overlay preview/template-shape fixes, purchase-order costing fixes, bug/feature sweep), 0.1.88 (PR #100: brand icons + admin-only purge) and 0.1.87 (PR #95: performance + data-safety audit). Replaced apps 0.1.86–0.1.89 are in the owner's `_trash/installed-apps/`; older ones (0.1.72–0.1.85) were erased with the build worktree on 2026-10-02 (see the `gh --delete-branch` rule). |
+| Current release | **0.1.91** — Catalog correctness and editing workflow improvements; arm64 DMG in the current owner's `dist/`. Prior installed app is preserved. Source integrated through the Catalog workflow PR; see Git history for its merge commit. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into the owner's `/Users/vengtheng/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` (the build worktree's own `_trash/` is not the place — it was erased with the worktree on 2026-10-02). |
-| Distribution | **One unsigned DMG per release**, `dist/Media Studio KH-<version>-arm64.dmg` — Theng's instruction of 2026-09-27 ("you only need to build 1 dmg. the arm64 until i tell you otherwise"), pinned by `test/releaseScripts.test.js`. An Intel build is still one command (`npm run dist:x64`) but ask first (AGENTS.md §20). They are handed to the owner; nothing is tagged, released, signed or published. `dist/` is gitignored. **`dist/` means the OWNER'S checkout** (`/Users/vengtheng/Developer/media-studio-kh/dist`) — that is where he looks for them. `npm run dist` writes them into the build worktree instead, so copy the release's two DMGs across before saying the release is done. **Only the newest two releases are kept** (Theng, 2026-09-26): run `npm run dmgs:prune` after a build, which moves anything older to `_trash/old-dmgs/`. |
+| Distribution | **One unsigned DMG per release**, `dist/Media Studio KH-<version>-arm64.dmg` — Theng's instruction of 2026-09-27 ("you only need to build 1 dmg. the arm64 until i tell you otherwise"), pinned by `test/releaseScripts.test.js`. An Intel build is still one command (`npm run dist:x64`) but ask first (AGENTS.md §20). They are handed to the owner; nothing is tagged, released, signed or published. `dist/` is gitignored. **`dist/` means the OWNER'S checkout** (`/Users/vengtheng/Developer/media-studio-kh/dist`) — that is where he looks for them. `npm run dist` writes them into the build worktree instead, so copy the release's one arm64 DMG across before saying the release is done. **Only the newest two releases are kept** (Theng, 2026-09-26): run `npm run dmgs:prune` after a build, which moves anything older to `_trash/old-dmgs/`. |
 | Hosted CI | **Disabled on purpose.** Before any push, `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` must return `false`. Never enable or dispatch a workflow. |
+
+## Catalog workflow — 0.1.91 (2026-10-05)
+
+Owner requested the complete Catalog audit fixes and workflow improvements. The plan is `docs/tasks/CATALOG_WORKFLOW_PLAN.md`.
+
+- Fixed wholesale starter pricing, optimistic template revisions and dirty navigation, stale project previews, zero spacing, leaked template cover content, deliberate empty fields and bulk-add scope.
+- Product picker is now `renderer/modules/CatalogStudio/ProductManager.jsx`; both-list search, brand/category filters, page/matching selection, batches, SKU paste and selected-block positioning preserve inactive/missing IDs.
+- Project undo/redo is session-only (20 snapshots), resets on remote refresh/project change, and saves through the same revision-aware queue.
+- New print controls live in the existing model/DesignControls: cards/list, photo visibility/height/fit, padding/type sizes, brand, field alignment, header/footer/page numbers. Defaults preserve prior designs. No schema bump or dependencies.
+- `CatalogPreview.jsx` builds screen sheets from the same card HTML. Screen breaks are approximate: exported PDF is authoritative. Native PDF header/footer options reserve at least10mm top/bottom only when needed. Catalog Print opens the exported PDF in Preview in standalone and client modes.
+- Local verification: `npm run check` 1248pass; `npm run test:native`212pass, no failures/skips. Build, independent agent review and PDF geometry checks passed; packaged0.1.91 launch with isolated data reached db:ready/window:shown; DMG integrity verification passed. `npm audit` reports0 vulnerabilities after updating the build-only http-cache-semantics from4.2.0 to4.3.0. No physical printer or second-Mac testing.
+- This session's owner checkout is `/Users/thengmacmini/Developer/media-studio-kh`; managed build worktree is `/Users/thengmacmini/.codex/worktrees/catalog-workflow/media-studio-kh`. Historical `/Users/vengtheng/` paths below belong to the previous Mac; use actual current paths.
+- Installed app is unchanged by this development session; the verified arm64 DMG is copied into the current owner's `dist/`. No tags/releases/publishing.
 
 ## THE WORKING LOOP
 
@@ -123,7 +136,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 
 ## OPEN / IN FLIGHT
 
-At 0.1.90 nothing is mid-implementation. The honest gaps:
+At 0.1.91 nothing is mid-implementation. The honest gaps:
 
 | Gap | State |
 |---|---|
@@ -165,3 +178,5 @@ At 0.1.90 nothing is mid-implementation. The honest gaps:
 
 If a task needs one of these, ask the owner. Do not search the filesystem for credentials, and never
 paste one into a commit, a document or a task.
+
+- Build worktrees need their own node_modules directory: npm install in predist replaces symlinked dependency trees. Both current checkout and build worktree dependencies were restored separately in this release. Prior dependency files were preserved under each checkout's _trash/catalog-workflow*/.

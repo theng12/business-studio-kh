@@ -69,6 +69,57 @@ export function idsInSortOrder(ids, productsById, sortBy) {
   return [...ids].sort((a, b) => cmp(productsById.get(a), productsById.get(b)));
 }
 
+/** Local filters never change the catalog's selection or order. */
+export function filterCatalogProducts(products, { query = '', brandId = '', categoryId = '' } = {}) {
+  const search = String(query).trim().toLowerCase();
+  return products.filter((p) => (!brandId || p.brandId === brandId)
+    && (!categoryId || p.categoryId === categoryId)
+    && (!search || `${p.sku || ''} ${p.name || ''} ${p.barcode || ''}`.toLowerCase().includes(search)));
+}
+
+/** Keep selections across filters, but prune products that left the list. */
+export function pruneCatalogSelection(selectedIds, listIds) {
+  const valid = new Set(listIds);
+  return [...new Set(selectedIds)].filter((id) => valid.has(id));
+}
+
+/** The selected block starts at a one-based final position, in catalog order. */
+export function moveCatalogBlock(ids, selectedIds, position) {
+  const target = Number(position);
+  if (!Number.isInteger(target) || target < 1) return ids;
+  const selected = new Set(selectedIds);
+  const block = ids.filter((id) => selected.has(id));
+  if (!block.length) return ids;
+  const rest = ids.filter((id) => !selected.has(id));
+  const index = Math.min(target - 1, rest.length);
+  return [...rest.slice(0, index), ...block, ...rest.slice(index)];
+}
+
+/** Never choose arbitrarily between case-insensitive SKUs from two brands. */
+export function matchCatalogSkus(text, products, includedIds = []) {
+  const bySku = new Map();
+  for (const p of products) {
+    const key = String(p.sku || '').trim().toLowerCase();
+    if (!key) continue;
+    if (!bySku.has(key)) bySku.set(key, new Map());
+    bySku.get(key).set(p.id, p);
+  }
+  const result = { addIds: [], includedSkus: [], unmatchedSkus: [], ambiguousSkus: [], inactiveSkus: [], duplicateCount: 0 };
+  const included = new Set(includedIds); const seen = new Set();
+  for (const sku of String(text).split(/[\n\r,\t]+/).map((s) => s.trim()).filter(Boolean)) {
+    const key = sku.toLowerCase();
+    if (seen.has(key)) { result.duplicateCount += 1; continue; }
+    seen.add(key);
+    const matches = [...(bySku.get(key)?.values() || [])];
+    if (!matches.length) result.unmatchedSkus.push(sku);
+    else if (matches.length > 1) result.ambiguousSkus.push(sku);
+    else if (included.has(matches[0].id)) result.includedSkus.push(sku);
+    else if (matches[0].status === 'inactive') result.inactiveSkus.push(sku);
+    else result.addIds.push(matches[0].id);
+  }
+  return result;
+}
+
 /**
  * The extra card-field rows this company can print: one per price group
  * (`price.<key>`) and one per custom field its products use (`custom.<key>`).

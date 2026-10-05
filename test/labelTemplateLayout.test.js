@@ -28,7 +28,9 @@ test('catalog studio exposes templates, projects, return navigation, and explici
   assert.match(sidebarSource, /id: 'catalogtemplates', name: 'Catalog Templates'/);
   assert.match(sidebarSource, /id: 'catalogprojects', name: 'Catalog Projects'/);
   assert.match(catalogSource, /backTo=\{\{ label: 'Catalog projects', onClick: leaveEditor \}\}/);
-  assert.match(catalogSource, />Product Library</);
-  assert.match(catalogSource, />Included in catalog</);
+  const products = fs.readFileSync(path.join(__dirname, '../renderer/modules/CatalogStudio/ProductManager.jsx'), 'utf8');
+  assert.match(catalogSource, /<ProductManager/);
+  assert.match(products, />Product Library</);
+  assert.match(products, />Included in catalog</);
   assert.match(catalogSource, /selectionMode: 'explicit'/);
 });

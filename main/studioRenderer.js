@@ -3,6 +3,7 @@ const path = require('node:path');
 const bwipjs = require('bwip-js');
 const { priceEntry, formatPriceEntry } = require('./util/prices');
 const { formatAmount } = require('./util/currencies');
+const { normalizeCatalogConfig, catalogPageMarginsMm } = require('./util/catalogModel');
 
 /* v0.1.25: resolved lazily rather than at module load.
  *
@@ -276,34 +277,36 @@ const EMPTY_CATALOG_HTML = '<div class="empty"><strong>No products have been add
  * cloning tens of MB of font CSS that is then refused bought nothing. The
  * PDF export renders in an offscreen window with no such CSP and keeps both. */
 function buildCatalogHtml({ project, products, brands = [], categories = [], company = null }, { preview = false } = {}) {
-  const c = project.config || {};
+  const rawConfig = project.config || {};
+  const c = normalizeCatalogConfig(rawConfig);
   const brandMap = new Map(brands.map((b) => [b.id, b]));
   const categoryMap = new Map(categories.map((x) => [x.id, x]));
-  const explicitSelection = c.selectionMode === 'explicit';
+  // Stored pre-template catalogs without selectionMode treated an empty list as all.
+  const explicitSelection = rawConfig.selectionMode === 'explicit';
+  const sortBy = rawConfig.sortBy == null ? 'sku' : c.sortBy;
   const manualOrder = new Map((c.productIds || []).map((id, index) => [id, index]));
   const selected = products.filter((p) => p.status !== 'inactive')
     .filter((p) => explicitSelection ? c.productIds?.includes(p.id) : (!c.productIds?.length || c.productIds.includes(p.id)))
     .filter((p) => !c.brandIds?.length || c.brandIds.includes(p.brandId))
     .filter((p) => !c.categoryIds?.length || c.categoryIds.includes(p.categoryId))
-    .sort((a, b) => c.sortBy === 'manual'
+    .sort((a, b) => sortBy === 'manual'
       ? (manualOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (manualOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
-      : String(c.sortBy === 'name' ? a.name : a.sku).localeCompare(String(c.sortBy === 'name' ? b.name : b.sku), undefined, { numeric: true }));
+      : String(sortBy === 'name' ? a.name : a.sku).localeCompare(String(sortBy === 'name' ? b.name : b.sku), undefined, { numeric: true }));
   // Script detection reads only what this document renders: the selected
   // products, not the whole catalog handed in (a template preview passes every
   // product and renders nine).
   const fonts = embeddedFontCss(JSON.stringify({ project, products: selected, brands, categories, company }), { preview });
-  const fields = c.fields || [
-    { key: 'sku', label: 'SKU', visible: true }, { key: 'name', label: 'Name', visible: true, bold: true },
-    { key: 'colorFinish', label: 'Color / Finish', visible: true }, { key: 'price', label: 'Price', visible: true, bold: true },
-  ];
+  const fields = c.fields;
   const card = (p) => {
-    const image = preview ? previewImageSrc(p.mainImagePath, p.updatedAt) : assetDataUri(p.mainImagePath);
+    const image = !c.showImages ? '' : preview ? previewImageSrc(p.mainImagePath, p.updatedAt) : assetDataUri(p.mainImagePath);
     const rows = fields.filter((f) => f.visible !== false).map((f) => {
       const value = catalogValue(p, f.key, c);
-      return value === '' || value == null ? '' : `<div class="field ${f.bold ? 'bold' : ''}">${f.showLabel === false ? '' : `<span>${esc(f.label || f.key)}</span>`}${esc(value)}</div>`;
+      return value === '' || value == null ? '' : `<div class="field ${f.bold ? 'bold' : ''}" style="text-align:${f.align}">${f.showLabel === false ? '' : `<span>${esc(f.label || f.key)}</span>`}<span class="field-value">${esc(value)}</span></div>`;
     }).join('');
     const brand = brandMap.get(p.brandId);
-    return `<article class="card">${image ? `<img class="photo" src="${image}">` : '<div class="photo placeholder">No image</div>'}<div class="card-body">${brand ? `<div class="brand">${esc(brand.name)}</div>` : ''}${rows}</div></article>`;
+    const brandHtml = c.showBrand && brand ? `<div class="brand">${esc(brand.name)}</div>` : '';
+    const body = brandHtml || rows ? `<div class="card-body">${brandHtml}${rows}</div>` : '';
+    return `<article class="card" data-product-id="${esc(p.id || '')}" data-sku="${esc(p.sku || '')}">${c.showImages ? (image ? `<img class="photo" src="${image}" alt="">` : '<div class="photo placeholder">No image</div>') : ''}${body}</article>`;
   };
   let cards = selected.map(card).join('');
   if (c.groupBy === 'brand' || c.groupBy === 'category') {
@@ -324,11 +327,16 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
   const title = c.cover?.title || project.name;
   const subtitle = c.cover?.subtitle || company?.name || '';
   const cover = c.cover?.enabled === false ? '' : `<section class="cover"><div class="cover-orb"></div><div class="eyebrow">PRODUCT CATALOG</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p><div class="cover-count">${selected.length} ${selected.length === 1 ? 'product' : 'products'}</div></section>`;
-  const cols = Math.max(1, Math.min(5, Number(c.columns) || 3));
-  const marginMm = Math.max(0, Number(c.marginMm) || 10);
+  const cols = c.layoutMode === 'list' ? 1 : c.columns;
+  const pageMargins = catalogPageMarginsMm(c);
+  const marginCss = Object.values(pageMargins).every(mm => mm === c.marginMm)
+    ? `${c.marginMm}mm`
+    : `${pageMargins.top}mm ${pageMargins.right}mm ${pageMargins.bottom}mm ${pageMargins.left}mm`;
+  const photoSize = c.imageHeightMm ? `height:${c.imageHeightMm}mm;` : 'aspect-ratio:1;';
   return `<!doctype html><html><head><meta charset="utf-8"><style>
-    ${fonts}@page{size:${c.pageSize || 'A4'} ${c.orientation || 'portrait'};margin:${marginMm}mm}*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"MS Noto Khmer","MS Noto Thai","MS Noto SC","MS Noto JP","MS Noto KR","MS Noto",Arial,sans-serif;color:#162033;-webkit-print-color-adjust:exact;print-color-adjust:exact}.cover{height:100vh;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:22mm;background:linear-gradient(145deg,${esc(c.primaryColor || '#111827')},${esc(c.accentColor || '#6366f1')});color:white;break-after:page}.cover-orb{position:absolute;width:150mm;height:150mm;border-radius:50%;right:-50mm;top:-55mm;background:rgba(255,255,255,.12);filter:blur(1px)}.eyebrow{font-size:9pt;letter-spacing:.22em;font-weight:700;opacity:.75}.cover h1{font-size:38pt;line-height:1.02;margin:6mm 0 3mm;max-width:150mm}.cover p{font-size:14pt;opacity:.78}.cover-count{margin-top:14mm;font-size:9pt;opacity:.65}.grid{display:grid;grid-template-columns:repeat(${cols},1fr);gap:${Number(c.gapMm) || 5}mm}.card{border:1px solid #e5e7eb;border-radius:${c.theme === 'minimal' ? '0' : '4mm'};overflow:hidden;break-inside:avoid;background:white}.photo{width:100%;aspect-ratio:1;object-fit:contain;background:#f8fafc;display:block}.placeholder{display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9pt}.card-body{padding:4mm}.brand{font-size:7pt;letter-spacing:.08em;text-transform:uppercase;color:${esc(c.accentColor || '#6366f1')};font-weight:700;margin-bottom:1.5mm}.field{font-size:8.5pt;color:#475569;margin-top:1mm;display:flex;gap:2mm;justify-content:space-between}.field span{color:#94a3b8}.field.bold{font-size:11pt;font-weight:700;color:#111827}.section-title{grid-column:1/-1;font-size:20pt;margin:2mm 0 4mm;color:${esc(c.primaryColor || '#111827')};break-after:avoid;page-break-after:avoid;break-inside:avoid;page-break-inside:avoid}.empty{grid-column:1/-1;max-width:420px;margin:32px auto;padding:32px 24px;border:1px dashed #d4d4d8;border-radius:8px;background:#fff;text-align:center;color:#6a6a73;font-size:13px;line-height:1.45}.empty strong{display:block;margin-bottom:4px;color:#1c1c1f;font-size:15px;font-weight:600}
-  </style></head><body>${cover}<main class="grid">${cards || EMPTY_CATALOG_HTML}</main></body></html>`;
+    ${fonts}@page{size:${c.pageSize || 'A4'} ${c.orientation || 'portrait'};margin:${marginCss}}*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"MS Noto Khmer","MS Noto Thai","MS Noto SC","MS Noto JP","MS Noto KR","MS Noto",Arial,sans-serif;color:#162033;-webkit-print-color-adjust:exact;print-color-adjust:exact}.cover{height:100vh;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;padding:22mm;background:linear-gradient(145deg,${esc(c.primaryColor || '#111827')},${esc(c.accentColor || '#6366f1')});color:white;break-after:page}.cover-orb{position:absolute;width:150mm;height:150mm;border-radius:50%;right:-50mm;top:-55mm;background:rgba(255,255,255,.12);filter:blur(1px)}.eyebrow{font-size:9pt;letter-spacing:.22em;font-weight:700;opacity:.75}.cover h1{font-size:38pt;line-height:1.02;margin:6mm 0 3mm;max-width:150mm}.cover p{font-size:14pt;opacity:.78}.cover-count{margin-top:14mm;font-size:9pt;opacity:.65}.grid{display:grid;grid-template-columns:repeat(${cols},1fr);gap:${c.gapMm}mm}.card{border:1px solid #e5e7eb;border-radius:${c.theme === 'minimal' ? '0' : '4mm'};overflow:hidden;break-inside:avoid;background:white}.photo{width:100%;${photoSize}object-fit:${c.imageFit};background:#f8fafc;display:block}.placeholder{display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:9pt}.card-body{padding:${c.cardPaddingMm}mm;min-width:0}.brand{font-size:7pt;letter-spacing:.08em;text-transform:uppercase;color:${esc(c.accentColor || '#6366f1')};font-weight:700;margin-bottom:1.5mm}.field{font-size:${c.fontSizePt}pt;color:#475569;margin-top:1mm;display:flex;gap:2mm;justify-content:space-between}.field span{color:#94a3b8}.field .field-value{color:inherit;flex:1;min-width:0;overflow-wrap:anywhere}.field>span:first-child:not(.field-value){text-align:left;min-width:0;max-width:50%;overflow-wrap:anywhere}.field.bold{font-size:${c.boldFontSizePt}pt;font-weight:700;color:#111827}.section-title{grid-column:1/-1;font-size:20pt;margin:2mm 0 4mm;color:${esc(c.primaryColor || '#111827')};break-after:avoid;page-break-after:avoid;break-inside:avoid;page-break-inside:avoid}.empty{grid-column:1/-1;max-width:420px;margin:32px auto;padding:32px 24px;border:1px dashed #d4d4d8;border-radius:8px;background:#fff;text-align:center;color:#6a6a73;font-size:13px;line-height:1.45}.empty strong{display:block;margin-bottom:4px;color:#1c1c1f;font-size:15px;font-weight:600}
+    .grid.list .card{display:flex}.grid.list .photo{width:${c.imageHeightMm || 24}mm;height:${c.imageHeightMm || 24}mm;aspect-ratio:1;flex:none}.grid.list .card-body{flex:1;display:flex;align-items:center;gap:3mm}.grid.list .field{flex:1;min-width:0;display:block;margin:0}.grid.list .field>span{display:block;overflow-wrap:anywhere}.grid.list .field>span:first-child:not(.field-value){text-align:inherit;max-width:none}.grid.list .brand{flex:none;max-width:20%;overflow-wrap:anywhere;margin:0}
+  </style></head><body>${cover}<main class="grid${c.layoutMode === 'list' ? ' list' : ''}">${cards || EMPTY_CATALOG_HTML}</main></body></html>`;
 }
 
 /* v0.1.25: `embeddedFontCss` and `esc` are exported for socialGridRenderer.js.
