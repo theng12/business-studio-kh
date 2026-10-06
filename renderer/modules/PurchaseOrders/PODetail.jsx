@@ -249,8 +249,10 @@ export function PODetail({ poId, onBack }) {
     remoteSeq.current += 1;
     const next = { ...(pendingRef.current || {}) };
     for (const [key, value] of Object.entries(patch)) {
-      const baseline = activeHeaderRef.current && key in activeHeaderRef.current ? activeHeaderRef.current[key] : header[key];
-      if ((baseline ?? '') === (value ?? '')) delete next[key];
+      const awaiting = activeHeaderRef.current && key in activeHeaderRef.current;
+      // Keep the desired value until the active write is acknowledged, even
+      // when it matches that write or reverts to the persisted header.
+      if (!awaiting && (header[key] ?? '') === (value ?? '')) delete next[key];
       else next[key] = value;
     }
     pendingRef.current = Object.keys(next).length ? next : null;
@@ -259,7 +261,10 @@ export function PODetail({ poId, onBack }) {
       revisionRef.current = header.updatedAt; queueRef.current?.setRevision(header.updatedAt);
     }
     clearTimeout(timerRef.current);
-    if (pendingRef.current) timerRef.current = setTimeout(() => ensureQueue().enqueue(pendingRef.current), 500);
+    if (pendingRef.current) timerRef.current = setTimeout(() => {
+      // The queue reads the live remaining patch after each acknowledgment.
+      void flushPending().catch(() => { /* onError keeps the draft retryable */ });
+    }, 500);
   }
 
   async function leaveEditor() { if (await saveNow()) onBack(); }

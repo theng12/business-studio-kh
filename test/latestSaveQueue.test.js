@@ -129,3 +129,19 @@ test('simultaneous static flush targets settle without alternating', async () =>
   await Promise.all([firstFlush, secondFlush]);
   assert.deepEqual(writes, ['first', 'second']);
 });
+
+test('a live flush replaces an intermediate queued snapshot and can cancel it after acknowledgment', async () => {
+  const { createLatestSaveQueue } = await import(queueUrl);
+  for (const final of [null, { name: 'Final' }]) {
+    const first = deferred(); const writes = []; const active = { name: 'Active' }; const intermediate = { name: 'Intermediate' }; let latest = active;
+    const queue = createLatestSaveQueue({
+      persist: async (value) => { writes.push(value); if (writes.length === 1) await first.promise; return { updatedAt: writes.length }; },
+      onSuccess: (_row, value) => { if (latest === value || latest === active) latest = null; },
+    });
+    const saving = queue.flush(() => latest);
+    latest = intermediate; queue.enqueue(intermediate);
+    latest = final === null ? active : final;
+    first.resolve(); await saving;
+    assert.deepEqual(writes, final === null ? [active] : [active, final]);
+  }
+});

@@ -24,7 +24,9 @@ export function createLatestSaveQueue({ persist, initialRevision = null, onStart
     running = true;
     let lastError = null;
     while (pending || waiters.length) {
-      if (!pending) pending = latestWaiterValue();
+      // A live flush owns the latest draft, including cancellation after an
+      // acknowledgment; its older queued snapshot must not win the next write.
+      if (waiters.some((waiter) => typeof waiter.value === 'function') || !pending) pending = latestWaiterValue();
       if (!pending) break;
       const value = pending;
       pending = null;

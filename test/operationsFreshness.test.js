@@ -588,3 +588,69 @@ test('PO acknowledgments and remote reads from an old context cannot replace the
     assert.deepEqual(reads, ['po-a', 'po-b'], 'old ack cannot launch a fresh read into the current editor');
   } finally { hook.cleanup(); }
 });
+
+test('PO final input replaces an intermediate autosave that queued while the first write was held', async () => {
+  for (const finalNotes of ['A', 'Original']) {
+    const first = deferred(); const writes = []; let snapshot = poSnapshot(); let back = 0;
+    const api = { purchaseOrders: {
+      getDetail: async () => structuredClone(snapshot),
+      update: async (_id, patch) => {
+        writes.push(patch);
+        if (writes.length === 1) await first.promise;
+        snapshot = { ...snapshot, header: { ...snapshot.header, ...patch, updatedAt: writes.length + 1 } };
+        return snapshot.header;
+      },
+    } };
+    const hook = hookHarness(); const { Component, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook);
+    const render = () => Component({ poId: 'po', onBack() { back += 1; } });
+    const notes = () => findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0];
+    try {
+      setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }] });
+      await hook.settle(render); await flush(); await hook.settle(render);
+      notes().props.onChange({ target: { value: 'A' } }); await hook.settle(render);
+      const saving = findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.onSave(); await hook.settle(render);
+      notes().props.onChange({ target: { value: 'B' } }); await hook.settle(render);
+      await delay(550); await hook.settle(render); // B really reaches the pending queue before the final input.
+      notes().props.onChange({ target: { value: finalNotes } }); await hook.settle(render);
+      assert.equal(notes().props.value, finalNotes, 'the unacknowledged final input stays visible');
+      const leaving = findAll(hook.getOutput(), (node) => node.props?.backTo)[0].props.backTo.onClick();
+      assert.equal(back, 0);
+      first.resolve(); await saving; await leaving; await hook.settle(render);
+      assert.equal(snapshot.header.notes, finalNotes); assert.equal(notes().props.value, finalNotes);
+      assert.equal(writes.some((patch) => patch.notes === 'B'), false, 'queued B must never persist');
+      assert.equal(writes.length, finalNotes === 'A' ? 1 : 2);
+      assert.equal(back, 1);
+      assert.equal(findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.state, 'saved');
+    } finally { hook.cleanup(); }
+  }
+});
+
+test('PO autosave-only live drafts drop a reverted field from a queued multi-field patch', async () => {
+  const first = deferred(); const writes = []; let snapshot = poSnapshot();
+  const api = { purchaseOrders: {
+    getDetail: async () => structuredClone(snapshot),
+    update: async (_id, patch) => {
+      writes.push(patch); if (writes.length === 1) await first.promise;
+      snapshot = { ...snapshot, header: { ...snapshot.header, ...patch, updatedAt: writes.length + 1 } }; return snapshot.header;
+    },
+  } };
+  const hook = hookHarness(); const { Component, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook);
+  const render = () => Component({ poId: 'po', onBack() {} });
+  const notes = () => findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0];
+  try {
+    setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }] });
+    await hook.settle(render); await flush(); await hook.settle(render);
+    notes().props.onChange({ target: { value: 'A' } }); await hook.settle(render);
+    await delay(550); await hook.settle(render); // Start A through the actual autosave path, without Save/Back.
+    assert.equal(writes.length, 1);
+    notes().props.onChange({ target: { value: 'B' } }); await hook.settle(render);
+    input(hook.getOutput(), (props) => props.value === 'PO-1').props.onChange({ target: { value: 'PO-final' } }); await hook.settle(render);
+    await delay(550); await hook.settle(render);
+    notes().props.onChange({ target: { value: 'A' } }); await hook.settle(render);
+    assert.equal(notes().props.value, 'A');
+    first.resolve(); await flush(); await hook.settle(render); await delay(550); await hook.settle(render);
+    assert.deepEqual(writes, [{ notes: 'A', expectedUpdatedAt: 1 }, { poNumber: 'PO-final', expectedUpdatedAt: 2 }]);
+    assert.equal(snapshot.header.notes, 'A'); assert.equal(snapshot.header.poNumber, 'PO-final');
+    assert.equal(findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.state, 'saved');
+  } finally { hook.cleanup(); }
+});
