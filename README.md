@@ -15,6 +15,7 @@ brother's — and is not publicly distributed.
 | Document | What it is for |
 |---|---|
 | [`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md) | The current truth for a working session: versions, commands, paths, traps, open gaps. Read first. |
+| [`docs/tasks/APP_IMPROVEMENT_PLAN.md`](docs/tasks/APP_IMPROVEMENT_PLAN.md) | Current whole-app audit and eight prioritized fix batches (2026-10-06); planned, not implemented. |
 | [`docs/Business Studio KH Project Status.md`](docs/Media%20Studio%20KH%20Project%20Status.md) | Short status page: current release, checks, release process, closed decisions. |
 | [`AGENTS.md`](AGENTS.md) (also `CLAUDE.md`) | Engineering rules for this codebase. |
 | [`docs/UI_GUIDE.md`](docs/UI_GUIDE.md) | The one UI pattern every screen follows. |
