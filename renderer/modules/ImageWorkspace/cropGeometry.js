@@ -114,6 +114,21 @@ export function moveRect(rect, dx, dy) {
   return { ...rect, x, y };
 }
 
+// Keyboard deltas use transformed-source pixels, independent of zoom/letterboxing.
+export function keyboardCropRect(rect, { key, shiftKey = false, altKey = false }, W, H, outputAspect) {
+  if (!W || !H) return rect;
+  if ((key === 'Enter' || key === ' ') && !rect) {
+    return reshapeCropRect({ x: 0.25, y: 0.25, width: 0.5, height: 0.5 }, outputAspect, W, H);
+  }
+  if (!rect || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(key)) return rect;
+  const step = shiftKey ? 10 : 1;
+  const dx = key === 'ArrowLeft' ? -step / W : key === 'ArrowRight' ? step / W : 0;
+  const dy = key === 'ArrowUp' ? -step / H : key === 'ArrowDown' ? step / H : 0;
+  if (!altKey) return moveRect(rect, dx, dy);
+  const handle = dx ? 'e' : 's';
+  return resize(rect, handle, { x: rect.x + rect.width + dx, y: rect.y + rect.height + dy }, rectAspectFromOutput(outputAspect, W, H));
+}
+
 export function containedImageBounds(imageW, imageH, boxW, boxH) {
   if (!imageW || !imageH || !boxW || !boxH) return null;
   const scale = Math.min(boxW / imageW, boxH / imageH);

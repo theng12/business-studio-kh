@@ -6,7 +6,8 @@
  * the original sku+name+barcode+secondary_code+description+color set;
  * a barcode hit looks identical to a name hit in the dropdown, so
  * users couldn't tell why a row was matching), brands (name), and
- * categories (name) for the active company. Live results as you type
+ * categories (name), plus permitted saved catalogs/templates and operations
+ * records for the active company. Live results as you type
  * with a 150ms debounce so we don't hammer the server on every keystroke.
  *
  * Keyboard model:
@@ -22,6 +23,7 @@
  *   - category → open Library with that category filtered
  *   - supplier → open Purchase Orders filtered to that supplier (v0.1.89)
  *   - po       → open that purchase order (v0.1.89)
+ *   - catalogProject / catalogTemplate → open the saved editor after flushing drafts
  * Suppliers and POs only come back for an account that may see costing —
  * the server decides (main/ipc/search.js).
  */
@@ -40,21 +42,26 @@ function kindBadge(kind) {
     case 'category': return 'Category';
     case 'supplier': return 'Supplier';
     case 'po':       return 'PO';
+    case 'catalogProject': return 'Catalog';
+    case 'catalogTemplate': return 'Template';
     default:         return kind || '';
   }
 }
 
 export function SearchPalette({ open, onClose }) {
   const setActiveModule = useAppStore((s) => s.setActiveModule);
-  const setActiveProductId = useAppStore((s) => s.setActiveProductId);
+  const openLibraryProduct = useAppStore((s) => s.openLibraryProduct);
+  const openCatalogProject = useAppStore((s) => s.openCatalogProject);
+  const openCatalogTemplate = useAppStore((s) => s.openCatalogTemplate);
+  const resetFilters = useAppStore((s) => s.resetFilters);
   const setCategoryFilter = useAppStore((s) => s.toggleCategoryFilter);
-  const clearCategoryFilter = useAppStore((s) => s.clearCategoryFilter);
   const toggleBrandFilter = useAppStore((s) => s.toggleBrandFilter);
-  const clearBrandFilter = useAppStore((s) => s.clearBrandFilter);
   const openPurchaseOrder = useAppStore((s) => s.openPurchaseOrder);
   const openPurchaseOrdersForSupplier = useAppStore((s) => s.openPurchaseOrdersForSupplier);
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
-  const canSeeCosting = hasCap(useUserCaps(), 'costing.view');
+  const userCaps = useUserCaps();
+  const canSeeCosting = hasCap(userCaps, 'costing.view');
+  const canSeeCatalog = hasCap(userCaps, 'catalog.design');
 
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -67,6 +74,9 @@ export function SearchPalette({ open, onClose }) {
   const debounceRef = useRef(null);
   /** Monotonic id for the newest search, so an older response can be ignored. */
   const searchSeq = useRef(0);
+  const resultScope = useRef(null);
+  const currentScope = `${activeCompanyId}|${query.trim()}|${canSeeCosting}|${canSeeCatalog}`;
+  const visibleResults = resultScope.current === currentScope ? results : [];
 
   // Reset state every time the palette opens, and focus the input.
   useEffect(() => {
@@ -80,7 +90,6 @@ export function SearchPalette({ open, onClose }) {
 
   // Debounced search.
   useEffect(() => {
-    if (!open) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     /* v0.1.27: every effect run claims a new sequence number, and a response
      * is only committed if it is still the newest.
@@ -95,7 +104,11 @@ export function SearchPalette({ open, onClose }) {
     const seq = (searchSeq.current += 1);
     const fresh = () => seq === searchSeq.current;
     const q = query.trim();
-    if (!q) {
+    setResults([]);
+    setHighlight(0);
+    setSearchError(null);
+    resultScope.current = null;
+    if (!open || !activeCompanyId || !q) {
       setResults([]);
       setSearchError(null);
       setSearching(false);
@@ -104,9 +117,12 @@ export function SearchPalette({ open, onClose }) {
     setSearching(true);
     debounceRef.current = setTimeout(async () => {
       try {
-        const hits = await window.api.search.global(q, 30);
+        const hits = await window.api.search.global(q, 30, activeCompanyId);
         if (fresh()) {
-          setResults(Array.isArray(hits) ? hits : []);
+          resultScope.current = currentScope;
+          setResults((Array.isArray(hits) ? hits : []).filter((r) =>
+            (!['supplier', 'po'].includes(r.kind) || canSeeCosting) &&
+            (!['catalogProject', 'catalogTemplate'].includes(r.kind) || canSeeCatalog)));
           setSearchError(null);
           setHighlight(0);
         }
@@ -119,31 +135,38 @@ export function SearchPalette({ open, onClose }) {
         if (fresh()) setSearching(false);
       }
     }, DEBOUNCE_MS);
-    return () => debounceRef.current && clearTimeout(debounceRef.current);
-  }, [query, open]);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      searchSeq.current += 1;
+    };
+  }, [query, open, activeCompanyId, canSeeCosting, canSeeCatalog, currentScope]);
 
-  function openResult(r) {
-    if (!r) return;
-    onClose?.();
+  async function openResult(r) {
+    if (!r || resultScope.current !== currentScope || searching) return;
+    const companyId = activeCompanyId;
+    let opened;
     if (r.kind === 'product') {
-      setActiveModule('library');
-      setActiveProductId(r.productId);
-    } else if (r.kind === 'brand') {
-      // The brand's own products, the same way a category result works.
-      setActiveModule('library');
-      clearBrandFilter?.();
-      toggleBrandFilter?.(r.id);
-    } else if (r.kind === 'supplier') {
-      openPurchaseOrdersForSupplier?.(r.id);
-    } else if (r.kind === 'po') {
-      openPurchaseOrder?.(r.id);
-    } else if (r.kind === 'category') {
-      setActiveModule('library');
-      // Apply the category as a filter so the Library narrows to it.
-      // Clear any existing category filter first to avoid stacking.
-      clearCategoryFilter?.();
-      setCategoryFilter?.(r.id);
+      opened = await openLibraryProduct(r.productId, companyId);
+    } else if (r.kind === 'catalogProject' && canSeeCatalog) {
+      opened = await openCatalogProject(r.id, companyId);
+    } else if (r.kind === 'catalogTemplate' && canSeeCatalog) {
+      opened = await openCatalogTemplate(r.id, companyId);
+    } else if (r.kind === 'supplier' && canSeeCosting) {
+      opened = await openPurchaseOrdersForSupplier?.(r.id);
+    } else if (r.kind === 'po' && canSeeCosting) {
+      opened = await openPurchaseOrder?.(r.id);
+    } else if (r.kind === 'brand' || r.kind === 'category') {
+      opened = await setActiveModule('library');
+      if (opened && useAppStore.getState().activeCompanyId === companyId) {
+        resetFilters();
+        if (r.kind === 'brand') {
+          toggleBrandFilter?.(r.id);
+        } else {
+          setCategoryFilter?.(r.id);
+        }
+      } else opened = false;
     }
+    if (opened) onClose?.();
   }
 
   function onKeyDown(e) {
@@ -154,7 +177,7 @@ export function SearchPalette({ open, onClose }) {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setHighlight((h) => Math.min(results.length - 1, h + 1));
+      setHighlight((h) => Math.max(0, Math.min(visibleResults.length - 1, h + 1)));
       return;
     }
     if (e.key === 'ArrowUp') {
@@ -164,7 +187,7 @@ export function SearchPalette({ open, onClose }) {
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      openResult(results[highlight]);
+      openResult(visibleResults[highlight]);
       return;
     }
   }
@@ -187,8 +210,7 @@ export function SearchPalette({ open, onClose }) {
             className="palette__input"
             type="text"
             placeholder={!activeCompanyId ? 'Pick a company first'
-              : canSeeCosting ? 'Search SKUs, products, brands, categories, suppliers, PO numbers…'
-                : 'Search SKUs, products, brands, categories…'}
+              : `Search products, brands, categories${canSeeCatalog ? ', catalogs, templates' : ''}${canSeeCosting ? ', suppliers, POs' : ''}…`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
@@ -203,11 +225,11 @@ export function SearchPalette({ open, onClose }) {
               <div className="palette__empty palette__empty--error" role="alert">
                 Search failed: {searchError}
               </div>
-            ) : results.length === 0 && !searching ? (
+            ) : visibleResults.length === 0 && !searching ? (
               <div className="palette__empty">No matches for &ldquo;{query}&rdquo;.</div>
             ) : (
               <ul role="listbox">
-                {results.map((r, i) => (
+                {visibleResults.map((r, i) => (
                   <li
                     key={`${r.kind}:${r.id}`}
                     role="option"

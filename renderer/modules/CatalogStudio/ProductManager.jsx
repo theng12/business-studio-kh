@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Field, Input, Modal, Pagination, Select, Textarea, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { appImageSrc } from '../../lib/imageUrl.js';
@@ -12,6 +12,7 @@ function ProductThumb({ product }) {
 const SORT_NAMES = { sku: 'SKU', name: 'product name' };
 
 export function ProductManager({ products, config, onChange, brands = [], categories = [] }) {
+  const availablePanel = useRef(null); const includedPanel = useRef(null);
   const [query, setQuery] = useState(''); const [includedQuery, setIncludedQuery] = useState('');
   const [brandId, setBrandId] = useState(''); const [categoryId, setCategoryId] = useState('');
   const [availablePage, setAvailablePage] = useState(0); const [availableSize, setAvailableSize] = useState(50);
@@ -55,7 +56,10 @@ export function ProductManager({ products, config, onChange, brands = [], catego
     const productIds = dropHidden ? [...visibleIds] : mergeCatalogIds(storedIds, visibleIds, keepHiddenIds);
     onChange({ productIds, selectionMode: 'explicit', brandIds: [], categoryIds: [], ...(manual ? { sortBy: 'manual' } : {}) });
   }
-  function add(ids) { commit([...includedIds, ...ids]); }
+  function focusSearch(panel, event) {
+    if (event?.currentTarget?.contains?.(globalThis.document?.activeElement)) panel.current?.querySelector('input')?.focus();
+  }
+  function add(ids, event) { focusSearch(availablePanel, event); commit([...includedIds, ...ids]); }
   function toggle(setSelection, id) { setSelection((ids) => ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]); }
   function selectRows(setSelection, rows) { setSelection((ids) => [...new Set([...ids, ...rows.map((p) => p.id)])]); }
   function move(id, direction) {
@@ -76,12 +80,12 @@ export function ProductManager({ products, config, onChange, brands = [], catego
   function pager(total, info, size, setPage, setSize) {
     return <Pagination total={total} pageStart={info.pageStart} pageEnd={info.pageEnd} currentPage={info.currentPage} maxPage={info.maxPage} pageSize={size} onPageChange={setPage} onPageSizeChange={setSize} />;
   }
-  function selectionControls(rows, matching, selection, setSelection) {
+  function selectionControls(rows, matching, selection, setSelection, panel) {
     return <div className="catalog-product-selection">
       <span>{selection.length} selected</span>
       <Button size="sm" disabled={!rows.length} onClick={() => selectRows(setSelection, rows)}>Select this page ({rows.length})</Button>
       <Button size="sm" disabled={!matching.length} onClick={() => selectRows(setSelection, matching)}>Select all matching ({matching.length})</Button>
-      <Button size="sm" variant="ghost" disabled={!selection.length} onClick={() => setSelection([])}>Clear selection</Button>
+      <Button size="sm" variant="ghost" disabled={!selection.length} onClick={(e) => { focusSearch(panel, e); setSelection([]); }}>Clear selection</Button>
     </div>;
   }
   return <section className="catalog-product-manager">
@@ -95,38 +99,43 @@ export function ProductManager({ products, config, onChange, brands = [], catego
       </div>
     </div>
     <div className="catalog-product-columns">
-      <section className="catalog-product-panel">
+      <section className="catalog-product-panel" ref={availablePanel}>
         <header><div><strong>Product Library</strong><span>{available.length} matching · {availableProducts.length} available</span></div></header>
         <div className="catalog-product-filters">
           <Field label="Search the library">{({ id }) => <Input id={id} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="SKU, name or barcode" aria-label="Search the product library" />}</Field>
           <Field label="Brand">{({ id }) => <Select id={id} value={brandId} onChange={(e) => setBrandId(e.target.value)}><option value="">All brands</option>{brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</Select>}</Field>
           <Field label="Category">{({ id }) => <Select id={id} value={categoryId} onChange={(e) => setCategoryId(e.target.value)}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</Select>}</Field>
         </div>
-        {selectionControls(availableShown, available, availableSelection, setSelectedAvailable)}
+        {selectionControls(availableShown, available, availableSelection, setSelectedAvailable, availablePanel)}
         <div className="catalog-product-batch">
-          <Button size="sm" disabled={!availableSelection.length} onClick={() => add(availableSelection)}>Add selected ({availableSelection.length})</Button>
-          <Button size="sm" disabled={!availableShown.length} onClick={() => add(availableShown.map((p) => p.id))}>Add this page ({availableShown.length})</Button>
-          <Button size="sm" disabled={!available.length} onClick={() => add(available.map((p) => p.id))}>Add all matching ({available.length})</Button>
+          {availableSelection.length ? <Button variant="primary" size="sm" onClick={(e) => add(availableSelection, e)}>Add selected ({availableSelection.length})</Button> : null}
+          <details className="catalog-product-add">
+            <summary>Add products</summary>
+            <div className="catalog-product-add__actions">
+              <Button size="sm" disabled={!availableShown.length} onClick={(e) => add(availableShown.map((p) => p.id), e)}>Add this page ({availableShown.length})</Button>
+              <Button size="sm" disabled={!available.length} onClick={(e) => add(available.map((p) => p.id), e)}>Add all matching ({available.length})</Button>
+            </div>
+          </details>
         </div>
         <div className="catalog-product-list">
           {availableShown.length ? availableShown.map((p) => <article key={p.id} className={`catalog-product-row${availableSelectedSet.has(p.id) ? ' is-selected' : ''}`}>
             <input type="checkbox" checked={availableSelectedSet.has(p.id)} onChange={() => toggle(setSelectedAvailable, p.id)} aria-label={`Select ${p.sku} from the product library`} />
             <ProductThumb product={p} />
             <div className="catalog-product-name"><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div>
-            <Button size="sm" onClick={() => add([p.id])} aria-label={`Add ${p.sku} to the catalog`}>Add</Button>
+            <Button size="sm" onClick={(e) => add([p.id], e)} aria-label={`Add ${p.sku} to the catalog`}>Add</Button>
           </article>) : <div className="catalog-product-empty">{query.trim() || brandId || categoryId ? 'No matching products outside this catalog. Change the search or filters.' : 'Every active product is already included.'}</div>}
         </div>
         {pager(available.length, availableInfo, availableSize, setAvailablePage, setAvailableSize)}
       </section>
-      <section className="catalog-product-panel catalog-product-panel--included">
+      <section className="catalog-product-panel catalog-product-panel--included" ref={includedPanel}>
         <header><div><strong>Included in catalog</strong><span>{sortBy === 'manual' ? 'Shown in catalog order' : `Printed sorted by ${sortName}; this order applies with Catalog order`}</span></div></header>
         <div className="catalog-product-search"><Field label="Search included products">{({ id }) => <Input id={id} value={includedQuery} onChange={(e) => setIncludedQuery(e.target.value)} placeholder="SKU, name or barcode" aria-label="Search included products" />}</Field></div>
-        {selectionControls(includedShown, includedMatching, includedSelection, setSelectedIncluded)}
-        <div className="catalog-product-batch">
+        {selectionControls(includedShown, includedMatching, includedSelection, setSelectedIncluded, includedPanel)}
+        {includedSelection.length ? <div className="catalog-product-batch">
           <Field label="Move selected to position" hint={`First selected product: 1–${maxMovePosition}.`}>{({ id }) => <Input id={id} type="number" min="1" max={maxMovePosition} step="1" value={movePosition} onChange={(e) => setMovePosition(e.target.value)} />}</Field>
-          <Button size="sm" disabled={!includedSelection.length || !validMove} onClick={() => commit(moveCatalogBlock(includedIds, includedSelection, movePosition), { manual: true })}>Move selected ({includedSelection.length})</Button>
-          <Button variant="danger" size="sm" disabled={!includedSelection.length} onClick={() => commit(includedIds.filter((id) => !includedSelectedSet.has(id)))}>Remove selected ({includedSelection.length})</Button>
-        </div>
+          <Button size="sm" disabled={!validMove} onClick={() => commit(moveCatalogBlock(includedIds, includedSelection, movePosition), { manual: true })}>Move selected ({includedSelection.length})</Button>
+          <Button variant="danger" size="sm" onClick={(e) => { focusSearch(includedPanel, e); commit(includedIds.filter((id) => !includedSelectedSet.has(id))); }}>Remove selected ({includedSelection.length})</Button>
+        </div> : null}
         <div className="catalog-product-list">
           {includedShown.length ? includedShown.map((p) => {
             const index = includedIndex.get(p.id);
@@ -139,7 +148,7 @@ export function ProductManager({ products, config, onChange, brands = [], catego
                 <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} up`} title="Move up" disabled={index === 0} onClick={() => move(p.id, -1)}>↑</button>
                 <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} down`} title="Move down" disabled={index === included.length - 1} onClick={() => move(p.id, 1)}>↓</button>
                 <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the bottom`} title="Move to bottom" disabled={index === included.length - 1} onClick={() => commit(moveToEdge(includedIds, p.id, 'bottom'), { manual: true })}>⤓</button>
-                <Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={() => commit(includedIds.filter((id) => id !== p.id))}>Remove</Button>
+                <Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={(e) => { focusSearch(includedPanel, e); commit(includedIds.filter((id) => id !== p.id)); }}>Remove</Button>
               </div>
             </article>;
           }) : <div className="catalog-product-empty"><strong>{includedQuery.trim() ? 'No matching included products' : 'No products added yet'}</strong><span>{includedQuery.trim() ? 'Change the search to see more products.' : 'Add products from the library to build this catalog.'}</span></div>}
@@ -147,7 +156,7 @@ export function ProductManager({ products, config, onChange, brands = [], catego
             <p>{inactive.length} inactive — hidden from the catalog. They keep their place and print again if reactivated.</p>
             {inactive.map((p) => <article key={p.id} className="is-inactive">
               <ProductThumb product={p} /><div className="catalog-product-name"><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'} · inactive — hidden from the catalog</span></div>
-              <div className="catalog-product-row-actions"><Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={() => commit(includedIds, { keepHiddenIds: hiddenIds.filter((id) => id !== p.id) })}>Remove</Button></div>
+              <div className="catalog-product-row-actions"><Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={(e) => { focusSearch(includedPanel, e); commit(includedIds, { keepHiddenIds: hiddenIds.filter((id) => id !== p.id) }); }}>Remove</Button></div>
             </article>)}
           </div> : null}
           {missingCount ? <p className="catalog-product-hidden">{missingCount} missing product{missingCount === 1 ? '' : 's'} kept in the saved order.</p> : null}

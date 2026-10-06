@@ -32,11 +32,58 @@ test('source-space crop ratio survives letterboxing, custom ratios, edge drags a
   }
 });
 
+test('keyboard crop creation, pixel steps and resizing preserve source bounds and output ratio', async () => {
+  const g = await load('renderer/modules/ImageWorkspace/cropGeometry.js');
+  for (const [W, H] of [[4000, 2000], [2000, 4000]]) {
+    for (const ratio of [null, 1, 4 / 3, 9 / 16]) {
+      let rect = g.keyboardCropRect(null, { key: 'Enter' }, W, H, ratio);
+      assert.ok(rect.width > 0 && rect.height > 0);
+      rect = { x: 0.35, y: 0.35, width: rect.width / 4, height: rect.height / 4 };
+      const moved = g.keyboardCropRect(rect, { key: 'ArrowRight', shiftKey: true }, W, H, ratio);
+      assert.ok(Math.abs((moved.x - rect.x) * W - 10) < 1e-9);
+      const up = g.keyboardCropRect(rect, { key: 'ArrowUp' }, W, H, ratio);
+      assert.ok(Math.abs((rect.y - up.y) * H - 1) < 1e-9);
+      const wider = g.keyboardCropRect(rect, { key: 'ArrowRight', altKey: true }, W, H, ratio);
+      assert.ok(Math.abs((wider.width - rect.width) * W - 1) < 1e-9);
+      const taller = g.keyboardCropRect(rect, { key: 'ArrowDown', altKey: true }, W, H, ratio);
+      assert.ok(Math.abs((taller.height - rect.height) * H - 1) < 1e-9);
+      for (const altKey of [false, true]) {
+        for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+          for (let i = 0; i < 500; i++) rect = g.keyboardCropRect(rect, { key, shiftKey: true, altKey }, W, H, ratio);
+          assert.ok(rect.x >= 0 && rect.y >= 0 && rect.width > 0 && rect.height > 0);
+          assert.ok(rect.x + rect.width <= 1 + 1e-10 && rect.y + rect.height <= 1 + 1e-10);
+          if (ratio) assert.ok(Math.abs(rect.width * W / (rect.height * H) - ratio) < 1e-9);
+        }
+      }
+      assert.equal(g.keyboardCropRect(rect, { key: 'Enter' }, W, H, ratio), rect, 'Enter must not replace an existing crop');
+      assert.equal(g.keyboardCropRect(rect, { key: 'a' }, W, H, ratio), rect);
+    }
+  }
+});
+
+test('processing recipe reflects effective processing settings, with draft crop and preview toggles excluded', async () => {
+  const { processingRecipe } = await load('renderer/modules/ImageWorkspace/processingRecipe.js');
+  const { defaultSettings } = await load('renderer/lib/workspaceSettings.js');
+  const defaults = defaultSettings();
+  assert.equal(processingRecipe(defaults), '2000 × 2000 px · PNG · 85% fill · Remove background · White canvas · No watermark');
+  const settings = { ...defaults, canvasWidth: 20, canvasHeight: 9000, productFillPct: 200, removeBackground: false,
+    rotation: -90, backgroundColor: '#123456', shadow: true, brightness: 8, contrast: -20, autoAdjust: true,
+    tone: { exposure: -50 }, detail: { sharpen: 17, denoise: 120 },
+    sourceCropRect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, cropStraighten: 9,
+    watermark: { enabled: true, relativePath: null } };
+  assert.equal(processingRecipe(settings), '64 × 8192 px · PNG · 100% fill · Keep background · #123456 canvas · Rotate 270° · Auto-adjust · Brightness +8 · Contrast -20 · Exposure -0.5 stop · Sharpen 17 · Noise reduction 100 · Watermark needs a logo');
+  const recipe = processingRecipe({ ...settings, removeBackground: true, cropRect: { x: 0, y: 0, width: 0.7, height: 1 }, watermark: { enabled: true, relativePath: 'logo.png', corner: 'tl', opacity: 0.6 } });
+  assert.match(recipe, /Shadow · Canvas crop/);
+  assert.match(recipe, /Watermark top left 60%$/);
+  assert.doesNotMatch(recipe, /Straighten|Source crop/);
+});
+
 test('actual CanvasView excludes letterboxing and processed image from crop pointer geometry', async () => {
   let cursor = 0, dirty = false, pending = [], hooks = [];
   const listeners = new Map();
-  const oldWindow = global.window, oldObserver = global.ResizeObserver;
+  const oldWindow = global.window, oldObserver = global.ResizeObserver, oldDocument = global.document;
   global.window = { addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: (name) => listeners.delete(name) };
+  global.document = { querySelector: () => null };
   global.ResizeObserver = class { observe() {} disconnect() {} };
   const React = {
     useState(initial) { const i = cursor++; hooks[i] ||= { value: initial }; return [hooks[i].value, (v) => { const next = typeof v === 'function' ? v(hooks[i].value) : v; if (next !== hooks[i].value) { hooks[i].value = next; dirty = true; } }]; },
@@ -70,12 +117,32 @@ test('actual CanvasView excludes letterboxing and processed image from crop poin
     listeners.get('mousemove')({ clientX: 210, clientY: 245 });
     assert.deepEqual(selected, { x: 0.25, y: 0.125, width: 0.25, height: 0.5 });
     assert.equal(selected.width * 4000, selected.height * 2000, 'pointer selection saves square source pixels');
+    listeners.get('mouseup')();
+    render();
+    const keys = (key, extra = {}) => ({ key, target: {}, preventDefault() {}, stopPropagation() {}, ...extra });
+    find(output, (n) => n.props?.className === 'ws-crop').props.onKeyDown(keys('Enter'));
+    assert.deepEqual(selected, { x: 0.25, y: 0, width: 0.5, height: 1 }, 'keyboard creation uses actual source aspect');
+    props = { ...props, settings: { ...props.settings, sourceCropRect: selected } };
+    render();
+    find(output, (n) => n.props?.className === 'ws-crop').props.onKeyDown(keys('ArrowRight', { shiftKey: true }));
+    assert.equal(selected.x, 0.2525);
+    const previous = selected;
+    global.document.querySelector = () => ({});
+    find(output, (n) => n.props?.className === 'ws-crop').props.onKeyDown(keys('ArrowRight'));
+    assert.equal(selected, previous, 'modal dialogs block keyboard crop edits');
+    global.document.querySelector = () => null;
     props = { ...props, cropPreview: null };
     render();
     assert.equal(find(output, (n) => n.props?.className === 'ws-crop'), null, 'loading preview cannot retain old crop geometry');
     assert.equal(find(output, (n) => n.props?.children === 'Apply crop').props.disabled, true);
+    props = { ...props, cropMode: false, viewMode: 'beforeAfter', divider: 50 };
+    render();
+    const divider = find(output, (n) => n.type === 'input' && n.props?.['aria-label'] === 'Before / after divider');
+    assert.equal(divider.props.type, 'range');
+    assert.equal(divider.props['aria-valuetext'], '50% raw, 50% processed');
+    for (const label of ['Zoom in', 'Zoom out']) assert.ok(find(output, (n) => n.type === 'button' && n.props?.['aria-label'] === label));
   } finally {
     hooks.forEach((hook) => hook?.cleanup?.());
-    global.window = oldWindow; global.ResizeObserver = oldObserver;
+    global.window = oldWindow; global.ResizeObserver = oldObserver; global.document = oldDocument;
   }
 });

@@ -51,4 +51,17 @@ function formatPriceEntry(entry, fallbackSymbol = '$') {
   return `${fallbackSymbol ?? ''}${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
-module.exports = { num, priceEntry, formatPriceEntry };
+/** True when the product row has ANY price — retail, wholesale or a price
+ *  group — read through priceEntry (HANDOFF: prices are never read off the
+ *  column or the map directly). */
+function rowHasAnyPrice(row) {
+  const product = { priceRetail: row.price_retail, priceWholesale: row.price_wholesale };
+  if (priceEntry(product, 'retail').amount != null || priceEntry(product, 'wholesale').amount != null) return true;
+  let prices;
+  try { prices = JSON.parse(row.prices || '{}') || {}; } catch (_) { prices = {}; }
+  product.prices = prices;
+  return Object.keys(prices && typeof prices === 'object' ? prices : {})
+    .some((src) => priceEntry(product, src).amount != null);
+}
+
+module.exports = { num, priceEntry, formatPriceEntry, rowHasAnyPrice };

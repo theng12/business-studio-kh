@@ -5,6 +5,7 @@ const { parseJson, getCallerUserId } = require('./_util');
 const { productAssetDir, companyDir } = require('../util/assetPath');
 const { trashPathInBackground } = require('../util/fileTrash');
 const { normalizeCurrency } = require('../util/currencies');
+const { rowHasAnyPrice } = require('../util/prices');
 
 // Late-required to break circular dependencies.
 let _companies;
@@ -107,7 +108,7 @@ function buildIdInFilter(col, values) {
 
 function list(companyId, filters = {}) {
   if (!companyId) return [];
-  const { search, brandIds, categoryIds, status, processStatus } = filters;
+  const { search, brandIds, categoryIds, status, processStatus, attentionFilter } = filters;
   const params = [companyId];
   // The indexed correlated lookups are deliberate. A previous grouped-join
   // version scanned every product_images row twice before applying the
@@ -143,6 +144,11 @@ function list(companyId, filters = {}) {
     sql += ' AND p.process_status = ?';
     params.push(processStatus);
   }
+  if (attentionFilter === 'missingBarcode') {
+    sql += " AND (p.barcode IS NULL OR TRIM(p.barcode) = '')";
+  } else if (attentionFilter === 'notExported') {
+    sql += " AND (p.process_status IS NULL OR p.process_status <> 'exported')";
+  }
   // v0.26.49: search overhaul. Three changes:
   //
   // 1. SCOPE — narrowed from 6 fields (sku, name, color_finish, tags,
@@ -175,7 +181,8 @@ function list(companyId, filters = {}) {
     params.push(term, term, term);
   }
   sql += ' ORDER BY p.updated_at DESC';
-  return getDb().prepare(sql).all(...params).map(rowToProduct);
+  const rows = getDb().prepare(sql).all(...params);
+  return (attentionFilter === 'missingPrice' ? rows.filter((row) => !rowHasAnyPrice(row)) : rows).map(rowToProduct);
 }
 
 function get(id) {

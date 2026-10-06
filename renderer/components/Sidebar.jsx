@@ -153,7 +153,7 @@ export function useUserCaps() {
   return appMode === 'client' ? caps : ALL_CAPS;
 }
 
-export function Sidebar() {
+export function Sidebar({ onSearch }) {
   const activeModule = useAppStore((s) => s.activeModule);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
   const platform = useAppStore((s) => s.platform);
@@ -297,6 +297,14 @@ export function Sidebar() {
         </div>
 
         <CompanySwitcher />
+        <button type="button" className="sidebar__item sidebar__search"
+          onClick={onSearch} title={`Search (${modKey}K)`} aria-label={`Search (${modKey}K)`}>
+          <svg className="sidebar__item-icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <circle cx="7.5" cy="7.5" r="5" stroke="currentColor" strokeWidth="1.5" />
+            <path d="m11.5 11.5 4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+          <span>Search</span><span className="sidebar__item-shortcut">{modKey}K</span>
+        </button>
 
         <nav className="sidebar__nav" aria-label="Primary">
           {NAV.filter((section) => !section.pinned).map(renderSection)}

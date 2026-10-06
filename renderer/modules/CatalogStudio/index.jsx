@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, EmptyState, Field, Input, Modal, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { shortcutBlocked } from '../../components/ShortcutsModal.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { GenerationExperience } from '../../components/GenerationExperience.jsx';
 import { useAppStore } from '../../store/index.js';
@@ -169,6 +170,7 @@ export function CatalogEditor({ projectId, onBack }) {
   const resetHistory = useCallback(() => { history.current = { past: [], future: [] }; setHistoryVersion((v) => v + 1); }, []);
   // v0.1.63: the template builder, opened from this project's design.
   const [templateDraft, setTemplateDraft] = useState(null);
+  const [designOpenSections, setDesignOpenSections] = useState({ Layout: true });
   /* v0.1.27: the pending edit is FLUSHED on unmount, not thrown away. The
    * autosave waits 550 ms, so "tweak a setting, click ← Catalog projects"
    * discarded the change silently — the debounce timer was merely cleared. */
@@ -250,7 +252,7 @@ export function CatalogEditor({ projectId, onBack }) {
     }
   }, [addToast, ensureSaveQueue, flushPending, projectId, resetHistory]);
   useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
-  useEffect(() => { let cancelled = false; const generation = ++editorGeneration.current; previewSeq.current += 1; setProject(null); setPreview(''); resetHistory(); saveQueue.current = null; latest.current = null; dirty.current = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled && generation === editorGeneration.current) { setProject(p); latest.current = p; acknowledgedRevision.current = p.updatedAt; setSavedAt(p.updatedAt); } }).catch((e) => { if (!cancelled && generation === editorGeneration.current) addToast(e.message, 'error'); }); return () => { cancelled = true; clearTimeout(timer.current); if (dirty.current && latest.current) void saveRef.current?.(latest.current); editorGeneration.current += 1; previewSeq.current += 1; }; }, [projectId, addToast, resetHistory]);
+  useEffect(() => { let cancelled = false; const generation = ++editorGeneration.current; previewSeq.current += 1; setProject(null); setPreview(''); resetHistory(); setDesignOpenSections({ Layout: true }); saveQueue.current = null; latest.current = null; dirty.current = false; window.api.catalogStudio.get(projectId).then((p) => { if (!cancelled && generation === editorGeneration.current) { setProject(p); latest.current = p; acknowledgedRevision.current = p.updatedAt; setSavedAt(p.updatedAt); } }).catch((e) => { if (!cancelled && generation === editorGeneration.current) addToast(e.message, 'error'); }); return () => { cancelled = true; clearTimeout(timer.current); if (dirty.current && latest.current) void saveRef.current?.(latest.current); editorGeneration.current += 1; previewSeq.current += 1; }; }, [projectId, addToast, resetHistory]);
   useEffect(() => {
     const offs = [];
     const generation = editorGeneration.current;
@@ -305,6 +307,13 @@ export function CatalogEditor({ projectId, onBack }) {
     const snapshot = from.pop(); if (!snapshot) return;
     to.push({ name: latest.current.name, description: latest.current.description, config: structuredClone(latest.current.config) });
     setHistoryVersion((v) => v + 1); applyChange({ ...latest.current, ...snapshot });
+  }
+  function historyShortcut(e) {
+    if (e.defaultPrevented || e.isComposing || e.nativeEvent?.isComposing || !(e.metaKey || e.ctrlKey) || e.altKey || e.key?.toLowerCase() !== 'z'
+      || shortcutBlocked(e.target, globalThis.document) || ['INPUT', 'SELECT'].includes(e.target?.tagName?.toUpperCase()) || e.target?.closest?.('[role="dialog"]')) return;
+    const direction = e.shiftKey ? 'redo' : 'undo';
+    if (companySwitching || !(direction === 'undo' ? history.current.past : history.current.future).length) return;
+    e.preventDefault(); stepHistory(direction);
   }
   function updateConfig(patch) { change({ config: { ...latest.current.config, ...patch } }); }
   async function leaveEditor() {
@@ -377,7 +386,7 @@ export function CatalogEditor({ projectId, onBack }) {
     );
   }
   const c = project.config || {};
-  return <section className="page catalog-editor-page">
+  return <section className="page catalog-editor-page" onKeyDown={historyShortcut}>
     <PageHeader
       title={project.name}
       subtitle="Catalog project"
@@ -403,8 +412,8 @@ export function CatalogEditor({ projectId, onBack }) {
       </>}
     />
     <div className="toolbar catalog-editor-toolbar" data-history-version={historyVersion}>
-      <Button size="sm" disabled={!history.current.past.length || companySwitching} onClick={() => stepHistory('undo')}>Undo</Button>
-      <Button size="sm" disabled={!history.current.future.length || companySwitching} onClick={() => stepHistory('redo')}>Redo</Button>
+      <Button size="sm" disabled={!history.current.past.length || companySwitching} onClick={() => stepHistory('undo')} title="Undo catalog edit (⌘Z / Ctrl+Z)">Undo</Button>
+      <Button size="sm" disabled={!history.current.future.length || companySwitching} onClick={() => stepHistory('redo')} title="Redo catalog edit (⌘⇧Z / Ctrl+Shift+Z)">Redo</Button>
       <div className="segments" role="tablist" aria-label="Catalog editor" onKeyDown={(e) => {
         const tabs = [...e.currentTarget.querySelectorAll('[role="tab"]')]; const at = tabs.indexOf(e.target);
         if (at < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
@@ -425,6 +434,8 @@ export function CatalogEditor({ projectId, onBack }) {
           </section>
           <DesignControls
             config={c}
+            openSections={designOpenSections}
+            onOpenSectionsChange={setDesignOpenSections}
             onChange={updateConfig}
             priceGroups={catalogPriceGroups}
             coverTitle={{ value: c.cover?.title || project.name, onChange: (title) => updateConfig({ cover: { ...c.cover, title } }) }}
@@ -452,6 +463,8 @@ function useCatalogCollection(rows) {
 }
 
 export function CatalogTemplates() {
+  const pendingTemplateId = useAppStore((s) => s.pendingCatalogTemplateId);
+  const clearPendingTemplate = useAppStore((s) => s.clearPendingCatalogTemplateNav);
   const companyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
   const openCatalogProject = useAppStore((s) => s.openCatalogProject);
@@ -463,6 +476,9 @@ export function CatalogTemplates() {
   // v0.1.63: my templates + the builder.
   const [templates, setTemplates] = useState([]);
   const [builderDraft, setBuilderDraft] = useState(null);
+  const builderIntent = useRef(0);
+  function cancelPendingTemplate() { builderIntent.current += 1; clearPendingTemplate?.(); }
+  function openBuilder(draft) { cancelPendingTemplate(); setBuilderDraft(draft); }
   const requestSeq = useRef(0);
   const collection = useCatalogCollection(templates);
 
@@ -475,6 +491,26 @@ export function CatalogTemplates() {
     } catch (e) { if (seq === requestSeq.current) addToast(e.message, 'error'); }
   }, [companyId, addToast]);
 
+  useEffect(() => {
+    if (!pendingTemplateId || !companyId) return undefined;
+    let cancelled = false;
+    const intent = ++builderIntent.current;
+    // The store's guarded navigation has already approved leaving the old draft.
+    setBuilderDraft(null);
+    const stillCurrent = () => {
+      const state = useAppStore.getState?.();
+      return !cancelled && intent === builderIntent.current && (!state || (state.activeCompanyId === companyId && state.pendingCatalogTemplateId === pendingTemplateId));
+    };
+    window.api.catalogStudio.getTemplate(pendingTemplateId).then((row) => {
+      if (!stillCurrent()) return;
+      if (!row || row.id !== pendingTemplateId || row.companyId !== companyId) throw new Error('Catalog template is no longer available in this company');
+      setBuilderDraft(row); clearPendingTemplate?.();
+    }).catch((e) => {
+      if (!stillCurrent()) return;
+      addToast(e.message, 'error'); clearPendingTemplate?.();
+    });
+    return () => { cancelled = true; };
+  }, [pendingTemplateId, companyId, clearPendingTemplate, addToast]);
   useEffect(() => { void loadTemplates(); }, [loadTemplates]);
   useEffect(() => {
     const offs = [];
@@ -485,6 +521,7 @@ export function CatalogTemplates() {
   }, [loadTemplates]);
 
   function begin(template) {
+    cancelPendingTemplate();
     setCreateTemplate(template);
     setName(template.name);
   }
@@ -520,8 +557,8 @@ export function CatalogTemplates() {
     return (
       <CatalogTemplateBuilder
         draft={builderDraft}
-        onClose={() => setBuilderDraft(null)}
-        onSaved={() => { setBuilderDraft(null); void loadTemplates(); }}
+        onClose={() => openBuilder(null)}
+        onSaved={() => { openBuilder(null); void loadTemplates(); }}
       />
     );
   }
@@ -541,7 +578,7 @@ export function CatalogTemplates() {
       actions={(
         <>
           <Button onClick={() => setActiveModule('catalogprojects')}>View projects</Button>
-          <Button variant="primary" onClick={() => setBuilderDraft({ name: '', description: '', config: {} })} disabled={!companyId}>
+          <Button variant="primary" onClick={() => openBuilder({ name: '', description: '', config: {} })} disabled={!companyId}>
             + New template
           </Button>
         </>
@@ -574,7 +611,7 @@ export function CatalogTemplates() {
               </div>
               <div className="card__actions">
                 <Button variant="primary" size="sm" onClick={() => begin({ ...t, builtIn: false })}>Use template</Button>
-                <Button size="sm" onClick={() => setBuilderDraft({ id: t.id, updatedAt: t.updatedAt, name: t.name, description: t.description || '', config: { ...t.config } })}>Edit</Button>
+                <Button size="sm" onClick={() => openBuilder({ id: t.id, updatedAt: t.updatedAt, name: t.name, description: t.description || '', config: { ...t.config } })}>Edit</Button>
                 <Button size="sm" onClick={() => duplicateTemplate(t)}>Duplicate</Button>
                 <Button variant="danger" size="sm" onClick={() => deleteTemplate(t)}>Delete</Button>
               </div>
@@ -608,8 +645,8 @@ export function CatalogTemplates() {
             </div>
             <div className="card__actions">
               <Button variant="primary" size="sm" onClick={() => begin(template)}>Use template</Button>
-              <Button size="sm" onClick={() => setPreviewTemplate(template)}>Preview</Button>
-              <Button size="sm" onClick={() => setBuilderDraft({ name: `${template.name} (mine)`, description: template.description, config: clone(template.config) })}>Open in builder</Button>
+              <Button size="sm" onClick={() => { cancelPendingTemplate(); setPreviewTemplate(template); }}>Preview</Button>
+              <Button size="sm" onClick={() => openBuilder({ name: `${template.name} (mine)`, description: template.description, config: clone(template.config) })}>Open in builder</Button>
             </div>
           </article>
         ))}

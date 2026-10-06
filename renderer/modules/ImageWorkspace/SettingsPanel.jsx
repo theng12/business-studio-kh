@@ -1,6 +1,7 @@
 import { Button, Input, SliderField } from '../../components/ui.jsx';
 import { Section } from '../../components/Section.jsx';
 import { FILL_SWATCHES, MARKETPLACE_PRESETS, WATERMARK_CORNERS, getPreset } from '../../lib/presets.js';
+import { processingRecipe } from './processingRecipe.js';
 
 export function SettingsPanel({
   settings,
@@ -343,6 +344,8 @@ export function SettingsPanel({
           docs/UI_GUIDE.md); it was a third full-width button here with a
           left-aligned label, and the same action twice on one screen. */}
       <div className="ws-panel__actions">
+        <p className="ws-processing-recipe" aria-label="Processing recipe">{processingRecipe(settings)}</p>
+        {settings.sourceCropRect ? <p className="ws-hint">Crop area is a draft. Use Apply crop below the canvas first.</p> : null}
         <Button
           block
           onClick={onApplyThis}
@@ -356,10 +359,10 @@ export function SettingsPanel({
           onClick={onApplyAll}
           disabled={!hasImage || processing || totalImages < 1}
         >
-          Apply to all{totalImages > 0 ? ` (${totalImages})` : ''}
+          Apply to all {totalImages} {totalImages === 1 ? 'image' : 'images'}
         </Button>
         <p className="ws-hint ws-hint--center">
-          Settings save automatically. Apply runs the processing: background removal, canvas and watermark.
+          Settings save automatically. Apply processes images using this recipe.
         </p>
       </div>
     </aside>
