@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const sharp = require('sharp');
+const { exportSubfolder, containedMediaPath } = require('./util/mediaPaths');
 const { getDataDir } = require('./db');
 const products = require('./db/products');
 const productImages = require('./db/productImages');
@@ -161,7 +162,7 @@ function expectedOutputs({ profile, productIds }) {
   if (!profile || !Array.isArray(productIds) || productIds.length === 0) {
     return { totalExpected: 0, entries: [] };
   }
-  const subfolder = profile.outputSubfolder || '';
+  const subfolder = exportSubfolder(profile.outputSubfolder);
   const ext = profile.format === 'png' ? '.png'
             : profile.format === 'webp' ? '.webp'
             : profile.format === 'avif' ? '.avif'
@@ -203,7 +204,7 @@ function previewCollisions({ profile, productIds, outputRoot }) {
   const { totalExpected, entries } = expectedOutputs({ profile, productIds });
   const collisions = [];
   for (const { rel, sku } of entries) {
-    const direct = path.join(outputRoot, rel);
+    const direct = containedMediaPath(outputRoot, rel);
     if (fs.existsSync(direct)) collisions.push({ name: path.basename(direct), sku });
   }
   return {
@@ -293,13 +294,11 @@ async function processOneImage({ sourceAbs, profile, outPath }) {
 async function runExport({ profile, productIds, outputRoot, onProgress, onExisting = 'keepBoth', saveToLibrary = false, isCancelled = null }) {
   if (!profile) throw new Error('Profile is required');
   if (!outputRoot) throw new Error('Output folder is required');
+  const outputPath = containedMediaPath(outputRoot, exportSubfolder(profile.outputSubfolder), 'Output subfolder', true);
   if (!Array.isArray(productIds) || productIds.length === 0) {
     return { exported: 0, skipped: 0, products: 0, outputPath: outputRoot, skips: [] };
   }
 
-  const outputPath = profile.outputSubfolder
-    ? path.join(outputRoot, profile.outputSubfolder)
-    : outputRoot;
   fs.mkdirSync(outputPath, { recursive: true });
 
   const ext = profile.format === 'png' ? '.png'
@@ -408,6 +407,8 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       // v0.26.24: collision-aware resolver. Returns { outPath, action }
       // where action drives the per-iteration branch below.
       const { outPath: outFile, action, inRun } = resolveOutputPath(outputPath, base, ext, onExisting, claimed);
+
+      containedMediaPath(outputRoot, path.relative(path.resolve(outputRoot), outFile));
 
       if (action === 'skip') {
         // File already exists at the canonical path and user chose

@@ -33,6 +33,7 @@
  */
 
 const { ipcMain, app, BrowserWindow } = require('electron');
+const { containedMediaPath } = require('../util/mediaPaths');
 // v0.49.43: 429 retry/backoff math (pure helper — no electron dep).
 const { retryWaitMs, shouldRetry } = require('../util/rateLimitRetry');
 // v0.1.18: the shared argument check, so client-mode local channels validate
@@ -1889,10 +1890,8 @@ function registerClientImageImportBridges() {
     const written = [];
 
     for (const f of files) {
-      const rel = String(f?.relPath || '').replace(/^\/+/, '');
-      if (!rel || rel.includes('..')) continue;
-      let dest = path.resolve(outRootAbs, rel);
-      if (!dest.startsWith(outRootAbs + path.sep) && dest !== outRootAbs) continue;
+      const rel = f?.relPath;
+      let dest = containedMediaPath(outRootAbs, rel);
 
       await fsp.mkdir(path.dirname(dest), { recursive: true });
       const bytes = Buffer.from(f.bytes);
@@ -1959,12 +1958,7 @@ function registerClientImageImportBridges() {
     const outRootAbs = path.resolve(outputRoot);
     const collisions = [];
     for (const { rel, sku } of (entries || [])) {
-      const cleaned = String(rel || '').replace(/^\/+/, '');
-      if (!cleaned || cleaned.includes('..')) continue;
-      const dest = path.resolve(outRootAbs, cleaned);
-      // Stay inside outputRoot (defensive — server-computed names
-      // never escape, but the wire is treated as hostile).
-      if (!dest.startsWith(outRootAbs + path.sep) && dest !== outRootAbs) continue;
+      const dest = containedMediaPath(outRootAbs, rel);
       try {
         if (fs.existsSync(dest)) collisions.push({ name: path.basename(dest), sku });
       } catch { /* ignore unreadable path */ }

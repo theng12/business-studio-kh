@@ -25,6 +25,14 @@
  * => ...)` the validator gets `{ id, patch }`.
  */
 
+const { exportSubfolder, relativeMediaPath } = require('../util/mediaPaths');
+
+function validateExportProfile(input) {
+  if (!isObject(input)) return 'profile must be an object';
+  try { exportSubfolder(input.outputSubfolder); } catch (err) { return err.message; }
+  return true;
+}
+
 function isString(v)  { return typeof v === 'string'; }
 function isObject(v)  { return v != null && typeof v === 'object' && !Array.isArray(v); }
 function isArray(v)   { return Array.isArray(v); }
@@ -321,8 +329,11 @@ const VALIDATORS = {
 
   // Exports --------------------------------------------------------
   'exports:getProfile':     requireStringArg('profile id'),
-  'exports:createProfile':  (a) => isObject(a) ? true : 'create payload must be an object',
-  'exports:updateProfile':  requireFields('id', 'patch'),
+  'exports:createProfile':  validateExportProfile,
+  'exports:updateProfile':  (a) => {
+    const shape = requireFields('id', 'patch')(a);
+    return shape === true ? validateExportProfile(a.patch) : shape;
+  },
   'exports:removeProfile':  requireStringArg('profile id'),
   'exports:duplicateProfile': requireStringArg('profile id'),
   // v0.1.89: the run id is the export's progress-event id.
@@ -823,6 +834,13 @@ const VALIDATORS = {
   'labels:previewDraft': (a) => {
     if (!isObject(a)) return 'expected an object with template';
     if (!isObject(a.template)) return 'template must be an object';
+    if (a.template.elements != null && !isArray(a.template.elements)) return 'template elements must be an array';
+    for (const el of a.template.elements || []) {
+      if (!isObject(el)) return 'template element must be an object';
+      if (['image', 'cert'].includes(el.type) && el.src != null && el.src !== '') {
+        try { relativeMediaPath(el.src, 'Artwork image path'); } catch (err) { return err.message; }
+      }
+    }
     return true;
   },
   'labels:barcodePreview':    (a) => isObject(a) ? true : 'expected an object',

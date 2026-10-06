@@ -447,3 +447,22 @@ test('registered client keepBoth export does not overwrite after suffix 999', as
     }
   });
 });
+
+test('registered client exports and collision checks refuse escaping symlinks and malformed relative paths', async () => {
+  await withTempDir(async (root) => {
+    const out = path.join(root, 'out');
+    const outside = path.join(root, 'outside');
+    await fsp.mkdir(out); await fsp.mkdir(outside);
+    await fsp.symlink(outside, path.join(out, 'link'));
+    for (const rel of ['link/export.png', '../outside/export.png', '/absolute.png', 'C:\\outside.png']) {
+      const harness = loadClientHarness({ rpcResult: async (channel) => channel === 'exports:runForClient'
+        ? { files: [{ relPath: rel, bytes: Buffer.from('new') }], skipped: 0, skips: [] }
+        : { totalExpected: 1, entries: [{ rel, sku: 'SKU' }] } });
+      try {
+        await assert.rejects(harness.handlers.get('exports:run')({}, { profileId: 'p', productIds: [], outputRoot: out }), /path|root|relative/i);
+        await assert.rejects(harness.handlers.get('exports:checkCollisions')({}, { profileId: 'p', productIds: [], outputRoot: out }), /path|root|relative/i);
+      } finally { harness.restore(); }
+    }
+    assert.deepEqual(await fsp.readdir(outside), []);
+  });
+});
