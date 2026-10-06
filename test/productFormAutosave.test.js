@@ -51,7 +51,7 @@ test('autosave, explicit Save and navigation share the latest-save queue', () =>
   assert.doesNotMatch(FLUSH, /autoSavePayload\.current = null|catch/);
   assert.match(SAVE, /await flushOwed\(\)/);
   assert.match(FORM, /saveQueue\.current\?\.enqueue\(owed\)/);
-  assert.match(FORM, /persist: \(draft, expectedUpdatedAt\) => updateProduct\(id/);
+  assert.match(blockAfter(FORM, 'persist: (draft, expectedUpdatedAt) =>'), /return updateProduct\(id/);
 });
 
 test('selection and all navigation exits await persistence before repointing or unmounting', () => {

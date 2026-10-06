@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Field, Input, Modal } from '../../components/ui.jsx';
 
 const SECTOR_OPTIONS = ['Retail', 'Wholesale', 'B2B', 'D2C', 'Marketplace'];
@@ -21,11 +21,16 @@ export function CompanyForm({ open, company, onClose, onSubmit, onDelete }) {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const isEdit = !!company;
+  const editorGeneration = useRef(0);
 
   useEffect(() => {
-    if (!open) return;
-    setForm(company ? companyToForm(company) : emptyForm());
-    setError(null);
+    editorGeneration.current += 1;
+    setSaving(false);
+    if (open) {
+      setForm(company ? companyToForm(company) : emptyForm());
+      setError(null);
+    }
+    return () => { editorGeneration.current += 1; };
   }, [open, company]);
 
   function toggleSector(s) {
@@ -40,14 +45,16 @@ export function CompanyForm({ open, company, onClose, onSubmit, onDelete }) {
       setError('Company name is required');
       return;
     }
+    const generation = editorGeneration.current;
+    const current = () => generation === editorGeneration.current;
     setSaving(true);
     try {
       const saved = await onSubmit({ name: form.name.trim(), color: form.color, sectors: form.sectors });
-      if (saved !== false) onClose();
+      if (saved !== false && current()) onClose();
     } catch (err) {
-      setError(err.message);
+      if (current()) setError(err.message);
     } finally {
-      setSaving(false);
+      if (current()) setSaving(false);
     }
   }
 
