@@ -197,3 +197,30 @@ test('JPEG, WebP and AVIF artwork embed their actual MIME type', async () => {
     }
   });
 });
+
+test('imported SVG brand logos keep compact label previews and correctly typed full artwork', async () => {
+  await fixture(async (dataDir) => {
+    const rel = 'brands/acme/logo.svg';
+    const abs = path.join(dataDir, 'assets', rel);
+    const svg = '\uFEFF<?xml version="1.0" encoding="UTF-8"?>\n<!-- an imported vector logo with a declaration longer than the preview header -->\n<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="red"/></svg>';
+    await fsp.mkdir(path.dirname(abs), { recursive: true });
+    await fsp.writeFile(abs, svg);
+    const studio = load('main/studioRenderer.js', { './db': { getDataDir: () => dataDir } });
+    const args = {
+      template: { widthMm: 50, heightMm: 25, elements: [{ type: 'logo', x: 0, y: 0, width: 10, height: 10 }] },
+      products: [{ id: 'p', brandId: 'brand', sku: 'SKU' }],
+      brands: [{ id: 'brand', icon: rel, updatedAt: 123 }],
+    };
+    const preview = await studio.labelsDocument({ ...args, preview: true });
+    assert.match(preview, /<img src="app-image:\/\/local\/brands%2Facme%2Flogo\.svg\?v=123"/);
+    const full = await studio.labelsDocument(args);
+    const expected = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+    assert.ok(full.includes(`<img src="${expected}"`));
+    assert.equal(studio.assetDataUri(rel), expected);
+    // A .svg name and an SVG embedded inside HTML do not make an SVG image.
+    await fsp.writeFile(abs, '<!doctype html><html><body><svg xmlns="http://www.w3.org/2000/svg"></svg></body></html>');
+    await assert.rejects(studio.labelsDocument({ ...args, preview: true }), /image|media/i);
+    await assert.rejects(studio.labelsDocument(args), /image|media/i);
+    assert.throws(() => studio.assetDataUri(rel), /image|media/i);
+  });
+});

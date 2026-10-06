@@ -60,17 +60,21 @@ function artworkPath(dataDir, rel) {
   return containedMediaPath(root, imageRel, 'Artwork image path');
 }
 
-// Byte signatures, not a filename's claimed extension, select the image MIME.
-// ponytail: signatures identify the raster kind, not full decodability; use
-// decoder verification if corrupt-image diagnostics require it. SVG/HTML and arbitrary files are
-// never embedded as an image. HEIC detection is shared with the importer.
+// Byte signatures/document root, not a filename's claimed extension, select MIME.
+// ponytail: identify image kinds rather than fully validate decodability; use
+// decoder verification if corrupt-image diagnostics require it. HTML/text are
+// rejected; SVG is used only as an <img> source. HEIC uses the importer detector.
 function imageMime(bytes) {
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
   if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
   if (bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
   if (isHeicBuffer(bytes)) return 'image/heic';
   if (bytes.length >= 12 && bytes.toString('ascii', 4, 8) === 'ftyp' && ['avif', 'avis'].includes(bytes.toString('ascii', 8, 12))) return 'image/avif';
-  throw new Error('Artwork must contain a supported image (JPEG, PNG, WebP, HEIC or AVIF)');
+  // Imported SVGs can start with a BOM, declaration, comments or a doctype.
+  // Require the image document root; an <svg> nested in HTML is not artwork.
+  const text = bytes.toString('utf8');
+  if (/^\uFEFF?\s*(?:(?:<\?xml[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE\s+svg\b[^>]*>)\s*)*<(?:[A-Za-z_][\w.-]*:)?svg(?:\s|\/?>)/.test(text)) return 'image/svg+xml';
+  throw new Error('Artwork must contain a supported image (JPEG, PNG, WebP, HEIC, AVIF or SVG)');
 }
 
 // A missing valid reference keeps the existing empty-artwork behavior. Unsafe
@@ -83,7 +87,9 @@ function readArtwork(dataDir, rel, { headerOnly = false } = {}) {
     fd = fs.openSync(abs, 'r');
     if (!fs.fstatSync(fd).isFile()) throw new Error('Artwork must be an image file');
     let bytes;
-    if (headerOnly) {
+    // SVG declarations/comments can extend beyond a small raster header.
+    // Read that supported imported format fully to identify its document root.
+    if (headerOnly && path.extname(abs).toLowerCase() !== '.svg') {
       bytes = Buffer.alloc(32);
       const size = fs.readSync(fd, bytes, 0, bytes.length, 0);
       bytes = bytes.subarray(0, size);
