@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Badge } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -6,6 +6,7 @@ import { confirm } from '../../components/ConfirmModal.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
 import { useUserCaps } from '../../components/Sidebar.jsx';
 import { hasCap } from '../../lib/capabilities.js';
+import { resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { CompanyForm } from './CompanyForm.jsx';
 
 /**
@@ -48,11 +49,29 @@ export function Companies() {
   const canDelete = Array.isArray(caps) && caps.includes('*');
 
   const [editing, setEditing] = useState(null);
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
 
   async function handleSubmit(payload) {
     if (editing && editing.id) {
-      const updated = await updateCompany(editing.id, payload);
-      addToast(`Saved ${updated.name}`, 'success');
+      const snapshot = editing;
+      try {
+        const updated = await updateCompany(snapshot.id, { ...payload, expectedUpdatedAt: snapshot.updatedAt });
+        addToast(`Saved ${updated.name}`, 'success');
+      } catch (error) {
+        const result = await resolveSaveConflict(error, {
+          refresh: async () => {
+            const fresh = await window.api.companies.get(snapshot.id);
+            if (!fresh) throw new Error('Company no longer exists');
+            await useAppStore.getState().refreshCompanies();
+            if (editingRef.current === snapshot) setEditing(fresh);
+            return fresh;
+          },
+          overwrite: () => updateCompany(snapshot.id, payload),
+        });
+        if (result.choice !== 'overwrite') return false;
+        addToast(`Overwrote ${result.row.name}`, 'success');
+      }
     } else {
       const created = await createCompany(payload);
       addToast(`Created ${created.name}`, 'success');

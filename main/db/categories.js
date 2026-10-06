@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
-const { getCallerUserId } = require('./_util');
+const { getCallerUserId, prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
 
 // v0.1.89: audit log (History → Brands/Categories filters were always empty
 // because only products and images were logged). Late-required, the same
@@ -92,6 +92,7 @@ function create({ companyId, name, parentId }) {
 function update(id, patch) {
   const existing = get(id);
   if (!existing) throw new Error('Category not found');
+  patch = prepareOptimisticPatch(existing, patch, 'category');
   if (patch.name && patch.name.trim().toLowerCase() !== existing.name.toLowerCase()) {
     const clash = getByName(existing.companyId, patch.name);
     if (clash) throw new Error(`Category "${patch.name}" already exists`);
@@ -103,7 +104,7 @@ function update(id, patch) {
   if (sets.length === 0) return existing;
   sets.push('updated_at = @updatedAt');
   sets.push('updated_by_user_id = @updatedByUserId');
-  params.updatedAt = Date.now();
+  params.updatedAt = nextUpdatedAt(existing.updatedAt);
   params.updatedByUserId = getCallerUserId();
   getDb().prepare(`UPDATE categories SET ${sets.join(', ')} WHERE id = @id`).run(params);
   const auditPatch = {};

@@ -141,7 +141,7 @@ test('a photo deleted on its own comes back too, at the end of the gallery', { s
   const { dataDir, product, files } = fixture({ sku: 'REC-2', images: 3 });
   const doomed = files[1]; // the middle one: deleting it renumbers the third
 
-  productImages.remove(product.id, doomed);
+  productImages.remove(product.id, productImages.listByProduct(product.id).find((row) => row.filepath === doomed).id);
 
   // The path `REC-2-002.jpg` exists again immediately — renumberFiles promoted
   // the third photo into it. So the assertion has to be about the BYTES, which
