@@ -56,36 +56,6 @@ function contextFor(rawConfig) {
   return { companyId, config, products, brands, brandNames, selected };
 }
 
-/** Scale every pixel-valued setting so a preview looks exactly like the
- *  export, just smaller. Scaling the canvas without the type sizes would
- *  change the layout, so both move together. */
-function scaledConfig(config, factor) {
-  const f = (n) => Math.max(1, Math.round(n * factor));
-  return normalizeConfig({
-    ...config,
-    width: f(config.width),
-    height: f(config.height),
-    padding: f(config.padding),
-    gap: f(config.gap),
-    radius: f(config.radius),
-    nameSize: f(config.nameSize),
-    priceSize: f(config.priceSize),
-    metaSize: f(config.metaSize),
-    titleSize: f(config.titleSize),
-    subtitleSize: f(config.subtitleSize),
-    footerSize: f(config.footerSize),
-    // v0.1.81: overlay text/image sizes and their px nudges are pixel values
-    // too. Scaling them keeps a watermark the same relative size in the preview
-    // render as in the exported file — the whole point of `scaledConfig`.
-    overlays: (config.overlays || []).map((o) => ({
-      ...o,
-      size: f(o.size),
-      offsetX: f(o.offsetX),
-      offsetY: f(o.offsetY),
-    })),
-  });
-}
-
 /**
  * Render one page to image bytes at exactly the configured pixel size.
  *
@@ -96,13 +66,16 @@ function scaledConfig(config, factor) {
  * identical everywhere. `fit: 'fill'` cannot distort anything here because
  * the capture has the same aspect ratio as the target.
  */
-async function renderPageBytes(products, brands, config, pageIndex, pageCount, format, quality) {
+async function renderPageBytes(products, brands, config, pageIndex, pageCount, format, quality, maxPx = null) {
   const html = buildPageHtml({
     products, brands, config, pageIndex, pageCount, resolveImage: assetDataUri,
   });
   const raw = await withWindow(html, { width: config.width, height: config.height, zoomFactor: 1 },
     (win) => win.webContents.capturePage());
-  const base = sharp(raw.toPNG()).resize(config.width, config.height, { fit: 'fill' });
+  const factor = maxPx ? Math.min(1, maxPx / Math.max(config.width, config.height)) : 1;
+  const width = Math.max(1, Math.round(config.width * factor));
+  const height = Math.max(1, Math.round(config.height * factor));
+  const base = sharp(raw.toPNG()).resize(width, height, { fit: 'fill' });
   return format === 'jpeg'
     ? base.jpeg({ quality }).toBuffer()
     : base.png({ compressionLevel: 9 }).toBuffer();
@@ -204,25 +177,23 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     };
   });
 
-  /** A real, scaled-down render of page 1 as a data URL — what the user
-   *  actually sees in the preview pane. */
+  /** A real render of the saved design, resized only after capture for the
+   *  preview pane. */
   expose('socialGrid:preview', async ({ config, pageIndex = 0 } = {}) => {
     const ctx = contextFor(config);
     const pages = paginate(ctx.selected, ctx.config);
     const pageCount = pages.length;
     const idx = Math.min(Math.max(0, Number(pageIndex) || 0), Math.max(0, pageCount - 1));
-    const factor = PREVIEW_MAX / Math.max(ctx.config.width, ctx.config.height);
-    const previewConfig = scaledConfig(ctx.config, Math.min(1, factor));
-
     const summary = summarize(ctx.products, ctx.config, ctx.brandNames);
     if (!ctx.selected.length) {
       return { dataUrl: null, summary, pageCount: 0, pageIndex: 0 };
     }
 
     const bytes = await renderPageBytes(
-      pages[idx], ctx.brands, previewConfig, idx, pageCount,
+      pages[idx], ctx.brands, ctx.config, idx, pageCount,
       ctx.config.format === 'jpeg' ? 'jpeg' : 'png',
       Math.min(85, ctx.config.quality),
+      PREVIEW_MAX,
     );
     const mime = ctx.config.format === 'jpeg' ? 'image/jpeg' : 'image/png';
     return { dataUrl: `data:${mime};base64,${bytes.toString('base64')}`, summary, pageCount, pageIndex: idx };

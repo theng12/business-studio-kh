@@ -20,8 +20,8 @@ const { resolvePriceEntry, formatPriceWithEntry, describeStock, normalizeConfig 
 /* ── v0.1.81: overlays ───────────────────────────────────────────────
  * Text or image marks drawn over the whole post — a handle, a logo, a faint
  * diagonal "@shop". Everything is inline-styled from the config so a preview
- * at 1/6 scale and the exported file are the same markup at different sizes
- * (main/ipc/socialGrid.js scales the numbers, nothing else changes).
+ * preview and export use the same full-size markup; the preview capture is
+ * reduced only after rendering (main/ipc/socialGrid.js).
  */
 const ANCHOR_CSS = {
   tl: 'left:0;top:0',            tc: 'left:50%;top:0',        tr: 'right:0;top:0',
