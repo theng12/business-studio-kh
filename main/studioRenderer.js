@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const bwipjs = require('bwip-js');
+const { readArtwork } = require('./util/mediaPaths');
 const { priceEntry, formatPriceEntry } = require('./util/prices');
 const { formatAmount } = require('./util/currencies');
 const { normalizeCatalogConfig, catalogPageMarginsMm } = require('./util/catalogModel');
@@ -77,21 +78,10 @@ function esc(value) {
   }[c]));
 }
 
-function fileDataUri(abs) {
-  if (!abs || !fs.existsSync(abs)) return '';
-  const ext = path.extname(abs).toLowerCase();
-  const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
-  return `data:${mime};base64,${fs.readFileSync(abs).toString('base64')}`;
-}
-
 function assetDataUri(rel) {
-  if (!rel) return '';
-  const candidates = [
-    path.join(getDataDir(), 'assets', rel),
-    path.join(getDataDir(), rel),
-    path.isAbsolute(rel) ? rel : '',
-  ].filter(Boolean);
-  return fileDataUri(candidates.find((p) => fs.existsSync(p)));
+  if (rel == null || rel === '') return '';
+  const image = readArtwork(getDataDir(), rel);
+  return image ? `data:${image.mime};base64,${image.bytes.toString('base64')}` : '';
 }
 
 /* The src for an image in a PREVIEW document — one shown in the app's own
@@ -106,16 +96,15 @@ function assetDataUri(rel) {
  * is built. The stamp follows renderer/lib/imageUrl.js: the file behind a
  * renumbered path can change while the path does not.
  *
- * The protocol serves `<dataDir>/assets/<rel>` (and `processed/` /
- * `ai-gallery/` from the data folder itself), and refuses absolute paths, so
- * anything that is not a plain file under assets/ keeps the data URI. The
- * existence check keeps the "No image" placeholder for a missing file. */
+ * The shared read guard checks roots, symlinks and image signatures before
+ * handing a reference to the protocol. A missing valid file stays empty. */
 function previewImageSrc(rel, version) {
-  if (!rel || path.isAbsolute(rel) || /^(processed|ai-gallery)\//.test(rel) || rel.split(/[\\/]/).includes('..')) {
-    return assetDataUri(rel);
-  }
-  if (!fs.existsSync(path.join(getDataDir(), 'assets', rel))) return assetDataUri(rel);
-  const url = `app-image://local/${encodeURIComponent(rel)}`;
+  if (rel == null || rel === '') return '';
+  const image = readArtwork(getDataDir(), rel, { headerOnly: true });
+  if (!image) return '';
+  // Explicit-root references keep their established embedded preview behavior.
+  if (/^(assets|processed|ai-gallery)[/\\]/.test(rel)) return assetDataUri(rel);
+  const url = `app-image://local/${encodeURIComponent(rel.replace(/\\/g, '/'))}`;
   return version == null || version === '' ? url : `${url}?v=${encodeURIComponent(String(version))}`;
 }
 
