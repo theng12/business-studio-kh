@@ -57,7 +57,8 @@ function contextFor(rawConfig) {
 }
 
 /**
- * Render one page to image bytes at exactly the configured pixel size.
+ * Capture one page at the configured canvas size, then return bytes at that
+ * size or, when maxPx is supplied, resize them to a capped final size.
  *
  * `capturePage()` returns the window's pixels at the display's scale factor,
  * so on a Retina Mac a "1080x1080" window yields 2160x2160. That is
