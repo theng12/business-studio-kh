@@ -18,20 +18,21 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
   been self-review (the same agent, or another agent from the same model family). No human or
   third-party model has reviewed the tree.
 
-## Current release — 0.1.91
+## Current release candidate — 0.1.92
 
 | | |
 |---|---|
-| Version | `0.1.91` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
-| Integration | Catalog workflow release; see session handoff and Git history |
+| Version | `0.1.92` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
+| Integration | Whole-app improvement branch; final verification/integration underway |
 | Installed | Existing installation preserved; use the new DMG to update |
-| DMG | `dist/Media Studio KH-0.1.91-arm64.dmg` in the owner's checkout (not in Git) |
+| DMG | `dist/Media Studio KH-0.1.92-arm64.dmg` in the owner's checkout (not in Git) |
 
 **What changed since the last version of this page (0.1.72).** One line per release; the full
 wording is in the "What's new" changelog.
 
 | Version | Main change |
 |---|---|
+| 0.1.92 | Eight audit batches: file/company safety, reliable editors/AI, source crop geometry, truthful labels/exports/Social previews, PO/cost/Settings recovery |
 | 0.1.91 | Catalog correctness, bulk picking/SKU paste, session undo, reusable print controls and paper preview |
 | 0.1.73–0.1.78 | Phone viewer: save an overlaid photo to the device, "Save copy only", choose which photo an overlay lands on, overlay several products at once, batch results as one zip, Android-correct save wording, `{price_<group>}` overlay tokens |
 | 0.1.79–0.1.80 | One price rule everywhere (labels, phone viewer, catalog CSV, Google feed, bulk table); History shows price-group changes in words |
