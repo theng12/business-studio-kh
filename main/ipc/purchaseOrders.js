@@ -46,7 +46,7 @@ function register({ expose, emitCatalogChange = () => {} }) {
   // Header CRUD
   expose('pos:create',    emitting('create',    (input) => purchaseOrders.create(input ?? {}), (_a, r) => r?.id));
   expose('pos:update',    emitting('update',    ({ id, patch } = {}) => purchaseOrders.update(id, patch ?? {}), (a) => a?.id));
-  expose('pos:setStatus', emitting('setStatus', ({ id, status } = {}) => purchaseOrders.setStatus(id, status), (a) => a?.id));
+  expose('pos:setStatus', emitting('setStatus', ({ id, status, expectedUpdatedAt } = {}) => purchaseOrders.setStatus(id, status, null, expectedUpdatedAt), (a) => a?.id));
   expose('pos:remove',    emitting('remove',    (id) => purchaseOrders.remove(id), (id) => id));
 
   // Lines + components
