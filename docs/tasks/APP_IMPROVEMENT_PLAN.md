@@ -1,7 +1,9 @@
 # App audit and improvement plan
 
-Date: 2026-10-06. Audited source: `0732bb5`, Business Studio KH **0.1.91**.
-Status: **implementation active — owner authorized autonomous completion on 2026-10-06**.
+Date: 2026-10-06. Audit baseline: `0732bb5`, Business Studio KH **0.1.91**. Implementation baseline:
+`e3af16d`; final app-source checkpoint: `d3d43a4`. Candidate: **0.1.92**; all eight batches,
+reviews and verification are complete. Packaged client/server and installed-app smoke checks passed;
+repository integration remains pending.
 
 The owner requested a distributed audit and a plan for each part of the app. This document is the execution order, with evidence and acceptance checks in the linked area reports. Catalog's completed 0.1.91 plan remains the baseline; do not reopen its resolved findings.
 
@@ -147,33 +149,32 @@ All audit workers read `0732bb5` in the owner checkout and wrote separate ignore
 
 Primary planning worktree: `codex/app-audit-plan`, starting at `0732bb5`. The [independent review](app-audit-2026-10-06/plan-review.md) is preserved beside the area reports. Documentation checks and raw proof evidence remain in local `graphify-out/app-audit-2026-10-06/` and the PR.
 
-## Implementation progress — 2026-10-06
+## Verified implementation and release checkpoint — 2026-10-06
 
-Start: e3af16d; worktree $HOME/.codex/worktrees/app-improvements/media-studio-kh; branch codex/app-improvements. Owner checkout .serena remains untouched. Dependencies are an independent copy, not a shared symlink.
+Branch `codex/app-improvements`, implementation baseline `e3af16d`, final app-source checkpoint
+`d3d43a4`, worktree `$HOME/.codex/worktrees/app-improvements/media-studio-kh`. All
+eight audit batches are implemented and independently reviewed; the review outcome is PASS. Use
+this checkpoint table for current status; task reports retain the detailed per-area evidence.
 
-- [x] 1a Artwork/export path boundaries (O1/O2)
-- [x] 1b Brand rename integrity (PO-1)
-- [x] 1c Gallery ownership (IA-3)
-- [x] 2 Product Library and organization (PO-2–7)
-- [x] 3 AI lifecycle/results (IA-1/2)
-- [x] 4 Crop geometry/context (IA-7/8)
-- [x] 5 Overlay save/apply/history/layout (IA-4–6)
-- [x] 6 Labels/exports/history (O3–5/7/8)
-- [x] 7 Social preview geometry (O6)
-- [x] 8 PO/cost/Settings (OPS-1–4/SET-1)
-- [ ] Independent task reviews, full verification, UI/output inspection
-- [ ] Patch/changelog/HANDOFF, PR merge, owner sync, DMG verification/copy, cleanup
+| Area | Verified result |
+|---|---|
+| App checks | `release-check.log`: 1379 pass, 0 fail, 0 skip. |
+| Native tests | `integrated-native.log` and post-dist `release-native-postdist.log`: 240 pass each, 0 fail, 0 skip. |
+| Build and security | `release-build.log` and `release-dist.log` succeeded. Both `audit-release-all.json` and `audit-release-production.json` report 0 vulnerabilities. No new runtime dependencies or schema bump; `source-map-js@1.2.2` is dev-only and `@electron/get` has a scoped `global-agent` override. |
+| UI and render checks | `final-ui-crawl.log`: 145/145, no console exceptions. `release-ui-manual.md` records Overlay at 1100/1400/1920px, crop source/letterbox behavior and PO save/focus. Image, renderer, client/server and webclient probes passed. |
+| Native output | `native-output-report.md` and `native-pdf-text-check.txt`: collision-safe label PNGs, actual A4 PDF containing all three fixture SKUs, matching Social preview/export pixels in portrait and landscape, and 8000×8000 capture. |
+| Packaged/install smoke | `release-packaged-round3.log` passed; `release-installed.log` reached ready state and the installed app displayed version 0.1.92. Both used isolated data. |
+| Candidate DMG | `dist/Business Studio KH-0.1.92-arm64.dmg` passed `release-dmg-verify.log`, was copied to owner `dist/`, and matches SHA-256 `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765`. Pruning retained 0.1.91/0.1.92 and moved older files to owner `_trash/old-dmgs/`. |
 
-Parallel work is explicitly owner-authorized and limited to disjoint ownership. Each worker reads its brief, records baseline/red/green evidence, and leaves an artifact for controller review. The primary owns shared contracts, package/version/release/docs and integration. No worker publishes, pushes, merges or launches a GUI.
+The packaged probe's earlier failures came from stale pre-0.1.89 UI selectors. The probe was updated
+to match current controls while retaining persisted-state assertions; its final run passed and the
+app source did not change for those probe fixes. The installed-app smoke also passed with isolated
+data. No live-data or physical-device test is claimed. PR/merge, owner checkout synchronization and
+final cleanup remain pending; do not mark the candidate shipped until these integration steps are
+completed and recorded.
 
-Baseline evidence: `npm run check`1248pass/0fail/0skip (four existing lint warnings); `npm run test:native`212pass/0fail/0skip. Task workers dispatched at e3af16d app source: fix_file_boundaries (task-1a-report.md), fix_brand_integrity (task-1b-report.md), fix_ai_reliability (task-ai-report.md). Reports and red/green logs live under worktree graphify-out/app-improvements/. The primary reviews serial task diffs and records checkpoint SHAs here.
+## Final release checklist
 
-Checkpoint log: 1b implementation79ed396; independent review found one P1 case-only final-move rollback gap; fix_brand_integrity resumed for round1 with native reproduction. 1a implementationea635bf; independent compatibility review active. AI IA-1/2/3 includes narrowly justified shared addImage cap guard so auto-add uses the existing50-image limit and at-cap content dedup remains valid. Newnative fixtures are registered in package test:native. No checkpoint is marked complete before required review fixes pass.
-
-Task1b: complete (79ed396 +1edbfc9; round1 P1 addressed, spec/quality review clean;51 scopednative cases). Task1a round1 restores legal SVG image compatibility under same roots; rereview pending. AIcheckpoint789e736 review active.
-
-Restart recovery: no child processes left; recovered reviewer independently completed Task1a round1 and AI task reviews, both spec/quality PASS. Task1a completeea635bf+2bf7579; Task1c/3 complete789e736 including shared cap guard. Parent corroborated2native AI checks+1stopdrain and preserved logs. Remaining active workers: fix_product_library Task2, fix_overlay_editor Task5, fix_operations_settings Task8, all start2bf7579 in sameworktree with disjointownership.
-
-Task5 complete0ce2544 (spec/quality review clean;115JS+4native;parent geometryinspection pending finalpass). Task8 completef71b5cf+e5d5af1 (round1 queued-revert P1 addressed; sharedgetterregressions,146focusedNode+8native; rereview clean). Task2 b5f9ad6+7d7b05b round1 active for failed-overwrite revision andCompany modal stalecompletion. Labels/exports/History Task6 workeractive7d7b05b; Crop Task4 workere5d5af1; Social Task7 stillqueued. Parent applies sharedIPC validators/preload and nativetestlist serially, all covered by task/final review.
-
-Task2 completeb5f9ad6+7d7b05b+16385a8, round1 twoP2s addressed/reviewclean. Task6 complete89a84b3, reviewclean; fullNativeSVGlabel/PNGunique/A4+actualSKU proof. Task7 completea417302+50a8fc9, reviewclean; nativepreview/exportpixel delta0 and8000²1.6s atscale1. Task4 complete11ad409+a0cef9f, round1 actualsavedsize/postcommitrefreshP2s addressed/reviewclean; importceiling andlegacycanvaspolicy preserved. All code tasks complete; integrated verification/realUI/release remain. Sharedcontracts4887056 registerednativetests andtypedrevisions/immutableimage/crop requests. FirstintegratedJS1377:1375pass,2failure(oldFXsourceassert +unbundledgeneratedphone); fixedbundle, FXbehaviorcheckcleanup active. Candidate patch0.1.92.
+- [x] Eight fix batches implemented and independent spec/quality review PASS.
+- [x] Full JavaScript and native checks, build, audits, UI/render/output probes, packaged client/server and installed-app smoke checks, and DMG integrity verified.
+- [ ] Complete authorized PR/merge, synchronize the owner checkout and finish cleanup. **Release integration remains pending.**
