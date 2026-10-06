@@ -1,6 +1,6 @@
 # Media Studio KH — Development Status
 
-Updated: **2026-10-06, at 0.1.92 candidate.** This is the short "where is the project" page. The operating
+Updated: **2026-10-06, at 0.1.92.** This is the short "where is the project" page. The operating
 loop, paths, traps and the full list of open gaps live in [the session handoff](tasks/HANDOFF.md),
 which is updated on every release — read that first in a new session. If either document disagrees
 with the code, the code wins.
@@ -18,12 +18,12 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
   a spec/quality review from another agent in the same model family. No human or third-party model
   has reviewed the tree.
 
-## Current release candidate — 0.1.92
+## Current release — 0.1.92
 
 | | |
 |---|---|
 | Version | `0.1.92` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
-| Integration | `codex/app-improvements`; all local, packaged client/server and installed-app checks passed. PR/merge, owner-checkout synchronization and cleanup remain pending. |
+| Integration | [PR #109](https://github.com/theng12/media-studio-kh/pull/109) merged as `84ec511`; owner `main` synchronized. Release evidence and build files preserved locally. |
 | Installed | **0.1.92** passed an isolated smoke check with the version visible in the sidebar. Previous 0.1.32 was preserved under the owner's `_trash/installed-apps/`; no live-data test was performed. |
 | DMG | Copied to the owner's `dist/Media Studio KH-0.1.92-arm64.dmg`; SHA-256 `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765` matches the verified build. Pruning retained 0.1.91/0.1.92 and moved older DMGs to `_trash/old-dmgs/`. |
 
@@ -47,7 +47,7 @@ wording is in the "What's new" changelog.
 
 ## Checks
 
-Verified for the 0.1.92 candidate in `graphify-out/app-improvements/`:
+Verified for 0.1.92 in `graphify-out/app-improvements-0.1.92/`:
 
 | Check | Result |
 |---|---|
@@ -101,8 +101,8 @@ The full step list is the handoff's "working loop". In short:
 
 ## Open
 
-The handoff's OPEN table is the complete list. For this candidate, PR/merge, owner checkout
-synchronization and final cleanup remain pending. The headline items:
+The eight approved software batches are complete. The handoff's OPEN table records separate
+hardware checks and deliberately deferred work. The headline items:
 
 - **Hardware validation has not been performed** — two physical Macs, a real printer, macOS 12,
   real phones, the background-removal model download. See
