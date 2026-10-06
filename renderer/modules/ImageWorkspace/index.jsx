@@ -190,16 +190,22 @@ export function ImageWorkspace() {
       setSettings((s) => ({ ...s, sourceCropRect: null, cropStraighten: 0, ...(destination === 'overwrite' ? { rotation: 0 } : {}) }));
       setCropMode(false);
       if (destination === 'overwrite') editorContextsRef.current.delete(context.identity);
-      await refreshWorkspaceImages(productId);
-      if (activeProductIdRef.current !== productId) return;
-      bumpProcessedTick();
-      useAppStore.getState().refreshProducts();
       if (destination === 'overwrite') {
         addToast(`Cropped to ${res.outW}×${res.outH}px (source overwritten)`, 'success');
       } else if (res?.skipped) {
         addToast('Crop produced an identical image — no duplicate added', 'info');
       } else {
         addToast(`Cropped to ${res.outW}×${res.outH}px (added as new image)`, 'success');
+      }
+      // The pixels are committed already. A failed view refresh must never
+      // invite retrying an overwrite against the newly cropped source.
+      try {
+        await refreshWorkspaceImages(productId);
+        if (activeProductIdRef.current !== productId) return;
+        bumpProcessedTick();
+        await useAppStore.getState().refreshProducts();
+      } catch (err) {
+        if (mountedRef.current && activeProductIdRef.current === productId) addToast(`Cropped, but the image list did not refresh: ${err.message}`, 'error');
       }
     } catch (err) {
       addToast(`Crop failed: ${err.message}`, 'error');

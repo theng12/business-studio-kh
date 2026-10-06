@@ -342,6 +342,33 @@ test('active overwrite-crop adopts rotation zero without clearing legacy canvas 
   } finally { hook.cleanup(); }
 });
 
+for (const destination of ['overwrite', 'newImage']) test(`successful ${destination} crop survives a failed image-list refresh`, async () => {
+  const image = { id: 'committed-crop', filepath: 'source.png', contentHash: 'source-hash', workspaceSettings: {}, workspaceRevision: 1 };
+  let cropCalls = 0;
+  const api = apiWith(async (_p, _i, _h, settings) => [{ ...image, workspaceSettings: settings, workspaceRevision: 2 }]);
+  api.images.cropImage = async () => { cropCalls++; return { outW: 40, outH: 30 }; };
+  api.images.listByProduct = async () => { throw new Error('refresh unavailable'); };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, image);
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, sourceCropRect: { x: 0, y: 0, width: 0.4, height: 0.3 } });
+    await hook.settle(Component);
+    await readyCrop(hook, Component);
+    global.window.confirm = () => true;
+    await canvasView(hook).props.onApplyCrop(destination);
+    await hook.settle(Component);
+    const messages = store.getState().toasts.map((toast) => toast.message);
+    assert.equal(cropCalls, 1, 'the mutation completed once');
+    assert.ok(messages.some((message) => /Cropped to 40×30px/.test(message)), 'acknowledge the completed crop');
+    assert.ok(messages.some((message) => /Cropped, but the image list did not refresh: refresh unavailable/.test(message)), 'report the view refresh separately');
+    assert.ok(!messages.some((message) => /Crop failed/.test(message)), 'do not encourage retrying an already completed mutation');
+    assert.equal(settingsPanel(hook).props.settings.sourceCropRect, null);
+    assert.equal(canvasView(hook).props.cropMode, false);
+  } finally { hook.cleanup(); }
+});
+
 test('ImageWorkspace adopts a newer same-image refresh after another editor saves and this editor is idle', async () => {
   const hook = hookHarness();
   const { Component, store } = await loadWorkspace(apiWith(async () => []), hook);
