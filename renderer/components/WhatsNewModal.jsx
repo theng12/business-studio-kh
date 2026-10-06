@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.93', date: '2026-10-06',
+    items: [
+      'POLISH — Catalog picking emphasizes selected products and groups page/all-matching Add actions. Design sections collapse with current-value summaries. Standard Undo and Redo shortcuts work outside text fields.',
+      'NEW — Product Library filters and details collapse independently. The details editor keeps its draft while hidden, and opening a product brings it back.',
+      'NEW — Image Workspace shows the current processing recipe and all-image count beside Apply. Create, move and resize crops with the keyboard; adjust Before/After with a slider and use image and zoom shortcuts.',
+      'NEW — Dashboard attention counts open the affected products. Global search finds catalog projects and templates, and the sidebar has a visible Search button.',
+      'POLISH — Photo removal names identify the image position. Search navigation opens the selected product and respects pending editor saves and company changes.',
+    ],
+  },
+  {
     version: '0.1.92', date: '2026-10-06',
     items: [
       'FIX — Product edits wait for the latest save before leaving. Photo selections and removal follow the actual image after reordering, and late replies cannot replace another product’s images. Company and category edits detect newer changes; image removal explains how to restore it.',

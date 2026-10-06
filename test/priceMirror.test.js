@@ -77,7 +77,7 @@ test('the two copies are actually two copies', () => {
   assert.match(esm, /export function priceEntry/, 'the renderer mirror still exports its own resolver');
   assert.match(
     fs.readFileSync(path.join(root, 'main/util/prices.js'), 'utf8'),
-    /module\.exports = \{ num, priceEntry, formatPriceEntry \}/,
+    /module\.exports = \{ num, priceEntry, formatPriceEntry(?:, rowHasAnyPrice)? \}/,
     'the main-process copy is still the canonical one',
   );
 });

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { SliderField } from '../../components/ui.jsx';
-import { parseAspectRatio, rectAspectFromOutput, buildDragRect, resize, moveRect, containedImageBounds } from './cropGeometry.js';
+import { shortcutBlocked } from '../../components/ShortcutsModal.jsx';
+import { parseAspectRatio, rectAspectFromOutput, buildDragRect, resize, moveRect, containedImageBounds, keyboardCropRect } from './cropGeometry.js';
 
 // v0.49.15: aspect-ratio presets exposed on the crop toolbar. The chip ids
 // are also the value persisted in `settings.cropAspectRatio`. "free" is
@@ -177,6 +178,7 @@ export function CanvasView({
   function handleCropMouseDown(e) {
     if (!cropMode || !cropRef.current || cropApplying || !cropReady) return;
     e.preventDefault();
+    cropRef.current.focus?.();
     const r = cropRef.current.getBoundingClientRect();
     const p = {
       x: Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)),
@@ -196,6 +198,22 @@ export function CanvasView({
     const initial = buildDragRect(p, p, rectAspectLock);
     onCropChange(initial);
     setCropDrag({ mode: 'create', anchor: p });
+  }
+
+  function createKeyboardCrop() {
+    if (cropApplying || cropCommitBusy || processing || !cropReady) return;
+    if (!settings.sourceCropRect) onCropChange(keyboardCropRect(null, { key: 'Enter' }, cropPreview.outW, cropPreview.outH, outputAspect));
+    cropRef.current?.focus?.();
+  }
+
+  function handleCropKeyDown(e) {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || shortcutBlocked(e.target, document)
+      || cropApplying || cropCommitBusy || processing || !cropReady) return;
+    if (!['Enter', ' ', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = keyboardCropRect(settings.sourceCropRect, e, cropPreview.outW, cropPreview.outH, outputAspect);
+    if (rect !== settings.sourceCropRect) onCropChange(rect);
   }
 
   const canvasStyle = fillPreview
@@ -261,10 +279,11 @@ export function CanvasView({
                     </div>
                     <div
                       className="ws-canvas__divider"
+                      aria-hidden="true"
                       style={{ left: `${divider}%` }}
                       onMouseDown={(e) => { e.preventDefault(); setDragging(true); }}
                     >
-                      <span className="ws-canvas__divider-handle" aria-label="Drag divider">⇆</span>
+                      <span className="ws-canvas__divider-handle">⇆</span>
                     </div>
                     <div className="ws-canvas__compare-labels">
                       <span>Raw</span>
@@ -296,6 +315,11 @@ export function CanvasView({
               <div
                 ref={cropRef}
                 className="ws-crop"
+                role="group"
+                tabIndex={cropCommitBusy || processing ? -1 : 0}
+                aria-label="Crop area"
+                aria-describedby="workspace-crop-keys"
+                onKeyDown={handleCropKeyDown}
                 style={{ inset: 'auto', ...cropBounds }}
                 onMouseDown={handleCropMouseDown}
               >
@@ -336,7 +360,7 @@ export function CanvasView({
                   <div className="ws-crop__instr">
                     {settings.cropAspectRatio && settings.cropAspectRatio !== 'free'
                       ? `Drag on the image to set a ${settings.cropAspectRatio} crop`
-                      : 'Drag on the image to set the crop area'}
+                      : 'Drag on the image or press Enter here to create a crop'}
                   </div>
                 )}
               </div>
@@ -358,6 +382,7 @@ export function CanvasView({
           className="ws-tool"
           disabled={!canZoomOut}
           title="Zoom out"
+          aria-label="Zoom out"
           onClick={() => onZoomChange(Math.max(0.25, zoom - 0.25))}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -371,6 +396,7 @@ export function CanvasView({
           className="ws-tool"
           disabled={!canZoomIn}
           title="Zoom in"
+          aria-label="Zoom in"
           onClick={() => onZoomChange(Math.min(4, zoom + 0.25))}
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -385,6 +411,23 @@ export function CanvasView({
           title="Reset view (fit canvas to frame)"
           onClick={() => onZoomChange(1)}
         >Reset view</button>
+        {isBeforeAfter ? (
+          <label className="ws-compare-control">
+            <span>Before / after</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={divider}
+              aria-label="Before / after divider"
+              aria-valuetext={`${Math.round(divider)}% raw, ${100 - Math.round(divider)}% processed`}
+              onChange={(e) => onDividerChange(Number(e.target.value))}
+            />
+          <input type="number" className="input ws-compare-value" min="0" max="100" step="1" value={Math.round(divider)}
+              aria-label="Before / after divider value" onChange={(e) => { const value = Number(e.target.value); if (Number.isFinite(value)) onDividerChange(Math.max(0, Math.min(100, value))); }} />
+          </label>
+        ) : null}
         <div className="ws-tool__sep" />
         <button
           type="button"
@@ -430,7 +473,7 @@ export function CanvasView({
         <button
           type="button"
           className={`ws-tool ws-tool--text${cropMode ? ' is-active' : ''}`}
-          title="Crop tool — pick a ratio, drag a rectangle, then Apply"
+          title="Crop tool — draw or use the keyboard, then Apply crop"
           disabled={cropCommitBusy || processing}
           onClick={onToggleCropMode}
         >Crop</button>
@@ -448,6 +491,10 @@ export function CanvasView({
           cropMode is on so the rest of the workspace stays clean. */}
       {cropMode ? (
         <div className="ws-crop-bar">
+          <p id="workspace-crop-keys" className="ws-crop-bar__keyboard ws-hint">
+            Focus the crop area: Enter or Space creates a crop. Arrows move 1 source pixel; Shift uses 10. Alt + arrows resize the right or bottom edge.
+          </p>
+          <button type="button" className="ws-tool ws-tool--text" disabled={cropCommitBusy || processing || !cropReady} onClick={createKeyboardCrop} title="Focus the crop area for keyboard movement and resizing">{settings.sourceCropRect ? 'Adjust crop' : 'Create crop'}</button>
           <div className="ws-crop-bar__chips" role="radiogroup" aria-label="Crop aspect ratio">
             {ASPECT_PRESETS.map((p) => (
               <button

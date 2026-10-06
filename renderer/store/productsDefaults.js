@@ -8,6 +8,7 @@ export const DEFAULT_FILTERS = {
   categoryIds: [],
   status: null,
   processStatus: null,
+  attentionFilter: null, // Dashboard queue: missingBarcode | missingPrice | notExported
   hasImages: null,       // null = all, 'with' = imageCount > 0, 'without' = imageCount === 0
 };
 

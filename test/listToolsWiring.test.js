@@ -10,7 +10,7 @@
  *
  * The Library filter column's collapse is checked here too, because its whole
  * point is that ONE localStorage key backs the toolbar button and the panel
- * chevron; two states would read as "the panel is open" to one control and
+ * chevron; inconsistent states would read as "the panel is open" to one control and
  * "closed" to the other.
  *
  * Static by design, so it runs under plain `npm test`. The runtime behavior is
@@ -20,6 +20,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const root = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
@@ -122,17 +123,20 @@ test('the All · Unassigned / Uncategorized chips open the Library with its own 
   assert.match(PRODUCTS_STORE, /categoryIds: \[null\]/, 'setCategoryFilterUnassigned must pin categoryIds to [null]');
 });
 
-test('the Library filter column retracts to a rail through the ONE panelVisible state', () => {
-  // The key is the single source of truth shared with the toolbar button.
+test('the Library filter column retracts to a rail through the independent persisted panel states', () => {
+  // Each panel has its own persisted choice; toolbar and filter rail agree.
   assert.match(LIBRARY, /PANEL_VISIBLE_STORAGE_KEY = 'ProductLibrary\.panelVisible'/, 'the panel key moved');
   assert.match(LIBRARY, /lib-layout--filters-collapsed/, 'the collapsed layout class is missing');
   assert.match(LIBRARY, /lib-filters__collapse/, 'the panel header has no collapse control');
   // Both controls call the same toggle.
-  const toggles = LIBRARY.match(/onClick=\{togglePanel\}/g) || [];
-  assert.ok(toggles.length >= 2, `expected the toolbar button and the panel chevron to share togglePanel (found ${toggles.length})`);
-  assert.match(LIBRARY, /aria-pressed=\{!panelVisible\}/, 'the panel chevron must expose its pressed state');
-  assert.match(LIBRARY, /Hide filters for a bigger view/, 'the hide tooltip is missing');
+  const toggles = LIBRARY.match(/onClick=\{toggleFilters\}/g) || [];
+  assert.ok(toggles.length >= 2, `expected the toolbar button and the panel chevron to share toggleFilters (found ${toggles.length})`);
+  assert.match(LIBRARY, /aria-pressed=\{!filtersVisible\}/, 'the panel chevron must expose its pressed state');
+  assert.match(LIBRARY, /Hide filters/, 'the hide tooltip is missing');
   assert.match(LIBRARY, /Show filters/, 'the show tooltip is missing');
+  assert.match(LIBRARY, /ProductLibrary\.filtersVisible/, 'independent filter preference missing');
+  assert.match(LIBRARY, /lib-inspector" hidden=\{!panelVisible\}/, 'hiding details must preserve the mounted draft');
+  assert.match(LIBRARY, /shortcutBlocked\(e\.target, globalThis\.document\)/, 'filter shortcut must leave inputs/dialogs alone');
   // The keyboard shortcut the tooltips advertise.
   assert.match(LIBRARY, /e\.key !== 'b' && e\.key !== 'B'/, 'the ⌘B shortcut is missing');
 });
@@ -154,4 +158,21 @@ test('Reset all filters sits above the first filter group', () => {
   assert.ok(reset !== -1, 'the reset button is gone');
   assert.ok(firstGroup !== -1, 'the Brand filter group is gone');
   assert.ok(reset < firstGroup, 'Reset all filters must come before the first filter group');
+});
+
+test('independent visibility choices migrate legacy settings and survive blocked storage', () => {
+  const source = LIBRARY.slice(LIBRARY.indexOf("const PANEL_VISIBLE_STORAGE_KEY"), LIBRARY.indexOf('/**\n * v0.1.67: per-group'));
+  const values = new Map([['ProductLibrary.panelVisible', 'off']]);
+  const ctx = { localStorage: { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) } };
+  vm.createContext(ctx); vm.runInContext(source, ctx);
+  assert.equal(vm.runInContext('loadPanelVisible()', ctx), false);
+  assert.equal(vm.runInContext('loadPanelVisible(FILTER_VISIBLE_STORAGE_KEY)', ctx), false);
+  vm.runInContext('savePanelVisible(true)', ctx);
+  assert.equal(vm.runInContext('loadPanelVisible(FILTER_VISIBLE_STORAGE_KEY)', ctx), false, 'legacy filter choice stays independent after Details changes');
+  vm.runInContext('savePanelVisible(false)', ctx);
+  vm.runInContext('savePanelVisible(true, FILTER_VISIBLE_STORAGE_KEY)', ctx);
+  assert.equal(vm.runInContext('loadPanelVisible(FILTER_VISIBLE_STORAGE_KEY)', ctx), true);
+  assert.equal(vm.runInContext('loadPanelVisible()', ctx), false);
+  ctx.localStorage.getItem = () => { throw new Error('blocked'); };
+  assert.equal(vm.runInContext('loadPanelVisible()', ctx), true);
 });

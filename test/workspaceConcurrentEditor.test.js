@@ -1051,3 +1051,62 @@ test('review: cancelling old conflict after remote image removal does not poison
     assert.equal(saveBadge(hook).props.status.state, 'idle', 'old modal cancellation must leave image B status alone');
   } finally { choice.resolve('cancel'); hook.cleanup(); }
 });
+
+test('workspace shortcuts respect typing, dialogs, native controls, crop mode and pending-save selection guards', async () => {
+  const first = { id: 'first', filepath: '1.jpg', contentHash: 'hash-1', workspaceSettings: { brightness: 1 }, workspaceRevision: 2 };
+  const second = { id: 'second', filepath: '2.jpg', contentHash: 'hash-2', workspaceSettings: { brightness: 2 }, workspaceRevision: 5 };
+  const gate = deferred();
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(apiWith(() => gate.promise), hook);
+  const listeners = new Map();
+  global.window.addEventListener = (name, fn) => listeners.set(name, fn);
+  global.window.removeEventListener = (name) => listeners.delete(name);
+  let modal = false;
+  global.document.querySelector = () => modal ? {} : null;
+  const key = (name, extra = {}) => {
+    let prevented = false;
+    const event = { key: name, target: {}, preventDefault() { prevented = true; }, ...extra };
+    listeners.get('keydown')(event);
+    return prevented;
+  };
+  try {
+    seed(store, first);
+    store.setState({ workspaceImages: [first, second] });
+    await hook.settle(Component);
+    assert.equal(key('+'), true);
+    assert.equal(store.getState().workspaceZoom, 1.25);
+    await hook.settle(Component);
+    for (const target of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'TEXTAREA' }, { isContentEditable: true }, { tagName: 'INPUT', type: 'range', closest: () => ({}) }, { tagName: 'SELECT', closest: () => ({}) }]) {
+      assert.equal(key('+', { target }), false);
+      assert.equal(key('ArrowRight', { target }), false);
+    }
+    modal = true;
+    assert.equal(key('+'), false);
+    assert.equal(key('ArrowRight'), false);
+    modal = false;
+    assert.equal(key('+', { ctrlKey: true }), false);
+    assert.equal(key('+', { defaultPrevented: true }), false);
+    assert.equal(store.getState().workspaceZoom, 1.25);
+    canvasView(hook).props.onToggleCropMode();
+    await hook.settle(Component);
+    assert.equal(key('ArrowRight'), false, 'crop arrows must not change the active image');
+    assert.equal(key('0'), true, 'zoom stays available while cropping');
+    assert.equal(store.getState().workspaceZoom, 1);
+    canvasView(hook).props.onToggleCropMode();
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, brightness: 9 });
+    await hook.settle(Component);
+    assert.equal(key('ArrowRight'), true);
+    await delay(0);
+    assert.equal(store.getState().workspaceImageIndex, 0, 'shortcut waits for the save acknowledgement');
+    gate.resolve([{ ...first, workspaceSettings: { brightness: 9 }, workspaceRevision: 3 }]);
+    await delay(0);
+    await hook.settle(Component);
+    assert.equal(store.getState().workspaceImageIndex, 1);
+    assert.equal(key('ArrowRight'), false, 'navigation cannot go beyond the last image');
+    assert.equal(key('ArrowLeft'), true);
+    await delay(0);
+    await hook.settle(Component);
+    assert.equal(store.getState().workspaceImageIndex, 0);
+  } finally { gate.resolve([]); hook.cleanup(); }
+});

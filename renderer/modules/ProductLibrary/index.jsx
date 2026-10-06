@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, EmptyState, Pagination } from '../../components/ui.jsx';
+import { shortcutBlocked } from '../../components/ShortcutsModal.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { Lightbox } from '../../components/Lightbox.jsx';
 import { ProductForm } from './ProductForm.jsx';
@@ -90,37 +91,24 @@ export function saveHoverPreview(on) {
   try { localStorage.setItem(HOVER_PREVIEW_STORAGE_KEY, on ? 'on' : 'off'); } catch {}
 }
 
-/**
- * v0.22.1: side panel visibility preference. v0.10.7 made the
- * Library's right-side detail panel always-mounted so users could
- * keep product details visible while browsing — but there was no
- * way to retract it short of pressing Esc. The "always visible"
- * behavior eats ~480px of horizontal width, which gets cramped on
- * smaller MacBook displays.
- *
- * Now this is a user preference toggleable from the Library
- * toolbar. Persists in localStorage so the choice survives
- * relaunches. On fresh installs, defaults to OFF when the
- * viewport is narrower than 1400px (small displays); ON
- * otherwise (preserves the v0.10.7 behavior on big screens).
- */
+// Independent user choices; legacy visibility seeds both until each is changed.
 const PANEL_VISIBLE_STORAGE_KEY = 'ProductLibrary.panelVisible';
-function loadPanelVisible() {
+const FILTER_VISIBLE_STORAGE_KEY = 'ProductLibrary.filtersVisible';
+function loadPanelVisible(key = PANEL_VISIBLE_STORAGE_KEY) {
   try {
-    const v = localStorage.getItem(PANEL_VISIBLE_STORAGE_KEY);
+    let v = localStorage.getItem(key);
+    if (v == null && key !== PANEL_VISIBLE_STORAGE_KEY) {
+      v = localStorage.getItem(PANEL_VISIBLE_STORAGE_KEY);
+      // Snapshot the old coupled choice once; changing Details must not change Filters.
+      try { localStorage.setItem(key, v === 'off' ? 'off' : 'on'); } catch {}
+    }
     if (v === 'on') return true;
     if (v === 'off') return false;
   } catch {}
-  // v0.1.67: ONE state now backs the FILTER column (and, with it, the
-  // detail panel — see togglePanel). The filter column must default
-  // open at every window size: the old viewport-based default existed
-  // only to give the 480px detail panel room on a 13" screen, and
-  // leaving first-run filters collapsed would hide the very controls
-  // this feature is about. The user retracts it deliberately.
   return true;
 }
-function savePanelVisible(on) {
-  try { localStorage.setItem(PANEL_VISIBLE_STORAGE_KEY, on ? 'on' : 'off'); } catch {}
+function savePanelVisible(on, key = PANEL_VISIBLE_STORAGE_KEY) {
+  try { localStorage.setItem(key, on ? 'on' : 'off'); } catch {}
 }
 
 /**
@@ -201,10 +189,12 @@ export function ProductLibrary() {
   const setHasImagesFilter = useAppStore((s) => s.setHasImagesFilter);
   const setProductSort = useAppStore((s) => s.setProductSort);
   const resetFilters = useAppStore((s) => s.resetFilters);
+  const clearAttentionFilter = useAppStore((s) => s.clearAttentionFilter);
   const setPage = useAppStore((s) => s.setPage);
   const setPageSize = useAppStore((s) => s.setPageSize);
   const openProductInWorkspace = useAppStore((s) => s.openProductInWorkspace);
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
+  const pendingLibraryProductId = useAppStore((s) => s.pendingLibraryProductId);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
   // v0.11.2: "Process →" in the Library opens a small router modal asking
   // whether to take the product to Image Workspace or AI Studio. The
@@ -226,29 +216,15 @@ export function ProductLibrary() {
   const [view, setViewRaw] = useState(loadView);
   const setView = (v) => { setViewRaw(v); saveView(v); };
   const [gridSize, setGridSize] = useState(loadGridSize); // 'compact' | 'comfortable' | 'roomy' | 'large'
-  // v0.22.1: side-panel visibility toggle. When OFF the right
-  // column is removed from the layout grid, freeing ~480px of
-  // horizontal width — crucial on smaller MacBook displays.
-  // v0.1.67: this ONE boolean now backs the filter column too. The
-  // filter column collapses to a narrow rail instead of vanishing, and
-  // the detail panel follows it — so "Hide filters" always yields the
-  // grid maximum width, and the toolbar button and the panel's own
-  // chevron can never disagree about the state.
-  // ponytail: ceiling — the filter rail and the 480px detail panel share
-  // this boolean, so you cannot retract the filters while keeping the
-  // detail panel. Splitting them would mean a second state and a second
-  // toolbar control; do that only if someone asks for it.
   const [panelVisible, setPanelVisible] = useState(loadPanelVisible);
+  const [filtersVisible, setFiltersVisible] = useState(() => loadPanelVisible(FILTER_VISIBLE_STORAGE_KEY));
+  const revealPanel = useCallback(() => { setPanelVisible(true); savePanelVisible(true); }, []);
+  function toggleFilters() {
+    setFiltersVisible((prev) => { savePanelVisible(!prev, FILTER_VISIBLE_STORAGE_KEY); return !prev; });
+  }
   async function togglePanel() {
     if (!await beforePanelChange()) return;
-    setPanelVisible((prev) => {
-      const next = !prev;
-      savePanelVisible(next);
-      // Keep the editing state untouched on toggle: hiding +
-      // re-showing the panel keeps the user on the same product
-      // instead of forcing them to re-click.
-      return next;
-    });
+    setPanelVisible((prev) => { savePanelVisible(!prev); return !prev; });
   }
   // v0.1.67: per-group open/closed state, persisted in localStorage.
   const [filterGroups, setFilterGroups] = useState(loadFilterGroups);
@@ -260,20 +236,13 @@ export function ProductLibrary() {
       return next;
     });
   }
-  // v0.1.67: ⌘/Ctrl+B retracts the filter column, mirroring the
-  // sidebar's collapse control. Bound here (not in App.jsx) because it
-  // only means anything on this screen, and it must respect the same
-  // single `panelVisible` state the two buttons use.
+  // Filter shortcut leaves text editing and dialogs alone.
   useEffect(() => {
     function onKey(e) {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.defaultPrevented || shortcutBlocked(e.target, globalThis.document)) return;
       if (e.key !== 'b' && e.key !== 'B') return;
       e.preventDefault();
-      setPanelVisible((prev) => {
-        const next = !prev;
-        savePanelVisible(next);
-        return next;
-      });
+      setFiltersVisible((prev) => { savePanelVisible(!prev, FILTER_VISIBLE_STORAGE_KEY); return !prev; });
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -519,7 +488,7 @@ export function ProductLibrary() {
     !categoryFilterEmpty ||
     filters.status !== null ||
     filters.processStatus !== null ||
-    filters.hasImages !== null;
+    filters.hasImages !== null || !!filters.attentionFilter;
 
   async function handleDownloadSample() {
     try {
@@ -558,13 +527,40 @@ export function ProductLibrary() {
   // would re-run the form's reset and replace what is on screen.
   const handleOpen = useCallback(async (p) => {
     if (!await beforePanelChange()) return;
+    useAppStore.getState().clearPendingLibraryNav?.();
+    revealPanel();
     setEditing((cur) => cur && cur !== 'new' && p && cur.id === p.id ? cur : p);
-  }, [beforePanelChange]);
+  }, [beforePanelChange, revealPanel]);
   const startNewProduct = useCallback(async () => {
     if (!await beforePanelChange()) return;
+    useAppStore.getState().clearPendingLibraryNav?.();
+    revealPanel();
     setEditing('new');
     setCreateNonce((n) => n + 1);
-  }, [beforePanelChange]);
+  }, [beforePanelChange, revealPanel]);
+  useEffect(() => {
+    if (!pendingLibraryProductId || !activeCompanyId) return;
+    let cancelled = false;
+    (async () => {
+      if (!await beforePanelChange() || cancelled) return;
+      const intent = selectionIntent.current;
+      try {
+        const product = await window.api.products.get(pendingLibraryProductId);
+        const current = useAppStore.getState();
+        if (cancelled || intent !== selectionIntent.current || current.activeCompanyId !== activeCompanyId || current.pendingLibraryProductId !== pendingLibraryProductId) return;
+        if (!product || product.companyId !== activeCompanyId) throw new Error('This product is no longer in the active company.');
+        revealPanel();
+        setEditing(product);
+        current.clearPendingLibraryNav();
+      } catch (err) {
+        if (!cancelled && intent === selectionIntent.current) {
+          useAppStore.getState().addToast(err.message, 'error');
+          useAppStore.getState().clearPendingLibraryNav();
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pendingLibraryProductId, activeCompanyId, beforePanelChange, revealPanel]);
   // "Process →" now opens a small destination picker — Image Workspace or
   // AI Studio. The actual store call happens inside the modal callbacks
   // below. Kept the function name + signature so existing call sites
@@ -637,7 +633,7 @@ export function ProductLibrary() {
   // each Library render.
   const handleOpenCost = useCallback((poId) => { if (poId) openPurchaseOrder(poId); }, [openPurchaseOrder]);
   const closePanel = useCallback(async () => {
-    if (await beforePanelChange()) setEditing(null);
+    if (await beforePanelChange()) { useAppStore.getState().clearPendingLibraryNav?.(); setEditing(null); }
   }, [beforePanelChange]);
   // v0.26.13: side-panel thumbs open the same Lightbox the row/grid thumbs do.
   // ProductForm only knows the index — Library owns the Lightbox state and
@@ -653,6 +649,7 @@ export function ProductLibrary() {
   const handleDuplicated = useCallback(async (created) => {
     if (!await beforePanelChange()) return;
     const intent = selectionIntent.current;
+    useAppStore.getState().clearPendingLibraryNav?.();
     try {
       const full = await window.api.products.get(created.id);
       if (intent === selectionIntent.current) setEditing(full ?? created);
@@ -710,6 +707,10 @@ export function ProductLibrary() {
         }
       />
 
+      {filters.attentionFilter ? <div className="lib-attention-filter" role="status">
+        <span>Showing products {({ missingBarcode: 'with no barcode', missingPrice: 'with no price', notExported: 'not exported' })[filters.attentionFilter]}</span>
+        <Button size="sm" variant="ghost" onClick={clearAttentionFilter}>Clear attention filter</Button>
+      </div> : null}
       <div className="toolbar lib-toolbar">
         <div className="search-wrap">
           <svg className="search-wrap__icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -752,28 +753,17 @@ export function ProductLibrary() {
             aria-pressed={view === 'grid'}
           >Grid</button>
         </div>
-        {/* v0.22.1: side-panel show/hide. Persists in
-            localStorage. Defaults OFF on narrow first-load
-            viewports (<1400px) so small MacBook screens
-            don't feel squashed.
-            v0.1.67: the same boolean retracts the FILTER column
-            to a rail (and the detail panel with it), so the
-            tooltip names the filter column — the width win is
-            the point. The panel header has a twin control. */}
-        <button
-          type="button"
-          className={`lib-toolbar-btn lib-panel-toggle${panelVisible ? ' is-active' : ''}`}
-          onClick={togglePanel}
-          title={panelVisible
-            ? 'Hide filters for a bigger view (⌘B)'
-            : 'Show filters (⌘B)'}
-          aria-label={panelVisible ? 'Hide filters' : 'Show filters'}
-          aria-pressed={panelVisible}
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2.5 3.5h11l-4.25 5v4l-2.5 1.25V8.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-          </svg>
+        <button type="button" className={`lib-toolbar-btn lib-filter-toggle${filtersVisible ? ' is-active' : ''}`}
+          onClick={toggleFilters} title={filtersVisible ? 'Hide filters (⌘/Ctrl+B)' : 'Show filters (⌘/Ctrl+B)'}
+          aria-label={filtersVisible ? 'Hide filters' : 'Show filters'} aria-pressed={filtersVisible}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 3.5h11l-4.25 5v4l-2.5 1.25V8.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /></svg>
           <span>Filters</span>
+        </button>
+        <button type="button" className={`lib-toolbar-btn lib-panel-toggle${panelVisible ? ' is-active' : ''}`}
+          onClick={togglePanel} title={panelVisible ? 'Hide product details' : 'Show product details'}
+          aria-label={panelVisible ? 'Hide product details' : 'Show product details'} aria-pressed={panelVisible}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1" stroke="currentColor" strokeWidth="1.4" /><path d="M10 3v10" stroke="currentColor" strokeWidth="1.4" /></svg>
+          <span>Details</span>
         </button>
         {view === 'table' ? (
           // v0.22.7: column picker — only meaningful for the
@@ -796,42 +786,17 @@ export function ProductLibrary() {
         <RefreshButton />
       </div>
 
-      <div className={`lib-layout${panelVisible ? ' lib-layout--has-panel' : ' lib-layout--filters-collapsed'}`}>
-        <aside className={`lib-filters${panelVisible ? '' : ' is-collapsed'}`} aria-label="Filters">
-          {/* v0.1.67: the filter column's own retract control, mirroring
-              Sidebar.jsx's collapse button: chevron flips direction,
-              title/aria-label flips too, aria-pressed tracks the
-              collapsed state, and it is always visible — collapsed
-              leaves this rail and the chevron is the way back. It
-              shares the ONE `panelVisible` boolean with the toolbar
-              button, so the two can never disagree. */}
+      <div className={`lib-layout${panelVisible ? ' lib-layout--has-panel' : ''}${filtersVisible ? '' : ' lib-layout--filters-collapsed'}`}>
+        <aside className={`lib-filters${filtersVisible ? '' : ' is-collapsed'}`} aria-label="Filters">
           <div className="lib-filters__head">
-            <button
-              type="button"
-              className="lib-filters__collapse"
-              onClick={togglePanel}
-              title={panelVisible
-                ? 'Hide filters for a bigger view (⌘B)'
-                : 'Show filters (⌘B)'}
-              aria-label={panelVisible
-                ? 'Hide filters for a bigger view'
-                : 'Show filters'}
-              aria-pressed={!panelVisible}
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d={panelVisible ? 'M10 4 6 8l4 4' : 'M6 4l4 4-4 4'}
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+            <button type="button" className="lib-filters__collapse" onClick={toggleFilters}
+              title={filtersVisible ? 'Hide filters (⌘/Ctrl+B)' : 'Show filters (⌘/Ctrl+B)'}
+              aria-label={filtersVisible ? 'Hide filters' : 'Show filters'} aria-pressed={!filtersVisible}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d={filtersVisible ? 'M10 4 6 8l4 4' : 'M6 4l4 4-4 4'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
-            {panelVisible ? <span className="lib-filters__title">Filters</span> : null}
+            {filtersVisible ? <span className="lib-filters__title">Filters</span> : null}
           </div>
-
-          {panelVisible ? (
+          {filtersVisible ? (
             <div className="lib-filters__body">
               {/* v0.1.67: reset moved from the bottom of the column to
                   the top, directly under the search box, so it is
@@ -1082,8 +1047,9 @@ export function ProductLibrary() {
           )}
         </section>
 
-        {panelVisible ? (
+        <div className="lib-inspector" hidden={!panelVisible}>
           <ProductForm
+            visible={panelVisible}
             product={editingProduct}
             isCreating={isCreatingProduct}
             createKey={createNonce}
@@ -1094,7 +1060,7 @@ export function ProductLibrary() {
             onDuplicated={handleDuplicated}
             onRegisterFlush={registerPanelFlush}
           />
-        ) : null}
+        </div>
       </div>
 
       <AutoMatchModal open={autoMatchOpen} onClose={() => setAutoMatchOpen(false)} />

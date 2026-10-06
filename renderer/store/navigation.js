@@ -30,10 +30,10 @@ const ALWAYS_AVAILABLE = new Set(['dashboard', 'company', 'settings', 'support',
 export function createNavigationSlice(set, get) {
   let navigationIntent = 0;
 
-  async function navigate(patch, intent = ++navigationIntent) {
+  async function navigate(patch, intent = ++navigationIntent, companyId = get().activeCompanyId) {
     try {
       await flushCompanySwitches();
-      if (intent !== navigationIntent) return false;
+      if (intent !== navigationIntent || get().activeCompanyId !== companyId) return false;
       set(patch);
       return true;
     } catch (error) {
@@ -58,6 +58,8 @@ export function createNavigationSlice(set, get) {
     pendingPoId: null,
     pendingPoSupplierId: null,
     pendingCatalogProjectId: null,
+    pendingCatalogTemplateId: null,
+    pendingLibraryProductId: null,
 
     async setActiveModule(name) {
       if (!MODULES.includes(name)) {
@@ -98,9 +100,17 @@ export function createNavigationSlice(set, get) {
       set({ pendingPoId: null, pendingPoSupplierId: null });
     },
 
-    openCatalogProject(projectId) {
-      return navigate({ pendingCatalogProjectId: projectId, activeModule: 'catalogprojects' });
+    openLibraryProduct(productId, companyId = get().activeCompanyId) {
+      return navigate({ pendingLibraryProductId: productId, activeModule: 'library' }, ++navigationIntent, companyId);
     },
+    clearPendingLibraryNav() { set({ pendingLibraryProductId: null }); },
+    openCatalogProject(projectId, companyId = get().activeCompanyId) {
+      return navigate({ pendingCatalogProjectId: projectId, activeModule: 'catalogprojects' }, ++navigationIntent, companyId);
+    },
+    openCatalogTemplate(templateId, companyId = get().activeCompanyId) {
+      return navigate({ pendingCatalogTemplateId: templateId, activeModule: 'catalogtemplates' }, ++navigationIntent, companyId);
+    },
+    clearPendingCatalogTemplateNav() { set({ pendingCatalogTemplateId: null }); },
     clearPendingCatalogNav() {
       set({ pendingCatalogProjectId: null });
     },

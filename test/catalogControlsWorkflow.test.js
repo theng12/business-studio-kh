@@ -42,7 +42,7 @@ async function load(name, hook, environment) {
       build.onResolve({ filter: /store\/index\.js$/ }, () => ({ path: 'store', namespace: 'test' }));
       build.onResolve({ filter: /components\/(ui|PageHeader|SaveStatus|ConfirmModal)\.jsx$/ }, (args) => ({ path: path.basename(args.path, '.jsx'), namespace: 'test' }));
       build.onResolve({ filter: /CatalogPreview\.jsx$/ }, () => ({ path: 'preview', namespace: 'test' }));
-      build.onLoad({ filter: /.*/, namespace: 'test' }, ({ path: name }) => ({ contents: name === 'store' ? 'export const useAppStore = (select) => select(globalThis.__catalogEnvironment.store);' : name === 'ConfirmModal' ? 'export const confirm = (options) => globalThis.__catalogEnvironment.confirm(options);' : name === 'preview' ? 'export function CatalogPreview() {}' : 'export function Button() {} export function Input() {} export function Select() {} export function Field() {} export function Modal() {} export function PageHeader() {} export function SaveStatus() {}', loader: 'js' }));
+      build.onLoad({ filter: /.*/, namespace: 'test' }, ({ path: name }) => ({ contents: name === 'store' ? 'export const useAppStore = (select) => select(globalThis.__catalogEnvironment.store);' : name === 'ConfirmModal' ? 'export const confirm = (options) => globalThis.__catalogEnvironment.confirm(options);' : name === 'preview' ? 'export function CatalogPreview() {}' : 'export function Button() {} export function Input() {} export function Textarea() {} export function Select() {} export function Field() {} export function Modal() {} export function PageHeader() {} export function SaveStatus() {} export function EmptyState() {} export function Pagination() {} export function paginate(total) { return { pageStart: 0, pageEnd: total, currentPage: 0, maxPage: 0 }; }', loader: 'js' }));
       // Use the actual conflict resolver, replacing only the interactive choice.
       build.onLoad({ filter: /ConflictModal\.jsx$/ }, (args) => ({ contents: fs.readFileSync(args.path, 'utf8').replace('choose = showConflict', 'choose = globalThis.__catalogEnvironment.choose'), loader: 'jsx' }));
       build.onResolve({ filter: /companySwitch\.js$/ }, () => ({ path: 'switch', namespace: 'guard' }));
@@ -53,7 +53,7 @@ async function load(name, hook, environment) {
   global.window = { api: { catalogStudio: environment.api } };
   const mod = { exports: {} };
   new Function('require', 'module', 'exports', out.outputFiles[0].text)((id) => id === 'react' ? hook.React : id === 'react/jsx-runtime' ? hook.runtime : require(id), mod, mod.exports);
-  return mod.exports[name === 'TemplateBuilder' ? 'CatalogTemplateBuilder' : name];
+  return mod.exports[name === 'TemplateBuilder' ? 'CatalogTemplateBuilder' : name === 'index' ? 'CatalogTemplates' : name];
 }
 async function builder(options = {}) {
   const hook = hooks(); const requests = []; const toasts = []; let closed = 0;
@@ -142,4 +142,71 @@ test('shared design controls expose bounded print options and retain field sourc
   const align = control(root, 'Alignment');
   assert.equal(align['aria-label'], 'Alignment for custom.Long original source title');
   align.onChange({ target: { value: 'center' } }); assert.equal(patches.pop().fields[0].align, 'center');
+});
+
+
+test('design disclosures retain independent open state while current summaries track edits', async () => {
+  const hook = hooks(); const Controls = await load('DesignControls', hook, { store: { products: [] } });
+  let config = { columns: 3, fields: [] };
+  const render = () => hook.render(Controls, { config, onChange: (patch) => { config = { ...config, ...patch }; } });
+  const group = (root, label) => find(root, (n) => n.type === 'details' && find(n.props.children?.[0], (child) => child.props?.children === label));
+  let root = render();
+  const layout = group(root, 'Layout'); assert.ok(layout, 'native Layout disclosure'); assert.equal(layout.props.open, true);
+  const style = group(root, 'Style'); assert.equal(style.props.open, false);
+  style.props.onToggle({ currentTarget: { open: true } }); root = render();
+  assert.equal(group(root, 'Style').props.open, true); assert.equal(group(root, 'Layout').props.open, true);
+  group(root, 'Layout').props.onToggle({ currentTarget: { open: false } });
+  control(root, 'Columns').onChange({ target: { value: '5' } }); root = render();
+  assert.equal(group(root, 'Layout').props.open, false); assert.equal(group(root, 'Style').props.open, true);
+  const summary = group(root, 'Layout').props.children[0];
+  assert.ok(find(summary, (n) => typeof n.props?.children === 'string' && n.props.children.includes('5 columns')), 'collapsed summary tracks the edited value');
+  for (const label of ['Cover', 'Photos and text', 'Page header and footer', 'Card fields']) assert.ok(group(root, label), label);
+});
+
+
+test('searched catalog template opens its editor and ignores stale cross-company replies', async () => {
+  const hook = hooks(); const first = deferred(); const requests = []; const toasts = [];
+  const store = { activeCompanyId: 'company-a', pendingCatalogTemplateId: 'template-a', addToast: (message) => toasts.push(message), clearPendingCatalogTemplateNav() { store.pendingCatalogTemplateId = null; } };
+  const environment = { store, api: { listTemplates: async () => [], getTemplate: (id) => { requests.push(id); return first.promise; } } };
+  const Templates = await load('index', hook, environment); hook.render(Templates, {});
+  assert.deepEqual(requests, ['template-a']);
+  store.activeCompanyId = 'company-b'; store.pendingCatalogTemplateId = 'template-b';
+  environment.api.getTemplate = async () => ({ id: 'template-b', companyId: 'company-b', name: 'Second', config: {} }); hook.render(Templates, {});
+  await new Promise(setImmediate); hook.render(Templates, {});
+  assert.equal(component(hook.output, 'CatalogTemplateBuilder').props.draft.id, 'template-b');
+  first.resolve({ id: 'template-a', companyId: 'company-a', name: 'First', config: {} }); await new Promise(setImmediate); hook.render(Templates, {});
+  assert.equal(component(hook.output, 'CatalogTemplateBuilder').props.draft.id, 'template-b');
+  assert.equal(store.pendingCatalogTemplateId, null); assert.deepEqual(toasts, []); hook.cleanup();
+});
+
+
+test('design field summary matches default print fields and respects deliberately empty fields', async () => {
+  const hook = hooks(); const Controls = await load('DesignControls', hook, { store: { products: [] } });
+  let root = hook.render(Controls, { config: {}, onChange() {} });
+  assert.ok(find(root, (n) => n.props?.className === 'catalog-design-section__value' && n.props.children === '4 fields printed'));
+  root = hook.render(Controls, { config: { fields: [] }, onChange() {} });
+  assert.ok(find(root, (n) => n.props?.className === 'catalog-design-section__value' && n.props.children === '0 fields printed'));
+});
+
+
+for (const [action, expectedId, expectedName] of [
+  ['+ New template', undefined, ''],
+  ['Edit', 'template-b', 'Manual B'],
+  ['Open in builder', undefined, 'Modern product grid (mine)'],
+]) test(`delayed searched template cannot replace manual ${action} builder intent`, async () => {
+  const hook = hooks(); const delayed = deferred(); const toasts = [];
+  const store = { activeCompanyId: 'company-a', pendingCatalogTemplateId: 'template-a', addToast: (message) => toasts.push(message), clearPendingCatalogTemplateNav() { store.pendingCatalogTemplateId = null; } };
+  const environment = { store, api: {
+    listTemplates: async () => [{ id: 'template-b', companyId: 'company-a', name: 'Manual B', config: {}, updatedAt: 5 }],
+    getTemplate: () => delayed.promise,
+  } };
+  const Templates = await load('index', hook, environment); hook.render(Templates, {}); await new Promise(setImmediate); hook.render(Templates, {});
+  button(hook.output, action).onClick();
+  // Reply before the next parent render: the old effect has not cleaned up yet.
+  delayed.resolve({ id: 'template-a', companyId: 'company-a', name: 'Searched A', config: {} }); await new Promise(setImmediate); hook.render(Templates, {});
+  const builder = component(hook.output, 'CatalogTemplateBuilder'); assert.ok(builder);
+  assert.equal(builder.props.draft.id, expectedId); assert.equal(builder.props.draft.name, expectedName);
+  const enteredDraft = builder.props.draft;
+  hook.render(Templates, {}); assert.equal(component(hook.output, 'CatalogTemplateBuilder').props.draft, enteredDraft, 'manual draft identity is retained for its typed editor state');
+  assert.equal(store.pendingCatalogTemplateId, null); assert.deepEqual(toasts, []); hook.cleanup();
 });

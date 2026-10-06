@@ -247,7 +247,7 @@ export default function App() {
 
   return (
     <div className="shell">
-      <Sidebar />
+      <Sidebar onSearch={() => { if (!modalDialogOpen(document)) setSearchOpen(true); }} />
       <main className="shell__content" inert={companySwitching ? '' : undefined} aria-busy={companySwitching || undefined}>
         <div className={`titlebar${isMac ? ' titlebar--mac' : ''}`} />
         {clientUnconfigured ? (
