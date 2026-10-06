@@ -210,8 +210,8 @@ async function labelsDocument({ template, products, brands = [], layout = {}, pr
   const mode = layout.mode || 'sheet';
   const pageSize = layout.pageSize || 'A4';
   const orientation = layout.orientation || 'portrait';
-  const margin = Math.max(0, Number(layout.marginMm) || 8);
-  const gap = Math.max(0, Number(layout.gapMm) || 2);
+  const margin = Math.max(0, layout.marginMm != null && layout.marginMm !== '' && Number.isFinite(Number(layout.marginMm)) ? Number(layout.marginMm) : 8);
+  const gap = Math.max(0, layout.gapMm != null && layout.gapMm !== '' && Number.isFinite(Number(layout.gapMm)) ? Number(layout.gapMm) : 2);
   const copies = Math.max(1, Math.min(100, Number(layout.copies) || 1));
   const repeated = labels.flatMap((html) => Array.from({ length: copies }, () => html));
   const fonts = embeddedFontCss(JSON.stringify({ template, products }), { preview });

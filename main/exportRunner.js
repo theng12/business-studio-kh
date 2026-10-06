@@ -360,6 +360,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       continue;
     }
 
+    let productExported = 0;
     for (let i = 0; i < images.length; i++) {
       if (cancelRequested()) break;
       const img = images[i];
@@ -432,6 +433,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       try {
         await processOneImage({ sourceAbs, profile, outPath: outFile });
         exported++;
+        productExported++;
         if (action === 'replace') replaced++;
         if (usedRaw) exportedFromRaw++;
         // Record the encoded output size for the run's size summary.
@@ -446,7 +448,6 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
           if (!toLibrary.has(productId)) toLibrary.set(productId, []);
           toLibrary.get(productId).push(outFile);
         }
-        // Mark as exported on product if all processed images now exported in this run.
         onProgress?.('image', { product, imageIndex: i, totalProducts: productIds.length, productIndex: p, outFile, usedRaw, action, bytes });
       } catch (err) {
         skipped++;
@@ -462,8 +463,9 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
     if (cancelled) break;
     productsDone++;
 
-    // Flip the product to "exported" if it had processed images.
-    if (images.some((im) => im.isProcessed)) {
+    // Complete requested work must be written this run. Collision Skip keeps an
+    // existing file but does not prove it contains the current product image.
+    if (productExported === images.length && images.some((im) => im.isProcessed)) {
       try {
         products.setProcessStatus(product.id, 'exported');
       } catch (err) {

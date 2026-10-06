@@ -463,7 +463,12 @@ class Crawl {
 
   /* Navigate by clicking the real sidebar button. */
   async goto(label) {
-    const res = await this.eval(`window.__ui.click('.sidebar__item', ${JSON.stringify(label)})`);
+    const res = await this.eval(`(() => {
+      const item = window.__ui.all('.sidebar__item').find((el) => window.__ui.textOf(el.querySelector('span:not(.sidebar__item-shortcut)')) === ${JSON.stringify(label)});
+      if (!item) return 'MISS';
+      item.click();
+      return 'ok';
+    })()`);
     if (res !== 'ok') throw new Error(`sidebar item not found: ${label} (${res})`);
     await this.waitFor(
       `!document.querySelector('.page-fallback') && (document.querySelector('.page__header') || document.querySelector('.page__error'))`,
@@ -478,6 +483,13 @@ class Crawl {
     await this.goto(label);
     const crash = await this.eval('window.__ui.crash()');
     const header = await this.eval('window.__ui.header()');
+    if (id === 'history') {
+      const globalHistory = await this.eval(`!!document.querySelector('.page--history') && window.__ui.textOf(document.querySelector('.page--history .page__title')) === 'History'`);
+      if (!globalHistory) {
+        this.step('page history', false, `Expected global History, got ${header || '(no header)'}`);
+        return;
+      }
+    }
     const bare = await this.eval('window.__ui.bareRanges()');
     const sliders = await this.eval('window.__ui.sliderCount()');
     const boxes = await this.eval('window.__ui.valueBoxCount()');
