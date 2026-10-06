@@ -288,8 +288,8 @@ Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
 **Note on styling (corrected 2026-09-19).** This table used to say Tailwind
 CSS and Puppeteer. Neither is true of this app and hasn't been for a long
 time: there is no `tailwindcss` dependency and no Tailwind or PostCSS config,
-and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~11.5k
-lines; verified 2026-10-02) plus small per-feature CSS blocks in the same file, and PDFs are
+and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~11.6k
+lines; verified 2026-10-06) plus small per-feature CSS blocks in the same file, and PDFs are
 produced by Electron's own `webContents.printToPDF()` in
 `main/renderWindow.js` — no bundled Chromium, no extra download. Both
 replacements are deliberate: the print path costs nothing extra, and the CSS
@@ -298,7 +298,7 @@ per-app choice, not the house default.
 
 ## 17. File layout (Electron apps)
 
-*(Counts re-verified 2026-10-02.)*
+*(Counts re-verified 2026-10-06.)*
 
 The shape below is what this app actually uses. Two things to note, because
 they're the parts newcomers get wrong: `db` and `ipc` are **directories with
@@ -314,7 +314,7 @@ main/                    # main process — CommonJS (require/module.exports)
   ipc/                   # 25 files, one per domain (products.js, images.js, …)
   db/                    # 30 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 32 helpers (slug, capabilities, landedCost,
+  util/                  # 33 helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode
@@ -342,7 +342,7 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 154 files — `node --test test/**/*.test.js`
+test/                    # 175 files — `node --test test/**/*.test.js`
 scripts/                 # 13 files: build-icon.js, build-webclient.js,
                          # prune-dmgs.js           (`npm run dmgs:prune`)
                          # probe-render-paint.js  (`npm run check:render`)
@@ -439,7 +439,7 @@ again, and twelve 240 MB DMGs had piled up. Use `npm run dmgs:prune` (dry run:
 them, per the working rule at the top of this file. The rule, the numeric version sort and
 the no-delete property are pinned by `test/dmgRetention.test.js`.
 
-**`dist/` means the owner's checkout** — `$HOME/Developer/media-studio-kh/dist`,
+**`dist/` means the owner's current checkout** — `$HOME/Developer/media-studio-kh/dist` (verified 2026-10-06),
 which is where he looks for a release. `npm run dist` writes into the build worktree
 instead, so copy the release's DMG across as the last step of a release (one file since
 2026-09-27 — AGENTS.md §20).

@@ -151,17 +151,29 @@ Primary planning worktree: `codex/app-audit-plan`, starting at `0732bb5`. The [i
 
 Start: e3af16d; worktree $HOME/.codex/worktrees/app-improvements/media-studio-kh; branch codex/app-improvements. Owner checkout .serena remains untouched. Dependencies are an independent copy, not a shared symlink.
 
-- [ ] 1a Artwork/export path boundaries (O1/O2)
-- [ ] 1b Brand rename integrity (PO-1)
-- [ ] 1c Gallery ownership (IA-3)
-- [ ] 2 Product Library and organization (PO-2–7)
-- [ ] 3 AI lifecycle/results (IA-1/2)
-- [ ] 4 Crop geometry/context (IA-7/8)
-- [ ] 5 Overlay save/apply/history/layout (IA-4–6)
-- [ ] 6 Labels/exports/history (O3–5/7/8)
-- [ ] 7 Social preview geometry (O6)
-- [ ] 8 PO/cost/Settings (OPS-1–4/SET-1)
+- [x] 1a Artwork/export path boundaries (O1/O2)
+- [x] 1b Brand rename integrity (PO-1)
+- [x] 1c Gallery ownership (IA-3)
+- [x] 2 Product Library and organization (PO-2–7)
+- [x] 3 AI lifecycle/results (IA-1/2)
+- [x] 4 Crop geometry/context (IA-7/8)
+- [x] 5 Overlay save/apply/history/layout (IA-4–6)
+- [x] 6 Labels/exports/history (O3–5/7/8)
+- [x] 7 Social preview geometry (O6)
+- [x] 8 PO/cost/Settings (OPS-1–4/SET-1)
 - [ ] Independent task reviews, full verification, UI/output inspection
 - [ ] Patch/changelog/HANDOFF, PR merge, owner sync, DMG verification/copy, cleanup
 
 Parallel work is explicitly owner-authorized and limited to disjoint ownership. Each worker reads its brief, records baseline/red/green evidence, and leaves an artifact for controller review. The primary owns shared contracts, package/version/release/docs and integration. No worker publishes, pushes, merges or launches a GUI.
+
+Baseline evidence: `npm run check`1248pass/0fail/0skip (four existing lint warnings); `npm run test:native`212pass/0fail/0skip. Task workers dispatched at e3af16d app source: fix_file_boundaries (task-1a-report.md), fix_brand_integrity (task-1b-report.md), fix_ai_reliability (task-ai-report.md). Reports and red/green logs live under worktree graphify-out/app-improvements/. The primary reviews serial task diffs and records checkpoint SHAs here.
+
+Checkpoint log: 1b implementation79ed396; independent review found one P1 case-only final-move rollback gap; fix_brand_integrity resumed for round1 with native reproduction. 1a implementationea635bf; independent compatibility review active. AI IA-1/2/3 includes narrowly justified shared addImage cap guard so auto-add uses the existing50-image limit and at-cap content dedup remains valid. Newnative fixtures are registered in package test:native. No checkpoint is marked complete before required review fixes pass.
+
+Task1b: complete (79ed396 +1edbfc9; round1 P1 addressed, spec/quality review clean;51 scopednative cases). Task1a round1 restores legal SVG image compatibility under same roots; rereview pending. AIcheckpoint789e736 review active.
+
+Restart recovery: no child processes left; recovered reviewer independently completed Task1a round1 and AI task reviews, both spec/quality PASS. Task1a completeea635bf+2bf7579; Task1c/3 complete789e736 including shared cap guard. Parent corroborated2native AI checks+1stopdrain and preserved logs. Remaining active workers: fix_product_library Task2, fix_overlay_editor Task5, fix_operations_settings Task8, all start2bf7579 in sameworktree with disjointownership.
+
+Task5 complete0ce2544 (spec/quality review clean;115JS+4native;parent geometryinspection pending finalpass). Task8 completef71b5cf+e5d5af1 (round1 queued-revert P1 addressed; sharedgetterregressions,146focusedNode+8native; rereview clean). Task2 b5f9ad6+7d7b05b round1 active for failed-overwrite revision andCompany modal stalecompletion. Labels/exports/History Task6 workeractive7d7b05b; Crop Task4 workere5d5af1; Social Task7 stillqueued. Parent applies sharedIPC validators/preload and nativetestlist serially, all covered by task/final review.
+
+Task2 completeb5f9ad6+7d7b05b+16385a8, round1 twoP2s addressed/reviewclean. Task6 complete89a84b3, reviewclean; fullNativeSVGlabel/PNGunique/A4+actualSKU proof. Task7 completea417302+50a8fc9, reviewclean; nativepreview/exportpixel delta0 and8000²1.6s atscale1. Task4 complete11ad409+a0cef9f, round1 actualsavedsize/postcommitrefreshP2s addressed/reviewclean; importceiling andlegacycanvaspolicy preserved. All code tasks complete; integrated verification/realUI/release remain. Sharedcontracts4887056 registerednativetests andtypedrevisions/immutableimage/crop requests. FirstintegratedJS1377:1375pass,2failure(oldFXsourceassert +unbundledgeneratedphone); fixedbundle, FXbehaviorcheckcleanup active. Candidate patch0.1.92.

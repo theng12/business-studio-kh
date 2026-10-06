@@ -7,7 +7,7 @@ One shared Product Library sits at the centre. Product details are entered once 
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release: **0.1.91** (2026-10-05). It is built for home use — the owner's Macs and his
+Current release candidate: **0.1.92** (2026-10-06). It is built for home use — the owner's Macs and his
 brother's — and is not publicly distributed.
 
 ## Where to read next
@@ -15,7 +15,7 @@ brother's — and is not publicly distributed.
 | Document | What it is for |
 |---|---|
 | [`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md) | The current truth for a working session: versions, commands, paths, traps, open gaps. Read first. |
-| [`docs/tasks/APP_IMPROVEMENT_PLAN.md`](docs/tasks/APP_IMPROVEMENT_PLAN.md) | Current whole-app audit and eight prioritized fix batches (2026-10-06); planned, not implemented. |
+| [`docs/tasks/APP_IMPROVEMENT_PLAN.md`](docs/tasks/APP_IMPROVEMENT_PLAN.md) | Current whole-app audit and eight implemented fix batches (2026-10-06), with verification and release progress. |
 | [`docs/Business Studio KH Project Status.md`](docs/Media%20Studio%20KH%20Project%20Status.md) | Short status page: current release, checks, release process, closed decisions. |
 | [`AGENTS.md`](AGENTS.md) (also `CLAUDE.md`) | Engineering rules for this codebase. |
 | [`docs/UI_GUIDE.md`](docs/UI_GUIDE.md) | The one UI pattern every screen follows. |
