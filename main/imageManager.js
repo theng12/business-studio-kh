@@ -467,22 +467,28 @@ function moveBrandDirEverywhere(companySlugs, oldBrandSlug, newBrandSlug, commit
     plans.push(plan);
   }
 
-  const reservations = new Set();
+  const reservations = new Map();
   function reserve(abs) {
     fs.mkdirSync(abs); // No recursive mkdir: an occupied target must fail.
-    reservations.add(abs);
+    reservations.set(abs, fs.lstatSync(abs));
   }
   function move(from, to) {
     fs.renameSync(from, to);
     reservations.delete(to); // The source directory now owns this path.
   }
+  function preserveEmptyReservation(abs) {
+    const owned = reservations.get(abs);
+    if (!owned || !fs.existsSync(abs)) return;
+    const current = fs.lstatSync(abs);
+    if (current.dev !== owned.dev || current.ino !== owned.ino
+      || !current.isDirectory() || fs.readdirSync(abs).length) return;
+    const trash = path.join(getDataDir(), '_trash', 'brand-rename');
+    fs.mkdirSync(trash, { recursive: true });
+    fs.renameSync(abs, path.join(trash, crypto.randomUUID()));
+    reservations.delete(abs);
+  }
   function preserveEmptyReservations() {
-    for (const abs of reservations) {
-      if (!fs.existsSync(abs) || !fs.lstatSync(abs).isDirectory() || fs.readdirSync(abs).length) continue;
-      const trash = path.join(getDataDir(), '_trash', 'brand-rename');
-      fs.mkdirSync(trash, { recursive: true });
-      fs.renameSync(abs, path.join(trash, crypto.randomUUID()));
-    }
+    for (const abs of reservations.keys()) preserveEmptyReservation(abs);
   }
   // ponytail: synchronous rollback covers operation errors; a process/power
   // loss between move and commit would require a durable rename journal.
@@ -496,7 +502,7 @@ function moveBrandDirEverywhere(companySlugs, oldBrandSlug, newBrandSlug, commit
         plan.currentAbs = stage;
       }
       reserve(plan.newAbs);
-      targetIsFree(plan, fs.lstatSync(plan.newAbs));
+      targetIsFree(plan, reservations.get(plan.newAbs));
       move(plan.currentAbs ?? plan.oldAbs, plan.newAbs);
       plan.currentAbs = plan.newAbs;
     }
@@ -512,6 +518,9 @@ function moveBrandDirEverywhere(companySlugs, oldBrandSlug, newBrandSlug, commit
           move(plan.currentAbs, stage);
           plan.currentAbs = stage;
         }
+        // A failed case-only final move leaves our empty destination aliasing
+        // the old path. Release only that still-owned reservation first.
+        if (plan.caseOnly) preserveEmptyReservation(plan.newAbs);
         reserve(plan.oldAbs);
         move(plan.currentAbs, plan.oldAbs);
         plan.currentAbs = null;
