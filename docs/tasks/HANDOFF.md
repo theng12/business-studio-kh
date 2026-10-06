@@ -1,13 +1,13 @@
 # HANDOFF — Media Studio KH
 
-**Read this first.** Current for **0.1.93, 2026-10-06**. The seven approved everyday UX improvements are implemented and independently reviewed. Local suites, rendered checks, packaged client/server and installed-app smoke pass. One verified arm64 DMG is in the owner dist; repository integration is recorded in the local `graphify-out/ux-workflows/release-receipt.md`. If this disagrees with the code, the code wins and this file is corrected.
+**Read this first.** Current for **0.1.93, 2026-10-06**. The seven approved everyday UX improvements are implemented and independently reviewed. Local suites, rendered checks, packaged client/server and installed-app smoke pass. One verified arm64 DMG is in the owner dist; source PR #111 merged as `0d8c15b`; owner main synchronized. Build checkout archived after preserving its files. The local `graphify-out/ux-workflows/release-receipt.md` records the final integration facts. If this disagrees with the code, the code wins and this file is corrected.
 
 ## WHERE THINGS STAND
 
 | | |
 |---|---|
 | App | Media Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.93** — Catalog control disclosure/history, independent Library panels, processing recipe/keyboard crop/comparison, Dashboard attention queues and catalog-aware search. Reviewed PASS;1405JS/242native/147UI, build/audits/probes and packaged/installed smoke verified. Owner dist contains the arm64 DMG. |
+| Current release | **0.1.93** — Catalog control disclosure/history, independent Library panels, processing recipe/keyboard crop/comparison, Dashboard attention queues and catalog-aware search. PR #111 merged (`0d8c15b`), owner main synchronized; reviewed PASS and1405JS/242native/147UI plus package/install verified. Owner dist contains the arm64 DMG. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into the owner's `/Users/thengmacmini/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` (the build worktree's own `_trash/` is not the place — it was erased with the worktree on 2026-10-02). |
@@ -226,3 +226,5 @@ paste one into a commit, a document or a task.
 - Build worktrees need their own node_modules directory: npm install in predist replaces symlinked dependency trees. Both current checkout and build worktree dependencies were restored separately in this release. Prior dependency files were preserved under each checkout's _trash/catalog-workflow*/.
 
 - Release 0.1.92 cleanup: source branch name/head/merge logged in owner `_trash/README-media-studio-kh-branch-log.md` before ref deletion. Owner dependencies synchronized from the verified arm64 build; previous tree preserved in `_trash/app-improvements-0.1.92-owner-dependencies/`. Owner pre-existing `.serena/` untouched.
+
+- Release0.1.93 integration: source commit `cee03d9e7aab9e09bceb58a69e65cc868a442fc7`, [PR #111](https://github.com/theng12/media-studio-kh/pull/111), merge `0d8c15bf02bdb67824e1b4165b66c89ba1c51cf0`. Owner main synchronized, Electron in-memory SQLite ABI smoke passed. Source branch refs logged in owner trash before deletion. Native worktree archival confirmed; ignored build/dependency/profile files preserved in owner `_trash/ux-workflows-build-0.1.93/`, proof in owner `graphify-out/ux-workflows/`. Pre-existing `.serena/` and CLAUDE symlink preserved.

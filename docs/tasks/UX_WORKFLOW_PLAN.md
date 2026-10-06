@@ -51,7 +51,7 @@ Files: ProductLibrary/index.jsx, ProductForm.jsx, renderer/index.css; relevant e
 - [x] Full npm run check, npm run test:native, production build, both dependency audits; affected render/image/client-server probes. Clean-profile UI crawl plus populated/overflow layouts and actual keyboard traversal.
 - [x] Patch 0.1.93 and top plain-text What's new entry; update HANDOFF and plan with actual evidence/remaining limits.
 - [x] Build arm64 DMG, verify packaged app with isolated data and hdiutil; copy to owner dist, prune older DMGs by move. Install only under recorded install workflow, preserving prior app.
-- [ ] Confirm Actions disabled; commit/push, PR attach, merge only after verified/reviewed/mergeable. Sync owner main. Record branch before deletion; preserve ignored evidence/builds before native worktree archival. Do not publish/tag.
+- [x] Confirm Actions disabled; commit/push, PR attach, merge only after verified/reviewed/mergeable. Sync owner main. Record branch before deletion; preserve ignored evidence/builds before native worktree archival. Do not publish/tag.
 
 ## Delegation ledger
 
@@ -60,7 +60,7 @@ Each worker starts at 079d528 in the same managed checkout, owns only assigned f
 ## Progress
 
 - Preparation: owner rules/handoff read, critique accepted, managed worktree created. Baseline check passed1379 before source edits.
-- Tasks1–4 complete and independent review PASS. Full verification1405JS/242native, production build, zero audit vulnerabilities,147/147UI and image/render/client-server probes passed. Native keyboard manual checks passed. Packaging complete; repository integration/cleanup pending; evidence graphify-out/ux-workflows.
+- Tasks1–4 complete and independent review PASS. Full verification1405JS/242native, production build, zero audit vulnerabilities,147/147UI and image/render/client-server probes passed. Native keyboard manual checks passed. Packaging, source integration and cleanup complete; evidence graphify-out/ux-workflows.
 
 ## Review resolutions and integration decisions
 
@@ -69,4 +69,4 @@ Each worker starts at 079d528 in the same managed checkout, owns only assigned f
 - Shared price completeness logic treats zero amounts as present and blank scalar values consistently with named groups. Existing formatter mirrors remain unchanged.
 - Preflight interfaces: Tasks1/3 share Catalog template pending navigation; matching IDs/company guards verified. Tasks3/4 share attentionFilter and pendingLibraryProductId; filters/clear/result consumer verified. Tasks1/2/3/4 shared CSS/shortcut sheet remain primary-only, no removed CSS class. Tasks1–4 requirements and checks agree; no conflicting source ownership.
 
-Package and installed0.1.93 smoke PASS; owner DMG verified valid, SHA-256 78f56b653364258f66786bf1fbc4a11166faa3272a3edbf34d25b48be14e8f66. Postdist242native pass. Owner keeps0.1.92/0.1.93, priorapp and olderDMG moved to trash. Integration/cleanup remain until receipt confirms them.
+Package and installed0.1.93 smoke PASS; owner DMG verified valid, SHA-256 78f56b653364258f66786bf1fbc4a11166faa3272a3edbf34d25b48be14e8f66. Postdist242native pass. Owner keeps0.1.92/0.1.93, priorapp and olderDMG moved to trash. Source PR111 merged0d8c15b; owner main synchronized, branch logged/deleted and native build worktree archived. Ignored build files preserved in owner trash and proof copied to owner graphify-out/ux-workflows. Local receipt confirms the actual outcomes.
