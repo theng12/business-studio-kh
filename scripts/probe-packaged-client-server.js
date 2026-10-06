@@ -265,7 +265,7 @@ function catalogNameInputScript() {
     if (!editor) return null;
     return [...editor.querySelectorAll('label')]
       .find((label) => label.textContent.trim().startsWith('Name'))
-      ?.querySelector('input') ?? null;
+      ?.control ?? null;
   })()`;
 }
 
@@ -280,12 +280,12 @@ async function openCatalogEditor(target, projectName, role) {
   assert.ok(openedProjects, `${role} could not open Catalog Projects from the sidebar`);
 
   await waitFor(
-    () => evaluate(target, `(() => [...document.querySelectorAll('.catalog-project-card')]
+    () => evaluate(target, `(() => [...document.querySelectorAll('.catalog-card')]
       .some((card) => card.innerText.includes(${JSON.stringify(projectName)})))()`),
     `${role} catalog project fixture`,
   );
   const openedEditor = await evaluate(target, `(() => {
-    const card = [...document.querySelectorAll('.catalog-project-card')]
+    const card = [...document.querySelectorAll('.catalog-card')]
       .find((candidate) => candidate.innerText.includes(${JSON.stringify(projectName)}));
     const button = [...(card?.querySelectorAll('button') ?? [])]
       .find((candidate) => candidate.textContent.trim() === 'Open');
@@ -478,7 +478,7 @@ async function runCatalogEditorConflictScenario({ serverTarget, clientTarget, pr
 
 function workspaceBrightnessInputScript() {
   return `(() => [...document.querySelectorAll('.ws-panel .slider-field')]
-    .find((field) => field.querySelector('.slider-field__head span')?.textContent.trim() === 'Brightness')
+    .find((field) => field.querySelector('.slider-field__head label')?.textContent.trim() === 'Brightness')
     ?.querySelector('input[type="range"]'))()`;
 }
 
@@ -555,7 +555,7 @@ async function setWorkspaceBrightness(target, value, role) {
 
 async function clickWorkspaceSave(target, role) {
   const clicked = await evaluate(target, `(() => {
-    const button = [...document.querySelectorAll('.ws-panel__actions button')]
+    const button = [...document.querySelectorAll('.page--workspace .save-status__button')]
       .find((candidate) => candidate.textContent.trim() === 'Save' && !candidate.disabled);
     if (!button) return false;
     button.click();
@@ -566,7 +566,7 @@ async function clickWorkspaceSave(target, role) {
 
 async function waitForWorkspaceSaved(target, role) {
   await waitFor(
-    () => evaluate(target, `document.querySelector('.ws-save')?.textContent.includes('All changes saved')`),
+    () => evaluate(target, `document.querySelector('.page--workspace .save-status')?.textContent.includes('All changes saved')`),
     `${role} Workspace save`,
   );
 }
@@ -588,16 +588,14 @@ async function waitForWorkspaceBrightness(target, value, role) {
 
 async function waitForWorkspaceAutosavePending(target, role) {
   await waitFor(
-    () => evaluate(target, `Boolean(document.querySelector('.ws-save--amber')
-      || [...document.querySelectorAll('.ws-save')].some((node) => node.textContent.includes('Saving')))`),
+    () => evaluate(target, `Boolean(document.querySelector('.page--workspace .save-status--dirty, .page--workspace .save-status--saving'))`),
     `${role} Workspace autosave pending`,
   );
 }
 
 async function waitForWorkspaceAutosaveError(target, role) {
   await waitFor(
-    () => evaluate(target, `Boolean(document.querySelector('.ws-save--rose')
-      || [...document.querySelectorAll('.ws-save')].some((node) => node.textContent.includes('Save failed')))`),
+    () => evaluate(target, `Boolean(document.querySelector('.page--workspace .save-status--error'))`),
     `${role} Workspace autosave failure`,
   );
 }
@@ -930,7 +928,9 @@ async function main() {
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } finally {
     await Promise.all(processes.map(stopChild));
-    await fsp.rm(root, { recursive: true, force: true });
+    const preservedRoot = path.join(ROOT, '_trash', 'packaged-probes', path.basename(root));
+    await fsp.mkdir(path.dirname(preservedRoot), { recursive: true });
+    await fsp.rename(root, preservedRoot);
   }
 }
 
