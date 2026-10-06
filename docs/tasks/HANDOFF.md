@@ -1,7 +1,7 @@
 # HANDOFF — Media Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.92 candidate, 2026-10-06**. If it disagrees with the
+that produced it. Current for the **0.1.92 candidate, 2026-10-06**; repository integration remains pending. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,11 +9,11 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Media Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.92 candidate** — All eight app-audit batches implemented in `codex/app-improvements`; task reviews passed, final tests/UI/package/integration underway. Owner installed app is currently0.1.32; no live-data test was performed. |
+| Current release | **0.1.92 candidate** — all eight batches, reviews, local and packaged checks, installed-app smoke, build and DMG integrity are verified. PR/merge, owner checkout sync and cleanup remain pending. No live-data test was performed. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
-| Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into the owner's `/Users/vengtheng/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` (the build worktree's own `_trash/` is not the place — it was erased with the worktree on 2026-10-02). |
-| Distribution | **One unsigned DMG per release**, `dist/Media Studio KH-<version>-arm64.dmg` — Theng's instruction of 2026-09-27 ("you only need to build 1 dmg. the arm64 until i tell you otherwise"), pinned by `test/releaseScripts.test.js`. An Intel build is still one command (`npm run dist:x64`) but ask first (AGENTS.md §20). They are handed to the owner; nothing is tagged, released, signed or published. `dist/` is gitignored. **`dist/` means the OWNER'S checkout** (`/Users/vengtheng/Developer/media-studio-kh/dist`) — that is where he looks for them. `npm run dist` writes them into the build worktree instead, so copy the release's one arm64 DMG across before saying the release is done. **Only the newest two releases are kept** (Theng, 2026-09-26): run `npm run dmgs:prune` after a build, which moves anything older to `_trash/old-dmgs/`. |
+| Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into the owner's `/Users/thengmacmini/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` (the build worktree's own `_trash/` is not the place — it was erased with the worktree on 2026-10-02). |
+| Distribution | **One unsigned DMG per release**, `dist/Media Studio KH-<version>-arm64.dmg` — Theng's instruction of 2026-09-27 ("you only need to build 1 dmg. the arm64 until i tell you otherwise"), pinned by `test/releaseScripts.test.js`. An Intel build is still one command (`npm run dist:x64`) but ask first (AGENTS.md §20). They are handed to the owner; nothing is tagged, released, signed or published. `dist/` is gitignored. **`dist/` means the OWNER'S checkout** (`/Users/thengmacmini/Developer/media-studio-kh/dist`) — that is where he looks for them. `npm run dist` writes them into the build worktree instead, so copy the release's one arm64 DMG across before saying the release is done. **Only the newest two releases are kept** (Theng, 2026-09-26): run `npm run dmgs:prune` after a build, which moves anything older to `_trash/old-dmgs/`. |
 | Hosted CI | **Disabled on purpose.** Before any push, `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` must return `false`. Never enable or dispatch a workflow. |
 
 ## Catalog workflow — 0.1.91 (2026-10-05)
@@ -32,41 +32,59 @@ Owner requested the complete Catalog audit fixes and workflow improvements. The 
 
 ## Whole-app improvements — 0.1.92 candidate (2026-10-06)
 
-- All eight confirmed audit batches implemented; source checkpoint/review/proof ledger is `docs/tasks/APP_IMPROVEMENT_PLAN.md`. Main source start e3af16d, managed worktree `/Users/thengmacmini/.codex/worktrees/app-improvements/media-studio-kh`.
-- Reused existing revision/conflict/save queue, locks, image importer, unique-file writer and renderer. No dependencies/schema change, provider spending, hosted Actions, owner-data mutation, tagging or publishing.
-- Source crop draft uses additive `sourceCropRect` in per-image JSON. Legacy `cropRect` remains the canvas processor's setting; no automatic coordinate migration. Overwrite resets baked rotation/draft and processed derivative flags, preserves unrelated latest settings; new copy/dedup preserves existing importer policy. Crop response/audit report actual saved dimensions and refresh failure acknowledges a successful mutation.
-- Task reviews caught and fixed case-only rename rollback, SVG compatibility, queued PO revert, one-operation Product overwrite, stale Company dialog completion and crop result reporting. All targeted task reviews pass.
-- Native hidden-window output: collision-safe203dpi480×320 labels and valid SVG/Khmer, actual one-page A4 PDF with all3SKUs extracted; Social previews exactly match reduced native exports in portrait/wide;8000² capture completed1.6s at observed scale1 (Browser working-set delta255MiB/GPU peak592MiB). No physical printer/secondMac/mobile capture proof.
-- Final full suites/renderedUI/package proof and installer placement are pending at this candidate checkpoint; update this section with actual results before final handoff.
+- All eight confirmed audit batches are implemented and independently reviewed PASS. The compact
+  checkpoint and evidence list is in [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md). Implementation started at `e3af16d`; final app-source checkpoint is `d3d43a4`; branch `codex/app-improvements`; worktree
+  `/Users/thengmacmini/.codex/worktrees/app-improvements/media-studio-kh`.
+- Verification: `release-check.log` 1379/1379; `integrated-native.log` and post-dist
+  `release-native-postdist.log` each 240/240; production build succeeded; both release audit
+  reports show zero vulnerabilities; UI crawl 145/145. Rendered crop, Overlay (1100/1400/1920px),
+  PO save/focus, image, render, client/server and webclient checks passed. Native output includes
+  an actual A4 PDF with all three fixture SKUs and exact Social preview/export pixel matches.
+- The work reuses the existing save/revision queues, locks, image importer, unique-file writer and
+  renderer. No schema bump or new runtime dependency. `source-map-js@1.2.2` is dev-only; the scoped
+  `@electron/get` override pins `global-agent`. No provider spending, owner-data mutation or hosted
+  Actions were used.
+- Crop now stores source coordinates additively in per-image JSON; legacy `cropRect` retains canvas
+  semantics. The targeted reviews also corrected rename rollback, SVG path compatibility, queued PO
+  reverts, Product overwrite identity, stale Company completion and crop result reporting.
+- Candidate DMG `Media Studio KH-0.1.92-arm64.dmg` passed integrity verification and was copied to
+  the owner's `dist/`. SHA-256:
+  `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765`. Pruning retained 0.1.91
+  and 0.1.92; older DMGs were moved to the owner's `_trash/old-dmgs/`.
+- Packaged client/server verification passed at probe checkpoint `77ee13a`. The isolated installed
+  app smoke passed: ready state, database ready, window shown, normal quit, and visible version
+  0.1.92. The previous 0.1.32 app was preserved under `_trash/installed-apps/`; no live-data test.
+- **Pending:** PR/merge, owner checkout synchronization and final cleanup. Do not call this shipped
+  until those integration steps are recorded complete.
 
 ## THE WORKING LOOP
 
-### Current planning work — 2026-10-06
+### Current release work — 2026-10-06
 
-The owner requested a distributed whole-app audit and per-area fix planning after Catalog 0.1.91. The current roadmap is [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md), with four area reports under `docs/tasks/app-audit-2026-10-06/`. The owner then authorized autonomous implementation. All eight software batches are implemented; task reviews and actual native output checks passed. Final verification, UI inspection, packaging and repository integration are underway. See the plan progress; do not call a candidate shipped before those steps succeed.
+The owner authorized eight whole-app fix batches after Catalog 0.1.91. All eight are implemented and independently reviewed PASS. For the current verified candidate and evidence, see [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md). The final app-source checkpoint is `d3d43a4`; the final packaged-probe checkpoint is `77ee13a`. Packaged client/server verification, installed-app smoke, DMG integrity and local verification passed. PR/merge, owner checkout synchronization and cleanup remain pending; do not call the candidate shipped before those steps succeed.
 
-Audit baseline: fresh build, isolated UI crawl 145/145 without console errors; scoped suites 31/38/58 pass; mocked current-source checks and actual component-harness checks corroborate the listed edge cases. Current full/production dependency audits each report zero vulnerabilities. The previous release's full 1248/212 test counts are historical, not a new full-suite run. Local evidence is in the current owner's ignored `graphify-out/app-audit-2026-10-06/`. No paid provider calls, live-data mutations or hardware readiness claims. Closed decisions stay closed.
+Current candidate evidence: `npm run check` 1379 pass; `npm run test:native` 240 pass (also rerun after dist); clean-profile UI crawl 145/145; production build and both dependency audits passed, with zero reported vulnerabilities. The packaged probe passed after selectors were updated to match the current UI, and the isolated installed app reached ready state with version 0.1.92 visible. Evidence is in `graphify-out/app-improvements/`. No provider calls or live-data mutations; physical devices remain unverified. Closed decisions stay closed.
 
-Replace `<wt>` with a worktree that has `node_modules` installed — this project's build worktree is
-`/Users/vengtheng/.codex/worktrees/workspace-concurrency/media-studio-kh`. Order matters.
+Replace `<wt>` with the dependency-installed build worktree
+`/Users/thengmacmini/.codex/worktrees/app-improvements/media-studio-kh`. Order matters.
 
 | # | Command | Note / footgun |
 |---|---|---|
 | 1 | `cd <wt> && git switch main && git pull --ff-only` | Start from merged `main`. |
 | 2 | `git switch -c codex/<topic>` | One branch per change or release. |
-| 3 | `npm run check` | `npm run lint && npm test`. **1217 pass** at 0.1.90 (1216 at 0.1.89). Four eslint warnings are pre-existing (unused disable directives in three unrelated test files and `main/util/fileTrash.js`); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flakes, two kinds:** 0–2 tests can fail on a run, and the honest response is always the same — re-run before believing it. (1) Several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output); seen 2026-09-26, clean in four follow-up runs. (2) The client/overlay timeout tests in `test/clientRpc.test.js` ("overlay reconciliation bounds hanging HTTP status reads", the `body` subtest) are wall-clock sensitive and failed twice on a loaded machine during 0.1.85, then passed in three consecutive full runs with no code change. Neither kind has ever reproduced on a quiet re-run. |
-| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **211 pass** at 0.1.89 and 0.1.90. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
+| 3 | `npm run check` | `npm run lint && npm test`. **1379 pass** at 0.1.92. Four eslint warnings are pre-existing (unused disable directives in three unrelated test files and `main/util/fileTrash.js`); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flakes, two kinds:** 0–2 tests can fail on a run, and the honest response is always the same — re-run before believing it. (1) Several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output); seen 2026-09-26, clean in four follow-up runs. (2) The client/overlay timeout tests in `test/clientRpc.test.js` ("overlay reconciliation bounds hanging HTTP status reads", the `body` subtest) are wall-clock sensitive and failed twice on a loaded machine during 0.1.85, then passed in three consecutive full runs with no code change. Neither kind has ever reproduced on a quiet re-run. |
+| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **240 pass** at 0.1.92, including the post-dist rerun. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
 | 4b | `node scripts/probe-webclient-context.js` | Real Chromium against `webclient/index.html` with loopback fixtures. **Any web-viewer change should run this** — it is the only check that loads the real page. Not in `package.json`; needs `env -u ELECTRON_RUN_AS_NODE`. |
 | 5 | `npm run check:images`, `check:render`, `check:client-server` | Electron probes. **This shell exports `ELECTRON_RUN_AS_NODE=1` globally**, so GUI probes need `env -u ELECTRON_RUN_AS_NODE npx electron …` or they behave as Node and fail. |
 | 6 | `env -u ELECTRON_RUN_AS_NODE npx electron . --remote-debugging-port=9333 --user-data-dir=/tmp/mskh-ui/userdata` | Launch for the crawl. **Footgun:** with no `config.json` in that user-data dir the app uses the owner's real data folder. Write `/tmp/mskh-ui/userdata/config.json` first: `{"dataDir":"/tmp/mskh-ui/data","firstLaunchHandled":true}`. |
-| 7 | `node scripts/probe-ui-crawl.js --port 9333 --out /tmp/mskh-ui/shots` | **145/145 at 0.1.89** (clean profile, no console errors; the 0.1.89 redesign needed the crawl's selectors updated — a step that fails after a UI change is checked by hand in the live app before it is called staleness); the only check that exercises real React screens. It creates companies and edits products — never point it at real data. **Run it against a fresh `--user-data-dir` and data folder**: re-running it over a previous crawl's profile flaked once on the label designer ("timed out waiting for the designer canvas"), and the clean re-run passed in full — so a failure here is not a finding until a clean-profile run reproduces it. Rebuild the renderer (`npm run build`) before a crawl that checks the shipped version: the crawl reads the *built* `dist-renderer` while the expected version comes from `package.json`, so a stale bundle fails "What's new shows the shipped version" on a correct tree. |
+| 7 | `node scripts/probe-ui-crawl.js --port 9333 --out /tmp/mskh-ui/shots` | **145/145 at 0.1.92** (clean profile, no console errors; the 0.1.89 redesign needed the crawl's selectors updated — a step that fails after a UI change is checked by hand in the live app before it is called staleness); the only check that exercises real React screens. It creates companies and edits products — never point it at real data. **Run it against a fresh `--user-data-dir` and data folder**: re-running it over a previous crawl's profile flaked once on the label designer ("timed out waiting for the designer canvas"), and the clean re-run passed in full — so a failure here is not a finding until a clean-profile run reproduces it. Rebuild the renderer (`npm run build`) before a crawl that checks the shipped version: the crawl reads the *built* `dist-renderer` while the expected version comes from `package.json`, so a stale bundle fails "What's new shows the shipped version" on a correct tree. |
 | 8 | Version bump | `npm version <next> --no-git-tag-version` (updates `package.json` + `package-lock.json`), then the top `WhatsNewModal.jsx` entry — plain-text bullets, `NEW —` / `FIX —` / `POLISH —` / `Internal —`. |
 | 9 | `npm run dist` | **One DMG (arm64) since 2026-09-27.** `predist` = `webclient:bundle` + `install:sharp` (both arches' sharp binaries stay installed so `dist:x64` still works); `postdist` = `native:host` (restores dev bindings). Emits the DMG plus `dist/mac-arm64/`. **A stale `dist/mac/` (Intel) from an older build may still be lying there — it is not this release.** |
 | 9b | `npm run dmgs:prune` | Keeps the newest two releases and **moves** older DMGs to `_trash/old-dmgs/` (never deletes). With one DMG per release that is two files, not four. Dry run: `npm run dmgs:prune:dry`. Theng's rule from 2026-09-26; pinned by `test/dmgRetention.test.js`. |
-| 9c | Copy the DMG into the owner's `dist/` | `/Users/vengtheng/Developer/media-studio-kh/dist` is where he looks; `npm run dist` only fills the worktree. Verify with `shasum -a 256`. |
-| 10 | Install | Quit the running app, copy the app (or mount the DMG) to `/Applications`, then `xattr -dr com.apple.quarantine "/Applications/Media Studio KH.app"` (unsigned build). Move the replaced app into the owner's `_trash/installed-apps/` rather than deleting it. **Then actually launch it — with `env -u ELECTRON_RUN_AS_NODE`** (see the rule below); `ditto` is safer than `cp -R` for an app bundle. |
+| 9c | Copy the DMG into the owner's `dist/` | `/Users/thengmacmini/Developer/media-studio-kh/dist` is where he looks; `npm run dist` only fills the worktree. Verify with `shasum -a 256`. **Done for 0.1.92; hash matches the verified worktree DMG.** |
+| 10 | Install | Quit the running app, copy the app (or mount the DMG) to `/Applications`, then `xattr -dr com.apple.quarantine "/Applications/Media Studio KH.app"` (unsigned build). Move the replaced app into the owner's `_trash/installed-apps/` rather than deleting it. **Then actually launch it — with `env -u ELECTRON_RUN_AS_NODE`** (see the rule below); `ditto` is safer than `cp -R` for an app bundle. **0.1.92 isolated launch and sidebar version check passed.** |
 | 11 | Ship | `git add -A`, commit, `git push -u origin codex/<topic>`, `gh pr create`, then switch the worktree OFF the topic branch (`git switch worktree/scratch`), then `gh pr merge <number> --merge` **without `--delete-branch`**, then delete the branch yourself (step 12). See the rule below — `--delete-branch` erased this worktree on 2026-10-02. |
-| 12 | Record | Branch name + SHA into the owner's `/Users/vengtheng/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` **before** deleting it (`git push origin --delete codex/<topic>` and `git branch -d codex/<topic>`); update this file with the new version/commit and anything newly learned. |
+| 12 | Record | Branch name + SHA into the owner's `/Users/thengmacmini/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` **before** deleting it (`git push origin --delete codex/<topic>` and `git branch -d codex/<topic>`); update this file with the new version/commit and anything newly learned. |
 
 Keep `dist/`, `node_modules/`, `dist-electron/`, `dist-renderer/`, `graphify-out/`, `_trash/` and
 test profiles out of Git — they are gitignored on purpose.
@@ -75,13 +93,13 @@ test profiles out of Git — they are gitignored on purpose.
 
 | What | Where |
 |---|---|
-| Owner's checkout | `/Users/vengtheng/Developer/media-studio-kh` (on `main`, **no** `node_modules`) |
-| Build worktree | `/Users/vengtheng/.codex/worktrees/workspace-concurrency/media-studio-kh` (deps installed) |
+| Owner's checkout | `/Users/thengmacmini/Developer/media-studio-kh` (on `main`; `node_modules` is present) |
+| Build worktree | `/Users/thengmacmini/.codex/worktrees/app-improvements/media-studio-kh` (deps installed) |
 | Live user data | `~/Pictures/Media Studio KH` — the real catalog + `assets/`. Never write here from a test. |
 | App config + logs | `~/Library/Application Support/Media Studio KH/` (`config.json`, `crash.log`); legacy data at `userData/data` |
 | Build inputs | `main/` (CommonJS), `renderer/` (ESM), `webclient/index.html` → generates `main/webclientHtml.js` via `npm run webclient:bundle` (edit the HTML, never the generated file) |
 | Build outputs | `dist/` (DMGs, `mac-arm64/`, `mac/`), `dist-electron/`, `dist-renderer/` — all gitignored |
-| Status / reference docs | Current as of 0.1.90 (docs pass 2026-10-02): `docs/Media Studio KH Project Status.md` (short status page), `README.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `AI_INTEGRATION.md`, `SIGNING.md`, `docs/HARDWARE_VALIDATION_RUNBOOK.md`, `docs/UI_GUIDE.md`. `docs/PICK_AND_PACK_PLAN.md` is a plan awaiting the owner's review (nothing built). |
+| Status / reference docs | Current for 0.1.92 candidate (docs pass 2026-10-06): `docs/Media Studio KH Project Status.md` (short status page), `README.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `AI_INTEGRATION.md`, `SIGNING.md`, `docs/HARDWARE_VALIDATION_RUNBOOK.md`, `docs/UI_GUIDE.md`. `docs/PICK_AND_PACK_PLAN.md` is a plan awaiting the owner's review (nothing built). |
 | Archive | `docs/archive/` — dated audits, completed plans (`plans/`, formerly `docs/superpowers/plans/`), the old SDD ledger (`progress.md`), the portable *_HANDOFF specs for other projects, and the long 0.1.34–0.1.72 status history. Historical only; `docs/archive/README.md` lists each. |
 | Reference app | `~/Developer/label-studio-kh` — the public sibling app whose designer interaction model this app copies. Another repo: read only. |
 
@@ -102,7 +120,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 - **`test:native` must be rerun for DB work**; the pure-JS run reports `skip` and stays green, which hides a broken native path.
 - **The web viewer can only reach Photos through iOS's own share sheet, and only over HTTPS — which this setup does not have, on purpose.** `navigator.share` needs a secure context, so on the viewer's plain-HTTP LAN / Tailscale address it does not exist at all, and the route is the native press-and-hold → Save Image. That missing share sheet is a **decision, not a bug** (AGENTS.md §25.4, 2026-09-27): the viewer already says "Open image to save" instead of "Save to Photos" and opens the result for the press. Never let a Files download be described as "saved to Photos" (v0.1.73, `webclient/index.html`).
 - **`npm run dist` does not need the worktree on a topic branch, but `/Applications` does need the new build.** Install with `ditto` + `xattr -cr`, and move the replaced app into the owner's `_trash/installed-apps/` rather than deleting it (v0.1.73).
-- **The owner looks for the DMGs in his own checkout, not in the build worktree.** `npm run dist` in the worktree writes them to `<wt>/dist`, and his `/Users/vengtheng/Developer/media-studio-kh/dist` stays empty — on 2026-09-26 he went looking and found nothing. Copy the release's DMG into his `dist/` as the last step of a release (one file since 2026-09-27), and verify with `shasum -a 256`; a release is not handed over until it is there (v0.1.74).
+- **The owner looks for the DMGs in his own checkout, not in the build worktree.** `npm run dist` in the worktree writes them to `<wt>/dist`, and his `/Users/thengmacmini/Developer/media-studio-kh/dist` stays empty — on 2026-09-26 he went looking and found nothing. Copy the release's DMG into his `dist/` as the last step of a release (one file since 2026-09-27), and verify with `shasum -a 256`; a release is not handed over until it is there (v0.1.74).
 - **A file handed to iOS must be named and typed from the picture itself, never from the response's MIME label.** `serveAsset` (`main/server/index.js`) labels only jpg / jpeg / png / webp / svg and answers everything else with `application/octet-stream`; a File typed that way loses "Save Image" in the share sheet, and its subtype becomes the filename extension. `IMAGE_TYPE_BY_EXT` in `webclient/index.html` is the client-side table that mirrors it (v0.1.74).
 - **A review handed to another agent is not a review it will keep to.** The 0.1.74 pass was asked for findings and edited the worktree instead; the edits were kept only because each claim was re-derived against the code, and one of them (a layout "defect") did not survive that. Ask for findings, then verify every one before taking it (v0.1.74).
 - **Name the menu the user's platform actually has.** "Press and hold, then tap Save Image" is iOS; Android says **Download image**, and a desktop browser says Save image as…. An instruction pointing at a menu item that is not there is worse than no instruction — this shipped for two releases before a screenshot showed it on a Samsung phone (`IS_ANDROID`, `DEVICE_SAVE_MENU` in `webclient/index.html`, v0.1.75).
@@ -143,7 +161,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 ## DO NOT TOUCH
 
 - **Other repositories**, especially `~/Developer/label-studio-kh` (read-only reference) and any other app's checkout.
-- **Other sessions' worktrees** under `/Users/vengtheng/.codex/worktrees/`. Check `git worktree list` first; only the `workspace-concurrency/media-studio-kh` one belongs to this project.
+- **Other sessions' worktrees** under `/Users/thengmacmini/.codex/worktrees/`. Check `git worktree list` first; the active `app-improvements/media-studio-kh` worktree belongs to this release.
 - **The owner's live data** — `~/Pictures/Media Studio KH`, `~/Library/Application Support/Media Studio KH`, and any `*.iskhbackup` / `*.iskhbundle`. Read-only observation only, and only when asked.
 - **`_trash/`** (gitignored, owner's territory) and the install backup at `/tmp/mskh-install-backup/`.
 - **Hosted GitHub compute** — Actions stays disabled.
@@ -152,7 +170,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 
 ## OPEN / IN FLIGHT
 
-At 0.1.92 candidate final verification/integration is underway. Physical-device checks and explicitly deferred optional work remain separate from the implemented eight audit batches.
+At the 0.1.92 candidate, implementation, reviews, local suites, rendered UI/output, packaged client/server probe, installed-app smoke, build, audits, DMG copy and integrity are verified. PR/merge, owner checkout sync and cleanup remain pending. Physical-device checks and explicitly deferred optional work remain separate from the eight audit batches.
 
 | Gap | State |
 |---|---|
@@ -179,7 +197,7 @@ At 0.1.92 candidate final verification/integration is underway. Physical-device 
 | Docs reconciled 2026-10-02 (0.1.90) | README, the briefing, the status page, AI_INTEGRATION, SIGNING and the hardware runbook were re-checked against the code at 0.1.90, and the dated audits, plans, specs and the long status history moved to `docs/archive/`. The status page is now short and points here rather than repeating this file. If a doc drifts again, fix it in the change that caused it — the current truth for versions/commands is this file. |
 | Pick & Pack plan | `docs/PICK_AND_PACK_PLAN.md` (2026-09-28) — orders, packing evidence, returns. **Awaiting the owner's review; nothing is built.** Do not start it without his go-ahead. |
 | `docs/HARDWARE_VALIDATION_RUNBOOK.md` | Still accurate ("not performed", re-checked 2026-10-02); it now also lists the phone-viewer saves (iOS and the brother's Android) and client thumbnails. Filling its results table is the deliverable when the owner has the hardware. |
-| Owner decisions outstanding | Independent review, a signing purchase, real-data migration — all authorization-gated. Public distribution and licensing are closed decisions (AGENTS.md §25.3). |
+| Owner decisions outstanding | Signing purchase and real-data migration remain authorization-gated. Public distribution and licensing are closed decisions (AGENTS.md §25.3). |
 
 ## SECRETS
 
