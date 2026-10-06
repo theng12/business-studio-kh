@@ -13,6 +13,7 @@ const renderer = require('../renderWindow');
 const events = require('../events');
 const { slugify } = require('../util/slug');
 const imageManager = require('../imageManager');
+const { writeUniqueFile } = require('../util/exclusiveFile');
 
 function productRows(ids) {
   return (Array.isArray(ids) ? ids : []).map((id) => productsDb.get(id)).filter(Boolean);
@@ -65,8 +66,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     const dataUrl = await barcodeUri(value, format, true);
     if (!dataUrl) throw new Error('The barcode value is not valid for that format');
     await fs.promises.mkdir(outputFolder, { recursive: true });
-    const outputPath = path.join(outputFolder, `${slugify(value, 'barcode')}-${format || 'code128'}.png`);
-    await fs.promises.writeFile(outputPath, Buffer.from(dataUrl.split(',')[1], 'base64'));
+    const outputPath = await writeUniqueFile(outputFolder, `${slugify(value, 'barcode')}-${format || 'code128'}.png`, Buffer.from(dataUrl.split(',')[1], 'base64'));
     return { outputPath };
   });
   exposeLocal('labels:importAsset', async ({ sourcePath, name } = {}) => imageManager.importAsset('labels', sourcePath, name || 'label-art'));
@@ -128,7 +128,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       return { documents, ...meta };
     }
 
-    return { html: await labelsDocument({ template, products, brands, layout }), ...meta };
+    return { html: await labelsDocument({ template, products, brands, layout }),
+      products: products.map((product) => ({ productId: product.id, sku: product.sku })), ...meta };
   });
 
   /**
@@ -218,7 +219,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
             html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single' } }),
             outputPath: path.join(outputFolder, `${slugify(product.sku || product.name, 'label')}-${slugify(template.name, 'label')}.${ext}`),
           };
-        }, { format, width: Math.ceil(template.widthMm * scale), height: Math.ceil(template.heightMm * scale), quality: 92, dpi, zoomFactor: dpi / 96 }, (i, target) => {
+        }, { format, width: Math.ceil(template.widthMm * scale), height: Math.ceil(template.heightMm * scale), quality: 92, dpi, zoomFactor: dpi / 96, unique: true }, (i, target) => {
           made.push(target);
           const product = products[i];
           events.broadcast('progress:event', { id: opId, kind: 'labels', done: i + 1, total: products.length, phase: 'rendering', label: product.sku || product.name });
