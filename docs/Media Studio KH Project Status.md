@@ -23,7 +23,7 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
 | | |
 |---|---|
 | Version | `0.1.93` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
-| Integration | Source reviewed and locally verified; repository integration is recorded in local `graphify-out/ux-workflows/release-receipt.md`. |
+| Integration | [PR #111](https://github.com/theng12/media-studio-kh/pull/111) merged as `0d8c15b`; owner main synchronized, build worktree archived with files preserved. Final receipt is local `graphify-out/ux-workflows/release-receipt.md`. |
 | Installed | **0.1.93** passed isolated smoke, attention-queue and product-search navigation checks; visible version and normal quit verified. Previous0.1.92 preserved under owner `_trash/installed-apps/`. Live data untouched. |
 | DMG | Owner `dist/Business Studio KH-0.1.93-arm64.dmg`, verified valid; SHA-256 `78f56b653364258f66786bf1fbc4a11166faa3272a3edbf34d25b48be14e8f66`. Keeps0.1.92/0.1.93;0.1.91 moved to `_trash/old-dmgs/`. |
 

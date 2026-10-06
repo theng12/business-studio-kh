@@ -7,7 +7,7 @@ One shared Product Library sits at the centre. Product details are entered once 
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release: **0.1.93** (2026-10-06). Seven everyday UX improvements are implemented, reviewed and installed locally. The arm64 DMG and packaged app are verified. It is built for home use — the owner's Macs and his brother's —
+Current release: **0.1.93** (2026-10-06). Seven everyday UX improvements are implemented, reviewed, merged in PR #111 and installed locally. The arm64 DMG and packaged app are verified. It is built for home use — the owner's Macs and his brother's —
 and is not publicly distributed.
 
 ## Where to read next
