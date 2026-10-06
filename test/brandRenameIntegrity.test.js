@@ -210,3 +210,65 @@ test('brand rename rewrites owned legacy path casing along with the moved folder
   assert.equal(row.filepath, 'Shop/New-Brand/A-1/A-1-001.jpg');
   assert.equal(fs.readFileSync(path.join(f.dataDir, 'assets', row.filepath), 'utf8'), a.bytes);
 });
+
+test('case-only final move failure restores original spelling, rows and photos', { skip }, (t) => {
+  const f = fresh(t);
+  const a = photo(f, f.brand, 'A-1', 'Shop/Royal/A-1/A-1-001.jpg', 'royal-photo');
+  const rename = fs.renameSync;
+  const destination = path.join(f.dataDir, 'assets/Shop/royal');
+  let failed = false;
+  fs.renameSync = (from, to) => {
+    if (!failed && String(to) === destination) {
+      failed = true;
+      throw new Error('injected case-only final-move failure');
+    }
+    return rename(from, to);
+  };
+  try {
+    assert.throws(() => brands.update(f.brand.id, { name: 'royal' }),
+      (err) => err.message === 'injected case-only final-move failure');
+  } finally { fs.renameSync = rename; }
+  assert.ok(failed);
+  unchanged(f, [a]);
+  assert.deepEqual(fs.readdirSync(path.join(f.dataDir, 'assets/Shop')), ['Royal']);
+  const restoredHash = crypto.createHash('sha1').update(fs.readFileSync(a.abs)).digest('hex');
+  assert.equal(restoredHash, a.hash);
+});
+
+for (const obstacle of ['replaced empty folder', 'occupied reservation']) {
+  test(`case-only rollback preserves a foreign ${obstacle}`, { skip }, (t) => {
+    const f = fresh(t);
+    const a = photo(f, f.brand, 'A-1', 'Shop/Royal/A-1/A-1-001.jpg', 'royal-photo');
+    const rename = fs.renameSync;
+    const destination = path.join(f.dataDir, 'assets/Shop/royal');
+    let failed = false;
+    let foreignInode;
+    fs.renameSync = (from, to) => {
+      if (!failed && String(to) === destination) {
+        failed = true;
+        if (obstacle === 'replaced empty folder') {
+          rename(destination, path.join(f.dataDir, 'displaced-empty-reservation'));
+          fs.mkdirSync(destination);
+        } else {
+          fs.writeFileSync(path.join(destination, 'late-photo.jpg'), 'foreign-photo');
+        }
+        foreignInode = fs.lstatSync(destination).ino;
+        throw new Error('injected final-move failure with obstacle');
+      }
+      return rename(from, to);
+    };
+    try {
+      assert.throws(() => brands.update(f.brand.id, { name: 'royal' }), /need recovery/);
+    } finally { fs.renameSync = rename; }
+    assert.equal(fs.lstatSync(destination).ino, foreignInode);
+    if (obstacle === 'occupied reservation') {
+      assert.equal(fs.readFileSync(path.join(destination, 'late-photo.jpg'), 'utf8'), 'foreign-photo');
+    }
+    assert.equal(brands.get(f.brand.id).name, 'Royal');
+    const row = db.getDb().prepare('SELECT filepath, content_hash FROM product_images WHERE id = ?').get(a.image.id);
+    assert.equal(row.filepath, a.image.filepath);
+    assert.equal(row.content_hash, a.hash);
+    const stage = fs.readdirSync(path.join(f.dataDir, 'assets/Shop')).find((name) => name.startsWith('__brand-rename-'));
+    assert.equal(fs.readFileSync(path.join(f.dataDir, 'assets/Shop', stage, 'A-1/A-1-001.jpg'), 'utf8'), a.bytes);
+  });
+}
