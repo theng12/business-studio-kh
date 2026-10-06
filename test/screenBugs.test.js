@@ -39,15 +39,8 @@ test('PO line modal: a new product replaces auto-filled defaults but never typed
   assert.match(PO, /if \(current !== '' && !wasAuto\) continue;/);
 });
 
-test('PO FX rate: unchanged blur writes nothing, blank / non-positive is refused', () => {
-  const at = PO.indexOf('FX rate (1');
-  const block = PO.slice(at, at + 1400);
-  assert.match(block, /e\.target\.defaultValue\) return/);
-  assert.match(block, /next <= 0/);
-  assert.match(block, /addToast\('FX rate must be a number above 0\.', 'error'\)/);
-  assert.match(block, /e\.target\.value = header\.exchangeRateToUsd/, 'the previous value is restored');
-  assert.doesNotMatch(block, /Number\(e\.target\.value\) \|\| 0/);
-});
+// PO FX validation now runs against the bundled controlled editor in
+// operationsFreshness.test.js, including unchanged Save and conflict Overwrite.
 
 test('Settings: numeric and API-key inputs keep a local draft and commit on blur', () => {
   assert.match(SETTINGS, /function ConcurrencyInput\(/);

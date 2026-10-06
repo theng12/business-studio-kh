@@ -1,7 +1,9 @@
 # App audit and improvement plan
 
-Date: 2026-10-06. Audited source: `0732bb5`, Media Studio KH **0.1.91**.
-Status: **audit and planning complete; implementation has not started**.
+Date: 2026-10-06. Audit baseline: `0732bb5`, Media Studio KH **0.1.91**. Implementation baseline:
+`e3af16d`; final app-source checkpoint: `d3d43a4`. Candidate: **0.1.92**; all eight batches,
+reviews and verification are complete. Packaged client/server and installed-app smoke checks passed;
+repository integration remains pending.
 
 The owner requested a distributed audit and a plan for each part of the app. This document is the execution order, with evidence and acceptance checks in the linked area reports. Catalog's completed 0.1.91 plan remains the baseline; do not reopen its resolved findings.
 
@@ -36,7 +38,7 @@ Start with batch1. Batches2 and3 can be implemented in parallel after its shared
 
 Batch1 has three independently verified checkpoints: **1a artwork/export path boundaries (O1/O2), 1b brand rename integrity (PO-1), 1c gallery source authorization (IA-3)**. Implement and review them as separate small changes, rather than one coupled refactor. Preserve that priority even if an independent S-sized checkpoint finishes sooner.
 
-## 1. File and company boundaries
+## Task 1 — File and company boundaries
 
 Details: [output report O1/O2](app-audit-2026-10-06/output-studios.md), [product report PO-1](app-audit-2026-10-06/products-organization.md), [AI report IA-3](app-audit-2026-10-06/image-ai-editors.md).
 
@@ -47,7 +49,7 @@ Details: [output report O1/O2](app-audit-2026-10-06/output-studios.md), [product
 
 Acceptance: harmless temporary fixtures prove outside-root and symlink reads/writes are refused; both local and RPC routes agree. Valid existing artwork exports unchanged. Distinct colliding brands/SKUs retain both original hashes and rows after a refused rename. Inject a mover failure and verify recoverable, consistent rows/files and an actual error; a late occupied target cannot cause a partial silent overwrite. Foreign gallery→existing/new product has zero side effects; same-company promotion works. Use current validator/reachability and native data-safety suites. No real credentials or owner files in the fixtures.
 
-## 2. Product Library and organization
+## Task 2 — Product Library and organization
 
 Details: [PO-2–7](app-audit-2026-10-06/products-organization.md).
 
@@ -59,7 +61,7 @@ Details: [PO-2–7](app-audit-2026-10-06/products-organization.md).
 
 Acceptance: deferred image/save replies and confirmation plus reorder preserve identity and the newest draft; A→B never applies A state to B. Two stale entity snapshots conflict. Dashboard's no-images count matches the opened set even after unrelated search/brand filters. Inspect photo selection, focus and toasts in the rendered app. Keep all three closed bulk modals intact.
 
-## 3. AI task reliability
+## Task 3 — AI task reliability
 
 Details: [IA-1–3](app-audit-2026-10-06/image-ai-editors.md). IA-3 belongs to batch1.
 
@@ -69,7 +71,7 @@ Details: [IA-1–3](app-audit-2026-10-06/image-ai-editors.md). IA-3 belongs to b
 
 Acceptance: controllable provider/filesystem stubs cover concurrency=1, cancel→late success/failure, live Repair rejection, disk-full zero/partial outputs, image cap and follow-on export failure. No duplicate submission, false Done or cancelled-state resurrection. Already durably saved outputs are preserved; cancellation cannot reverse a completed provider charge or earlier durable write. Run renderer task-display and native gallery assertions without provider spending.
 
-## 4. Image Workspace crop
+## Task 4 — Image Workspace crop
 
 Details: [IA-7/IA-8](app-audit-2026-10-06/image-ai-editors.md).
 
@@ -78,7 +80,7 @@ Details: [IA-7/IA-8](app-audit-2026-10-06/image-ai-editors.md).
 
 Acceptance: landscape/portrait fixtures with marked corners produce the requested1:1/4:3 ratio and selected pixels. Raw/processed,90° rotation and straighten previews agree with saved bytes. Deferred A crop cannot clear B or another image in A. New-copy and overwrite routes keep existing confirmations and immutable replacement checks.
 
-## 5. Overlay Studio editing
+## Task 5 — Overlay Studio editing
 
 Details: [IA-4–6](app-audit-2026-10-06/image-ai-editors.md).
 
@@ -89,7 +91,7 @@ Details: [IA-4–6](app-audit-2026-10-06/image-ai-editors.md).
 
 Acceptance: stale Mac B cannot erase Mac A's layout; delayed acknowledgments cannot mark a newer draft saved. Immediate Apply of template B after its last edit uses B's saved acknowledgment. Failed save opens no run modal. Gesture undo/redo works from toolbar and keyboard. Essential controls remain reachable with keyboard and visible at supported window widths.
 
-## 6. Labels, barcodes and export history
+## Task 6 — Labels, barcodes and export history
 
 Details: [O3–5/O7–8](app-audit-2026-10-06/output-studios.md).
 
@@ -101,7 +103,7 @@ Details: [O3–5/O7–8](app-audit-2026-10-06/output-studios.md).
 
 Acceptance: repeated/sluggified outputs retain original hashes and unique actual paths, including a competing write. Client three-product PDF reports three products and reruns them; a missing selected product is not falsely recorded. Zero-spacing CSS and real temporary PDFs agree. Missing/partial/cancelled exports preserve prior status. History refresh from a removed last page displays surviving earlier records. Physical printer calibration is a later hardware check, not a prerequisite for verified source/PDF fixes.
 
-## 7. Social Grid previews
+## Task 7 — Social Grid previews
 
 Details: [O6](app-audit-2026-10-06/output-studios.md).
 
@@ -109,7 +111,7 @@ Replace the separate per-field preview scaling rules with full normalized design
 
 Acceptance: compare preview with a reduced exported fixture for signed offsets, zero padding/gap/radius, dense tiles, font minima, portrait/wide canvases. Measure largest supported capture and preserve PREVIEW_MAX payload bounds. Check the rendered picker/preview after the geometry fix.
 
-## 8. Operations and Settings
+## Task 8 — Operations and Settings
 
 Details: [operations/Settings report](app-audit-2026-10-06/operations-settings.md).
 
@@ -132,7 +134,7 @@ Acceptance: PO remote updates cannot silently overwrite pending metadata drafts;
 
 For each material batch: establish an isolated branch/worktree and failing targeted regression, apply the smallest shared fix, run focused checks immediately, review independently, run the appropriate full/local/native/render suites and inspect affected UI. Then patch-bump package/lock/What's new and update HANDOFF, integrate through a mergeable PR with Actions still disabled, synchronize owner main, create/verify one arm64 DMG in owner dist and preserve evidence. No paid calls, publishing, deployment, tags, important-data deletion or customer safeguard changes are implied by this plan.
 
-This plan covers documentation-only audit work. Version0.1.91 and its existing verified DMG remain unchanged; no new app release or installation is performed. Implementation is deliberately deferred because this request is audit/planning only.
+The owner now authorized autonomous implementation of all eight confirmed fix batches. Implement independently reviewed checkpoints on one coordinated feature branch; complete local/native/render verification and a patch release once the accepted fixes are integrated. Optional behavior changes and unverified hardware inventories remain outside the eight confirmed batches. No provider spending or live-data reset is authorized.
 
 ## Delegation and watchdog record
 
@@ -146,3 +148,33 @@ All audit workers read `0732bb5` in the owner checkout and wrote separate ignore
 | audit_plan_review | gpt-6-luna / high | independent plan-review report, source/caller/proof verification |
 
 Primary planning worktree: `codex/app-audit-plan`, starting at `0732bb5`. The [independent review](app-audit-2026-10-06/plan-review.md) is preserved beside the area reports. Documentation checks and raw proof evidence remain in local `graphify-out/app-audit-2026-10-06/` and the PR.
+
+## Verified implementation and release checkpoint — 2026-10-06
+
+Branch `codex/app-improvements`, implementation baseline `e3af16d`, final app-source checkpoint
+`d3d43a4`, worktree `/Users/thengmacmini/.codex/worktrees/app-improvements/media-studio-kh`. All
+eight audit batches are implemented and independently reviewed; the review outcome is PASS. Use
+this checkpoint table for current status; task reports retain the detailed per-area evidence.
+
+| Area | Verified result |
+|---|---|
+| App checks | `release-check.log`: 1379 pass, 0 fail, 0 skip. |
+| Native tests | `integrated-native.log` and post-dist `release-native-postdist.log`: 240 pass each, 0 fail, 0 skip. |
+| Build and security | `release-build.log` and `release-dist.log` succeeded. Both `audit-release-all.json` and `audit-release-production.json` report 0 vulnerabilities. No new runtime dependencies or schema bump; `source-map-js@1.2.2` is dev-only and `@electron/get` has a scoped `global-agent` override. |
+| UI and render checks | `final-ui-crawl.log`: 145/145, no console exceptions. `release-ui-manual.md` records Overlay at 1100/1400/1920px, crop source/letterbox behavior and PO save/focus. Image, renderer, client/server and webclient probes passed. |
+| Native output | `native-output-report.md` and `native-pdf-text-check.txt`: collision-safe label PNGs, actual A4 PDF containing all three fixture SKUs, matching Social preview/export pixels in portrait and landscape, and 8000×8000 capture. |
+| Packaged/install smoke | `release-packaged-round3.log` passed; `release-installed.log` reached ready state and the installed app displayed version 0.1.92. Both used isolated data. |
+| Candidate DMG | `dist/Media Studio KH-0.1.92-arm64.dmg` passed `release-dmg-verify.log`, was copied to owner `dist/`, and matches SHA-256 `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765`. Pruning retained 0.1.91/0.1.92 and moved older files to owner `_trash/old-dmgs/`. |
+
+The packaged probe's earlier failures came from stale pre-0.1.89 UI selectors. The probe was updated
+to match current controls while retaining persisted-state assertions; its final run passed and the
+app source did not change for those probe fixes. The installed-app smoke also passed with isolated
+data. No live-data or physical-device test is claimed. PR/merge, owner checkout synchronization and
+final cleanup remain pending; do not mark the candidate shipped until these integration steps are
+completed and recorded.
+
+## Final release checklist
+
+- [x] Eight fix batches implemented and independent spec/quality review PASS.
+- [x] Full JavaScript and native checks, build, audits, UI/render/output probes, packaged client/server and installed-app smoke checks, and DMG integrity verified.
+- [ ] Complete authorized PR/merge, synchronize the owner checkout and finish cleanup. **Release integration remains pending.**

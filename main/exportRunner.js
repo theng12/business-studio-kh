@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const sharp = require('sharp');
+const { exportSubfolder, containedMediaPath } = require('./util/mediaPaths');
 const { getDataDir } = require('./db');
 const products = require('./db/products');
 const productImages = require('./db/productImages');
@@ -161,7 +162,7 @@ function expectedOutputs({ profile, productIds }) {
   if (!profile || !Array.isArray(productIds) || productIds.length === 0) {
     return { totalExpected: 0, entries: [] };
   }
-  const subfolder = profile.outputSubfolder || '';
+  const subfolder = exportSubfolder(profile.outputSubfolder);
   const ext = profile.format === 'png' ? '.png'
             : profile.format === 'webp' ? '.webp'
             : profile.format === 'avif' ? '.avif'
@@ -203,7 +204,7 @@ function previewCollisions({ profile, productIds, outputRoot }) {
   const { totalExpected, entries } = expectedOutputs({ profile, productIds });
   const collisions = [];
   for (const { rel, sku } of entries) {
-    const direct = path.join(outputRoot, rel);
+    const direct = containedMediaPath(outputRoot, rel);
     if (fs.existsSync(direct)) collisions.push({ name: path.basename(direct), sku });
   }
   return {
@@ -293,13 +294,11 @@ async function processOneImage({ sourceAbs, profile, outPath }) {
 async function runExport({ profile, productIds, outputRoot, onProgress, onExisting = 'keepBoth', saveToLibrary = false, isCancelled = null }) {
   if (!profile) throw new Error('Profile is required');
   if (!outputRoot) throw new Error('Output folder is required');
+  const outputPath = containedMediaPath(outputRoot, exportSubfolder(profile.outputSubfolder), 'Output subfolder', true);
   if (!Array.isArray(productIds) || productIds.length === 0) {
     return { exported: 0, skipped: 0, products: 0, outputPath: outputRoot, skips: [] };
   }
 
-  const outputPath = profile.outputSubfolder
-    ? path.join(outputRoot, profile.outputSubfolder)
-    : outputRoot;
   fs.mkdirSync(outputPath, { recursive: true });
 
   const ext = profile.format === 'png' ? '.png'
@@ -361,6 +360,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       continue;
     }
 
+    let productExported = 0;
     for (let i = 0; i < images.length; i++) {
       if (cancelRequested()) break;
       const img = images[i];
@@ -409,6 +409,8 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       // where action drives the per-iteration branch below.
       const { outPath: outFile, action, inRun } = resolveOutputPath(outputPath, base, ext, onExisting, claimed);
 
+      containedMediaPath(outputRoot, path.relative(path.resolve(outputRoot), outFile));
+
       if (action === 'skip') {
         // File already exists at the canonical path and user chose
         // to keep existing. Don't run the sharp pipeline — just
@@ -431,6 +433,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       try {
         await processOneImage({ sourceAbs, profile, outPath: outFile });
         exported++;
+        productExported++;
         if (action === 'replace') replaced++;
         if (usedRaw) exportedFromRaw++;
         // Record the encoded output size for the run's size summary.
@@ -445,7 +448,6 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
           if (!toLibrary.has(productId)) toLibrary.set(productId, []);
           toLibrary.get(productId).push(outFile);
         }
-        // Mark as exported on product if all processed images now exported in this run.
         onProgress?.('image', { product, imageIndex: i, totalProducts: productIds.length, productIndex: p, outFile, usedRaw, action, bytes });
       } catch (err) {
         skipped++;
@@ -461,8 +463,9 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
     if (cancelled) break;
     productsDone++;
 
-    // Flip the product to "exported" if it had processed images.
-    if (images.some((im) => im.isProcessed)) {
+    // Complete requested work must be written this run. Collision Skip keeps an
+    // existing file but does not prove it contains the current product image.
+    if (productExported === images.length && images.some((im) => im.isProcessed)) {
       try {
         products.setProcessStatus(product.id, 'exported');
       } catch (err) {

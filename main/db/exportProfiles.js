@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { exportSubfolder } = require('../util/mediaPaths');
 const { getDb } = require('./index');
 const { clampIndexPad, sanitizeIndexPrefix } = require('../util/exportIndex');
 
@@ -46,6 +47,7 @@ function create(input) {
   const name = (input.name ?? '').trim();
   if (!name) throw new Error('Profile name is required');
 
+  const outputSubfolder = exportSubfolder(input.outputSubfolder);
   const id = crypto.randomUUID();
   const ts = Date.now();
   getDb()
@@ -74,7 +76,7 @@ function create(input) {
       backgroundColor: input.backgroundColor ?? '#FFFFFF',
       colorProfile:    input.colorProfile ?? 'sRGB',
       namingPattern:   input.namingPattern ?? '{SKU}-{INDEX}',
-      outputSubfolder: input.outputSubfolder ?? null,
+      outputSubfolder: outputSubfolder || null,
       indexPad:        clampIndexPad(input.indexPad),
       indexPrefix:     sanitizeIndexPrefix(input.indexPrefix),
       createdAt:       ts,
@@ -93,7 +95,7 @@ const UPDATABLE = {
   backgroundColor: { col: 'background_color' },
   colorProfile:    { col: 'color_profile' },
   namingPattern:   { col: 'naming_pattern' },
-  outputSubfolder: { col: 'output_subfolder' },
+  outputSubfolder: { col: 'output_subfolder', transform: (v) => exportSubfolder(v) || null },
   indexPad:        { col: 'index_pad',    transform: clampIndexPad },
   indexPrefix:     { col: 'index_prefix', transform: sanitizeIndexPrefix },
 };

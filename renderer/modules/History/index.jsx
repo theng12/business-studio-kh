@@ -153,8 +153,14 @@ export function History() {
     ])
       .then(([rows, count]) => {
         if (cancelled) return;
+        const nextTotal = Math.max(0, Number(count) || 0);
+        setTotal(nextTotal);
+        const nextLastPage = Math.max(0, Math.ceil(nextTotal / pageSize) - 1);
+        if (page > nextLastPage) {
+          setPage(nextLastPage);
+          return; // The page effect fetches the surviving rows with the same stale-request guard.
+        }
         setEntries(rows);
-        setTotal(Number(count) || 0);
       })
       .catch((err) => {
         if (cancelled) return;

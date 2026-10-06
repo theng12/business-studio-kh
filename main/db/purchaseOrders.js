@@ -28,6 +28,7 @@
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
 const landedCost = require('../util/landedCost');
+const { prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
 
 /** Statuses whose PO counts toward product landed cost (with a received_at). */
 const COST_SOURCE_STATUSES = ['received', 'closed'];
@@ -342,7 +343,7 @@ function reconvertAmounts(poId, rate) {
 function update(id, patch, userId = null) {
   const existing = get(id);
   if (!existing) throw new Error('PO not found');
-  const input = { ...(patch ?? {}) };
+  const input = prepareOptimisticPatch(existing, patch, 'purchaseOrder');
 
   if ('receivedAt' in input) {
     if (!isCostSource(existing.status)) {
@@ -368,7 +369,7 @@ function update(id, patch, userId = null) {
   }
 
   const sets = [];
-  const params = { id, updatedAt: Date.now(), updatedByUserId: userId };
+  const params = { id, updatedAt: nextUpdatedAt(existing.updatedAt), updatedByUserId: userId };
   for (const [key, col, fn] of HEADER_PATCH) {
     if (key in input) {
       sets.push(`${col} = @${key}`);
@@ -417,12 +418,13 @@ function update(id, patch, userId = null) {
  * The UI layer warns before destructive transitions; the DB layer
  * accepts whatever the UI tells it.
  */
-function setStatus(id, newStatus, userId = null) {
+function setStatus(id, newStatus, userId = null, expectedUpdatedAt) {
   const existing = get(id);
   if (!existing) throw new Error('PO not found');
+  prepareOptimisticPatch(existing, expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }, 'purchaseOrder');
   if (!VALID_STATUS.includes(newStatus)) throw new Error(`Invalid status: ${newStatus}`);
 
-  const now = Date.now();
+  const now = nextUpdatedAt(existing.updatedAt);
   const db = getDb();
   inTransaction(() => {
     const wasSource = isCostSource(existing.status) && existing.receivedAt != null;
@@ -533,6 +535,7 @@ function updateLine(lineId, patch, userId = null) {
   const row = db.prepare(`SELECT * FROM po_lines WHERE id = ?`).get(lineId);
   if (!row) throw new Error('Line not found');
   const po = get(row.po_id);
+  patch = prepareOptimisticPatch(po, patch, 'purchaseOrder');
 
   const sets = [];
   const params = { id: lineId };
@@ -620,7 +623,7 @@ function updateComponent(componentId, patch, userId = null) {
   const row = db.prepare(`SELECT * FROM po_cost_components WHERE id = ?`).get(componentId);
   if (!row) throw new Error('Component not found');
   const po = get(row.po_id);
-  const input = patch ?? {};
+  const input = prepareOptimisticPatch(po, patch, 'purchaseOrder');
 
   const sets = [];
   const params = { id: componentId };
@@ -731,9 +734,10 @@ function updatePayment(paymentId, patch, userId = null) {
   const db = getDb();
   const row = db.prepare(`SELECT * FROM po_payments WHERE id = ?`).get(paymentId);
   if (!row) throw new Error('Payment not found');
+  patch = prepareOptimisticPatch(get(row.po_id), patch, 'purchaseOrder');
 
   const sets = [];
-  const params = { id: paymentId, updatedAt: Date.now() };
+  const params = { id: paymentId, updatedAt: nextUpdatedAt(row.updated_at) };
   for (const [key, col, fn] of PAYMENT_PATCH) {
     if (key in (patch ?? {})) {
       sets.push(`${col} = @${key}`);
@@ -876,7 +880,7 @@ function recomputeHeader(poId, _userId = null) {
     UPDATE purchase_orders
        SET total_value_supplier = ?, total_value_usd = ?,
            total_volume_cbm = ?, total_weight_kg = ?,
-           total_components_usd = ?, lines_count = ?
+           total_components_usd = ?, lines_count = ?, updated_at = ?
      WHERE id = ?
   `).run(
     totalSupplier,
@@ -885,6 +889,7 @@ function recomputeHeader(poId, _userId = null) {
     calc.header.totalWeightKg,
     realComponentsUsd,
     lines.length,
+    nextUpdatedAt(po.updatedAt),
     poId,
   );
 

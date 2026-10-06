@@ -143,3 +143,34 @@ test('search returns suppliers and PO numbers only when costing is allowed', { s
   assert.equal(po[0].label, 'PO-7781');
   assert.equal(po[0].sublabel, 'Guangzhou Widgets');
 });
+
+test('export profile paths validate before SQLite writes and stored paths validate at runtime', { skip: skipReason }, async () => {
+  const { dataDir, company } = fresh();
+  const profiles = require('../main/db/exportProfiles');
+  const { runExport, expectedOutputs } = require('../main/exportRunner');
+  try {
+    for (const outputSubfolder of ['../outside', '/outside', 'C:\\outside', 'nested\\..\\outside']) {
+      assert.throws(() => profiles.create({ companyId: company.id, name: 'Unsafe', outputSubfolder }), /subfolder|relative/i);
+    }
+    assert.equal(profiles.list(company.id).length, 0);
+    const profile = profiles.create({ companyId: company.id, name: 'Safe', outputSubfolder: 'nested/photos' });
+    assert.throws(() => profiles.update(profile.id, { name: 'Changed', outputSubfolder: '../outside' }), /subfolder|relative/i);
+    assert.equal(profiles.get(profile.id).name, 'Safe');
+    assert.equal(profiles.get(profile.id).outputSubfolder, 'nested/photos');
+    const product = await productWithImage(dataDir, company.id, 'BOUNDARY-1', 'Boundary');
+    const outputRoot = path.join(dataDir, 'output');
+    const result = await runExport({ profile, productIds: [product.id], outputRoot });
+    assert.equal(result.exported, 1);
+    assert.equal(fs.readdirSync(path.join(outputRoot, 'nested/photos')).length, 1);
+    // Legacy rows do not pass through create/update, so runtime must enforce it.
+    db.getDb().prepare('UPDATE export_profiles SET output_subfolder = ? WHERE id = ?').run('../outside', profile.id);
+    const legacy = profiles.get(profile.id);
+    assert.throws(() => expectedOutputs({ profile: legacy, productIds: [product.id] }), /subfolder|relative/i);
+    await assert.rejects(runExport({ profile: legacy, productIds: [product.id], outputRoot }), /subfolder|relative/i);
+    assert.equal(fs.existsSync(path.join(dataDir, 'outside')), false);
+  } finally {
+    db.closeDb();
+    // This is disposable test data, never the configured owner data folder.
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});

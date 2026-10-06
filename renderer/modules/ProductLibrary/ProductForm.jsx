@@ -10,6 +10,8 @@ import { appImageSrc } from '../../lib/imageUrl.js';
 import { CURRENCIES } from '../../lib/currencies.js';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { parseConflictError, showConflict } from '../../components/ConflictModal.jsx';
+import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
+import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { ReframeModal } from './ReframeModal.jsx';
 
 // v0.27.0: raised 20 → 50 (matches imageManager.MAX_IMAGES_PER_PRODUCT
@@ -148,7 +150,7 @@ function buildPrices(map) {
 /* Memoized: every prop the Library passes is stable (state, or a useCallback /
  * useMemo there), so typing in the Library's search box or ticking a row no
  * longer re-renders this ~1,500-line form. Store subscriptions still update it. */
-export const ProductForm = memo(function ProductForm({ product, isCreating = false, createKey = 0, onClose, onStartCreate, onProcess, onPreview, onDuplicated }) {
+export const ProductForm = memo(function ProductForm({ product, isCreating = false, createKey = 0, onClose, onStartCreate, onProcess, onPreview, onDuplicated, onRegisterFlush }) {
   // The panel is persistently mounted (per the user's request to keep the
   // detail view always visible). There are three modes:
   //   - `product` truthy            → edit-existing form
@@ -189,16 +191,11 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   const [saveState, setSaveState] = useState('saved');
   const [savedAt, setSavedAt] = useState(null);
   const autoSaveTimer = useRef(null);
-  /** The un-written autosave payload, so unmount can flush it instead of dropping it. */
+  /** The un-written autosave payload, retained until acknowledged, including a failed navigation flush. */
   const autoSavePayload = useRef(null);
   const skipNextAutoSave = useRef(true);
-  // v0.49.39: multi-select state for the image grid. Set of FILEPATHS
-  // (not indices — indices shift after a delete/reorder; filepaths are
-  // stable per row). When non-empty, the selection toolbar appears
-  // above the grid with Copy / Drag / Clear. The set resets when the
-  // displayed product changes — selections shouldn't leak across
-  // products since their filepaths reference different rows.
-  const [selectedFilepaths, setSelectedFilepaths] = useState(() => new Set());
+  // Row identity survives the server's filename-slot renumbering.
+  const [selectedImageIds, setSelectedImageIds] = useState(() => new Set());
   // Copying-in-progress flag so we can disable the buttons + show
   // "Copying…" during the IPC roundtrip. Folder picker latency + fetch
   // time means a 20-image copy isn't instant on a slow client link.
@@ -253,27 +250,63 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   /** One "changed elsewhere" toast per conflict, not one per pause in typing. */
   const conflictToasted = useRef(false);
 
-  /* Write a pending autosave NOW, to the product it was typed into.
-   *
-   * The payload carries its own id and token (captured when it was built), so
-   * a flush never reads the refs after they have been re-pointed. It used to:
-   * switching rows within 500 ms dropped A's edit, left the payload owed, and
-   * the unmount flush later sent A's fields to B with B's token — B was
-   * overwritten with A's data. Called before the refs move to another product
-   * and on unmount. Goes through the store so the list (and the token the next
-   * open of this product reads) is refreshed behind it. */
-  const flushOwed = useCallback(() => {
+  const noteSaved = useCallback((gen, id, updatedAt) => {
+    if (gen !== selectionGen.current || id !== activeProductIdRef.current) return false;
+    lastSavedUpdatedAt.current = updatedAt ?? null;
+    conflictToasted.current = false;
+    return true;
+  }, []);
+
+  const makeSaveQueue = useCallback((id, gen, revision) => {
+    return createLatestSaveQueue({
+      initialRevision: revision,
+      persist: (draft, expectedUpdatedAt) => {
+        // Consume the deliberate bypass before sending this one request. A
+        // failed overwrite keeps the draft and the queue's acknowledged token.
+        const overwrite = draft.overwriteOnce === true;
+        delete draft.overwriteOnce;
+        return updateProduct(id, { ...draft.payload, ...(overwrite ? {} : { expectedUpdatedAt }) });
+      },
+      onStart: () => { if (gen === selectionGen.current) setSaveState('saving'); },
+      onSuccess: (row, draft) => {
+        if (!noteSaved(gen, id, row.updatedAt)) return;
+        if (autoSavePayload.current !== draft) return;
+        autoSavePayload.current = null;
+        setSaveState('saved');
+        setSavedAt(Date.now());
+        setSkuError(null);
+      },
+      onError: (err, draft) => {
+        if (gen !== selectionGen.current) return;
+        setSaveState('dirty');
+        if (parseConflictError(err)) {
+          if (!conflictToasted.current) addToast(`${draft.payload.sku} changed elsewhere. Your draft is kept here. Click Save to review it.`, 'error');
+          conflictToasted.current = true;
+        } else addToast(`${draft.payload.sku}: ${err.message}. Your draft is kept here; click Save to retry.`, 'error');
+      },
+    });
+  }, [updateProduct, addToast, noteSaved]);
+
+  const saveQueue = useRef(null);
+  const flushOwed = useCallback(async () => {
     clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = null;
     const owed = autoSavePayload.current;
-    autoSavePayload.current = null;
-    if (!owed || !owed.id || !owed.payload.sku || !owed.payload.sku.trim()) return;
-    updateProduct(owed.id, { ...owed.payload, expectedUpdatedAt: owed.expectedUpdatedAt })
-      .catch(() => { /* the panel has moved on; a toast here would be noise */ });
-  }, [updateProduct]);
+    if (owed && !owed.payload.sku.trim()) {
+      const message = 'SKU is required. Keep this product open and correct it before leaving.';
+      setSkuError(message);
+      addToast(message, 'error');
+      throw new Error(message);
+    }
+    await saveQueue.current?.flush(() => autoSavePayload.current);
+  }, [addToast]);
+  useEffect(() => registerCompanySwitchFlusher(flushOwed), [flushOwed]);
+  useEffect(() => {
+    onRegisterFlush?.(flushOwed);
+    return () => onRegisterFlush?.(null);
+  }, [flushOwed, onRegisterFlush]);
 
   useEffect(() => {
-    flushOwed();
     selectionGen.current += 1;
     const gen = selectionGen.current;
     if (product) {
@@ -290,6 +323,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
       skipNextAutoSave.current = true;
       setForm(productToForm(source));
       lastSavedUpdatedAt.current = source.updatedAt ?? null;
+      saveQueue.current = makeSaveQueue(product.id, gen, source.updatedAt);
+      autoSavePayload.current = null;
       setActiveProductId(product.id);
       activeProductIdRef.current = product.id;
       window.api?.images.listByProduct(product.id)
@@ -298,6 +333,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     } else {
       // Either creating a new product or showing the empty state — either
       // way we want a clean form so the next interaction starts fresh.
+      saveQueue.current = null;
+      autoSavePayload.current = null;
       setForm(emptyForm());
       setImages([]);
       setActiveProductId(null);
@@ -305,20 +342,21 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
       lastSavedUpdatedAt.current = null;
     }
     setSkuError(null);
+    setSaving(false);
     // The pill belongs to the product now on screen, not to a save of the last one.
     setSaveState('saved');
     setSavedAt(null);
     conflictToasted.current = false;
     // v0.49.39: drop any per-image selection when the displayed product
-    // changes. Filepaths reference rows of the OLD product; carrying
+    // changes. IDs reference rows of the OLD product; carrying
     // them over would either match nothing or (worse) match a same-
     // path image of the new product. Always reset.
-    setSelectedFilepaths(new Set());
+    setSelectedImageIds(new Set());
     setCopyMenuOpen(false);
     // createKey changes when the user asks for ANOTHER new product while the
     // panel is already in create mode; without it the effect would not re-run
     // and the previously created product would stay on screen. */
-  }, [product, isCreating, createKey, flushOwed]);
+  }, [product, isCreating, createKey, makeSaveQueue]);
 
   // v0.49.48: load this company's suppliers for the sourcing dropdown.
   // Includes archived (status 'all') so a product attached to a now-
@@ -332,12 +370,12 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   }, [activeCompanyId]);
 
   // v0.49.39: when the loaded image list shrinks (delete, reorder
-  // renumber, etc.), drop any selected filepaths that no longer exist.
+  // renumber, etc.), drop selected image IDs that no longer exist.
   // Same fix the Library does for selected product ids.
   useEffect(() => {
-    setSelectedFilepaths((prev) => {
+    setSelectedImageIds((prev) => {
       if (prev.size === 0) return prev;
-      const live = new Set(images.map((im) => im.filepath));
+      const live = new Set(images.map((im) => im.id));
       let changed = false;
       const next = new Set();
       for (const fp of prev) {
@@ -467,21 +505,6 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     };
   }
 
-  /* Record a write's new concurrency token, but only while the panel still
-   * shows the product the write was for (see selectionGen). A payload typed
-   * while that write was in flight was captured with the old token, so it is
-   * advanced too. Returns false when the selection has moved on, and the
-   * caller then skips its own state writes. */
-  function noteSaved(gen, id, updatedAt) {
-    if (gen !== selectionGen.current) return false;
-    lastSavedUpdatedAt.current = updatedAt ?? null;
-    if (autoSavePayload.current?.id === id) {
-      autoSavePayload.current.expectedUpdatedAt = lastSavedUpdatedAt.current;
-    }
-    conflictToasted.current = false;
-    return true;
-  }
-
   async function handleSave() {
     if (!skuValid) {
       setSkuError('SKU is required');
@@ -492,7 +515,6 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     // with the token this one is about to replace (a CONFLICT).
     clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = null;
-    autoSavePayload.current = null;
     const gen = selectionGen.current;
     const current = () => gen === selectionGen.current;
     const id = activeProductId;
@@ -508,68 +530,40 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
         setActiveProductId(created.id);
         activeProductIdRef.current = created.id;
         lastSavedUpdatedAt.current = created.updatedAt ?? null;
+        saveQueue.current = makeSaveQueue(created.id, gen, created.updatedAt);
         setSaveState('saved');
         setSavedAt(Date.now());
         setSkuError(null);
       } else {
-        // v0.17.2: optimistic concurrency. We send the product's
-        // `updatedAt` from when it was loaded; the server rejects
-        // the save if anyone else has written to the row since.
-        // When that happens we ask the user what to do and either
-        // refresh the form, overwrite (retry without the token), or
-        // bail out leaving their pending edits intact in the form.
+        autoSavePayload.current ??= { id, payload: buildPayload() };
         try {
-          const updated = await updateProduct(id, {
-            ...buildPayload(),
-            expectedUpdatedAt: lastSavedUpdatedAt.current,
-          });
-          addToast(`Saved ${updated.sku}`, 'success');
-          if (!noteSaved(gen, id, updated?.updatedAt)) return;
-          setSaveState('saved');
-          setSavedAt(Date.now());
-          setSkuError(null);
+          await flushOwed();
+          if (current()) addToast(`Saved ${form.sku}`, 'success');
         } catch (err) {
           const conflict = parseConflictError(err);
           if (!conflict) throw err;
-          // The panel has moved to another product: a Refresh here would load
-          // this row into THAT product's form.
-          if (!current()) {
-            addToast(`${form.sku || 'That product'} changed elsewhere, so the save was not applied. Open it again to review.`, 'error');
-            return;
-          }
+          if (!current()) return;
           const choice = await showConflict(conflict);
           if (!current()) return;
           if (choice === 'refresh') {
-            /* v0.1.27: actually re-read the row.
-             *
-             * This used to call refreshProducts() alone and claim "the
-             * selector that drives `product` reads from the store". It does
-             * not — `product` is the Library's local `editing` object, which
-             * is never re-pointed — so Refresh updated the store behind the
-             * form, changed nothing on screen, and left the stale token in
-             * place. The next save conflicted again. Fetch the row and reset
-             * the form and token from it. */
             const fresh = await window.api.products.get(id);
-            if (fresh && current()) {
-              skipNextAutoSave.current = true;
-              setForm(productToForm(fresh));
-              lastSavedUpdatedAt.current = fresh.updatedAt ?? null;
-              conflictToasted.current = false;
-              setSaveState('saved');
-            }
+            if (!fresh) throw new Error('This product was removed. Your draft is still here.', { cause: err });
+            if (!current()) return;
+            skipNextAutoSave.current = true;
+            autoSavePayload.current = null;
+            setForm(productToForm(fresh));
+            lastSavedUpdatedAt.current = fresh.updatedAt ?? null;
+            saveQueue.current.setRevision(fresh.updatedAt);
+            conflictToasted.current = false;
+            setSaveState('saved');
             await refreshProducts();
             addToast('Form refreshed with the latest data', 'info');
           } else if (choice === 'overwrite') {
-            const updated = await updateProduct(id, buildPayload());
-            addToast(`Overwrote ${updated.sku}`, 'success');
-            if (!noteSaved(gen, id, updated?.updatedAt)) return;
-            setSaveState('saved');
-            setSavedAt(Date.now());
-            setSkuError(null);
-          } else {
-            // 'cancel' — leave form unchanged; the edits are still unsaved.
-            setSaveState('dirty');
-          }
+            // Explicit owner choice is the only path that omits the token.
+            autoSavePayload.current.overwriteOnce = true;
+            await flushOwed();
+            if (current()) addToast(`Overwrote ${form.sku}`, 'success');
+          } else setSaveState('dirty');
         }
       }
     } catch (err) {
@@ -579,7 +573,7 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
       }
       addToast(err.message, 'error');
     } finally {
-      setSaving(false);
+      if (current()) setSaving(false);
     }
   }
 
@@ -590,57 +584,19 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     if (skipNextAutoSave.current) { skipNextAutoSave.current = false; return undefined; }
     clearTimeout(autoSaveTimer.current);
     setSaveState('dirty');
-    /* v0.1.27: hold the payload so leaving the panel can FLUSH it. Pressing Esc,
-     * clicking another row, hiding the panel or navigating away within 500 ms
-     * used to discard the edit — the cleanup below only cleared the timer, and
-     * the next effect run then skipped via skipNextAutoSave.
-     *
-     * The id and token travel WITH the payload (see flushOwed): whoever writes
-     * it — this timer, a switch, an unmount — writes it to the product it was
-     * typed into. */
-    const gen = selectionGen.current;
-    autoSavePayload.current = {
-      id: activeProductId,
-      expectedUpdatedAt: lastSavedUpdatedAt.current,
-      payload: buildPayload(),
-    };
-    autoSaveTimer.current = setTimeout(async () => {
+    autoSavePayload.current = { id: activeProductId, payload: buildPayload() };
+    autoSaveTimer.current = setTimeout(() => {
       const owed = autoSavePayload.current;
-      autoSavePayload.current = null;      // claim it — the unmount flush must not repeat it
-      if (!owed || !owed.payload.sku || !owed.payload.sku.trim()) return;
-      setSaveState('saving');
-      try {
-        const updated = await updateProduct(owed.id, {
-          ...owed.payload, expectedUpdatedAt: owed.expectedUpdatedAt,
-        });
-        if (!noteSaved(gen, owed.id, updated?.updatedAt)) return;
-        setSaveState('saved');
-        setSavedAt(Date.now());
-      } catch (err) {
-        if (gen === selectionGen.current) setSaveState('dirty');
-        if (parseConflictError(err)) {
-          // Same handling as ImageWorkspace / SocialGrid: never show the raw
-          // CONFLICT| sentinel. Save opens the Refresh / Overwrite choice; say
-          // so once rather than on every pause in typing.
-          const stale = gen !== selectionGen.current;
-          if (stale || !conflictToasted.current) {
-            if (!stale) conflictToasted.current = true;
-            addToast(`${owed.payload.sku} changed elsewhere, so the last edit is not saved yet. Click Save to review it.`, 'error');
-          }
-        } else {
-          addToast(err.message, 'error');
-        }
-      }
+      if (owed?.payload.sku.trim()) saveQueue.current?.enqueue(owed);
     }, 500);
     return () => clearTimeout(autoSaveTimer.current);
     // Form is the intentional trigger; the store actions are stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form]);
 
-  /* Flush a pending autosave when the panel closes. Unmount only — an effect
-   * re-run triggered by a form edit must keep debouncing, not fire early (a
-   * product switch flushes from the product-change effect instead). */
-  useEffect(() => () => flushOwed(), [flushOwed]);
+  // All authorized exits await the flusher before unmounting. Cleanup only
+  // disarms the debounce: a rejected write must never be silently discarded.
+  useEffect(() => () => clearTimeout(autoSaveTimer.current), []);
 
   /**
    * v0.1.85: delete moved off the footer into the "⋯" menu, and now needs the
@@ -660,7 +616,9 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
    * The image files also go to the Trash now (main/util/fileTrash.js).
    */
   async function handleDelete() {
-    if (!activeProductId) return;
+    const id = activeProductId;
+    const gen = selectionGen.current;
+    if (!id) return;
     const sku = (form.sku || '').trim();
     const ok = await confirmWithBackup({
       title: `Delete ${sku || 'this product'}?`,
@@ -675,9 +633,10 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     });
     if (!ok) return;
     try {
-      await removeProduct(activeProductId);
+      await flushOwed();
+      await removeProduct(id);
       addToast(`Deleted ${sku || 'product'} — restore it from Settings → Recently deleted if that was a mistake.`, 'success');
-      onClose();
+      if (gen === selectionGen.current) onClose();
     } catch (err) {
       addToast(err.message, 'error');
     }
@@ -695,7 +654,9 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
    * pass can add an "include images" toggle to a dedicated modal.
    */
   async function handleDuplicate() {
-    if (!activeProductId) return;
+    const id = activeProductId;
+    const gen = selectionGen.current;
+    if (!id) return;
     const ok = await confirm({
       title: `Duplicate ${form.sku || 'this product'}?`,
       message: 'A new product will be created with the same fields and images. The new SKU appends " (copy)" to the original.',
@@ -705,7 +666,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     if (!ok) return;
     setDuplicating(true);
     try {
-      const created = await window.api.products.duplicate(activeProductId, true);
+      await flushOwed();
+      const created = await window.api.products.duplicate(id, true);
       addToast(`Duplicated to ${created.sku}`, 'success');
       useAppStore.getState().refreshProducts();
       useAppStore.getState().refreshAllProducts?.();
@@ -714,7 +676,7 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
       // product is the Library's own selection, so the Library does the
       // jump; the store's activeProductId it used to set here is the Image
       // Workspace's product, and the panel stayed on the original.
-      onDuplicated?.(created);
+      if (gen === selectionGen.current) onDuplicated?.(created);
     } catch (err) {
       addToast(err.message, 'error');
     } finally {
@@ -739,6 +701,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   /* ─── Image grid handlers ─── */
 
   async function handleAddImage() {
+    const gen = selectionGen.current;
+    const productId = activeProductId;
     if (!activeProductId) {
       addToast('Save the product first, then add images.', 'info');
       return;
@@ -750,8 +714,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     try {
       const filePath = await window.api.files.pickImageFile();
       if (!filePath) return;
-      const res = await window.api.images.importForProduct(activeProductId, filePath);
-      setImages(res.images);
+      const res = await window.api.images.importForProduct(productId, filePath);
+      if (gen === selectionGen.current && productId === activeProductIdRef.current) setImages(res.images);
       useAppStore.getState().refreshProducts();
       if (res.skipped) addToast('Same image already on this product — skipped.', 'info');
       else addToast('Image added', 'success');
@@ -761,9 +725,11 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   }
 
   async function handleSetMain(filepath) {
+    const gen = selectionGen.current;
+    const productId = activeProductId;
     try {
-      const next = await window.api.images.setMainImage(activeProductId, filepath);
-      setImages(next);
+      const next = await window.api.images.setMainImage(productId, filepath);
+      if (gen === selectionGen.current && productId === activeProductIdRef.current) setImages(next);
       useAppStore.getState().refreshProducts();
       // v0.12.4: explicit toast so the user sees confirmation. Without
       // it, the operation looks silent — especially when both involved
@@ -775,14 +741,16 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   }
 
   async function handleReorder(filepath, direction) {
+    const gen = selectionGen.current;
+    const productId = activeProductId;
     const idx = images.findIndex((i) => i.filepath === filepath);
     const target = idx + direction;
     if (idx < 0 || target < 0 || target >= images.length) return;
     const next = [...images];
     [next[idx], next[target]] = [next[target], next[idx]];
     try {
-      const updated = await window.api.images.reorderImages(activeProductId, next.map((i) => i.filepath));
-      setImages(updated);
+      const updated = await window.api.images.reorderImages(productId, next.map((i) => i.filepath));
+      if (gen === selectionGen.current && productId === activeProductIdRef.current) setImages(updated);
       useAppStore.getState().refreshProducts();
     } catch (err) {
       addToast(err.message, 'error');
@@ -790,22 +758,18 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   }
 
   async function handleRemoveImage(filepath) {
-    // v0.22.4: confirm before deleting. Misclicking the small × on an
-    // image tile used to silently delete it — annoying because the
-    // delete cascades to disk (the asset file is removed), so there
-    // was no "undo" once it fired. The asset is still content-
-    // addressed in the dedup pool, so other products referencing the
-    // same hash keep their copy; but if this was the only reference,
-    // the bytes are gone after this call.
+    const gen = selectionGen.current;
+    const productId = activeProductId;
     const tile = images.find((i) => i.filepath === filepath);
-    const isMain = tile && images[0]?.filepath === filepath;
+    if (!tile?.id) return;
+    const isMain = tile.id === images[0]?.id;
     const basename = (filepath?.split('/').pop() ?? 'this image');
     const ok = await confirm({
       title: 'Remove this image?',
       message: isMain
-        ? `Position 0 (main image) will be removed${images.length > 1 ? '; the next image takes its place' : ''}.`
+        ? `Position 1 (main image) will be removed${images.length > 1 ? '; the next image takes its place' : ''}.`
         : `"${basename}" will be removed from this product.`,
-      detail: 'The file is deleted from disk if no other product references it. This can\'t be undone.',
+      detail: 'Restore this photo from Settings → Recently deleted if you remove it by mistake.',
       danger: true,
       confirmLabel: 'Remove image',
       // v0.26.21: power-user shortcut. Shift+D fires the confirm
@@ -815,15 +779,15 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     });
     if (!ok) return;
     try {
-      const next = await window.api.images.removeFromProduct(activeProductId, filepath);
-      setImages(next);
+      const next = await window.api.images.removeFromProduct(productId, tile.id, tile.contentHash ?? null);
+      if (gen === selectionGen.current && productId === activeProductIdRef.current) setImages(next);
       useAppStore.getState().refreshProducts();
       // v0.22.9: explicit success toast that names the file that was
       // removed. Beyond the basic "yes it worked" feedback, this is
       // the explicit visual confirmation of WHICH file the click
       // affected — important now that the surrounding tiles re-flow
       // and the user can't easily eyeball which one disappeared.
-      addToast(`Removed ${basename}`, 'success');
+      addToast(`Removed ${basename} — restore it from Settings → Recently deleted.`, 'success');
     } catch (err) {
       addToast(err.message, 'error');
     }
@@ -832,25 +796,25 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   /* ─── v0.49.39: multi-image copy + drag-out helpers ────────────── */
 
   // Toggle a single image's selection. The ImageTile checkbox calls
-  // this — passes the filepath. Toggling the selection of an image
+  // this — passes the row ID. Toggling the selection of an image
   // that's currently the only-selected one leaves the set empty,
   // which auto-hides the selection toolbar (the JSX below tests
   // size > 0). No animation; the toolbar just disappears.
-  function toggleImageSelected(filepath) {
-    setSelectedFilepaths((prev) => {
+  function toggleImageSelected(imageId) {
+    setSelectedImageIds((prev) => {
       const next = new Set(prev);
-      if (next.has(filepath)) next.delete(filepath);
-      else next.add(filepath);
+      if (next.has(imageId)) next.delete(imageId);
+      else next.add(imageId);
       return next;
     });
   }
 
   function clearImageSelection() {
-    setSelectedFilepaths(new Set());
+    setSelectedImageIds(new Set());
   }
 
   function selectAllImages() {
-    setSelectedFilepaths(new Set(images.map((im) => im.filepath)));
+    setSelectedImageIds(new Set(images.map((im) => im.id)));
   }
 
   // Pop the OS folder picker, copy the chosen filepaths there.
@@ -869,7 +833,7 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
       filepaths = [images[0].filepath];
     } else if (scope === 'selected') {
       filepaths = images
-        .filter((im) => selectedFilepaths.has(im.filepath))
+        .filter((im) => selectedImageIds.has(im.id))
         .map((im) => im.filepath);
       if (filepaths.length === 0) {
         addToast('Select at least one image first.', 'info');
@@ -933,7 +897,7 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     let filepaths;
     if (scope === 'selected') {
       filepaths = images
-        .filter((im) => selectedFilepaths.has(im.filepath))
+        .filter((im) => selectedImageIds.has(im.id))
         .map((im) => im.filepath);
     } else { // 'all'
       filepaths = images.map((im) => im.filepath);
@@ -967,6 +931,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   }
 
   async function handlePaste(e) {
+    const gen = selectionGen.current;
+    const productId = activeProductId;
     const items = Array.from(e.clipboardData?.items ?? []);
     const imageItem = items.find((it) => it.type.startsWith('image/'));
     if (!imageItem) return;
@@ -985,8 +951,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
       const buf = await blob.arrayBuffer();
       const subtype = (blob.type.split('/')[1] || 'png').toLowerCase();
       const ext = subtype === 'jpeg' ? '.jpg' : `.${subtype}`;
-      const res = await window.api.images.importFromBytes(activeProductId, buf, ext);
-      setImages(res.images);
+      const res = await window.api.images.importFromBytes(productId, buf, ext);
+      if (gen === selectionGen.current && productId === activeProductIdRef.current) setImages(res.images);
       useAppStore.getState().refreshProducts();
       if (res.skipped) addToast('Same image already on this product — skipped.', 'info');
       else addToast('Image pasted', 'success');
@@ -1402,10 +1368,10 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
                   native one via webContents.startDrag.
                 - "Clear" — drops the selection. Same affordance as the
                   Esc key would do if we wired one. */}
-          {selectedFilepaths.size > 0 ? (
+          {selectedImageIds.size > 0 ? (
             <div className="image-select-bar">
               <span className="image-select-bar__count">
-                {selectedFilepaths.size} selected
+                {selectedImageIds.size} selected
               </span>
               <Button
                 onClick={() => handleCopyImagesToFolder('selected')}
@@ -1432,8 +1398,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
                   : 'Click and drag to copy these files to Finder, Mail, Slack, or any drop target'}
               >
                 {draggingPrep
-                  ? `Preparing ${selectedFilepaths.size}…`
-                  : `⤴ Drag ${selectedFilepaths.size}`}
+                  ? `Preparing ${selectedImageIds.size}…`
+                  : `⤴ Drag ${selectedImageIds.size}`}
               </button>
               <Button onClick={clearImageSelection}>Clear</Button>
             </div>
@@ -1466,8 +1432,8 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
                   onPreview={onPreview ? () => onPreview(i) : null}
                   onReframe={() => setReframeTarget(img)}
                   // v0.49.39: multi-select state for this tile.
-                  selected={selectedFilepaths.has(img.filepath)}
-                  onToggleSelected={() => toggleImageSelected(img.filepath)}
+                  selected={selectedImageIds.has(img.id)}
+                  onToggleSelected={() => toggleImageSelected(img.id)}
                 />
               ))}
             </div>

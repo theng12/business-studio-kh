@@ -284,7 +284,16 @@ async function addImage(productId, originalFilepath, importFn) {
   const baseName = productImageBasename(product, existing.length);
 
   const im = getImageManager();
-  const hashLookup = (h) => findByHashForProduct(productId, h);
+  const hashLookup = (h) => {
+    const hit = findByHashForProduct(productId, h);
+    // Called by both importers after hashing and before claiming a file.
+    // The existing per-product lock makes the capacity check atomic; a
+    // usable dedup hit needs no new slot even when the product is full.
+    if (existing.length >= im.MAX_IMAGES_PER_PRODUCT && (!hit || !fs.existsSync(assetAbsPath(hit)))) {
+      throw new Error(`Image cap reached (${im.MAX_IMAGES_PER_PRODUCT})`);
+    }
+    return hit;
+  };
   const { relativePath, hash, skipped } = await importFn(im, {
     destDirRel: dir,
     baseName,
@@ -327,14 +336,9 @@ async function addImage(productId, originalFilepath, importFn) {
  * renumbering immediately promotes `003` into the freed `002` slot, so a
  * delayed move would race it and could take the wrong bytes.
  */
-function remove(productId, filepath) {
+function remove(productId, imageId, expectedContentHash) {
   const db = getDb();
-  // Throws for a path that would leave <dataDir>/assets — checked even though
-  // the row lookup below would also miss it, so no future edit can reach disk
-  // with one.
-  assetAbsPath(filepath);
-
-  const rawRow = db.prepare('SELECT * FROM product_images WHERE product_id = ? AND filepath = ?').get(productId, filepath);
+  const rawRow = db.prepare('SELECT * FROM product_images WHERE product_id = ? AND id = ?').get(productId, imageId);
   /* No row, no disk. This used to unlink `<assets>/<filepath>` anyway, so a
    * stale screen (the photo already renumbered or deleted elsewhere) erased
    * another product's or another position's file, and a crafted path erased
@@ -342,6 +346,12 @@ function remove(productId, filepath) {
   if (!rawRow) {
     throw new Error('That photo is not on this product any more (it may have been moved or deleted already). Refresh and try again.');
   }
+
+  if (expectedContentHash != null && rawRow.content_hash !== expectedContentHash) {
+    throw new Error('That photo changed while you were confirming removal. Refresh and try again.');
+  }
+  const filepath = rawRow.filepath;
+  assetAbsPath(filepath);
 
   /* Hold the file BEFORE the row goes and before the renumber: holding renames
    * it into the recycle bin, and the renumber right after promotes `003` into
@@ -389,6 +399,7 @@ function remove(productId, filepath) {
   } catch (err) {
     process.stderr.write(`[images.remove] renumber after delete skipped: ${err.message}\n`);
   }
+  return rowToImage(rawRow);
 }
 
 /**

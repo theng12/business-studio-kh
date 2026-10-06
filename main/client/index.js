@@ -33,6 +33,7 @@
  */
 
 const { ipcMain, app, BrowserWindow } = require('electron');
+const { containedMediaPath } = require('../util/mediaPaths');
 // v0.49.43: 429 retry/backoff math (pure helper — no electron dep).
 const { retryWaitMs, shouldRetry } = require('../util/rateLimitRetry');
 // v0.1.18: the shared argument check, so client-mode local channels validate
@@ -1300,8 +1301,8 @@ function registerClientFileHandlers() {
     const dataUrl = await barcodeUri(value, format, true);
     if (!dataUrl) throw new Error('The barcode value is not valid for that format');
     await fsp.mkdir(outputFolder, { recursive: true });
-    const outputPath = path.join(outputFolder, `${slugify(value, 'barcode')}-${format || 'code128'}.png`);
-    await fsp.writeFile(outputPath, Buffer.from(dataUrl.split(',')[1], 'base64'));
+    const { writeUniqueFile } = require('../util/exclusiveFile');
+    const outputPath = await writeUniqueFile(outputFolder, `${slugify(value, 'barcode')}-${format || 'code128'}.png`, Buffer.from(dataUrl.split(',')[1], 'base64'));
     return { outputPath };
   });
 
@@ -1312,9 +1313,9 @@ function registerClientFileHandlers() {
     const renderer = require('../renderWindow');
     const { slugify } = require('../util/slug');
     const events = require('../events');
-    const ids = Array.isArray(productIds) ? productIds : [];
     const opId = `label-${Date.now()}`;
     const made = [];
+    let items;
     let templateName;
 
     try {
@@ -1325,11 +1326,12 @@ function registerClientFileHandlers() {
         // nothing else has to travel.
         const built = await rpc('labels:buildDocument', { companyId, templateId, productIds, layout });
         templateName = built.templateName;
-        events.broadcast('progress:event', { id: opId, kind: 'labels', done: 0, total: ids.length, phase: 'rendering', label: templateName });
+        events.broadcast('progress:event', { id: opId, kind: 'labels', done: 0, total: built.products.length, phase: 'rendering', label: templateName });
         const target = path.join(outputFolder, `${slugify(templateName, 'labels')}-${Date.now()}.pdf`);
         await renderer.toPdf(built.html, target, { orientation: layout.orientation });
         made.push({ filePath: target });
-        events.broadcast('progress:event', { id: opId, kind: 'labels', done: ids.length, total: ids.length, phase: 'finishing', label: templateName });
+        items = built.products.map((product) => ({ ...product, filePath: target }));
+        events.broadcast('progress:event', { id: opId, kind: 'labels', done: built.products.length, total: built.products.length, phase: 'finishing', label: templateName });
       } else {
         // One file per label. Ask for a document per product in a single call —
         // a batch document is one page and cannot be split back into labels.
@@ -1344,14 +1346,15 @@ function registerClientFileHandlers() {
         for (let i = 0; i < built.documents.length; i += 1) {
           const doc = built.documents[i];
           const target = path.join(outputFolder, `${slugify(doc.sku, 'label')}-${slugify(templateName, 'label')}.${ext}`);
-          await renderer.toImage(doc.html, target, {
+          const actualPath = await renderer.toImage(doc.html, target, {
             format,
             width: Math.ceil(built.widthMm * scale),
             height: Math.ceil(built.heightMm * scale),
             quality: 92,
             zoomFactor: dpi / 96,
+            unique: true,
           });
-          made.push({ filePath: target, productId: doc.productId, sku: doc.sku });
+          made.push({ filePath: actualPath, productId: doc.productId, sku: doc.sku });
           events.broadcast('progress:event', { id: opId, kind: 'labels', done: i + 1, total: built.documents.length, phase: 'rendering', label: doc.sku });
         }
       }
@@ -1367,7 +1370,7 @@ function registerClientFileHandlers() {
         outputPath: format === 'pdf' ? made[0]?.filePath : outputFolder,
         settings: layout,
         originHost: require('node:os').hostname(),
-        items: made.map((entry) => ({
+        items: items || made.map((entry) => ({
           productId: entry.productId ?? null,
           sku: entry.sku ?? null,
           filePath: entry.filePath,
@@ -1889,10 +1892,8 @@ function registerClientImageImportBridges() {
     const written = [];
 
     for (const f of files) {
-      const rel = String(f?.relPath || '').replace(/^\/+/, '');
-      if (!rel || rel.includes('..')) continue;
-      let dest = path.resolve(outRootAbs, rel);
-      if (!dest.startsWith(outRootAbs + path.sep) && dest !== outRootAbs) continue;
+      const rel = f?.relPath;
+      let dest = containedMediaPath(outRootAbs, rel);
 
       await fsp.mkdir(path.dirname(dest), { recursive: true });
       const bytes = Buffer.from(f.bytes);
@@ -1959,12 +1960,7 @@ function registerClientImageImportBridges() {
     const outRootAbs = path.resolve(outputRoot);
     const collisions = [];
     for (const { rel, sku } of (entries || [])) {
-      const cleaned = String(rel || '').replace(/^\/+/, '');
-      if (!cleaned || cleaned.includes('..')) continue;
-      const dest = path.resolve(outRootAbs, cleaned);
-      // Stay inside outputRoot (defensive — server-computed names
-      // never escape, but the wire is treated as hostile).
-      if (!dest.startsWith(outRootAbs + path.sep) && dest !== outRootAbs) continue;
+      const dest = containedMediaPath(outRootAbs, rel);
       try {
         if (fs.existsSync(dest)) collisions.push({ name: path.basename(dest), sku });
       } catch { /* ignore unreadable path */ }

@@ -2,6 +2,17 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.92', date: '2026-10-06',
+    items: [
+      'FIX — Product edits wait for the latest save before leaving. Photo selections and removal follow the actual image after reordering, and late replies cannot replace another product’s images. Company and category edits detect newer changes; image removal explains how to restore it.',
+      'FIX — AI cancellation keeps active request limits intact. Repair cannot resubmit a live request, saved outputs are preserved, and missing or partial results show their actual errors. Gallery promotion checks the source company before importing.',
+      'FIX — Source crop preview and saved selection share rotation, straighten and image coordinates. A completed crop cannot clear another photo’s draft. Overlay saves detect conflicts, Apply uses the current saved template, and Undo restores a complete gesture.',
+      'FIX — Labels and barcodes keep earlier files when names collide. Client PDF history retains the actual products for Run again. Zero label spacing works, Social Grid previews match export geometry, and incomplete exports keep their previous status.',
+      'POLISH — Purchase Order headers show save status and keep pending edits through remote refreshes. Cost Calculator refreshes received costs, preserves manual input and reports the realized margin from the rounded price. Settings offers Retry when loading fails, and History recovers when its last page disappears.',
+      'Internal — Artwork reads and export destinations stay inside their allowed folders. Brand renames refuse photo-folder collisions and restore failed moves. Regression checks cover local and client contracts without changing the database schema. Updated build-tool source maps and proxy dependencies to remove newly reported security advisories.',
+    ],
+  },
+  {
     version: '0.1.91', date: '2026-10-05',
     items: [
       'FIX — Catalog wholesale layouts use wholesale prices. Template edits detect changes from another Mac, and leaving an unsaved template asks before discarding it. Catalog previews wait for your latest save and ignore older replies.',

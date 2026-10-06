@@ -30,7 +30,7 @@ export function ImageStrip({ images, activeIndex, onSelect, onPreview }) {
       <div className="ws-strip__list">
         {images.map((img, idx) => {
           const active = idx === activeIndex;
-          const src = appImageSrc(img.filepath, img.contentHash || img.id || img.filepath);
+          const src = appImageSrc(img.filepath, img.contentHash || img.id || img.filepath, { w: 96 });
           return (
             <div
               key={img.id ?? img.filepath}

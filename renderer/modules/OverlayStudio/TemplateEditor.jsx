@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /**
  * v0.26.0 (Phase 4): canvas-size presets shown in the editor toolbar.
@@ -27,6 +27,9 @@ import { EyeIcon, EyeOffIcon, LockIcon, UnlockIcon } from './icons.jsx';
 import { BulkOverlayRunModal } from '../ProductLibrary/BulkOverlayRunModal.jsx';
 import { priceEntry } from '../../lib/prices.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
+import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
+import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
+import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 
 /**
  * Template editor — the heart of Overlay Studio.
@@ -102,55 +105,77 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
 
   const saveTimer = useRef(null);
   const lastSavedJSON = useRef(null);
+  const latest = useRef(null);
+  const dirty = useRef(false);
+  const saveQueue = useRef(null);
+  const saveOperation = useRef(null);
+  const resolvingConflict = useRef(false);
+  const acknowledgedRevision = useRef(null);
+  const editorGeneration = useRef(0);
 
-  // v0.25.0 (Phase 3): undo/redo history stack + clipboard.
-  //
-  // History strategy: passive "settle commit". After any template
-  // change, wait HISTORY_DEBOUNCE_MS. If no further change happens
-  // in that window, push the current state to history. Naturally
-  // captures end-of-drag / end-of-keystroke states without needing
-  // explicit pointer-up signals from the canvas. The downside is a
-  // small commit-delay (~300ms) but Cmd+Z still works the moment a
-  // checkpoint lands.
-  //
-  // History is per-session — closing and reopening the editor resets
-  // it. Saved templates obviously persist via the normal save path.
-  //
-  // Clipboard is also session-local in-memory. Survives across
-  // template-editor open/close cycles within the same app launch.
+  // Bounded, session-only history. A burst records its FIRST pre-edit state;
+  // the timer only closes the burst, so Undo also works before it settles.
   const HISTORY_DEBOUNCE_MS = 300;
   const HISTORY_LIMIT = 50;
   const [history, setHistory] = useState({ past: [], future: [] });
+  const historyRef = useRef(history);
   const historyTimer = useRef(null);
-  const skipNextCommitRef = useRef(false);
+  const burstOpen = useRef(false);
   const clipboardRef = useRef(null);
 
-  // Initial load
+  function resetHistory() {
+    clearTimeout(historyTimer.current);
+    burstOpen.current = false;
+    historyRef.current = { past: [], future: [] };
+    setHistory(historyRef.current);
+  }
+
+  // Invalidate old reads and save acknowledgments on template change/unmount.
   useEffect(() => {
-    let cancelled = false;
+    const generation = ++editorGeneration.current;
+    latest.current = null;
+    dirty.current = false;
+    saveQueue.current = null;
+    saveOperation.current = null;
+    resolvingConflict.current = false;
+    lastSavedJSON.current = null;
+    setTemplate(null);
+    setSelectedId(null);
+    setApplyOpen(false);
+    setSaveStatus({ state: 'saved', lastSavedAt: null });
+    resetHistory();
     (async () => {
       try {
         const t = await window.api.templates.get(templateId);
-        if (cancelled) return;
+        if (generation !== editorGeneration.current) return;
+        if (!t) throw new Error('Template not found');
+        latest.current = t;
+        acknowledgedRevision.current = t.updatedAt;
         setTemplate(t);
         lastSavedJSON.current = JSON.stringify(stripEphemeral(t));
-        // Auto-pick a backdrop: first product in the company, if any.
-        if (products.length > 0) setBackdropProductId(products[0].id);
+        setSaveStatus({ state: 'saved', lastSavedAt: t.updatedAt });
+        setBackdropProductId(products[0]?.id ?? null);
       } catch (err) {
-        if (!cancelled) addToast(err.message, 'error');
+        if (generation === editorGeneration.current) addToast(err.message, 'error');
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      editorGeneration.current += 1;
+      clearTimeout(saveTimer.current);
+      clearTimeout(historyTimer.current);
+    };
+    // The loaded products only choose the initial backdrop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId]);
 
-  // When backdrop product changes, fetch its images so the canvas can show
-  // image #0 and the inspector's image-source dropdown can resolve previews.
   useEffect(() => {
-    if (!backdropProductId) { setProductImages([]); return; }
+    let cancelled = false;
+    setProductImages([]);
+    if (!backdropProductId) return undefined;
     window.api.images.listByProduct(backdropProductId)
-      .then(setProductImages)
-      .catch(() => setProductImages([]));
+      .then((rows) => { if (!cancelled) setProductImages(rows); })
+      .catch(() => { if (!cancelled) setProductImages([]); });
+    return () => { cancelled = true; };
   }, [backdropProductId]);
 
   // Build the product context for token-filling in the live preview.
@@ -206,70 +231,48 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
 
   /* ── change handling ──────────────────────────────────────── */
 
-  // Generic patch dispatcher used by every form. Computes the new template
-  // synchronously, kicks off a debounced save. We intentionally bypass
-  // React state for the saved-JSON tracking so subsequent renders within
-  // the 500ms debounce window don't re-fire saves.
+  // Mirror edits synchronously: a Save/Apply in the same event turn must see
+  // the newest draft. State updaters stay pure under React's replay behavior.
   function updateTemplate(mutator) {
-    setTemplate((prev) => {
-      if (!prev) return prev;
-      const next = typeof mutator === 'function' ? mutator(prev) : mutator;
-      scheduleSave(next);
-      scheduleHistoryCommit(prev);
-      return next;
-    });
-  }
-
-  // v0.25.0: settle-commit history. Whenever `updateTemplate` fires
-  // we (re)start a timer; if no further change in 300ms, snapshot the
-  // PREVIOUS state into history.past. That way Cmd+Z restores
-  // whatever the template was BEFORE the change ended. Future stack
-  // is cleared on any new change (standard "branching invalidates the
-  // redo path" semantics).
-  function scheduleHistoryCommit(prevState) {
-    if (skipNextCommitRef.current) {
-      skipNextCommitRef.current = false;
-      return;
+    const prev = latest.current;
+    if (!prev) return;
+    const next = typeof mutator === 'function' ? mutator(prev) : mutator;
+    if (JSON.stringify(stripEphemeral(next)) === JSON.stringify(stripEphemeral(prev))) return;
+    if (!burstOpen.current) {
+      historyRef.current = { past: [...historyRef.current.past, stripEphemeral(prev)].slice(-HISTORY_LIMIT), future: [] };
+      burstOpen.current = true;
+    } else {
+      historyRef.current = { ...historyRef.current, future: [] };
     }
-    if (historyTimer.current) clearTimeout(historyTimer.current);
-    historyTimer.current = setTimeout(() => {
-      setHistory((h) => {
-        // Skip pushing if the most recent past entry is already this
-        // shape (e.g. a no-op patch).
-        const snapshot = stripEphemeral(prevState);
-        const snapJSON = JSON.stringify(snapshot);
-        const lastPast = h.past[h.past.length - 1];
-        if (lastPast && JSON.stringify(lastPast) === snapJSON) return h;
-        const past = [...h.past, snapshot];
-        if (past.length > HISTORY_LIMIT) past.shift();
-        return { past, future: [] };
-      });
-    }, HISTORY_DEBOUNCE_MS);
+    setHistory(historyRef.current);
+    clearTimeout(historyTimer.current);
+    historyTimer.current = setTimeout(() => { burstOpen.current = false; }, HISTORY_DEBOUNCE_MS);
+    latest.current = next;
+    setTemplate(next);
+    scheduleSave(next);
   }
 
-  function undo() {
-    if (history.past.length === 0 || !template) return;
-    const target = history.past[history.past.length - 1];
-    const past = history.past.slice(0, -1);
-    const future = [...history.future, stripEphemeral(template)];
-    skipNextCommitRef.current = true;  // navigating, not editing — don't recommit
-    setHistory({ past, future });
-    const restored = { ...template, ...target };
+  function navigateHistory(direction) {
+    const current = latest.current;
+    if (!current) return;
+    clearTimeout(historyTimer.current);
+    burstOpen.current = false;
+    const h = historyRef.current;
+    const from = direction === 'undo' ? h.past : h.future;
+    if (!from.length) return;
+    const target = from[from.length - 1];
+    historyRef.current = direction === 'undo'
+      ? { past: h.past.slice(0, -1), future: [...h.future, stripEphemeral(current)].slice(-HISTORY_LIMIT) }
+      : { past: [...h.past, stripEphemeral(current)].slice(-HISTORY_LIMIT), future: h.future.slice(0, -1) };
+    setHistory(historyRef.current);
+    const restored = { ...current, ...target };
+    latest.current = restored;
     setTemplate(restored);
     scheduleSave(restored);
   }
 
-  function redo() {
-    if (history.future.length === 0 || !template) return;
-    const target = history.future[history.future.length - 1];
-    const future = history.future.slice(0, -1);
-    const past = [...history.past, stripEphemeral(template)];
-    skipNextCommitRef.current = true;
-    setHistory({ past, future });
-    const restored = { ...template, ...target };
-    setTemplate(restored);
-    scheduleSave(restored);
-  }
+  function undo() { navigateHistory('undo'); }
+  function redo() { navigateHistory('redo'); }
 
   // v0.25.0: Cmd+D duplicate / Cmd+C copy / Cmd+V paste.
   function duplicateElement(elementId) {
@@ -329,51 +332,122 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
     }
   }
 
+  const ensureSaveQueue = useCallback(() => {
+    if (!saveQueue.current) {
+      const generation = editorGeneration.current;
+      saveQueue.current = createLatestSaveQueue({
+        initialRevision: acknowledgedRevision.current,
+        persist: (value, expectedUpdatedAt) => {
+          if (generation !== editorGeneration.current) throw new Error('Template editor changed before saving');
+          return window.api.templates.update(value.id, { ...stripEphemeral(value), expectedUpdatedAt });
+        },
+        onStart: () => { if (generation === editorGeneration.current) setSaveStatus((s) => ({ ...s, state: 'saving', error: null })); },
+        onSuccess: (row, value) => {
+          if (generation !== editorGeneration.current) return;
+          acknowledgedRevision.current = row.updatedAt;
+          lastSavedJSON.current = JSON.stringify(stripEphemeral(value));
+          if (latest.current === value) {
+            latest.current = row;
+            setTemplate(row);
+            dirty.current = false;
+            lastSavedJSON.current = JSON.stringify(stripEphemeral(row));
+            setSaveStatus({ state: 'saved', lastSavedAt: row.updatedAt });
+          } else {
+            setSaveStatus((s) => ({ ...s, state: 'dirty' }));
+          }
+          onChanged?.();
+        },
+        onError: (err) => {
+          if (generation !== editorGeneration.current) return;
+          dirty.current = true;
+          setSaveStatus((s) => ({ ...s, state: 'error', error: err.message }));
+          if (!parseConflictError(err)) addToast(err.message, 'error');
+        },
+      });
+    }
+    return saveQueue.current;
+  }, [addToast, onChanged]);
+
   function scheduleSave(next) {
-    const json = JSON.stringify(stripEphemeral(next));
-    /* v0.1.25: cancel the pending timer BEFORE the no-op return. Otherwise the
-     * earlier timer is still queued holding the previous snapshot, and typing a
-     * character then deleting it within 500 ms saved the abandoned text — the UI
-     * and the "saved" pill showed the corrected value while the database kept
-     * the typo. */
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    if (json === lastSavedJSON.current) return;  // genuinely nothing to save
-    // Waiting for the debounce: "Unsaved changes" (the Save button flushes now).
-    setSaveStatus((s) => ({ ...s, state: 'dirty' }));
-    saveTimer.current = setTimeout(() => {
-      saveNow(next, /* showToast */ false);
-    }, 500);
+    clearTimeout(saveTimer.current);
+    // An active write can still change the saved row even if the user returned
+    // to its previous value; keep that restoration queued behind the write.
+    dirty.current = JSON.stringify(stripEphemeral(next)) !== lastSavedJSON.current || !!saveQueue.current?.hasPending();
+    setSaveStatus((s) => ({ ...s, state: dirty.current ? 'dirty' : 'saved', error: null }));
+    if (dirty.current && !resolvingConflict.current) saveTimer.current = setTimeout(() => ensureSaveQueue().enqueue(latest.current), 500);
   }
 
-  async function saveNow(snapshot, showToast = true) {
-    const t = snapshot ?? template;
-    if (!t) return;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    const json = JSON.stringify(stripEphemeral(t));
-    if (json === lastSavedJSON.current && saveStatus.state !== 'error') {
-      if (showToast) addToast('Already saved', 'info');
-      return;
-    }
-    setSaveStatus((s) => ({ ...s, state: 'saving' }));
+  const flushPending = useCallback(() => {
+    clearTimeout(saveTimer.current);
+    if (!dirty.current || !latest.current) return Promise.resolve();
+    return ensureSaveQueue().flush(() => dirty.current ? latest.current : null);
+  }, [ensureSaveQueue]);
+
+  const performSave = useCallback(async () => {
+    const generation = editorGeneration.current;
     try {
-      await window.api.templates.update(t.id, {
-        name: t.name,
-        description: t.description,
-        canvasWidth: t.canvasWidth,
-        canvasHeight: t.canvasHeight,
-        elements: t.elements,
-        inset: t.inset ?? null,
-        tags: t.tags,
-      });
-      lastSavedJSON.current = json;
-      setSaveStatus({ state: 'saved', lastSavedAt: Date.now() });
-      onChanged?.();
-      if (showToast) addToast('Saved', 'success');
-    } catch (err) {
-      setSaveStatus((s) => ({ state: 'error', lastSavedAt: s.lastSavedAt, error: err.message }));
-      addToast(`Save failed: ${err.message}`, 'error');
+      await flushPending();
+      return generation === editorGeneration.current;
+    } catch (error) {
+      if (generation !== editorGeneration.current) return false;
+      clearTimeout(saveTimer.current);
+      resolvingConflict.current = true;
+      let overwrittenDraft = null;
+      try {
+        const result = await resolveSaveConflict(error, {
+          refresh: () => window.api.templates.get(templateId),
+          overwrite: () => {
+            if (generation !== editorGeneration.current) throw new Error('Template editor changed before conflict resolution', { cause: error });
+            overwrittenDraft = latest.current;
+            return window.api.templates.update(overwrittenDraft.id, stripEphemeral(overwrittenDraft));
+          },
+        });
+        if (result.choice === 'cancel' || generation !== editorGeneration.current) return false;
+        const row = result.row;
+        if (!row) throw new Error('Template not found', { cause: error });
+        acknowledgedRevision.current = row.updatedAt;
+        ensureSaveQueue().setRevision(row.updatedAt);
+        if (result.choice === 'refresh' || latest.current === overwrittenDraft) {
+          clearTimeout(saveTimer.current);
+          latest.current = row;
+          setTemplate(row);
+          dirty.current = false;
+          lastSavedJSON.current = JSON.stringify(stripEphemeral(row));
+          setSaveStatus({ state: 'saved', lastSavedAt: row.updatedAt });
+          if (result.choice === 'refresh') resetHistory();
+          onChanged?.();
+        } else {
+          await flushPending();
+        }
+        return true;
+      } catch (nextError) {
+        if (generation === editorGeneration.current) {
+          setSaveStatus((s) => ({ ...s, state: 'error', error: nextError.message }));
+          if (parseConflictError(error) || nextError !== error) addToast(nextError.message, 'error');
+        }
+        return false;
+      } finally {
+        if (generation === editorGeneration.current) resolvingConflict.current = false;
+      }
     }
-  }
+  }, [ensureSaveQueue, flushPending, templateId, addToast, onChanged]);
+
+  // Save, Apply and navigation share the same drain/conflict resolution.
+  const saveNow = useCallback(() => {
+    if (saveOperation.current) return saveOperation.current;
+    const operation = performSave().finally(() => {
+      if (saveOperation.current === operation) saveOperation.current = null;
+    });
+    saveOperation.current = operation;
+    return operation;
+  }, [performSave]);
+
+  useEffect(() => registerCompanySwitchFlusher(async () => {
+    if (!await saveNow()) throw new Error('Save this template before leaving.');
+  }), [saveNow]);
+
+  async function leave() { if (await saveNow()) onClose?.(); }
+  async function apply() { if (await saveNow()) setApplyOpen(true); }
 
   /* ── element ops ──────────────────────────────────────────── */
 
@@ -471,7 +545,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
 
   // docs/UI_GUIDE.md: the editor's header is the page header — back to the
   // list via `backTo`, SaveStatus first in the actions, the primary last.
-  const back = { label: 'All templates', onClick: onClose };
+  const back = { label: 'All templates', onClick: leave };
   if (!template) {
     return (
       <>
@@ -501,13 +575,13 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
               destination radio in the modal. Disabled until a product is
               chosen so the user gets a tooltip instead of a silent no-op. */}
           <Button
-            onClick={() => setApplyOpen(true)}
+            onClick={apply}
             disabled={!backdropProductId}
             title={backdropProductId
               ? 'Render this template against the previewed product and save the result.'
               : 'Pick a product in "Preview against" to enable Apply.'}
           >Apply…</Button>
-          <Button variant="primary" onClick={onClose}>Done</Button>
+          <Button variant="primary" onClick={leave}>Done</Button>
         </>
       )}
     />
@@ -737,6 +811,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
         <div className="ovl-editor__backdrop-picker">
           <span className="muted">Preview against</span>
           <Select
+            aria-label="Preview against"
             value={backdropProductId ?? ''}
             onChange={(e) => setBackdropProductId(e.target.value || null)}
           >
@@ -804,6 +879,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
           "Current filter" if they want to fan out from here. */}
       <BulkOverlayRunModal
         open={applyOpen}
+        initialTemplateId={templateId}
         productIds={backdropProductId ? [backdropProductId] : []}
         filters={null}
         onClose={() => setApplyOpen(false)}

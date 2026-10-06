@@ -1,6 +1,6 @@
 # Media Studio KH — Development Status
 
-Updated: **2026-10-05, at 0.1.91.** This is the short "where is the project" page. The operating
+Updated: **2026-10-06, at 0.1.92 candidate.** This is the short "where is the project" page. The operating
 loop, paths, traps and the full list of open gaps live in [the session handoff](tasks/HANDOFF.md),
 which is updated on every release — read that first in a new session. If either document disagrees
 with the code, the code wins.
@@ -14,24 +14,25 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
 - **Who uses it:** home use — the owner's Macs, plus his brother (whose phone is Android). There
   is no public release, and none is planned.
 - **Platform:** macOS 12 or newer, Apple Silicon. One unsigned arm64 DMG per release.
-- **Who builds it:** AI coding agents working under the owner's direction. Every review so far has
-  been self-review (the same agent, or another agent from the same model family). No human or
-  third-party model has reviewed the tree.
+- **Who builds it:** AI coding agents working under the owner's direction. The 0.1.92 tree received
+  a spec/quality review from another agent in the same model family. No human or third-party model
+  has reviewed the tree.
 
-## Current release — 0.1.91
+## Current release candidate — 0.1.92
 
 | | |
 |---|---|
-| Version | `0.1.91` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
-| Integration | Catalog workflow release; see session handoff and Git history |
-| Installed | Existing installation preserved; use the new DMG to update |
-| DMG | `dist/Media Studio KH-0.1.91-arm64.dmg` in the owner's checkout (not in Git) |
+| Version | `0.1.92` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
+| Integration | `codex/app-improvements`; all local, packaged client/server and installed-app checks passed. PR/merge, owner-checkout synchronization and cleanup remain pending. |
+| Installed | **0.1.92** passed an isolated smoke check with the version visible in the sidebar. Previous 0.1.32 was preserved under the owner's `_trash/installed-apps/`; no live-data test was performed. |
+| DMG | Copied to the owner's `dist/Media Studio KH-0.1.92-arm64.dmg`; SHA-256 `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765` matches the verified build. Pruning retained 0.1.91/0.1.92 and moved older DMGs to `_trash/old-dmgs/`. |
 
 **What changed since the last version of this page (0.1.72).** One line per release; the full
 wording is in the "What's new" changelog.
 
 | Version | Main change |
 |---|---|
+| 0.1.92 | Eight audit batches: file/company safety, reliable editors/AI, source crop geometry, truthful labels/exports/Social previews, PO/cost/Settings recovery |
 | 0.1.91 | Catalog correctness, bulk picking/SKU paste, session undo, reusable print controls and paper preview |
 | 0.1.73–0.1.78 | Phone viewer: save an overlaid photo to the device, "Save copy only", choose which photo an overlay lands on, overlay several products at once, batch results as one zip, Android-correct save wording, `{price_<group>}` overlay tokens |
 | 0.1.79–0.1.80 | One price rule everywhere (labels, phone viewer, catalog CSV, Google feed, bulk table); History shows price-group changes in words |
@@ -46,14 +47,18 @@ wording is in the "What's new" changelog.
 
 ## Checks
 
-Recorded in the handoff for the 0.1.89/0.1.90 tree:
+Verified for the 0.1.92 candidate in `graphify-out/app-improvements/`:
 
 | Check | Result |
 |---|---|
-| `npm run lint` | 0 errors, 4 pre-existing warnings (unused `eslint-disable` directives in three test files and `main/util/fileTrash.js`) |
-| `npm test` | 1217 pass |
-| `npm run test:native` (Electron's Node, database tests) | 211 pass |
-| UI crawl (`scripts/probe-ui-crawl.js`, clean profile) | 145/145 at 0.1.89 |
+| `npm run check` (`release-check.log`) | 1379 pass, 0 fail, 0 skip |
+| `npm run test:native` (`integrated-native.log`, rerun after packaging) | 240 pass, 0 fail, 0 skip |
+| Production build and arm64 DMG (`release-build.log`, `release-dist.log`) | Passed; DMG integrity valid |
+| Dependency audit (`audit-release-all.json`, `audit-release-production.json`) | 0 vulnerabilities in both reports |
+| UI crawl (`final-ui-crawl.log`) | 145/145, no console errors or exceptions |
+| Rendered/editor and actual output checks | Overlay at 1100/1400/1920px; crop letterbox/source checks; PO save/focus; native label PNGs, A4 PDF with all 3 SKUs, Social preview/export pixel match |
+| Packaged client/server probe (`release-packaged-round3.log`) | Passed on packaged 0.1.92 after correcting stale UI selectors in the probe |
+| Installed-app smoke (`release-installed.log`) | Passed with isolated data; database ready, window shown, normal quit, and sidebar version 0.1.92 visible |
 
 The handoff lists the known flaky tests (port races, wall-clock timeouts) and the order to run
 the checks in. `npm test` mounts almost no React screens, so UI changes also need the crawl, and
@@ -67,7 +72,7 @@ The full step list is the handoff's "working loop". In short:
 1. Work on a `codex/<topic>` branch; `npm run check` and, for database work, `npm run test:native`.
 2. Patch version bump in `package.json` plus a new top changelog entry (AGENTS.md §23, §24).
 3. `npm run dist` builds **one** arm64 DMG (AGENTS.md §20; Intel only on request with
-   `npm run dist:x64`). Copy it into the owner's `dist/` (`/Users/vengtheng/Developer/media-studio-kh/dist`),
+   `npm run dist:x64`). Copy it into the owner's `dist/` (`/Users/thengmacmini/Developer/media-studio-kh/dist`),
    then `npm run dmgs:prune`, which keeps the newest two releases and moves older DMGs to `_trash/old-dmgs/`.
 4. Install: copy the app to `/Applications` and clear the quarantine flag
    (`xattr -cr "/Applications/Media Studio KH.app"`) — builds are unsigned (see `SIGNING.md`).
@@ -96,7 +101,8 @@ The full step list is the handoff's "working loop". In short:
 
 ## Open
 
-The handoff's OPEN table is the complete list. The headline items:
+The handoff's OPEN table is the complete list. For this candidate, PR/merge, owner checkout
+synchronization and final cleanup remain pending. The headline items:
 
 - **Hardware validation has not been performed** — two physical Macs, a real printer, macOS 12,
   real phones, the background-removal model download. See
