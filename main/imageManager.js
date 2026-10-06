@@ -418,43 +418,111 @@ function moveProductDir(oldRel, newRel) {
 }
 
 /**
- * v0.12.0: rename a brand-slug subdirectory in place (used when a brand
- * is renamed). Walks every company that owns this brand and moves
- *   <company>/<old-brand-slug>/  →  <company>/<new-brand-slug>/
- *
- * Returns an array of (oldRel, newRel) pairs covering every file inside.
- * The caller updates the corresponding product_images rows in one tx.
+ * Move entire brand directories without merging into another owner's folder.
+ * Preflight every destination, then reserve each with exclusive mkdir. A
+ * directory rename can replace our empty reservation, but refuses a target
+ * that gains any file after preflight. Commit DB changes only after the moves;
+ * any move/commit failure restores completed moves before returning an error.
  */
-function moveBrandDirEverywhere(companySlugs, oldBrandSlug, newBrandSlug) {
-  if (oldBrandSlug === newBrandSlug) return [];
-  const dataDir = getDataDir();
+function moveBrandDirEverywhere(companySlugs, oldBrandSlug, newBrandSlug, commit = () => {}) {
+  if (oldBrandSlug === newBrandSlug) { commit(); return []; }
+  const assetsAbs = path.join(getDataDir(), 'assets');
+  const plans = [];
   const allMoves = [];
-  for (const companySlug of companySlugs) {
-    // Stored paths are relative to <dataDir>/assets/ — no leading `assets/`.
+  function targetIsFree(plan, reservation = null) {
+    const parent = path.dirname(plan.newAbs);
+    if (!fs.existsSync(parent)) return;
+    for (const name of fs.readdirSync(parent)) {
+      if (name.toLowerCase() !== newBrandSlug.toLowerCase()) continue;
+      const entryAbs = path.join(parent, name);
+      // On a case-insensitive volume the case-only destination is the source.
+      const stat = fs.lstatSync(entryAbs);
+      if (reservation && stat.dev === reservation.dev && stat.ino === reservation.ino) continue;
+      if (plan.caseOnly && fs.existsSync(plan.oldAbs)) {
+        const sourceStat = fs.lstatSync(plan.oldAbs);
+        if (stat.dev === sourceStat.dev && stat.ino === sourceStat.ino) continue;
+      }
+      throw new Error(`Brand image folder is occupied: ${path.relative(assetsAbs, entryAbs)}. No photos were overwritten.`);
+    }
+  }
+  function inventory(abs, oldRel, newRel) {
+    for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+      const from = path.posix.join(oldRel, entry.name);
+      const to = path.posix.join(newRel, entry.name);
+      if (entry.isDirectory()) inventory(path.join(abs, entry.name), from, to);
+      else allMoves.push({ oldRel: from, newRel: to });
+    }
+  }
+  for (const companySlug of new Set(companySlugs)) {
     const oldRel = path.posix.join(companySlug, oldBrandSlug);
     const newRel = path.posix.join(companySlug, newBrandSlug);
-    const oldAbs = path.join(dataDir, 'assets', oldRel);
-    if (!fs.existsSync(oldAbs)) continue;
-    const newAbs = path.join(dataDir, 'assets', newRel);
-    fs.mkdirSync(newAbs, { recursive: true });
-    const skuEntries = fs.readdirSync(oldAbs, { withFileTypes: true });
-    for (const skuEntry of skuEntries) {
-      if (!skuEntry.isDirectory()) continue;
-      const skuOldAbs = path.join(oldAbs, skuEntry.name);
-      const skuNewAbs = path.join(newAbs, skuEntry.name);
-      fs.mkdirSync(skuNewAbs, { recursive: true });
-      const fileEntries = fs.readdirSync(skuOldAbs, { withFileTypes: true });
-      for (const f of fileEntries) {
-        if (!f.isFile()) continue;
-        fs.renameSync(path.join(skuOldAbs, f.name), path.join(skuNewAbs, f.name));
-        allMoves.push({
-          oldRel: path.posix.join(oldRel, skuEntry.name, f.name),
-          newRel: path.posix.join(newRel, skuEntry.name, f.name),
-        });
-      }
-      try { fs.rmdirSync(skuOldAbs); } catch (_) {}
+    const plan = {
+      oldAbs: path.join(assetsAbs, oldRel), newAbs: path.join(assetsAbs, newRel),
+      caseOnly: oldRel.toLowerCase() === newRel.toLowerCase(), currentAbs: null,
+    };
+    targetIsFree(plan);
+    if (!fs.existsSync(plan.oldAbs)) continue;
+    if (!fs.lstatSync(plan.oldAbs).isDirectory()) throw new Error(`Brand image folder is not a directory: ${oldRel}`);
+    inventory(plan.oldAbs, oldRel, newRel);
+    plans.push(plan);
+  }
+
+  const reservations = new Set();
+  function reserve(abs) {
+    fs.mkdirSync(abs); // No recursive mkdir: an occupied target must fail.
+    reservations.add(abs);
+  }
+  function move(from, to) {
+    fs.renameSync(from, to);
+    reservations.delete(to); // The source directory now owns this path.
+  }
+  function preserveEmptyReservations() {
+    for (const abs of reservations) {
+      if (!fs.existsSync(abs) || !fs.lstatSync(abs).isDirectory() || fs.readdirSync(abs).length) continue;
+      const trash = path.join(getDataDir(), '_trash', 'brand-rename');
+      fs.mkdirSync(trash, { recursive: true });
+      fs.renameSync(abs, path.join(trash, crypto.randomUUID()));
     }
-    try { fs.rmdirSync(oldAbs); } catch (_) {}
+  }
+  // ponytail: synchronous rollback covers operation errors; a process/power
+  // loss between move and commit would require a durable rename journal.
+  try {
+    for (const plan of plans) {
+      targetIsFree(plan);
+      if (plan.caseOnly) {
+        const stage = path.join(path.dirname(plan.oldAbs), `__brand-rename-${crypto.randomUUID()}`);
+        reserve(stage);
+        move(plan.oldAbs, stage);
+        plan.currentAbs = stage;
+      }
+      reserve(plan.newAbs);
+      targetIsFree(plan, fs.lstatSync(plan.newAbs));
+      move(plan.currentAbs ?? plan.oldAbs, plan.newAbs);
+      plan.currentAbs = plan.newAbs;
+    }
+    commit();
+  } catch (err) {
+    const recovery = [];
+    for (const plan of [...plans].reverse()) {
+      if (!plan.currentAbs) continue;
+      try {
+        if (plan.caseOnly && plan.currentAbs === plan.newAbs) {
+          const stage = path.join(path.dirname(plan.oldAbs), `__brand-rename-${crypto.randomUUID()}`);
+          reserve(stage);
+          move(plan.currentAbs, stage);
+          plan.currentAbs = stage;
+        }
+        reserve(plan.oldAbs);
+        move(plan.currentAbs, plan.oldAbs);
+        plan.currentAbs = null;
+      } catch (rollbackError) {
+        recovery.push(`${plan.currentAbs} → ${plan.oldAbs}: ${rollbackError.message}`);
+      }
+    }
+    // Empty reservations are ours; occupied targets remain where they are.
+    try { preserveEmptyReservations(); } catch (cleanupError) { recovery.push(cleanupError.message); }
+    if (recovery.length) throw new Error(`${err.message}. Brand photos need recovery: ${recovery.join('; ')}`, { cause: err });
+    throw err;
   }
   return allMoves;
 }
