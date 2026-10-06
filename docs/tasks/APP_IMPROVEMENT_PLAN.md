@@ -1,7 +1,7 @@
 # App audit and improvement plan
 
 Date: 2026-10-06. Audited source: `0732bb5`, Business Studio KH **0.1.91**.
-Status: **audit and planning complete; implementation has not started**.
+Status: **implementation active — owner authorized autonomous completion on 2026-10-06**.
 
 The owner requested a distributed audit and a plan for each part of the app. This document is the execution order, with evidence and acceptance checks in the linked area reports. Catalog's completed 0.1.91 plan remains the baseline; do not reopen its resolved findings.
 
@@ -36,7 +36,7 @@ Start with batch1. Batches2 and3 can be implemented in parallel after its shared
 
 Batch1 has three independently verified checkpoints: **1a artwork/export path boundaries (O1/O2), 1b brand rename integrity (PO-1), 1c gallery source authorization (IA-3)**. Implement and review them as separate small changes, rather than one coupled refactor. Preserve that priority even if an independent S-sized checkpoint finishes sooner.
 
-## 1. File and company boundaries
+## Task 1 — File and company boundaries
 
 Details: [output report O1/O2](app-audit-2026-10-06/output-studios.md), [product report PO-1](app-audit-2026-10-06/products-organization.md), [AI report IA-3](app-audit-2026-10-06/image-ai-editors.md).
 
@@ -47,7 +47,7 @@ Details: [output report O1/O2](app-audit-2026-10-06/output-studios.md), [product
 
 Acceptance: harmless temporary fixtures prove outside-root and symlink reads/writes are refused; both local and RPC routes agree. Valid existing artwork exports unchanged. Distinct colliding brands/SKUs retain both original hashes and rows after a refused rename. Inject a mover failure and verify recoverable, consistent rows/files and an actual error; a late occupied target cannot cause a partial silent overwrite. Foreign gallery→existing/new product has zero side effects; same-company promotion works. Use current validator/reachability and native data-safety suites. No real credentials or owner files in the fixtures.
 
-## 2. Product Library and organization
+## Task 2 — Product Library and organization
 
 Details: [PO-2–7](app-audit-2026-10-06/products-organization.md).
 
@@ -59,7 +59,7 @@ Details: [PO-2–7](app-audit-2026-10-06/products-organization.md).
 
 Acceptance: deferred image/save replies and confirmation plus reorder preserve identity and the newest draft; A→B never applies A state to B. Two stale entity snapshots conflict. Dashboard's no-images count matches the opened set even after unrelated search/brand filters. Inspect photo selection, focus and toasts in the rendered app. Keep all three closed bulk modals intact.
 
-## 3. AI task reliability
+## Task 3 — AI task reliability
 
 Details: [IA-1–3](app-audit-2026-10-06/image-ai-editors.md). IA-3 belongs to batch1.
 
@@ -69,7 +69,7 @@ Details: [IA-1–3](app-audit-2026-10-06/image-ai-editors.md). IA-3 belongs to b
 
 Acceptance: controllable provider/filesystem stubs cover concurrency=1, cancel→late success/failure, live Repair rejection, disk-full zero/partial outputs, image cap and follow-on export failure. No duplicate submission, false Done or cancelled-state resurrection. Already durably saved outputs are preserved; cancellation cannot reverse a completed provider charge or earlier durable write. Run renderer task-display and native gallery assertions without provider spending.
 
-## 4. Image Workspace crop
+## Task 4 — Image Workspace crop
 
 Details: [IA-7/IA-8](app-audit-2026-10-06/image-ai-editors.md).
 
@@ -78,7 +78,7 @@ Details: [IA-7/IA-8](app-audit-2026-10-06/image-ai-editors.md).
 
 Acceptance: landscape/portrait fixtures with marked corners produce the requested1:1/4:3 ratio and selected pixels. Raw/processed,90° rotation and straighten previews agree with saved bytes. Deferred A crop cannot clear B or another image in A. New-copy and overwrite routes keep existing confirmations and immutable replacement checks.
 
-## 5. Overlay Studio editing
+## Task 5 — Overlay Studio editing
 
 Details: [IA-4–6](app-audit-2026-10-06/image-ai-editors.md).
 
@@ -89,7 +89,7 @@ Details: [IA-4–6](app-audit-2026-10-06/image-ai-editors.md).
 
 Acceptance: stale Mac B cannot erase Mac A's layout; delayed acknowledgments cannot mark a newer draft saved. Immediate Apply of template B after its last edit uses B's saved acknowledgment. Failed save opens no run modal. Gesture undo/redo works from toolbar and keyboard. Essential controls remain reachable with keyboard and visible at supported window widths.
 
-## 6. Labels, barcodes and export history
+## Task 6 — Labels, barcodes and export history
 
 Details: [O3–5/O7–8](app-audit-2026-10-06/output-studios.md).
 
@@ -101,7 +101,7 @@ Details: [O3–5/O7–8](app-audit-2026-10-06/output-studios.md).
 
 Acceptance: repeated/sluggified outputs retain original hashes and unique actual paths, including a competing write. Client three-product PDF reports three products and reruns them; a missing selected product is not falsely recorded. Zero-spacing CSS and real temporary PDFs agree. Missing/partial/cancelled exports preserve prior status. History refresh from a removed last page displays surviving earlier records. Physical printer calibration is a later hardware check, not a prerequisite for verified source/PDF fixes.
 
-## 7. Social Grid previews
+## Task 7 — Social Grid previews
 
 Details: [O6](app-audit-2026-10-06/output-studios.md).
 
@@ -109,7 +109,7 @@ Replace the separate per-field preview scaling rules with full normalized design
 
 Acceptance: compare preview with a reduced exported fixture for signed offsets, zero padding/gap/radius, dense tiles, font minima, portrait/wide canvases. Measure largest supported capture and preserve PREVIEW_MAX payload bounds. Check the rendered picker/preview after the geometry fix.
 
-## 8. Operations and Settings
+## Task 8 — Operations and Settings
 
 Details: [operations/Settings report](app-audit-2026-10-06/operations-settings.md).
 
@@ -132,7 +132,7 @@ Acceptance: PO remote updates cannot silently overwrite pending metadata drafts;
 
 For each material batch: establish an isolated branch/worktree and failing targeted regression, apply the smallest shared fix, run focused checks immediately, review independently, run the appropriate full/local/native/render suites and inspect affected UI. Then patch-bump package/lock/What's new and update HANDOFF, integrate through a mergeable PR with Actions still disabled, synchronize owner main, create/verify one arm64 DMG in owner dist and preserve evidence. No paid calls, publishing, deployment, tags, important-data deletion or customer safeguard changes are implied by this plan.
 
-This plan covers documentation-only audit work. Version0.1.91 and its existing verified DMG remain unchanged; no new app release or installation is performed. Implementation is deliberately deferred because this request is audit/planning only.
+The owner now authorized autonomous implementation of all eight confirmed fix batches. Implement independently reviewed checkpoints on one coordinated feature branch; complete local/native/render verification and a patch release once the accepted fixes are integrated. Optional behavior changes and unverified hardware inventories remain outside the eight confirmed batches. No provider spending or live-data reset is authorized.
 
 ## Delegation and watchdog record
 
@@ -146,3 +146,22 @@ All audit workers read `0732bb5` in the owner checkout and wrote separate ignore
 | audit_plan_review | gpt-6-luna / high | independent plan-review report, source/caller/proof verification |
 
 Primary planning worktree: `codex/app-audit-plan`, starting at `0732bb5`. The [independent review](app-audit-2026-10-06/plan-review.md) is preserved beside the area reports. Documentation checks and raw proof evidence remain in local `graphify-out/app-audit-2026-10-06/` and the PR.
+
+## Implementation progress — 2026-10-06
+
+Start: e3af16d; worktree $HOME/.codex/worktrees/app-improvements/media-studio-kh; branch codex/app-improvements. Owner checkout .serena remains untouched. Dependencies are an independent copy, not a shared symlink.
+
+- [ ] 1a Artwork/export path boundaries (O1/O2)
+- [ ] 1b Brand rename integrity (PO-1)
+- [ ] 1c Gallery ownership (IA-3)
+- [ ] 2 Product Library and organization (PO-2–7)
+- [ ] 3 AI lifecycle/results (IA-1/2)
+- [ ] 4 Crop geometry/context (IA-7/8)
+- [ ] 5 Overlay save/apply/history/layout (IA-4–6)
+- [ ] 6 Labels/exports/history (O3–5/7/8)
+- [ ] 7 Social preview geometry (O6)
+- [ ] 8 PO/cost/Settings (OPS-1–4/SET-1)
+- [ ] Independent task reviews, full verification, UI/output inspection
+- [ ] Patch/changelog/HANDOFF, PR merge, owner sync, DMG verification/copy, cleanup
+
+Parallel work is explicitly owner-authorized and limited to disjoint ownership. Each worker reads its brief, records baseline/red/green evidence, and leaves an artifact for controller review. The primary owns shared contracts, package/version/release/docs and integration. No worker publishes, pushes, merges or launches a GUI.
