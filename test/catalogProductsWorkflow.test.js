@@ -19,6 +19,7 @@ async function productSession(products, config) {
   const jsx = (type, props) => ({ type, props: props || {} });
   const react = {
     useState(initial) { const i = index++; if (!(i in hooks)) hooks[i] = initial; return [hooks[i], (next) => { hooks[i] = typeof next === 'function' ? next(hooks[i]) : next; }]; },
+    useRef(initial) { const i = index++; if (!(i in hooks)) hooks[i] = { current: initial }; return hooks[i]; },
     useMemo(factory, deps) { const i = index++; if (changed(hooks[i], deps)) hooks[i] = { deps, value: factory() }; return hooks[i].value; },
     useEffect(effect, deps) { const i = index++; if (changed(effects[i], deps)) effects[i] = { deps, effect, pending: true }; },
   };
@@ -120,9 +121,9 @@ test('selection remains across filters and is pruned when a product leaves its u
   const session = await productSession(products, { selectionMode: 'explicit', productIds: [] }); session.render();
   nodes(session.tree, (n) => n.props['aria-label'] === 'Select A from the product library')[0].props.onChange(); session.render();
   nodes(session.tree, (n) => n.type?.name === 'Input' && n.props['aria-label'] === 'Search the product library')[0].props.onChange({ target: { value: 'B' } }); session.render();
-  assert.equal(button(session, 'Add selected (1)').disabled, false);
+  assert.equal(Boolean(button(session, 'Add selected (1)').disabled), false);
   session.props.products = [products[1]]; session.render(); session.render();
-  assert.equal(button(session, 'Add selected (0)').disabled, true);
+  assert.equal(nodes(session.tree, (n) => n.type?.name === 'Button' && text(n).startsWith('Add selected')).length, 0);
 });
 
 test('brand and category filters constrain the all-matching action without altering saved selection', async () => {
@@ -165,4 +166,40 @@ test('selected block UI keeps catalog order rather than click order at the reque
   button(session, 'Move selected (2)').onClick(); session.render();
   assert.deepEqual(session.patches.at(-1).productIds, ['a', 'missing', 'b', 'd', 'c']);
   assert.equal(session.patches.at(-1).sortBy, 'manual');
+});
+
+
+test('catalog selected actions are conditional while direct Add scopes stay in a labeled disclosure', async () => {
+  const session = await productSession([{ id: 'a', sku: 'A' }, { id: 'b', sku: 'B' }], { selectionMode: 'explicit', productIds: ['b', 'missing'] }); session.render();
+  const selectedActions = () => nodes(session.tree, (n) => n.type?.name === 'Button' && /^(Add|Move|Remove) selected/.test(text(n)));
+  assert.equal(selectedActions().length, 0);
+  const disclosure = nodes(session.tree, (n) => n.type === 'details' && text(n).includes('Add this page'))[0];
+  assert.ok(disclosure, 'direct additions are grouped');
+  assert.ok(nodes(disclosure, (n) => n.type === 'summary' && text(n) === 'Add products')[0], 'native summary is the keyboard launcher');
+  assert.equal(button(session, 'Add this page (1)').disabled, false);
+  nodes(session.tree, (n) => n.props['aria-label'] === 'Select A from the product library')[0].props.onChange(); session.render();
+  assert.equal(button(session, 'Add selected (1)').variant, 'primary');
+  button(session, 'Add selected (1)').onClick(); session.render(); session.render();
+  assert.deepEqual(session.patches.at(-1).productIds, ['b', 'missing', 'a']);
+  assert.equal(selectedActions().length, 0);
+  nodes(session.tree, (n) => n.props['aria-label'] === 'Select B in the catalog')[0].props.onChange(); session.render();
+  assert.ok(button(session, 'Move selected (1)'));
+  assert.ok(button(session, 'Remove selected (1)'));
+});
+
+test('add and remove actions move focus to the panel search before their controls disappear', async () => {
+  const session = await productSession([{ id: 'a', sku: 'A' }, { id: 'b', sku: 'B' }], { selectionMode: 'explicit', productIds: ['b'] }); session.render();
+  let focused = 0;
+  const panels = nodes(session.tree, (n) => n.type === 'section' && n.props.className?.includes('catalog-product-panel'));
+  for (const panel of panels) panel.props.ref.current = { querySelector: () => ({ focus() { focused += 1; } }) };
+  const action = { contains: () => true };
+  const oldDocument = global.document;
+  global.document = { activeElement: action };
+  try {
+    nodes(session.tree, (n) => n.props['aria-label'] === 'Add A to the catalog')[0].props.onClick({ currentTarget: action }); session.render();
+    assert.equal(focused, 1);
+    nodes(session.tree, (n) => n.props['aria-label'] === 'Select B in the catalog')[0].props.onChange(); session.render();
+    button(session, 'Remove selected (1)').onClick({ currentTarget: action }); session.render();
+    assert.equal(focused, 2);
+  } finally { global.document = oldDocument; }
 });

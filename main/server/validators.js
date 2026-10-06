@@ -221,7 +221,13 @@ const VALIDATORS = {
   'companies:remove':      requireStringArg('company id'),
 
   // Products -------------------------------------------------------
-  'products:list':         (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
+  'products:list':         (a) => {
+    if (a != null && !isObject(a)) return 'expected an object or null';
+    if (a?.filters != null && !isObject(a.filters)) return 'filters must be an object';
+    const criterion = a?.filters?.attentionFilter;
+    if (criterion != null && !['missingBarcode', 'missingPrice', 'notExported'].includes(criterion)) return 'unknown attention filter';
+    return true;
+  },
   'products:get':          requireStringArg('product id'),
   'products:create':       (a) => {
     if (!isObject(a)) return 'create payload must be an object';
@@ -519,6 +525,7 @@ const VALIDATORS = {
   'search:global':         (a) => {
     if (!isObject(a)) return 'expected object with query';
     if (!isString(a.query)) return 'query must be a string';
+    if (a.companyId != null && !isString(a.companyId)) return 'companyId must be a string';
     if (a.limit != null && !isNumber(a.limit)) return 'limit must be a number';
     return true;
   },

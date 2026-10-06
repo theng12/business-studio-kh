@@ -93,7 +93,7 @@ test('Esc already handled by a control does not close the panel', () => {
   assert.match(esc, /if \(e\.defaultPrevented\) return;/,
     'Esc in a SearchableSelect (brand / category / supplier) must not also close the panel');
   assert.match(esc, /onCloseRef\.current\?\.\(\)/, 'the listener must read onClose from a ref');
-  assert.match(FORM, /window\.removeEventListener\('keydown', onKey\);\s*\}, \[isEmpty\]\);/,
+  assert.match(FORM, /window\.removeEventListener\('keydown', onKey\);\s*\}, \[isEmpty, visible\]\);/,
     'the Esc listener must not re-register on every Library render');
 });
 

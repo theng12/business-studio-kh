@@ -1,5 +1,5 @@
 /**
- * v0.18.2: global search across products, brands, and categories
+ * Global search across products, brands, categories and permitted catalog/operations records
  * for the active company.
  *
  * Single ORs-and-LIKEs query against each table; results are
@@ -10,8 +10,9 @@
  * should refine their query.
  *
  * Match strategy: case-insensitive LIKE on every searched column.
- * Not full-text search; for the typical catalog size (a few thousand
- * products) the regex-style match is fast enough and the UX matches
+ * ponytail: LIKE is sized for a few thousand products; switch to FTS5
+ * only when measured search latency warrants it. For typical catalogs,
+ * the substring match is fast enough and the UX matches
  * user mental models ("does the string appear anywhere in the SKU /
  * name?"). If catalogs grow huge we can switch to FTS5 later with
  * no API surface change.
@@ -37,6 +38,7 @@ const { getDb } = require('./index');
  * orders (PO number). The caller decides it from the account's capabilities
  * (costing.view), because search:global itself is a baseline read that every
  * account may call — a photographer must not learn supplier names this way.
+ * `opts.includeCatalog` similarly requires catalog.design for saved projects/templates.
  */
 function globalSearch(companyId, query, limit = 30, opts = {}) {
   if (!companyId) return [];
@@ -133,12 +135,33 @@ function globalSearch(companyId, query, limit = 30, opts = {}) {
     }
   }
 
+  if (opts.includeCatalog) {
+    // Only saved company templates are searchable; built-in layouts have no
+    // persistent record ID and remain reachable on the Templates screen.
+    for (const [table, kind] of [['catalog_projects', 'catalogProject'], ['catalog_templates', 'catalogTemplate']]) {
+      const rows = db.prepare(`SELECT id, name, description FROM ${table}
+        WHERE company_id = ? AND (name LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE)
+        ORDER BY updated_at DESC LIMIT ?`).all(companyId, like, like, limit);
+      for (const row of rows) results.push({ kind, id: row.id, label: row.name, sublabel: row.description || null });
+    }
+  }
+
   // Cap the merged list. Products are listed first by design — they're
   // the most-common target. v0.1.89: but a long product list no longer
   // pushes every other kind out — up to half the cap is kept for brand /
   // category / supplier / PO hits, and products fill the rest.
   const products = results.filter((r) => r.kind === 'product');
-  const others = results.filter((r) => r.kind !== 'product');
+  const groups = new Map();
+  for (const result of results.filter((r) => r.kind !== 'product')) {
+    if (!groups.has(result.kind)) groups.set(result.kind, []);
+    groups.get(result.kind).push(result);
+  }
+  // Share the non-product places across kinds, so many brand hits cannot
+  // crowd every matching catalog or order out of the palette.
+  const others = [];
+  for (let index = 0; index < limit; index += 1) {
+    for (const group of groups.values()) if (group[index]) others.push(group[index]);
+  }
   const keepOthers = others.slice(0, Math.max(0, Math.min(others.length, limit - Math.min(products.length, Math.ceil(limit / 2)))));
   const keepProducts = products.slice(0, limit - keepOthers.length);
   return [...keepProducts, ...keepOthers];

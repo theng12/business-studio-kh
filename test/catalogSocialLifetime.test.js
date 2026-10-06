@@ -549,3 +549,48 @@ test('catalog keeps undo across its own saved event and rejects previews before 
   assert.notEqual(control().props.preview, 'BEFORE REMOTE');
   assert.equal(control().props.state, 'refreshing'); harness.unmount();
 });
+
+
+test('catalog history shortcuts use revisions and leave native text undo and dialogs alone', async () => {
+  const server = { row: makeRow('catalog'), enforceRevision: true }; const updates = [];
+  global.window = { api: makeApi('catalog', server, updates) };
+  const state = storeState(); const harness = makeReactHarness(state);
+  const { CatalogEditor } = await loadEditors(harness);
+  const session = await openEditor('catalog', CatalogEditor, harness);
+  let prevented = 0; let dialogOpen = false;
+  const oldDocument = global.document; global.document = { querySelector: () => dialogOpen ? {} : null };
+  const key = (overrides = {}) => {
+    const root = findAll(session.output, (n) => n.props?.className === 'page catalog-editor-page')[0];
+    assert.equal(typeof root.props.onKeyDown, 'function', 'editor exposes the history shortcut handler');
+    root.props.onKeyDown({ key: 'z', metaKey: true, target: { tagName: 'BUTTON' }, preventDefault() { prevented += 1; }, ...overrides }); session.render();
+  };
+  const hasName = (name) => findAll(session.output, (n) => n.type?.name === 'Input' && n.props.value === name).length > 0;
+  try {
+    editName(session, 'Original', 'Changed', true); updates[0].gate.resolve(); await tick(); session.render();
+    for (const target of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'INPUT', type: 'checkbox' }, { tagName: 'INPUT', type: 'range' }, { tagName: 'TEXTAREA' }, { isContentEditable: true }, { tagName: 'SELECT' }]) { key({ target }); assert.ok(hasName('Changed')); }
+    dialogOpen = true; key(); assert.ok(hasName('Changed')); dialogOpen = false;
+    for (const guards of [{ altKey: true }, { isComposing: true }, { nativeEvent: { isComposing: true } }, { defaultPrevented: true }]) { key(guards); assert.ok(hasName('Changed')); }
+    state.companySwitching = true; session.render(); key(); assert.ok(hasName('Changed')); state.companySwitching = false; session.render();
+    assert.equal(prevented, 0);
+    key({ metaKey: false, ctrlKey: true }); assert.ok(hasName('Original')); assert.equal(prevented, 1);
+    const saving = findAll(session.output, (n) => n.type?.name === 'SaveStatus')[0].props.onSave();
+    assert.equal(updates[1].patch.expectedUpdatedAt, 2); updates[1].gate.resolve(); await saving; session.render();
+    key({ shiftKey: true, key: 'Z' }); assert.ok(hasName('Changed')); assert.equal(prevented, 2);
+    const savingRedo = findAll(session.output, (n) => n.type?.name === 'SaveStatus')[0].props.onSave();
+    assert.equal(updates[2].patch.expectedUpdatedAt, 3); updates[2].gate.resolve(); await savingRedo;
+  } finally { global.document = oldDocument; harness.unmount(); for (const update of updates) update.gate.resolve(); }
+});
+
+
+test('catalog design disclosure choices survive a trip through Products', async () => {
+  const server = { row: makeRow('catalog') }; const updates = [];
+  global.window = { api: makeApi('catalog', server, updates) };
+  const harness = makeReactHarness(storeState()); const { CatalogEditor } = await loadEditors(harness);
+  const session = await openEditor('catalog', CatalogEditor, harness);
+  const design = () => findAll(session.output, (n) => n.type?.name === 'DesignControls')[0].props;
+  assert.deepEqual(design().openSections, { Layout: true });
+  design().onOpenSectionsChange({ Layout: false, Style: true }); session.render();
+  findAll(session.output, (n) => n.type === 'button' && textOf(n) === 'Products')[0].props.onClick(); session.render();
+  findAll(session.output, (n) => n.type === 'button' && textOf(n) === 'Layout & design')[0].props.onClick(); session.render();
+  assert.deepEqual(design().openSections, { Layout: false, Style: true }); assert.equal(updates.length, 0, 'disclosure choices do not save a design edit'); harness.unmount();
+});

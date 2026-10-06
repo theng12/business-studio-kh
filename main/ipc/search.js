@@ -28,15 +28,27 @@ function callerMayViewCosting() {
   }
 }
 
+function callerMayViewCatalog() {
+  let uid;
+  try { uid = require('../server').getCurrentUserId?.() ?? null; } catch (_) { return true; }
+  if (!uid) return true;
+  try {
+    const user = require('../db/users').get(uid);
+    return !!user && require('../util/permissions').isAllowed(user.role, 'catalogStudio:list');
+  } catch (_) { return false; }
+}
+
 function register({ expose }) {
-  expose('search:global', ({ query, limit } = {}) => {
+  expose('search:global', ({ query, limit, companyId: requestedCompanyId } = {}) => {
     const companyId = companies.getActiveId();
+    if (requestedCompanyId != null && requestedCompanyId !== companyId) return [];
     if (!companyId) return [];
     const { globalSearch } = require('../db/search');
     return globalSearch(companyId, query, Math.min(limit ?? 30, 100), {
       includeCosting: callerMayViewCosting(),
+      includeCatalog: callerMayViewCatalog(),
     });
   });
 }
 
-module.exports = { register, callerMayViewCosting };
+module.exports = { register, callerMayViewCosting, callerMayViewCatalog };

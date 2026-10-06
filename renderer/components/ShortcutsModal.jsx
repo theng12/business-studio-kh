@@ -81,6 +81,7 @@ const GROUPS = (mod, caps) => [
     title: 'Product Library',
     rows: [
       { keys: ['Click row'], action: 'Open side panel for product' },
+      { keys: [`${mod}B`], action: 'Collapse / expand Library filters (outside fields and dialogs)' },
       { keys: ['Esc'], action: 'Close side panel' },
       { keys: ['⌘V / Ctrl+V'], action: 'Paste image into selected product' },
     ],
@@ -94,11 +95,22 @@ const GROUPS = (mod, caps) => [
     ],
   },
   {
+    title: 'Catalog project',
+    rows: [
+      { keys: [`${mod}Z`], action: 'Undo catalog edit outside text fields' },
+      { keys: [`${mod}Shift+Z`], action: 'Redo catalog edit outside text fields' },
+    ],
+  },
+  {
     title: 'Image Workspace',
     rows: [
-      { keys: ['←', '→'], action: 'Previous / next image on this product' },
+      { keys: ['←', '→'], action: 'Previous / next image outside crop mode' },
       { keys: ['+ / -'], action: 'Zoom in / out' },
       { keys: ['0'], action: 'Reset zoom to fit' },
+      { keys: ['Enter / Space'], action: 'Create crop when crop canvas is focused' },
+      { keys: ['Arrow keys'], action: 'Move focused crop by 1 source pixel (Shift: 10)' },
+      { keys: ['Alt + arrow keys'], action: 'Resize focused crop right/bottom edge; Shift uses 10 pixels' },
+      { keys: ['Arrow keys / Home / End'], action: 'Adjust focused Before/After slider' },
     ],
   },
 ];

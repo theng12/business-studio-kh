@@ -150,7 +150,7 @@ function buildPrices(map) {
 /* Memoized: every prop the Library passes is stable (state, or a useCallback /
  * useMemo there), so typing in the Library's search box or ticking a row no
  * longer re-renders this ~1,500-line form. Store subscriptions still update it. */
-export const ProductForm = memo(function ProductForm({ product, isCreating = false, createKey = 0, onClose, onStartCreate, onProcess, onPreview, onDuplicated, onRegisterFlush }) {
+export const ProductForm = memo(function ProductForm({ product, visible = true, isCreating = false, createKey = 0, onClose, onStartCreate, onProcess, onPreview, onDuplicated, onRegisterFlush }) {
   // The panel is persistently mounted (per the user's request to keep the
   // detail view always visible). There are three modes:
   //   - `product` truthy            → edit-existing form
@@ -986,7 +986,7 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   useEffect(() => {
-    if (isEmpty) return undefined;
+    if (isEmpty || !visible) return undefined;
     const onKey = (e) => {
       if (e.key !== 'Escape') return;
       if (e.defaultPrevented) return;  // a focused control already used it
@@ -996,7 +996,7 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isEmpty]);
+  }, [isEmpty, visible]);
 
   if (isEmpty) {
     return (
@@ -1613,8 +1613,8 @@ function ImageTile({ image, index, total, onSetMain, onMoveLeft, onMoveRight, on
       <button
         type="button"
         className="image-tile__remove"
-        aria-label="Remove image"
-        title="Remove image"
+        aria-label={`Remove ${isMain ? 'main ' : ''}image ${index + 1}`}
+        title={`Remove ${isMain ? 'main ' : ''}image ${index + 1}`}
         onClick={onRemove}
       >
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none">

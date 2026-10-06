@@ -1,16 +1,5 @@
 const { getDb } = require('./index');
-const { priceEntry } = require('../util/prices');
-
-/** True when the product row has ANY price — retail, wholesale or a price
- *  group — read through priceEntry (HANDOFF: prices are never read off the
- *  column or the map directly). */
-function rowHasAnyPrice(row) {
-  let prices;
-  try { prices = JSON.parse(row.prices || '{}') || {}; } catch (_) { prices = {}; }
-  const product = { priceRetail: row.price_retail, priceWholesale: row.price_wholesale, prices };
-  const sources = ['retail', 'wholesale', ...Object.keys(prices && typeof prices === 'object' ? prices : {})];
-  return sources.some((src) => priceEntry(product, src).amount != null);
-}
+const { rowHasAnyPrice } = require('../util/prices');
 
 function statsFor(companyId) {
   if (!companyId) {
@@ -110,13 +99,12 @@ function completenessFor(companyId) {
       WHERE p.company_id = ?
     `)
     .get(companyId);
-  // "No price" means no price ANYWHERE — a product sold only at wholesale or
-  // through a price group is priced. Only rows with neither column set can
-  // be missing one, so just those have their price-group map parsed.
+  // Share the same price interpretation as the Library attention queue,
+  // including legacy blank columns, zero amounts and named price groups.
   const missingPrice = getDb()
     .prepare(`
       SELECT price_retail, price_wholesale, prices FROM products
-       WHERE company_id = ? AND price_retail IS NULL AND price_wholesale IS NULL
+       WHERE company_id = ?
     `)
     .all(companyId)
     .filter((r) => !rowHasAnyPrice(r)).length;

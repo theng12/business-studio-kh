@@ -99,3 +99,26 @@ test('a newer context-navigation request invalidates an older awaited route', as
     assert.equal(state.pendingCatalogProjectId, null);
   } finally { unregister(); }
 });
+
+for (const [action, pending, module] of [
+  ['openLibraryProduct', 'pendingLibraryProductId', 'library'],
+  ['openCatalogTemplate', 'pendingCatalogTemplateId', 'catalogtemplates'],
+]) test(`${action} waits for the draft guard and cancels when the company changes`, async () => {
+  const { createNavigationSlice, registerCompanySwitchFlusher } = await loadNavigation();
+  const gate = deferred();
+  const state = { activeCompanyId: 'company-1', addToast() {} };
+  Object.assign(state, createNavigationSlice((patch) => Object.assign(state, patch), () => state));
+  const unregister = registerCompanySwitchFlusher(() => gate.promise);
+  try {
+    const opening = state[action]('record', 'company-1');
+    assert.equal(state[pending], null);
+    state.activeCompanyId = 'company-2';
+    gate.resolve();
+    assert.equal(await opening, false);
+    assert.equal(state[pending], null);
+    assert.equal(state.activeModule, 'dashboard');
+    assert.equal(await state[action]('record', 'company-2'), true);
+    assert.equal(state[pending], 'record');
+    assert.equal(state.activeModule, module);
+  } finally { unregister(); }
+});

@@ -944,7 +944,7 @@ async function deepCatalogTemplateFlow(crawl) {
   if (builderCrash) { crawl.step('deep: the builder opens', false, `CRASHED: ${builderCrash}`); return; }
   // UI pass 2026-10: the controls column is `.catalog-sidebar`, one
   // `.catalog-sidebar__section` per group (Template, Cover, Layout, Style, Card fields).
-  const sections = await crawl.eval(`window.__ui.all('.catalog-sidebar section h3').map((h) => h.textContent)`);
+  const sections = await crawl.eval(`window.__ui.all('.catalog-sidebar section h3, .catalog-design-section > summary .section-title').map((h) => h.textContent)`);
   await crawl.shot('catalog-builder');
   crawl.step('deep: the builder opens with the design controls', sections.length >= 4, `sections: ${JSON.stringify(sections)}`);
 
@@ -974,6 +974,9 @@ async function deepCatalogTemplateFlow(crawl) {
   await crawl.eval(`window.__ui.fieldSet('Description', 'Built by the UI crawl')`);
   await crawl.eval(`window.__ui.fieldSet('Columns', '2')`);
   await crawl.eval(`window.__ui.fieldSet('Page margin (mm)', '14')`);
+  // Optional design groups are native disclosures; exercise their visible controls.
+  await crawl.eval(`(() => { for (const d of document.querySelectorAll('.catalog-design-section')) { const label = d.querySelector('summary .section-title')?.textContent; if (['Style', 'Cover', 'Card fields'].includes(label) && !d.open) d.querySelector('summary').click(); } })()`);
+  await crawl.settle(100);
   await crawl.eval(`window.__ui.click('.theme-choices button', 'Minimal')`);
   await crawl.settle(200);
   const coverOff = await crawl.eval(`(() => {
@@ -2096,7 +2099,7 @@ async function deepBulkTableFlow(crawl, photoPath) {
  *
  * The Feature A assertions read the real DOM AND the real localStorage keys,
  * because the point of the fix is that the toolbar button and the panel
- * chevron agree about ONE state (`ProductLibrary.panelVisible`) and one map
+ * chevron agree about the independent filter state (`ProductLibrary.filtersVisible`) and one map
  * (`ProductLibrary.filterGroups`). Brands is exercised through to its delete
  * confirm (cancelled — the seeded starters are never deleted). Suppliers is
  * exercised through the refusal path, which needs a real supplier with a real
@@ -2172,9 +2175,9 @@ async function deepListToolsFlow(crawl) {
     layout: document.querySelector('.lib-layout').classList.contains('lib-layout--filters-collapsed'),
     groups: document.querySelectorAll('.filter-group').length,
     chevron: !!document.querySelector('.lib-filters__collapse'),
-    toolbar: document.querySelector('.lib-panel-toggle') ? document.querySelector('.lib-panel-toggle').getAttribute('aria-label') : null,
-    toolbarPressed: document.querySelector('.lib-panel-toggle') ? document.querySelector('.lib-panel-toggle').getAttribute('aria-pressed') : null,
-    stored: localStorage.getItem('ProductLibrary.panelVisible'),
+    toolbar: document.querySelector('.lib-filter-toggle') ? document.querySelector('.lib-filter-toggle').getAttribute('aria-label') : null,
+    toolbarPressed: document.querySelector('.lib-filter-toggle') ? document.querySelector('.lib-filter-toggle').getAttribute('aria-pressed') : null,
+    stored: localStorage.getItem('ProductLibrary.filtersVisible'),
   }))()`);
   const tableCollapsed = await mainWidth();
   await crawl.shot('listtools-filters-rail');
@@ -2191,7 +2194,7 @@ async function deepListToolsFlow(crawl) {
     aside: document.querySelector('.lib-filters').classList.contains('is-collapsed'),
     layout: document.querySelector('.lib-layout').classList.contains('lib-layout--filters-collapsed'),
     groups: document.querySelectorAll('.filter-group').length,
-    stored: localStorage.getItem('ProductLibrary.panelVisible'),
+    stored: localStorage.getItem('ProductLibrary.filtersVisible'),
   }))()`);
   crawl.step('list tools: the column expands again',
     !reExpanded.aside && !reExpanded.layout && reExpanded.groups === 5 && reExpanded.stored === 'on',
@@ -2214,6 +2217,25 @@ async function deepListToolsFlow(crawl) {
   await crawl.settle(300);
   await crawl.eval(`window.__ui.set('.lib-toolbar input.search-input', '')`);
   await crawl.settle(500);
+
+  // Independent details controls must retain a hidden new-product draft and its DOM.
+  await crawl.eval(`window.__ui.clickExact('+ New product')`);
+  await crawl.waitFor(`window.__ui.fieldInput('Name') !== null`, 6000, 'new product draft');
+  await crawl.eval(`window.__ui.fieldSet('Name', 'Crawl hidden draft')`);
+  await crawl.eval(`window.__uxDraftPanel = document.querySelector('.lib-inspector .lib-panel'); document.querySelector('.lib-panel-toggle').click()`);
+  await crawl.settle(200);
+  await crawl.eval(`window.__ui.pressEscape()`);
+  await crawl.eval(`document.querySelector('.lib-panel-toggle').click()`);
+  await crawl.settle(200);
+  const draftPanel = await crawl.eval(`({ name: window.__ui.fieldValue('Name'), same: window.__uxDraftPanel === document.querySelector('.lib-inspector .lib-panel'), filters: localStorage.getItem('ProductLibrary.filtersVisible'), details: localStorage.getItem('ProductLibrary.panelVisible') })`);
+  crawl.step('list tools: Details preserves hidden draft and does not change Filters', draftPanel.name === 'Crawl hidden draft' && draftPanel.same && draftPanel.filters === 'on' && draftPanel.details === 'on', JSON.stringify(draftPanel));
+  await crawl.eval(`window.__ui.pressEscape()`);
+  await crawl.cdp.send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false });
+  await crawl.settle(200);
+  const narrowLibrary = await crawl.eval(`(() => { const r = document.querySelector('.lib-layout').getBoundingClientRect(); const main = document.querySelector('.lib-main').getBoundingClientRect(); const details = document.querySelector('.lib-inspector').getBoundingClientRect(); return { width: innerWidth, right: r.right, table: main.width, details: details.width }; })()`);
+  await crawl.shot('library-1100');
+  crawl.step('list tools: Library panels fit a 1100px viewport with a scrollable table', narrowLibrary.right <= 1100 && narrowLibrary.table > 150 && narrowLibrary.details >= 320, JSON.stringify(narrowLibrary));
+  await crawl.cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
 
   /* ── B: Brands ────────────────────────────────────────────────────── */
   crawl.phase = 'deep: list tools brands';

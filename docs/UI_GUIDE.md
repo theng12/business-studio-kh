@@ -118,3 +118,6 @@ one line. Times come from `renderer/lib/format.js`: `timeAgo` ("just now",
   `--fs-xl` 22. Nothing goes below 11px.
 - **Spacing:** `--s-1`…`--s-8` (4/8/12/16/20/24/32). Don't hard-code a
   7/9/11/13px radius or gap.
+
+## Dense editor sections
+Use native `details` / `summary` for long optional control groups, with a short current-value summary. Keep independent groups openable together, visible disclosure markers and focus outlines. Collapsing controls is UI state, never an output/save/history change. A hidden editor panel stays mounted when it must preserve a draft.
