@@ -129,14 +129,32 @@ function requireScalarOrField(name) {
 }
 
 /** Existing editor updates may omit the token for an intentional overwrite. */
-function requireVersionedPatch(args) {
-  const base = requireFields('id', 'patch')(args);
+function requireVersionedPatch(args, idField = 'id') {
+  const base = requireFields(idField, 'patch')(args);
   if (base !== true) return base;
   if (!isObject(args.patch)) return 'patch must be an object';
   if (
     Object.prototype.hasOwnProperty.call(args.patch, 'expectedUpdatedAt')
     && !isNumber(args.patch.expectedUpdatedAt)
   ) return 'expectedUpdatedAt must be a finite number';
+  return true;
+}
+
+function cropRequest(a) {
+  if (!isObject(a)) return 'expected an object';
+  if (!isString(a.productId) || !a.productId.trim()) return 'productId required';
+  if (!isString(a.filepath) || !a.filepath.trim()) return 'filepath required';
+  if (!isObject(a.rect)) return 'rect must be an object';
+  for (const key of ['x', 'y', 'width', 'height']) {
+    if (!isNumber(a.rect[key])) return `rect.${key} must be a finite number`;
+    if (a.rect[key] < 0 || a.rect[key] > 1 || (['width', 'height'].includes(key) && a.rect[key] === 0)) return `rect.${key} must be a normalized crop fraction`;
+  }
+  if ('rotation' in a && (!isNumber(a.rotation) || a.rotation % 90 !== 0)) return 'rotation must be a finite multiple of 90';
+  if ('imageId' in a && (!isString(a.imageId) || !a.imageId.trim())) return 'imageId required';
+  if ('expectedContentHash' in a && !isNullableString(a.expectedContentHash)) return 'expectedContentHash must be a string or null';
+  if ('straighten' in a && !isNumber(a.straighten)) return 'straighten must be a finite number';
+  if ('previewMaxEdge' in a && (!isNumber(a.previewMaxEdge) || a.previewMaxEdge < 128 || a.previewMaxEdge > 2048)) return 'previewMaxEdge must be between 128 and 2048';
+  if ('destination' in a && !['newImage', 'overwrite'].includes(a.destination)) return 'destination must be newImage or overwrite';
   return true;
 }
 
@@ -199,7 +217,7 @@ const VALIDATORS = {
   'companies:get':         requireStringArg('company id'),
   'companies:setActive':   (a) => (a == null || isString(a)) ? true : 'company id must be a string or null',
   'companies:create':      (a) => isObject(a) ? true : 'create payload must be an object',
-  'companies:update':      requireFields('id', 'patch'),
+  'companies:update':      requireVersionedPatch,
   'companies:remove':      requireStringArg('company id'),
 
   // Products -------------------------------------------------------
@@ -261,7 +279,7 @@ const VALIDATORS = {
 
   // Categories -----------------------------------------------------
   'categories:create':     (a) => isObject(a) ? true : 'create payload must be an object',
-  'categories:update':     requireFields('id', 'patch'),
+  'categories:update':     requireVersionedPatch,
   'categories:remove':     requireStringArg('category id'),
 
   // Images ---------------------------------------------------------
@@ -277,7 +295,13 @@ const VALIDATORS = {
   },
   'images:setMainImage':   requireFields('productId', 'filepath'),
   'images:reorderImages':  requireFields('productId', 'newOrder'),
-  'images:removeFromProduct': requireFields('productId', 'filepath'),
+  'images:removeFromProduct': (a) => {
+    if (!isObject(a)) return 'expected object';
+    if (!isString(a.productId) || !a.productId.trim()) return 'productId required';
+    if (!isString(a.imageId) || !a.imageId.trim()) return 'imageId required';
+    if ('expectedContentHash' in a && !isNullableString(a.expectedContentHash)) return 'expectedContentHash must be a string or null';
+    return true;
+  },
   'images:flipSource': (a) => {
     if (!isObject(a)) return 'expected object';
     if (!isString(a.productId)) return 'productId required';
@@ -415,7 +439,7 @@ const VALIDATORS = {
   // Overlay Studio -------------------------------------------------
   'templates:get':         requireStringArg('template id'),
   'templates:create':      (a) => isObject(a) ? true : 'expected object',
-  'templates:update':      requireFields('id', 'patch'),
+  'templates:update':      requireVersionedPatch,
   'templates:remove':      requireStringArg('template id'),
   'templates:duplicate':   requireStringArg('template id'),
   // v0.26.40: added during the audit. renderPreview takes either an
@@ -555,18 +579,23 @@ const VALIDATORS = {
   'pos:listProductCosts':    nullableCompanyId(),
   'pos:supplierSpendRollup': nullableCompanyId(),
   'pos:create':              (a) => isObject(a) ? true : 'create payload must be an object',
-  'pos:update':              requireFields('id', 'patch'),
-  'pos:setStatus':           requireFields('id', 'status'),
+  'pos:update':              requireVersionedPatch,
+  'pos:setStatus':           (a) => {
+    const base = requireFields('id', 'status')(a);
+    if (base !== true) return base;
+    if (Object.prototype.hasOwnProperty.call(a, 'expectedUpdatedAt') && !isNumber(a.expectedUpdatedAt)) return 'expectedUpdatedAt must be a finite number';
+    return true;
+  },
   'pos:remove':              requireStringArg('purchase order id'),
   'pos:addLine':             requireFields('poId', 'input'),
-  'pos:updateLine':          requireFields('lineId', 'patch'),
+  'pos:updateLine':          (a) => requireVersionedPatch(a, 'lineId'),
   'pos:removeLine':          requireStringArg('line id'),
   'pos:addComponent':        requireFields('poId', 'input'),
-  'pos:updateComponent':     requireFields('componentId', 'patch'),
+  'pos:updateComponent':     (a) => requireVersionedPatch(a, 'componentId'),
   'pos:removeComponent':     requireStringArg('component id'),
   'pos:listPayments':        requireStringArg('purchase order id'),
   'pos:addPayment':          requireFields('poId', 'input'),
-  'pos:updatePayment':       requireFields('paymentId', 'patch'),
+  'pos:updatePayment':       (a) => requireVersionedPatch(a, 'paymentId'),
   'pos:removePayment':       requireStringArg('payment id'),
 
   // Costing maths — numbers in, number out ---------------------------
@@ -913,8 +942,8 @@ const VALIDATORS = {
   'images:getMetadata':         (a) => isObject(a) ? true : 'expected an object',
   'images:reframePreview':      (a) => isObject(a) ? true : 'expected an object',
   'images:reframeImage':        (a) => isObject(a) ? true : 'expected an object',
-  'images:cropPreview':         (a) => isObject(a) ? true : 'expected an object',
-  'images:cropImage':           (a) => isObject(a) ? true : 'expected an object',
+  'images:cropPreview':         cropRequest,
+  'images:cropImage':           cropRequest,
   'images:sampleImageBgColor':  (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
 
   /* ─── Local-only channels (`exposeLocal`) ─────────────────────────────
