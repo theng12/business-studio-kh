@@ -42,8 +42,8 @@ export function CompanyForm({ open, company, onClose, onSubmit, onDelete }) {
     }
     setSaving(true);
     try {
-      await onSubmit({ name: form.name.trim(), color: form.color, sectors: form.sectors });
-      onClose();
+      const saved = await onSubmit({ name: form.name.trim(), color: form.color, sectors: form.sectors });
+      if (saved !== false) onClose();
     } catch (err) {
       setError(err.message);
     } finally {

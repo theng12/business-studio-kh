@@ -131,7 +131,7 @@ test('removing a path the product does not own throws and erases nothing', { ski
   // A path that climbs out of the library.
   const dbFile = path.join(dataDir, 'database.sqlite');
   const dbExisted = fs.existsSync(dbFile);
-  assert.throws(() => productImages.remove(product.id, '../database.sqlite'), /not inside the library/);
+  assert.throws(() => productImages.remove(product.id, '../database.sqlite'), /not on this product/);
   assert.equal(fs.existsSync(dbFile), dbExisted, 'the database file is untouched');
 
   assert.equal(productImages.listByProduct(product.id).length, rels.length, 'no row was removed');
@@ -145,7 +145,7 @@ test('if the photo cannot be held, it is not deleted at all', { skip: skipReason
   // A FILE where the bin's folder should be makes every hold fail.
   fs.writeFileSync(path.join(dataDir, '.recycle'), 'in the way');
 
-  assert.throws(() => productImages.remove(product.id, rels[0]));
+  assert.throws(() => productImages.remove(product.id, productImages.listByProduct(product.id).find((row) => row.filepath === rels[0]).id));
   assert.equal(fs.readFileSync(abs(dataDir, rels[0]), 'utf8'), 'bytes-1', 'the photo is still there');
   assert.equal(productImages.listByProduct(product.id).length, 2, 'and so is its row');
   cleanup(dataDir);
@@ -273,7 +273,7 @@ test('an in-place edit of a photo that changed meanwhile is refused and changes 
   );
   assert.equal(fs.readFileSync(abs(dataDir, rels[0]), 'utf8'), 'bytes-1');
 
-  productImages.remove(product.id, rels[0]);
+  productImages.remove(product.id, productImages.listByProduct(product.id).find((row) => row.filepath === rels[0]).id);
   assert.throws(
     () => productImages.replaceImageFile(product.id, first.id, { tmpAbs: tmp, newHash: 'x', expectedHash: first.contentHash }),
     /was removed/,
@@ -356,7 +356,7 @@ test('a refused renumber leaves the old order in place, not the new one', { skip
 
 test('restoring a photo whose held file is gone refuses, and the boot sweep keeps it listed', { skip: skipReason }, () => {
   const { dataDir, product, rels } = productWithImages({ images: 3 });
-  productImages.remove(product.id, rels[1]);
+  productImages.remove(product.id, productImages.listByProduct(product.id).find((row) => row.filepath === rels[1]).id);
   const item = deleted.list({})[0];
   // What a backup restore leaves: the row is listed, `.recycle` is not there.
   fs.rmSync(deleted.heldDir(item.id), { recursive: true, force: true });
@@ -377,7 +377,7 @@ test('restoring a photo whose held file is gone refuses, and the boot sweep keep
 
 test('a restored photo never shares a filepath with a live row', { skip: skipReason }, () => {
   const { dataDir, product, rels } = productWithImages({ images: 2 });
-  productImages.remove(product.id, rels[0]);
+  productImages.remove(product.id, productImages.listByProduct(product.id).find((row) => row.filepath === rels[0]).id);
   // The survivor was renumbered into rels[0]; the held file is named rels[0] too.
   assert.equal(productImages.listByProduct(product.id)[0].filepath, rels[0]);
   deleted.restore(deleted.list({})[0].id);
@@ -393,7 +393,7 @@ test('a restored photo never shares a filepath with a live row', { skip: skipRea
 test('a photo restore that would pass the per-product cap is refused', { skip: skipReason }, () => {
   const { MAX_IMAGES_PER_PRODUCT } = require('../main/imageManager');
   const { dataDir, product, rels, dir } = productWithImages({ images: 1 });
-  productImages.remove(product.id, rels[0]);
+  productImages.remove(product.id, productImages.listByProduct(product.id).find((row) => row.filepath === rels[0]).id);
   for (let i = 0; i < MAX_IMAGES_PER_PRODUCT; i += 1) {
     productImages.addRow(product.id, { filepath: `${dir}/filler-${i}.jpg`, filename: `filler-${i}.jpg`, orderIndex: i });
   }

@@ -1,6 +1,6 @@
 const crypto = require('node:crypto');
 const { getDb, getAppState, setAppState } = require('./index');
-const { parseJson, getCallerUserId } = require('./_util');
+const { parseJson, getCallerUserId, prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
 
 /**
  * v0.1.55: named price groups, e.g. `[{ key: 'retail', label: 'Retail' }]`.
@@ -120,6 +120,7 @@ function create({ name, color, sectors, isActive = true }) {
 function update(id, patch) {
   const existing = get(id);
   if (!existing) throw new Error('Company not found');
+  patch = prepareOptimisticPatch(existing, patch, 'company');
 
   if (patch.name && patch.name.trim().toLowerCase() !== existing.name.toLowerCase()) {
     const clash = getByName(patch.name);
@@ -127,7 +128,7 @@ function update(id, patch) {
   }
 
   const sets = [];
-  const params = { id, updatedAt: Date.now() };
+  const params = { id, updatedAt: nextUpdatedAt(existing.updatedAt) };
   if ('name' in patch && patch.name?.trim()) {
     sets.push('name = @name'); params.name = patch.name.trim();
   }

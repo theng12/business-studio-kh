@@ -211,6 +211,14 @@ export function ProductLibrary() {
   // store actions below cover both paths; the modal calls one of them.
   const setAiSourceProduct = useAppStore((s) => s.setAiSourceProduct);
 
+  const panelFlush = useRef(null);
+  const selectionIntent = useRef(0);
+  const registerPanelFlush = useCallback((flush) => { panelFlush.current = flush; }, []);
+  const beforePanelChange = useCallback(async () => {
+    const intent = ++selectionIntent.current;
+    try { await panelFlush.current?.(); return intent === selectionIntent.current; }
+    catch { return false; } // The editor reports the error and keeps its draft.
+  }, []);
   const [editing, setEditing] = useState(null); // product or 'new' or null
   // v0.26.23: seed from localStorage so the user's choice survives
   // module unmount/remount on tab switches. Wrap setView so the
@@ -231,7 +239,8 @@ export function ProductLibrary() {
   // detail panel. Splitting them would mean a second state and a second
   // toolbar control; do that only if someone asks for it.
   const [panelVisible, setPanelVisible] = useState(loadPanelVisible);
-  function togglePanel() {
+  async function togglePanel() {
+    if (!await beforePanelChange()) return;
     setPanelVisible((prev) => {
       const next = !prev;
       savePanelVisible(next);
@@ -547,13 +556,15 @@ export function ProductLibrary() {
   // arrow functions get a fresh identity each render, defeating React.memo.
   // Re-clicking the open product keeps the panel as it is: a fresh row object
   // would re-run the form's reset and replace what is on screen.
-  const handleOpen = useCallback((p) => setEditing((cur) => (
-    cur && cur !== 'new' && p && cur.id === p.id ? cur : p
-  )), []);
-  const startNewProduct = useCallback(() => {
+  const handleOpen = useCallback(async (p) => {
+    if (!await beforePanelChange()) return;
+    setEditing((cur) => cur && cur !== 'new' && p && cur.id === p.id ? cur : p);
+  }, [beforePanelChange]);
+  const startNewProduct = useCallback(async () => {
+    if (!await beforePanelChange()) return;
     setEditing('new');
     setCreateNonce((n) => n + 1);
-  }, []);
+  }, [beforePanelChange]);
   // "Process →" now opens a small destination picker — Image Workspace or
   // AI Studio. The actual store call happens inside the modal callbacks
   // below. Kept the function name + signature so existing call sites
@@ -625,7 +636,9 @@ export function ProductLibrary() {
   // rest) — an inline arrow here re-rendered every row and the whole panel on
   // each Library render.
   const handleOpenCost = useCallback((poId) => { if (poId) openPurchaseOrder(poId); }, [openPurchaseOrder]);
-  const closePanel = useCallback(() => setEditing(null), []);
+  const closePanel = useCallback(async () => {
+    if (await beforePanelChange()) setEditing(null);
+  }, [beforePanelChange]);
   // v0.26.13: side-panel thumbs open the same Lightbox the row/grid thumbs do.
   // ProductForm only knows the index — Library owns the Lightbox state and
   // fetches the image list via handlePreview's existing IPC path.
@@ -638,13 +651,15 @@ export function ProductLibrary() {
    * Image Workspace's product, so the panel stayed on the original. Fetch the
    * full row — the panel reads every field and the concurrency token from it. */
   const handleDuplicated = useCallback(async (created) => {
+    if (!await beforePanelChange()) return;
+    const intent = selectionIntent.current;
     try {
       const full = await window.api.products.get(created.id);
-      setEditing(full ?? created);
+      if (intent === selectionIntent.current) setEditing(full ?? created);
     } catch {
-      setEditing(created);
+      if (intent === selectionIntent.current) setEditing(created);
     }
-  }, []);
+  }, [beforePanelChange]);
 
   return (
     <div className="page page--library">
@@ -1077,6 +1092,7 @@ export function ProductLibrary() {
             onProcess={handleProcess}
             onPreview={previewEditing}
             onDuplicated={handleDuplicated}
+            onRegisterFlush={registerPanelFlush}
           />
         ) : null}
       </div>

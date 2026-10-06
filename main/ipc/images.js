@@ -279,9 +279,9 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     return updated;
   });
 
-  expose('images:removeFromProduct', ({ productId, filepath } = {}) => productImages.withProductImageLock(productId, () => {
+  expose('images:removeFromProduct', ({ productId, imageId, expectedContentHash } = {}) => productImages.withProductImageLock(productId, () => {
     assertProductInActiveCompany(productId);
-    productImages.remove(productId, filepath);
+    const removed = productImages.remove(productId, imageId, expectedContentHash);
     products.recomputeProcessStatus(productId);
     // v0.22.8: touch updated_at even when recomputeProcessStatus
     // would no-op (e.g. removing the 2nd image from a still-Done
@@ -289,7 +289,7 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     // change; we want the cache-bust signal regardless.
     products.touchUpdated(productId);
     emitCatalogChange('images', 'remove', productId);
-    auditImage(productId, 'image:remove', { filename: lastSegment(filepath) });
+    auditImage(productId, 'image:remove', { filename: lastSegment(removed.filepath) });
     return productImages.listByProduct(productId);
   }));
 

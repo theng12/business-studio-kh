@@ -17,7 +17,7 @@ export function Dashboard() {
   const companies = useAppStore((s) => s.companies);
   const refreshDashboard = useAppStore((s) => s.refreshDashboard);
   const completeness = useAppStore((s) => s.dashboardCompleteness);
-  const setHasImagesFilter = useAppStore((s) => s.setHasImagesFilter);
+  const setCompanyNoImagesFilter = useAppStore((s) => s.setCompanyNoImagesFilter);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
   const openProductInWorkspace = useAppStore((s) => s.openProductInWorkspace);
   const donateDismissed = useAppStore((s) => s.donateBannerDismissed);
@@ -83,7 +83,7 @@ export function Dashboard() {
                 type="button"
                 className="dash-attention__chip"
                 disabled={completeness.missingImages === 0}
-                onClick={() => { setHasImagesFilter('without'); setActiveModule('library'); }}
+                onClick={() => { setCompanyNoImagesFilter(); setActiveModule('library'); }}
                 title={completeness.missingImages > 0 ? 'Show the products with no images' : 'Every product has at least one image'}
               ><strong>{completeness.missingImages}</strong> no image{completeness.missingImages === 1 ? '' : 's'}</button>
               <span className="dash-attention__chip is-static"><strong>{completeness.missingBarcode}</strong> no barcode</span>

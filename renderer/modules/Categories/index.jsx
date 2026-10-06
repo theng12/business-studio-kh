@@ -18,7 +18,7 @@
  * rules live in renderer/lib/listTools.js — this screen drives them
  * rather than keeping its own copy.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import {
   Button, EmptyState, Input, Pagination, Select, paginate,
@@ -26,6 +26,7 @@ import {
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
+import { resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { allIds, filterRows, nextSelection, sortRows } from '../../lib/listTools.js';
 
 const SORT_OPTIONS = [
@@ -54,6 +55,8 @@ export function CategoriesBody({ autoFocus = false }) {
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
+  const editContext = useRef(null);
+  useEffect(() => { editContext.current = null; setEditingId(null); setEditingName(''); }, [activeCompanyId]);
   const [busy, setBusy] = useState(false);
 
   // v0.1.67: search / sort / multi-select state.
@@ -173,6 +176,7 @@ export function CategoriesBody({ autoFocus = false }) {
   }
 
   function startEdit(c) {
+    editContext.current = { id: c.id, updatedAt: c.updatedAt };
     setEditingId(c.id);
     setEditingName(c.name);
   }
@@ -183,10 +187,28 @@ export function CategoriesBody({ autoFocus = false }) {
     if (!next) { addToast('Name can\'t be empty', 'error'); return; }
     setBusy(true);
     try {
-      await updateCategory(editingId, { name: next });
+      const snapshot = editContext.current;
+      try {
+        await updateCategory(snapshot.id, { name: next, expectedUpdatedAt: snapshot.updatedAt });
+      } catch (error) {
+        const result = await resolveSaveConflict(error, {
+          refresh: async () => {
+            const latest = await window.api.categories.list(activeCompanyId);
+            const fresh = latest.find((c) => c.id === snapshot.id);
+            await refreshCategories();
+            if (!fresh) throw new Error('Category no longer exists');
+            if (editContext.current === snapshot) {
+              editContext.current = { id: fresh.id, updatedAt: fresh.updatedAt };
+              setEditingName(fresh.name);
+            }
+            return fresh;
+          },
+          overwrite: () => updateCategory(snapshot.id, { name: next }),
+        });
+        if (result.choice !== 'overwrite') return;
+      }
       addToast('Saved', 'success');
-      setEditingId(null);
-      setEditingName('');
+      if (editContext.current === snapshot) cancelEdit();
     } catch (err) {
       addToast(err.message, 'error');
     } finally {
@@ -195,6 +217,7 @@ export function CategoriesBody({ autoFocus = false }) {
   }
 
   function cancelEdit() {
+    editContext.current = null;
     setEditingId(null);
     setEditingName('');
   }

@@ -160,6 +160,12 @@ export function createProductsSlice(set, get) {
       set((s) => ({ productFilters: { ...s.productFilters, processStatus }, page: 0 }));
       get().refreshProducts();
     },
+    setCompanyNoImagesFilter() {
+      if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+      set({ productFilters: { ...DEFAULT_FILTERS, hasImages: 'without' }, page: 0 });
+      return get().refreshProducts();
+    },
     setHasImagesFilter(hasImages) {
       // Tri-state: null | 'with' | 'without'. Client-side filter (cheap on the
       // already-fetched list); we just refetch + slice in the renderer.

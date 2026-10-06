@@ -2329,7 +2329,7 @@
         var menuBtn = fig.querySelector('.tile-menu');
         menuBtn.addEventListener('click', function (ev) {
           ev.stopPropagation();
-          openTileMenu({ productId: productId, filepath: img.filepath, index: i, isMain: i === 0, sku: (currentDetail && currentDetail.sku) || '' });
+          openTileMenu({ productId: productId, imageId: img.id, expectedContentHash: img.contentHash, filepath: img.filepath, index: i, isMain: i === 0, sku: (currentDetail && currentDetail.sku) || '' });
         });
         // v0.49.8: reorder by swapping with the neighbor. Server enforces the
         // permutation check on `images:reorderImages`, so an invalid order
@@ -2542,9 +2542,10 @@
   // Server is authoritative; we just bust the in-page caches and re-render.
   // The image cap on the product means deletion can only DECREMENT imageCount,
   // never push it negative; the Math.max guard is a belt-and-braces clamp.
-  function confirmAndDeleteImage(productId, filepath, index) {
+  function confirmAndDeleteImage(productId, imageId, expectedContentHash, index) {
+    if (!imageId) { toast('Photo no longer available. Refresh and try again.'); return; }
     if (!window.confirm(deleteImageConfirmText(index))) return;
-    rpc('images:removeFromProduct', { productId: productId, filepath: filepath })
+    rpc('images:removeFromProduct', { productId: productId, imageId: imageId, expectedContentHash: expectedContentHash })
       .then(function () {
         clearImageCaches(productId);
         if (currentDetail && currentDetail.id === productId) {
@@ -2617,7 +2618,7 @@
     }));
     if (can('products.delete')) list.appendChild(menuRow('🗑  Delete', function () {
       closeSheet('tileMenuSheet');
-      confirmAndDeleteImage(ctx.productId, ctx.filepath, ctx.index);
+      confirmAndDeleteImage(ctx.productId, ctx.imageId, ctx.expectedContentHash, ctx.index);
     }, true));
     openSheet('tileMenuSheet');
   }
