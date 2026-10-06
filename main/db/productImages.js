@@ -284,7 +284,16 @@ async function addImage(productId, originalFilepath, importFn) {
   const baseName = productImageBasename(product, existing.length);
 
   const im = getImageManager();
-  const hashLookup = (h) => findByHashForProduct(productId, h);
+  const hashLookup = (h) => {
+    const hit = findByHashForProduct(productId, h);
+    // Called by both importers after hashing and before claiming a file.
+    // The existing per-product lock makes the capacity check atomic; a
+    // usable dedup hit needs no new slot even when the product is full.
+    if (existing.length >= im.MAX_IMAGES_PER_PRODUCT && (!hit || !fs.existsSync(assetAbsPath(hit)))) {
+      throw new Error(`Image cap reached (${im.MAX_IMAGES_PER_PRODUCT})`);
+    }
+    return hit;
+  };
   const { relativePath, hash, skipped } = await importFn(im, {
     destDirRel: dir,
     baseName,

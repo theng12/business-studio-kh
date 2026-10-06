@@ -517,9 +517,9 @@ export function AIStudio() {
       />
 
       <p className="ai-retention-note">
-        Results are saved to this Mac the moment a run completes. If a run is
-        interrupted (app quit, network drop), use <strong>Repair</strong> to submit
-        it again.
+        Results appear in the gallery after they are saved. <strong>Repair</strong>
+        {' '}and <strong>Queue fresh</strong> submit a new paid generation. Cancel
+        stops accepting further results; it cannot undo provider charges or earlier saves.
       </p>
 
       <div className="ai-layout">
@@ -953,25 +953,15 @@ export function AIStudio() {
                 // when products are still loading.
                 const productResolved = resolveTaskProduct(t);
                 const product = productResolved && typeof productResolved === 'object' ? productResolved : null;
-                // A "Done" task that produced no gallery entries is effectively
-                // recoverable — treat it like Failed for the action buttons and
-                // label it so the user sees something is off.
+                // Older releases could report Done without any durable output.
+                // Only Queue fresh is appropriate: Done tasks cannot be repaired.
                 const isStuckDone = t.status === 'done' && (t.galleryCount ?? 0) === 0;
-                // Also surface Repair on a task that has been running for
-                // more than 5 minutes — an OpenAI request occasionally hangs.
-                // Repair re-queues the task instead of waiting forever.
-                // Threshold is conservative so normal in-flight tasks don't
-                // get a useless button.
-                const startedAtMs = t.startedAt || t.createdAt || 0;
-                const ageMin = startedAtMs ? (Date.now() - Number(startedAtMs)) / 60000 : 0;
-                const longRunning = t.status === 'running' && ageMin > 5;
-                const needsRecovery = t.status === 'failed' || t.status === 'cancelled' || isStuckDone || longRunning;
+                const needsRecovery = t.status === 'failed' || t.status === 'cancelled';
                 let status = STATUS_TONE[t.status] ?? STATUS_TONE.queued;
-                if (isStuckDone) status = { tone: 'amber', label: 'Done · no images' };
-                const errorOrPrompt = needsRecovery && (t.errorMessage || isStuckDone)
-                  ? (t.errorMessage
-                      || 'Provider reported success but no images landed in the gallery. Click Repair to re-fetch.')
-                  : null;
+                if (isStuckDone) status = { tone: 'amber', label: 'No saved images' };
+                else if (t.status === 'done' && t.errorMessage) status = { tone: 'amber', label: 'Done · warnings' };
+                const errorOrPrompt = t.errorMessage
+                  || (isStuckDone ? 'No images are saved in the gallery. Queue fresh submits a new paid generation.' : null);
                 return (
                   <tr key={t.id}>
                     <td className="ai-queue__product">
@@ -1027,7 +1017,7 @@ export function AIStudio() {
                       <span
                         className="ai-queue__cost"
                         title={t.costActual != null
-                          ? 'Actual cost from OpenAI token usage'
+                          ? 'Recorded cost from returned OpenAI token usage across this task’s submissions'
                           : 'Estimated cost — the actual cost is recorded when the run finishes'}
                       >
                         {t.costActual != null
@@ -1040,22 +1030,22 @@ export function AIStudio() {
                       {t.status === 'running' ? `${Math.round((t.progress ?? 0) * 100)}%` : null}
                     </td>
                     <td className="is-actions">
-                      {needsRecovery ? (
+                      {needsRecovery || isStuckDone ? (
                         <>
-                          <Button
+                          {needsRecovery ? <Button
                             size="sm"
-                            title="Re-submit this task to OpenAI (charged again)"
+                            title="After the request settles, submit this task again to OpenAI (charged again)"
                             onClick={() => Promise.resolve(repairAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}
-                          >Repair</Button>
+                          >Repair</Button> : null}
                           <Button
                             size="sm"
-                            title="Submit a brand-new task with the same parameters"
+                            title="Submit a new paid generation with the same parameters"
                             onClick={() => Promise.resolve(queueFreshAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}
                           >Queue fresh</Button>
                         </>
                       ) : null}
                       {t.status === 'running' || t.status === 'queued' ? (
-                        <Button size="sm" onClick={() => Promise.resolve(cancelAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>Cancel</Button>
+                        <Button size="sm" title="Stop accepting results; provider charges and earlier saves remain" onClick={() => Promise.resolve(cancelAiTask(t.id)).catch((e) => addToast(e.message, 'error'))}>Cancel</Button>
                       ) : null}
                       {/* v0.1.25: these four were uncaught. The store actions do not
                           catch either, so a rejection (e.g. "Task belongs to a

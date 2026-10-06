@@ -229,6 +229,9 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, asse
     const entry = aiGallery.get(galleryId);
     if (!entry) throw new Error('Gallery entry not found');
 
+    // Authorize the source before creating a destination or reading its bytes.
+    if (entry.companyId !== companies.getActiveId()) throw new Error('Cross-company access denied');
+
     // Resolve the destination product id.
     let productId = entry.productId ?? targetProductId ?? null;
     if (!productId && newProduct) {
