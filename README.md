@@ -7,16 +7,15 @@ One shared Product Library sits at the centre. Product details are entered once 
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release candidate: **0.1.92** (2026-10-06). The arm64 build and DMG integrity are verified;
-the packaged client/server probe and installed-app smoke passed. PR/merge, owner checkout sync and
-cleanup remain. It is built for home use — the owner's Macs and his brother's — and is not publicly
-distributed.
+Current release: **0.1.92** (2026-10-06), merged in PR #109 and installed locally. The arm64
+DMG and packaged app are verified. It is built for home use — the owner's Macs and his brother's —
+and is not publicly distributed.
 
 ## Where to read next
 
 | Document | What it is for |
 |---|---|
-| [`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md) | Current verified 0.1.92 state, commands, paths and remaining integration steps. Read first. |
+| [`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md) | Current verified 0.1.92 state, commands, paths and release evidence and working rules. Read first. |
 | [`docs/tasks/APP_IMPROVEMENT_PLAN.md`](docs/tasks/APP_IMPROVEMENT_PLAN.md) | The whole-app audit, eight completed fix batches and release evidence (2026-10-06). |
 | [`docs/Business Studio KH Project Status.md`](docs/Media%20Studio%20KH%20Project%20Status.md) | Short status page: current release, checks, release process, closed decisions. |
 | [`AGENTS.md`](AGENTS.md) (also `CLAUDE.md`) | Engineering rules for this codebase. |

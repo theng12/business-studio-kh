@@ -1,7 +1,7 @@
 # HANDOFF — Business Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. Current for the **0.1.92 candidate, 2026-10-06**; repository integration remains pending. If it disagrees with the
+that produced it. Current for **0.1.92, 2026-10-06**, merged in PR #109 and installed locally. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,7 +9,7 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Business Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.92 candidate** — all eight batches, reviews, local and packaged checks, installed-app smoke, build and DMG integrity are verified. PR/merge, owner checkout sync and cleanup remain pending. No live-data test was performed. |
+| Current release | **0.1.92** — eight batches complete, merged in PR #109 (`84ec511`), owner main synchronized. Local/native/UI/output/package checks and DMG integrity passed; installed app0.1.92 verified with isolated data. Live catalog untouched. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into the owner's `$HOME/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` (the build worktree's own `_trash/` is not the place — it was erased with the worktree on 2026-10-02). |
@@ -30,7 +30,7 @@ Owner requested the complete Catalog audit fixes and workflow improvements. The 
 - Installed app is unchanged by this development session; the verified arm64 DMG is copied into the current owner's `dist/`. No tags/releases/publishing.
 
 
-## Whole-app improvements — 0.1.92 candidate (2026-10-06)
+## Whole-app improvements — 0.1.92 (2026-10-06)
 
 - All eight confirmed audit batches are implemented and independently reviewed PASS. The compact
   checkpoint and evidence list is in [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md). Implementation started at `e3af16d`; final app-source checkpoint is `d3d43a4`; branch `codex/app-improvements`; worktree
@@ -47,31 +47,32 @@ Owner requested the complete Catalog audit fixes and workflow improvements. The 
 - Crop now stores source coordinates additively in per-image JSON; legacy `cropRect` retains canvas
   semantics. The targeted reviews also corrected rename rollback, SVG path compatibility, queued PO
   reverts, Product overwrite identity, stale Company completion and crop result reporting.
-- Candidate DMG `Business Studio KH-0.1.92-arm64.dmg` passed integrity verification and was copied to
+- Release DMG `Business Studio KH-0.1.92-arm64.dmg` passed integrity verification and was copied to
   the owner's `dist/`. SHA-256:
   `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765`. Pruning retained 0.1.91
   and 0.1.92; older DMGs were moved to the owner's `_trash/old-dmgs/`.
 - Packaged client/server verification passed at probe checkpoint `77ee13a`. The isolated installed
   app smoke passed: ready state, database ready, window shown, normal quit, and visible version
   0.1.92. The previous 0.1.32 app was preserved under `_trash/installed-apps/`; no live-data test.
-- **Pending:** PR/merge, owner checkout synchronization and final cleanup. Do not call this shipped
-  until those integration steps are recorded complete.
+- PR #109 merged as `84ec511`; owner main and dependencies synchronized. Source branch refs were
+  logged before deletion; release proof and recoverable build files remain in the owner checkout.
 
 ## THE WORKING LOOP
 
 ### Current release work — 2026-10-06
 
-The owner authorized eight whole-app fix batches after Catalog 0.1.91. All eight are implemented and independently reviewed PASS. For the current verified candidate and evidence, see [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md). The final app-source checkpoint is `d3d43a4`; the final packaged-probe checkpoint is `77ee13a`. Packaged client/server verification, installed-app smoke, DMG integrity and local verification passed. PR/merge, owner checkout synchronization and cleanup remain pending; do not call the candidate shipped before those steps succeed.
+The owner authorized eight whole-app fix batches after Catalog 0.1.91. All eight are implemented and independently reviewed PASS. For the completed release and evidence, see [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md). The final app-source checkpoint is `d3d43a4`; the final packaged-probe checkpoint is `77ee13a`. Packaged client/server verification, installed-app smoke, DMG integrity and local verification passed. PR #109 merged as `84ec511a708327b43d2eaf415bafff8e4ea40de9`; owner main was fast-forwarded. Evidence is preserved in the owner checkout, and build files moved to owner `_trash/app-improvements-build-0.1.92/`.
 
-Current candidate evidence: `npm run check` 1379 pass; `npm run test:native` 240 pass (also rerun after dist); clean-profile UI crawl 145/145; production build and both dependency audits passed, with zero reported vulnerabilities. The packaged probe passed after selectors were updated to match the current UI, and the isolated installed app reached ready state with version 0.1.92 visible. Evidence is in `graphify-out/app-improvements/`. No provider calls or live-data mutations; physical devices remain unverified. Closed decisions stay closed.
+Release evidence: `npm run check` 1379 pass; `npm run test:native` 240 pass (also rerun after dist); clean-profile UI crawl 145/145; production build and both dependency audits passed, with zero reported vulnerabilities. The packaged probe passed after selectors were updated to match the current UI, and the isolated installed app reached ready state with version 0.1.92 visible. Evidence is in `graphify-out/app-improvements-0.1.92/`. No provider calls or live-data mutations; physical devices remain unverified. Closed decisions stay closed.
 
-Replace `<wt>` with the dependency-installed build worktree
-`$HOME/.codex/worktrees/app-improvements/media-studio-kh`. Order matters.
+Replace `<wt>` with a suitable active managed worktree for the next change and install its own
+dependencies. The completed 0.1.92 build checkout is archival; use the attachment inventory to create
+or reuse the next one. The owner checkout has its own verified dependencies. Order matters.
 
 | # | Command | Note / footgun |
 |---|---|---|
-| 1 | `cd <wt> && git switch main && git pull --ff-only` | Start from merged `main`. |
-| 2 | `git switch -c codex/<topic>` | One branch per change or release. |
+| 1 | `cd <wt> && git fetch origin main` | Start from merged `origin/main`; the owner checkout already owns local `main`. |
+| 2 | `git switch -c codex/<topic> origin/main` | One branch per change or release. |
 | 3 | `npm run check` | `npm run lint && npm test`. **1379 pass** at 0.1.92. Four eslint warnings are pre-existing (unused disable directives in three unrelated test files and `main/util/fileTrash.js`); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flakes, two kinds:** 0–2 tests can fail on a run, and the honest response is always the same — re-run before believing it. (1) Several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output); seen 2026-09-26, clean in four follow-up runs. (2) The client/overlay timeout tests in `test/clientRpc.test.js` ("overlay reconciliation bounds hanging HTTP status reads", the `body` subtest) are wall-clock sensitive and failed twice on a loaded machine during 0.1.85, then passed in three consecutive full runs with no code change. Neither kind has ever reproduced on a quiet re-run. |
 | 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **240 pass** at 0.1.92, including the post-dist rerun. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
 | 4b | `node scripts/probe-webclient-context.js` | Real Chromium against `webclient/index.html` with loopback fixtures. **Any web-viewer change should run this** — it is the only check that loads the real page. Not in `package.json`; needs `env -u ELECTRON_RUN_AS_NODE`. |
@@ -94,12 +95,12 @@ test profiles out of Git — they are gitignored on purpose.
 | What | Where |
 |---|---|
 | Owner's checkout | `$HOME/Developer/media-studio-kh` (on `main`; `node_modules` is present) |
-| Build worktree | `$HOME/.codex/worktrees/app-improvements/media-studio-kh` (deps installed) |
+| Completed build | Worktree `$HOME/.codex/worktrees/app-improvements/media-studio-kh`; ignored build/dependency/profile files preserved in owner `_trash/app-improvements-build-0.1.92/`. Native attachment inventory records its archival state. |
 | Live user data | `~/Pictures/Business Studio KH` — the real catalog + `assets/`. Never write here from a test. |
 | App config + logs | `~/Library/Application Support/Business Studio KH/` (`config.json`, `crash.log`); legacy data at `userData/data` |
 | Build inputs | `main/` (CommonJS), `renderer/` (ESM), `webclient/index.html` → generates `main/webclientHtml.js` via `npm run webclient:bundle` (edit the HTML, never the generated file) |
 | Build outputs | `dist/` (DMGs, `mac-arm64/`, `mac/`), `dist-electron/`, `dist-renderer/` — all gitignored |
-| Status / reference docs | Current for 0.1.92 candidate (docs pass 2026-10-06): `docs/Business Studio KH Project Status.md` (short status page), `README.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `AI_INTEGRATION.md`, `SIGNING.md`, `docs/HARDWARE_VALIDATION_RUNBOOK.md`, `docs/UI_GUIDE.md`. `docs/PICK_AND_PACK_PLAN.md` is a plan awaiting the owner's review (nothing built). |
+| Status / reference docs | Current for 0.1.92 (docs pass 2026-10-06): `docs/Business Studio KH Project Status.md` (short status page), `README.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `AI_INTEGRATION.md`, `SIGNING.md`, `docs/HARDWARE_VALIDATION_RUNBOOK.md`, `docs/UI_GUIDE.md`. `docs/PICK_AND_PACK_PLAN.md` is a plan awaiting the owner's review (nothing built). |
 | Archive | `docs/archive/` — dated audits, completed plans (`plans/`, formerly `docs/superpowers/plans/`), the old SDD ledger (`progress.md`), the portable *_HANDOFF specs for other projects, and the long 0.1.34–0.1.72 status history. Historical only; `docs/archive/README.md` lists each. |
 | Reference app | `~/Developer/label-studio-kh` — the public sibling app whose designer interaction model this app copies. Another repo: read only. |
 
@@ -170,7 +171,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 
 ## OPEN / IN FLIGHT
 
-At the 0.1.92 candidate, implementation, reviews, local suites, rendered UI/output, packaged client/server probe, installed-app smoke, build, audits, DMG copy and integrity are verified. PR/merge, owner checkout sync and cleanup remain pending. Physical-device checks and explicitly deferred optional work remain separate from the eight audit batches.
+At 0.1.92, implementation, reviews, local suites, rendered UI/output, packaged client/server probe, installed-app smoke, build, audits, DMG copy and integrity are verified. PR #109 is merged, owner main synchronized and local evidence/build files preserved. Physical-device checks and explicitly deferred optional work remain separate from the eight audit batches.
 
 | Gap | State |
 |---|---|
@@ -214,3 +215,5 @@ If a task needs one of these, ask the owner. Do not search the filesystem for cr
 paste one into a commit, a document or a task.
 
 - Build worktrees need their own node_modules directory: npm install in predist replaces symlinked dependency trees. Both current checkout and build worktree dependencies were restored separately in this release. Prior dependency files were preserved under each checkout's _trash/catalog-workflow*/.
+
+- Release 0.1.92 cleanup: source branch name/head/merge logged in owner `_trash/README-media-studio-kh-branch-log.md` before ref deletion. Owner dependencies synchronized from the verified arm64 build; previous tree preserved in `_trash/app-improvements-0.1.92-owner-dependencies/`. Owner pre-existing `.serena/` untouched.

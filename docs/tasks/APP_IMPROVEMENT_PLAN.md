@@ -1,9 +1,9 @@
 # App audit and improvement plan
 
 Date: 2026-10-06. Audit baseline: `0732bb5`, Business Studio KH **0.1.91**. Implementation baseline:
-`e3af16d`; final app-source checkpoint: `d3d43a4`. Candidate: **0.1.92**; all eight batches,
+`e3af16d`; final app-source checkpoint: `d3d43a4`. Release: **0.1.92**; all eight batches,
 reviews and verification are complete. Packaged client/server and installed-app smoke checks passed;
-repository integration remains pending.
+source integrated through PR #109 (`84ec511`), owner main synchronized and release artifacts verified.
 
 The owner requested a distributed audit and a plan for each part of the app. This document is the execution order, with evidence and acceptance checks in the linked area reports. Catalog's completed 0.1.91 plan remains the baseline; do not reopen its resolved findings.
 
@@ -164,17 +164,23 @@ this checkpoint table for current status; task reports retain the detailed per-a
 | UI and render checks | `final-ui-crawl.log`: 145/145, no console exceptions. `release-ui-manual.md` records Overlay at 1100/1400/1920px, crop source/letterbox behavior and PO save/focus. Image, renderer, client/server and webclient probes passed. |
 | Native output | `native-output-report.md` and `native-pdf-text-check.txt`: collision-safe label PNGs, actual A4 PDF containing all three fixture SKUs, matching Social preview/export pixels in portrait and landscape, and 8000×8000 capture. |
 | Packaged/install smoke | `release-packaged-round3.log` passed; `release-installed.log` reached ready state and the installed app displayed version 0.1.92. Both used isolated data. |
-| Candidate DMG | `dist/Business Studio KH-0.1.92-arm64.dmg` passed `release-dmg-verify.log`, was copied to owner `dist/`, and matches SHA-256 `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765`. Pruning retained 0.1.91/0.1.92 and moved older files to owner `_trash/old-dmgs/`. |
+| Release DMG | `dist/Business Studio KH-0.1.92-arm64.dmg` passed `release-dmg-verify.log`, was copied to owner `dist/`, and matches SHA-256 `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765`. Pruning retained 0.1.91/0.1.92 and moved older files to owner `_trash/old-dmgs/`. |
 
 The packaged probe's earlier failures came from stale pre-0.1.89 UI selectors. The probe was updated
 to match current controls while retaining persisted-state assertions; its final run passed and the
 app source did not change for those probe fixes. The installed-app smoke also passed with isolated
-data. No live-data or physical-device test is claimed. PR/merge, owner checkout synchronization and
-final cleanup remain pending; do not mark the candidate shipped until these integration steps are
-completed and recorded.
+data. No live-data or physical-device test is claimed. PR #109 merged as `84ec511`; owner main was
+fast-forwarded and dependencies synchronized. Evidence is preserved in owner
+`graphify-out/app-improvements-0.1.92/`; ignored build files are preserved under owner
+`_trash/app-improvements-build-0.1.92/`. The native worktree attachment records archival state.
 
 ## Final release checklist
 
 - [x] Eight fix batches implemented and independent spec/quality review PASS.
 - [x] Full JavaScript and native checks, build, audits, UI/render/output probes, packaged client/server and installed-app smoke checks, and DMG integrity verified.
-- [ ] Complete authorized PR/merge, synchronize the owner checkout and finish cleanup. **Release integration remains pending.**
+- [x] PR #109 merged; owner checkout/dependencies synchronized; DMG copied/hash-verified; evidence, previous install and build files preserved. Source branch refs logged before deletion.
+
+The final documentation closure updates release status only. It changes no app bytes, version or
+verification outcome. The local `graphify-out/app-improvements-0.1.92/release-integration-receipt.md` records integration
+and worktree archival outcomes as each operation completes. Separate hardware/deferred
+inventories above remain outside the completed eight software batches.
