@@ -30,17 +30,18 @@ const A = { id: 'A', sku: 'A', updatedAt: 7 };
 const B = { id: 'B', sku: 'B', updatedAt: 12 };
 const photos = (id) => [1, 2].map((n) => ({ id: `${id}-${n}`, filepath: `${id}/${n}.jpg`, contentHash: `${id}-${n}-hash` }));
 async function editor(options = {}) {
+  const listeners = new Map();
   const hook = hooks(); const toasts = []; const writes = []; let output; let guard;
   const state = { brands: [], categories: [], companies: [], products: [A, B], allProducts: [A, B], refreshProducts: async () => {}, addToast: (...a) => toasts.push(a), updateProduct: async (id, patch) => { writes.push({ id, patch }); return { id, ...patch, updatedAt: patch.expectedUpdatedAt + 1 }; }, ...options.store };
   const useAppStore = (select) => select(state); useAppStore.getState = () => state;
   const parseConflictError = (e) => e.message.startsWith('CONFLICT|') ? JSON.parse(e.message.slice(9)) : null;
   const Component = load('renderer/modules/ProductLibrary/ProductForm.jsx', { react: hook.React, 'react/jsx-runtime': hook.runtime, '../../store/index.js': { useAppStore }, '../../components/ConfirmModal.jsx': { confirm: options.confirm || (async () => true) }, '../../components/ConflictModal.jsx': { parseConflictError, showConflict: options.choose || (async () => 'cancel') }, '../../lib/companySwitch.js': { registerCompanySwitchFlusher: (fn) => { guard = fn; return () => { guard = null; }; } } }).ProductForm;
-  global.window = { api: { images: { listByProduct: async (id) => photos(id), importForProduct: async () => ({ images: photos('A') }), setMainImage: async () => photos('A').reverse(), reorderImages: async () => photos('A').reverse(), removeFromProduct: async () => photos('A').slice(1), importFromBytes: async () => ({ images: photos('A') }), ...options.images }, files: { pickImageFile: async () => '/tmp/photo.jpg' }, products: { get: async () => A }, suppliers: { list: async () => [] } }, addEventListener() {}, removeEventListener() {} };
+  global.window = { api: { images: { listByProduct: async (id) => photos(id), importForProduct: async () => ({ images: photos('A') }), setMainImage: async () => photos('A').reverse(), reorderImages: async () => photos('A').reverse(), removeFromProduct: async () => photos('A').slice(1), importFromBytes: async () => ({ images: photos('A') }), ...options.images }, files: { pickImageFile: async () => '/tmp/photo.jpg' }, products: { get: async () => A }, suppliers: { list: async () => [] } }, addEventListener(type, fn) { listeners.set(type, fn); }, removeEventListener(type, fn) { if (listeners.get(type) === fn) listeners.delete(type); } };
   global.document = { addEventListener() {}, removeEventListener() {}, querySelector() { return null; } };
   const props = { product: A, onClose() {}, onRegisterFlush: (fn) => { guard = fn; } };
   const render = () => output = hook.render(Component, props);
   render(); await settle(); render(); render();
-  return { hook, props, render, state, toasts, writes, tiles: () => named(output, 'ImageTile'), edit: (value) => { field(output, 'Name').onChange({ target: { value } }); render(); }, save: () => named(output, 'Button').find((n) => n.props.children === 'Save' || n.props.children === 'Saving…').props.onClick(), flush: () => guard(), output: () => output };
+  return { hook, props, render, listeners, state, toasts, writes, tiles: () => named(output, 'ImageTile'), edit: (value) => { field(output, 'Name').onChange({ target: { value } }); render(); }, save: () => named(output, 'Button').find((n) => n.props.children === 'Save' || n.props.children === 'Saving…').props.onClick(), flush: () => guard(), output: () => output };
 }
 for (const [operation, invoke, api] of [
   ['set main', (e) => e.tiles()[1].props.onSetMain(), 'setMainImage'],
@@ -191,4 +192,18 @@ for (const outcome of ['success', 'failure']) test(`old Company overwrite ${outc
     assert.equal(named(formOut, 'Field').find((n) => n.props.label === 'Name').props.error, null);
     bSave.resolve({ ...companies[1], name: 'B unsaved draft', updatedAt: 9 }); await savingB;
   } finally { parentHook.cleanup(); formHook.cleanup(); }
+});
+
+test('a hidden mounted product editor does not consume Escape and keeps its draft/flush', async () => {
+  const e = await editor();
+  try {
+    let closed = 0; e.props.onClose = () => { closed++; };
+    e.edit('Hidden draft'); e.props.visible = false; e.render();
+    assert.equal(e.listeners.has('keydown'), false);
+    assert.equal(field(e.output(), 'Name').value, 'Hidden draft');
+    await e.flush(); assert.equal(e.writes.at(-1).patch.name, 'Hidden draft');
+    e.props.visible = true; e.render();
+    e.listeners.get('keydown')({ key: 'Escape', stopPropagation() {} });
+    assert.equal(closed, 1);
+  } finally { e.hook.cleanup(); }
 });

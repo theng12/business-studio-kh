@@ -59,7 +59,8 @@ function filtersAreDefault(filters) {
     (filters.categoryIds == null || filters.categoryIds.length === 0) &&
     filters.status == null &&
     filters.processStatus == null &&
-    filters.hasImages == null;
+    filters.hasImages == null &&
+    filters.attentionFilter == null;
 }
 
 export function createProductsSlice(set, get) {
@@ -164,6 +165,17 @@ export function createProductsSlice(set, get) {
       if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
       searchDebounceTimer = null;
       set({ productFilters: { ...DEFAULT_FILTERS, hasImages: 'without' }, page: 0 });
+      return get().refreshProducts();
+    },
+    setCompanyAttentionFilter(attentionFilter) {
+      if (!['missingBarcode', 'missingPrice', 'notExported'].includes(attentionFilter)) return;
+      if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = null;
+      set({ productFilters: { ...DEFAULT_FILTERS, attentionFilter }, page: 0 });
+      return get().refreshProducts();
+    },
+    clearAttentionFilter() {
+      set((s) => ({ productFilters: { ...s.productFilters, attentionFilter: null }, page: 0 }));
       return get().refreshProducts();
     },
     setHasImagesFilter(hasImages) {

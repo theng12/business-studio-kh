@@ -4584,7 +4584,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 
 .lib-layout {
   display: grid;
-  grid-template-columns: 200px 1fr;
+  grid-template-columns: 180px minmax(0, 1fr);
   gap: var(--s-5);
   flex: 1;
   min-height: 0;
@@ -4592,17 +4592,17 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 
 .lib-layout--has-panel {
-  grid-template-columns: 200px 1fr 480px;
+  grid-template-columns: 180px minmax(0, 1fr) clamp(320px, 28vw, 400px);
 }
 
 /* v0.1.67: the filter column retracts IN PLACE to a narrow rail. A real
    column (and the chevron inside it) stays, so the grid never collapses
    to a blank gap and there is always a visible way back. */
 .lib-layout--filters-collapsed {
-  grid-template-columns: 40px 1fr;
+  grid-template-columns: 40px minmax(0, 1fr);
 }
 .lib-layout--filters-collapsed.lib-layout--has-panel {
-  grid-template-columns: 40px 1fr 480px;
+  grid-template-columns: 40px minmax(0, 1fr) clamp(320px, 28vw, 400px);
 }
 
 .lib-filters {
@@ -11598,3 +11598,81 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   .catalog-product-panel--included .catalog-product-list article.catalog-product-row { grid-template-columns: auto auto minmax(0, 1fr) auto; }
   .catalog-product-panel--included .catalog-product-list article.catalog-product-row > .catalog-product-row-actions { grid-column: auto; }
 }
+
+/* Independent Library panels keep drafts mounted while the user browses. */
+.lib-inspector { display: flex; min-width: 0; min-height: 0; }
+.lib-inspector[hidden] { display: none; }
+.lib-inspector > .lib-panel { flex: 1; min-width: 0; }
+.lib-attention-filter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); padding: var(--s-2) 0; }
+
+/* Workspace action context and keyboard controls. */
+.ws-processing-recipe {
+  margin: 0;
+  padding: var(--s-2);
+  background: var(--c-brand-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--c-text);
+  overflow-wrap: anywhere;
+}
+.ws-canvas__tools { flex-wrap: wrap; justify-content: center; max-width: 100%; }
+.ws-compare-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  color: var(--c-text-muted);
+}
+.ws-compare-control input[type="range"] { width: 120px; max-width: 100%; accent-color: var(--c-brand); }
+.ws-crop:focus-visible { outline: 2px solid var(--c-brand); outline-offset: -3px; }
+.ws-crop-bar__keyboard { flex-basis: 100%; margin: 0; }
+.ws-crop-bar__actions { flex-wrap: wrap; }
+
+.sidebar__search { width: calc(100% - 2 * var(--s-2)); margin: 0 var(--s-2) var(--s-2); flex-shrink: 0; }
+
+/* Native disclosures in dense Catalog controls. */
+details.catalog-design-section { display: block; }
+.catalog-design-section > summary {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.catalog-design-section > summary .section-title { display: inline; }
+.catalog-design-section__value {
+  display: block;
+  margin-top: var(--s-1);
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.catalog-design-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+  margin-top: var(--s-3);
+}
+.catalog-design-section:not([open]) > .catalog-design-section__body { display: none; }
+.catalog-product-add { min-width: 0; flex: 1 1 auto; }
+.catalog-product-add > summary {
+  width: fit-content;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.catalog-product-add__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+.catalog-design-section > summary:focus-visible,
+.catalog-product-add > summary:focus-visible {
+  outline: 2px solid var(--c-brand);
+  outline-offset: 2px;
+}
+
+.ws-compare-value { width: 64px; }

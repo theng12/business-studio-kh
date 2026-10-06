@@ -288,3 +288,6 @@ What the previous version of this file said, and what is true
 
 Two claims the previous version got **right** and that are worth keeping: no
 Tailwind and no Puppeteer. Both remain true.
+
+## Everyday editing improvements (verified 2026-10-06)
+Catalog design groups collapse with current summaries and standard Undo/Redo chords. Library Filters and Details are independent; hiding Details preserves its mounted draft. Workspace shows its processing recipe and supports keyboard crop/comparison. Dashboard counts open scoped work queues, and the existing global search includes saved Catalog projects/templates with a sidebar launcher. See `docs/tasks/UX_WORKFLOW_PLAN.md` and the current handoff for verification/release state.

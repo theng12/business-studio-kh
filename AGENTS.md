@@ -288,7 +288,7 @@ Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
 **Note on styling (corrected 2026-09-19).** This table used to say Tailwind
 CSS and Puppeteer. Neither is true of this app and hasn't been for a long
 time: there is no `tailwindcss` dependency and no Tailwind or PostCSS config,
-and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~11.6k
+and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~11.7k
 lines; verified 2026-10-06) plus small per-feature CSS blocks in the same file, and PDFs are
 produced by Electron's own `webContents.printToPDF()` in
 `main/renderWindow.js` — no bundled Chromium, no extra download. Both
@@ -342,7 +342,7 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 18 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 176 files — `node --test test/**/*.test.js`
+test/                    # 179 files — `node --test test/**/*.test.js`
 scripts/                 # 13 files: build-icon.js, build-webclient.js,
                          # prune-dmgs.js           (`npm run dmgs:prune`)
                          # probe-render-paint.js  (`npm run check:render`)

@@ -383,7 +383,7 @@ contextBridge.exposeInMainWorld('api', {
   /** v0.18.2: global search across products / brands / categories
    *  for the active company. Used by the Cmd+K palette. */
   search: {
-    global: (query, limit = 30) => invoke('search:global', { query, limit }),
+    global: (query, limit = 30, companyId) => invoke('search:global', { query, limit, companyId }),
   },
   dashboard: {
     stats:          (companyId)          => invoke('dashboard:stats', companyId),

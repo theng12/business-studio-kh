@@ -1,6 +1,6 @@
 # Media Studio KH — Development Status
 
-Updated: **2026-10-06, at 0.1.92.** This is the short "where is the project" page. The operating
+Updated: **2026-10-06, at 0.1.93.** This is the short "where is the project" page. The operating
 loop, paths, traps and the full list of open gaps live in [the session handoff](tasks/HANDOFF.md),
 which is updated on every release — read that first in a new session. If either document disagrees
 with the code, the code wins.
@@ -14,24 +14,25 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
 - **Who uses it:** home use — the owner's Macs, plus his brother (whose phone is Android). There
   is no public release, and none is planned.
 - **Platform:** macOS 12 or newer, Apple Silicon. One unsigned arm64 DMG per release.
-- **Who builds it:** AI coding agents working under the owner's direction. The 0.1.92 tree received
+- **Who builds it:** AI coding agents working under the owner's direction. The 0.1.93 tree received
   a spec/quality review from another agent in the same model family. No human or third-party model
   has reviewed the tree.
 
-## Current release — 0.1.92
+## Current release — 0.1.93
 
 | | |
 |---|---|
-| Version | `0.1.92` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
-| Integration | [PR #109](https://github.com/theng12/media-studio-kh/pull/109) merged as `84ec511`; owner `main` synchronized. Release evidence and build files preserved locally. |
-| Installed | **0.1.92** passed an isolated smoke check with the version visible in the sidebar. Previous 0.1.32 was preserved under the owner's `_trash/installed-apps/`; no live-data test was performed. |
-| DMG | Copied to the owner's `dist/Media Studio KH-0.1.92-arm64.dmg`; SHA-256 `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765` matches the verified build. Pruning retained 0.1.91/0.1.92 and moved older DMGs to `_trash/old-dmgs/`. |
+| Version | `0.1.93` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
+| Integration | Source reviewed and locally verified; repository integration is recorded in local `graphify-out/ux-workflows/release-receipt.md`. |
+| Installed | **0.1.93** passed isolated smoke, attention-queue and product-search navigation checks; visible version and normal quit verified. Previous0.1.92 preserved under owner `_trash/installed-apps/`. Live data untouched. |
+| DMG | Owner `dist/Media Studio KH-0.1.93-arm64.dmg`, verified valid; SHA-256 `78f56b653364258f66786bf1fbc4a11166faa3272a3edbf34d25b48be14e8f66`. Keeps0.1.92/0.1.93;0.1.91 moved to `_trash/old-dmgs/`. |
 
 **What changed since the last version of this page (0.1.72).** One line per release; the full
 wording is in the "What's new" changelog.
 
 | Version | Main change |
 |---|---|
+| 0.1.93 | Seven everyday UX areas: Catalog disclosure/history, Library panels, processing recipe/keyboard crop/comparison, attention queues, catalog-aware search |
 | 0.1.92 | Eight audit batches: file/company safety, reliable editors/AI, source crop geometry, truthful labels/exports/Social previews, PO/cost/Settings recovery |
 | 0.1.91 | Catalog correctness, bulk picking/SKU paste, session undo, reusable print controls and paper preview |
 | 0.1.73–0.1.78 | Phone viewer: save an overlaid photo to the device, "Save copy only", choose which photo an overlay lands on, overlay several products at once, batch results as one zip, Android-correct save wording, `{price_<group>}` overlay tokens |
@@ -47,23 +48,21 @@ wording is in the "What's new" changelog.
 
 ## Checks
 
-Verified for 0.1.92 in `graphify-out/app-improvements-0.1.92/`:
+Verified for0.1.93 in local `graphify-out/ux-workflows/`:
 
 | Check | Result |
 |---|---|
-| `npm run check` (`release-check.log`) | 1379 pass, 0 fail, 0 skip |
-| `npm run test:native` (`integrated-native.log`, rerun after packaging) | 240 pass, 0 fail, 0 skip |
-| Production build and arm64 DMG (`release-build.log`, `release-dist.log`) | Passed; DMG integrity valid |
-| Dependency audit (`audit-release-all.json`, `audit-release-production.json`) | 0 vulnerabilities in both reports |
-| UI crawl (`final-ui-crawl.log`) | 145/145, no console errors or exceptions |
-| Rendered/editor and actual output checks | Overlay at 1100/1400/1920px; crop letterbox/source checks; PO save/focus; native label PNGs, A4 PDF with all 3 SKUs, Social preview/export pixel match |
-| Packaged client/server probe (`release-packaged-round3.log`) | Passed on packaged 0.1.92 after correcting stale UI selectors in the probe |
-| Installed-app smoke (`release-installed.log`) | Passed with isolated data; database ready, window shown, normal quit, and sidebar version 0.1.92 visible |
+| Full check/lint (`release-check.log`) |1405pass,0fail/skip; four existing lint warnings |
+| Native (`integrated-native.log`, `postdist-native.log`) |242pass,0fail/skip, including post-packaging |
+| Clean-profile UI crawl (`final-ui-crawl.log`) |147/147; no console errors; hidden draft and1100px Library layout included |
+| Production build and arm64 DMG | Passed; owner copy checksum valid |
+| Production/full dependency audits |0 vulnerabilities |
+| Image/render/client-server probes | Passed |
+| Packaged client/server (`packaged.log`) | Passed: real preloads, conflict/recovery, save-before-image-switch, assets and reconnect |
+| Installed app (`installed.log`, owner `installed-ax.txt`) | Version0.1.93, scoped attention queue and exact searched product editor observed; normal quit |
+| Independent review | PASS with regression-tested migration, hidden-Esc and stale-navigation fixes |
 
-The handoff lists the known flaky tests (port races, wall-clock timeouts) and the order to run
-the checks in. `npm test` mounts almost no React screens, so UI changes also need the crawl, and
-the crawl's test companies are nearly empty, so layout changes also need a check with real-sized
-data (that gap is how 0.1.89 shipped the Dashboard bug 0.1.90 fixed).
+Native Cmd+Z/Shift+Z, crop creation/1px movement/10px resize and comparison arrow adjustment were observed in the development app. All app data used by these checks was synthetic. Physical Macs/printer/phones and paid provider behavior remain outside this batch's evidence.
 
 ## Release and install
 

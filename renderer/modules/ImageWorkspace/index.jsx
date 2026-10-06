@@ -13,6 +13,7 @@ import { removeBackground } from '../../lib/bgRemoval.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
+import { shortcutBlocked } from '../../components/ShortcutsModal.jsx';
 
 export function ImageWorkspace() {
   const activeProductId = useAppStore((s) => s.activeProductId);
@@ -847,6 +848,29 @@ export function ImageWorkspace() {
     setWorkspaceViewMode('single');
     return true;
   }
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || shortcutBlocked(e.target, document)
+        || e.target?.closest?.('input, select, [role="slider"], [role="radio"], [role="radiogroup"]')
+        || loading || processing || processingRunRef.current || cropApplying || !activeProductId || !images.length) return;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (cropMode) return;
+        const index = activeIdx + (e.key === 'ArrowLeft' ? -1 : 1);
+        if (index < 0 || index >= images.length) return;
+        e.preventDefault();
+        if (!e.repeat) void handleSelectImage(index);
+      } else if (e.key === '+' || e.key === '=' || e.key === '-') {
+        e.preventDefault();
+        setWorkspaceZoom(zoom + (e.key === '-' ? -0.25 : 0.25));
+      } else if (e.key === '0') {
+        e.preventDefault();
+        setWorkspaceZoom(1);
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
 
   /* UI pass, 2026-10: the header carries only the §6 save status + Save (the
    * house order, docs/UI_GUIDE.md). Product navigation, the view switch and
