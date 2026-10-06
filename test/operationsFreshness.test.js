@@ -654,3 +654,71 @@ test('PO autosave-only live drafts drop a reverted field from a queued multi-fie
     assert.equal(findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.state, 'saved');
   } finally { hook.cleanup(); }
 });
+
+test('PO FX unchanged blur and Save send no IPC; invalid rates retain retryable drafts and valid rates use the revision', async () => {
+  const writes = []; const toasts = []; let snapshot = poSnapshot();
+  const api = { purchaseOrders: {
+    getDetail: async () => structuredClone(snapshot),
+    update: async (_id, patch) => { writes.push(patch); snapshot = { ...snapshot, header: { ...snapshot.header, ...patch, updatedAt: 2 } }; return snapshot.header; },
+  } };
+  const hook = hookHarness(); const { Component, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook);
+  const render = () => Component({ poId: 'po', onBack() {} });
+  const fx = () => input(hook.getOutput(), (props) => props.step === '0.0001');
+  const status = () => findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0];
+  try {
+    setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }], addToast: (...args) => toasts.push(args) });
+    await hook.settle(render); await flush(); await hook.settle(render);
+    fx().props.onBlur?.({ target: { value: '1' } }); await status().props.onSave();
+    await delay(550); await hook.settle(render);
+    assert.deepEqual(writes, [], 'focusing/leaving an unchanged FX field and Save cannot create a mutation');
+    for (const value of ['', '0', '-1', 'invalid', 'Infinity']) {
+      fx().props.onChange({ target: { value } }); await hook.settle(render);
+      assert.equal(await status().props.onSave(), false); await hook.settle(render);
+      assert.equal(fx().props.value, value, 'invalid input stays available to correct');
+      assert.equal(status().props.state, 'error');
+      assert.match(status().props.error, /FX rate must be a number above 0/);
+      assert.match(toasts.at(-1)[0], /FX rate must be a number above 0/);
+      assert.deepEqual(writes, [], 'invalid rates are rejected before IPC');
+    }
+    fx().props.onChange({ target: { value: '0.15' } }); await hook.settle(render);
+    assert.equal(await status().props.onSave(), true); await hook.settle(render);
+    assert.equal(writes.length, 1); assert.equal(writes[0].exchangeRateToUsd, 0.15); assert.equal(writes[0].expectedUpdatedAt, 1);
+    assert.ok(Number.isFinite(writes[0].exchangeRateDate)); assert.equal(status().props.state, 'saved');
+    fx().props.onBlur?.({ target: { value: '0.15' } }); await status().props.onSave(); await hook.settle(render);
+    assert.equal(writes.length, 1, 'unchanged persisted FX does not repeat its write');
+  } finally { hook.cleanup(); }
+});
+
+test('PO FX explicit Overwrite revalidates the latest draft before omitting its revision', async () => {
+  const writes = []; let snapshot = poSnapshot();
+  const api = { purchaseOrders: {
+    getDetail: async () => structuredClone(snapshot),
+    update: async (_id, patch) => {
+      writes.push(patch);
+      if ('expectedUpdatedAt' in patch) { snapshot = poSnapshot('Remote', 2); throw new Error('CONFLICT|{"kind":"purchaseOrder","id":"po","updatedAt":2}'); }
+      snapshot = { ...snapshot, header: { ...snapshot.header, ...patch, updatedAt: 3 } }; return snapshot.header;
+    },
+  } };
+  const hook = hookHarness();
+  const { Component, ConflictHost, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook, "\nexport { ConflictModalHost } from '../../components/ConflictModal.jsx';");
+  const render = () => ({ type: 'div', props: { children: [Component({ poId: 'po', onBack() {} }), ConflictHost()] } });
+  const fx = () => input(hook.getOutput(), (props) => props.step === '0.0001');
+  const status = () => findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0];
+  const overwrite = () => findAll(hook.getOutput(), (node) => node.type?.name === 'Button' && node.props.children === 'Overwrite')[0];
+  try {
+    setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }] });
+    await hook.settle(render); await flush(); await hook.settle(render);
+    fx().props.onChange({ target: { value: '0.20' } }); await hook.settle(render);
+    const saving = status().props.onSave(); await flush(); await hook.settle(render);
+    assert.equal(writes[0].expectedUpdatedAt, 1);
+    fx().props.onChange({ target: { value: '' } }); await hook.settle(render);
+    overwrite().props.onClick(); assert.equal(await saving, false); await hook.settle(render);
+    assert.equal(writes.length, 1, 'a newly invalid draft must never reach overwrite IPC');
+    assert.equal(fx().props.value, ''); assert.equal(status().props.state, 'error'); assert.match(status().props.error, /FX rate must be a number above 0/);
+    fx().props.onChange({ target: { value: '0.25' } }); await hook.settle(render);
+    const retry = status().props.onSave(); await flush(); await hook.settle(render);
+    overwrite().props.onClick(); assert.equal(await retry, true); await hook.settle(render);
+    assert.equal(writes.at(-1).exchangeRateToUsd, 0.25); assert.equal('expectedUpdatedAt' in writes.at(-1), false);
+    assert.equal(status().props.state, 'saved'); assert.equal(fx().props.value, 0.25);
+  } finally { hook.cleanup(); }
+});
