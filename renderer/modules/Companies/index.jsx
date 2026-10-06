@@ -72,6 +72,7 @@ export function Companies() {
         if (result.choice !== 'overwrite') return false;
         addToast(`Overwrote ${result.row.name}`, 'success');
       }
+      if (editingRef.current !== snapshot) return false;
     } else {
       const created = await createCompany(payload);
       addToast(`Created ${created.name}`, 'success');

@@ -260,7 +260,13 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
   const makeSaveQueue = useCallback((id, gen, revision) => {
     return createLatestSaveQueue({
       initialRevision: revision,
-      persist: (draft, expectedUpdatedAt) => updateProduct(id, { ...draft.payload, ...(expectedUpdatedAt == null ? {} : { expectedUpdatedAt }) }),
+      persist: (draft, expectedUpdatedAt) => {
+        // Consume the deliberate bypass before sending this one request. A
+        // failed overwrite keeps the draft and the queue's acknowledged token.
+        const overwrite = draft.overwriteOnce === true;
+        delete draft.overwriteOnce;
+        return updateProduct(id, { ...draft.payload, ...(overwrite ? {} : { expectedUpdatedAt }) });
+      },
       onStart: () => { if (gen === selectionGen.current) setSaveState('saving'); },
       onSuccess: (row, draft) => {
         if (!noteSaved(gen, id, row.updatedAt)) return;
@@ -554,7 +560,7 @@ export const ProductForm = memo(function ProductForm({ product, isCreating = fal
             addToast('Form refreshed with the latest data', 'info');
           } else if (choice === 'overwrite') {
             // Explicit owner choice is the only path that omits the token.
-            saveQueue.current.setRevision(null);
+            autoSavePayload.current.overwriteOnce = true;
             await flushOwed();
             if (current()) addToast(`Overwrote ${form.sku}`, 'success');
           } else setSaveState('dirty');

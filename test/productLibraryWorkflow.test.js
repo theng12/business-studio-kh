@@ -142,3 +142,53 @@ test('phone delete captures row identity when its tile menu opens', () => {
   assert.match(source, /confirmAndDeleteImage\(ctx.productId, ctx.imageId, ctx.expectedContentHash, ctx.index\)/);
   assert.match(source, /rpc\('images:removeFromProduct', \{ productId: productId, imageId: imageId, expectedContentHash: expectedContentHash \}\)/);
 });
+test('a failed explicit Product overwrite keeps ordinary later writes tokened', async () => {
+  const overwrite = deferred(); const writes = [];
+  const e = await editor({ choose: async () => 'overwrite', store: { updateProduct: async (id, patch) => {
+    writes.push(patch);
+    if (writes.length === 2) return overwrite.promise;
+    if (patch.expectedUpdatedAt != null) throw new Error('CONFLICT|{"updatedAt":20}');
+    return { ...A, ...patch, updatedAt: 21 };
+  } } });
+  try {
+    e.edit('Force once'); const saving = e.save(); await settle(); assert.equal(writes.length, 2);
+    assert.equal(writes[0].expectedUpdatedAt, 7); assert.equal(writes[1].expectedUpdatedAt, undefined);
+    overwrite.reject(new Error('Link unavailable')); await saving; e.render();
+    e.edit('Later ordinary edit'); await assert.rejects(e.flush(), /CONFLICT\|/);
+    assert.equal(writes[2].expectedUpdatedAt, 7); e.render(); assert.equal(field(e.output(), 'Name').value, 'Later ordinary edit');
+  } finally { e.hook.cleanup(); }
+});
+for (const outcome of ['success', 'failure']) test(`old Company overwrite ${outcome} preserves the next Company's draft and busy state`, async () => {
+  const parentHook = hooks(); const formHook = hooks(); const overwrite = deferred(); const bSave = deferred(); const writes = [];
+  const companies = [{ id: 'A', name: 'Company A', updatedAt: 7, sectors: [] }, { id: 'B', name: 'Company B', updatedAt: 8, sectors: [] }];
+  const state = { companies, addToast() {}, updateCompany: async (id, patch) => {
+    writes.push({ id, patch });
+    if (id === 'B') return bSave.promise;
+    if (patch.expectedUpdatedAt != null) throw new Error('CONFLICT|{}');
+    return overwrite.promise;
+  }, refreshCompanies: async () => {} };
+  const useAppStore = (select) => select(state); useAppStore.getState = () => state;
+  const conflict = load('renderer/components/ConflictModal.jsx', {});
+  global.window = { api: {} };
+  const Parent = load('renderer/modules/Companies/index.jsx', { react: parentHook.React, 'react/jsx-runtime': parentHook.runtime, '../../store/index.js': { useAppStore }, '../../components/Sidebar.jsx': { useUserCaps: () => ['*'] }, '../../lib/capabilities.js': { hasCap: () => true }, '../../components/ConflictModal.jsx': { resolveSaveConflict: (error, callbacks) => conflict.resolveSaveConflict(error, { ...callbacks, choose: async () => 'overwrite' }) } }).Companies;
+  const Form = load('renderer/modules/Companies/CompanyForm.jsx', { react: formHook.React, 'react/jsx-runtime': formHook.runtime }).CompanyForm;
+  let parentOut; let formOut; let props;
+  const render = () => { parentOut = parentHook.render(Parent); props = named(parentOut, 'CompanyForm')[0].props; formOut = formHook.render(Form, props); formOut = formHook.render(Form, props); };
+  const saveButton = () => named(formOut, 'Button').find((n) => ['Save', 'Saving…'].includes(n.props.children));
+  try {
+    render(); named(parentOut, 'Button').filter((n) => n.props.children === 'Edit')[0].props.onClick(); render();
+    field(formOut, 'Name').onChange({ target: { value: 'A forced draft' } }); render();
+    const savingA = saveButton().props.onClick(); await settle(); assert.equal(writes.length, 2);
+    props.onClose(); render(); named(parentOut, 'Button').filter((n) => n.props.children === 'Edit')[1].props.onClick(); render();
+    assert.equal(saveButton().props.disabled, false, 'a new editor resets the old busy flag');
+    field(formOut, 'Name').onChange({ target: { value: 'B unsaved draft' } }); render();
+    const savingB = saveButton().props.onClick(); await settle(); render();
+    if (outcome === 'success') overwrite.resolve({ ...companies[0], name: 'A forced draft', updatedAt: 20 });
+    else overwrite.reject(new Error('A link failed'));
+    await savingA; render();
+    assert.equal(props.open, true); assert.equal(props.company.id, 'B'); assert.equal(field(formOut, 'Name').value, 'B unsaved draft');
+    assert.equal(saveButton().props.children, 'Saving…'); assert.equal(saveButton().props.disabled, true);
+    assert.equal(named(formOut, 'Field').find((n) => n.props.label === 'Name').props.error, null);
+    bSave.resolve({ ...companies[1], name: 'B unsaved draft', updatedAt: 9 }); await savingB;
+  } finally { parentHook.cleanup(); formHook.cleanup(); }
+});
