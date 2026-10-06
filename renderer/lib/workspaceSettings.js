@@ -20,6 +20,7 @@ export function defaultSettings() {
       corner: 'br',
       opacity: 0.7,
     },
+    sourceCropRect: null, // source crop draft, fractions of rotated/straightened raw photo
     cropRect: null,  // null = no crop; { x, y, width, height } as fractions of canvas
     // v0.49.15: aspect-ratio constraint for the crop tool. Null = Free.
     // Otherwise a string: '1:1' | '4:3' | '3:4' | '16:9' | '9:16' | a

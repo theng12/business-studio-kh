@@ -631,8 +631,9 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
    *   - 'overwrite' → write back to the source path (destructive)
    *
    * `rect` is normalized 0..1 against the source image's pixel dimensions
-   * — the renderer sends the rect against the canvas / display, the
-   * server resolves to actual source pixels here. That way the wire
+   * after the same rotation/straighten used by cropPreview. The renderer
+   * excludes display letterboxing; the server resolves source pixels here.
+   * That way the wire
    * format is resolution-independent and survives a future shift to
    * a different canvas-size convention.
    */
@@ -643,8 +644,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const fw = Math.max(0, Math.min(1, Number(rect.width)  || 0));
     const fh = Math.max(0, Math.min(1, Number(rect.height) || 0));
     if (fw <= 0 || fh <= 0) throw new Error('rect width/height must be > 0');
-    const left   = Math.round(fx * W);
-    const top    = Math.round(fy * H);
+    const left   = Math.min(W - 1, Math.round(fx * W));
+    const top    = Math.min(H - 1, Math.round(fy * H));
     // Clamp so left+width never overflows the source dims (sharp throws).
     const width  = Math.max(1, Math.min(W - left, Math.round(fw * W)));
     const height = Math.max(1, Math.min(H - top,  Math.round(fh * H)));
@@ -667,22 +668,51 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     return { source: rotated, W: meta.width || W, H: meta.height || H };
   }
 
+  async function resolveCropSource(opts) {
+    // Row identity survives renumbering. Legacy callers may still use a path.
+    if (!opts.imageId) return resolveImageForReframe(opts.productId, opts.filepath);
+    assertProductInActiveCompany(opts.productId);
+    const src = readImageNow(opts.productId, opts.imageId);
+    if (!src) throw new Error('Source image is missing');
+    if (opts.expectedContentHash != null && src.row.contentHash !== opts.expectedContentHash) {
+      throw new Error('This image changed while cropping. Refresh it before trying again.');
+    }
+    const meta = await sharp(src.bytes, { failOn: 'none' }).metadata();
+    return { ...src, W: meta.width, H: meta.height };
+  }
+
+  async function transformCropSource(opts) {
+    const src = await resolveCropSource(opts);
+    const rotation = Number(opts.rotation || 0);
+    if (!Number.isFinite(rotation) || rotation % 90 !== 0) throw new Error('rotation must be a multiple of 90');
+    let source = src.bytes, W = src.W, H = src.H;
+    if (rotation % 360) {
+      // sharp permits one explicit rotation per pipeline. Materialise the
+      // quarter-turn before straighten so neither operation replaces the other.
+      const turned = await sharp(source, { failOn: 'none' }).rotate(rotation).png().toBuffer({ resolveWithObject: true });
+      source = turned.data; W = turned.info.width; H = turned.info.height;
+    }
+    return { ...src, ...(await applyStraighten(source, W, H, opts.straighten)) };
+  }
+
   expose('images:cropPreview', async (opts = {}) => {
-    const { bytes: srcBytes, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
-    const stt = await applyStraighten(srcBytes, W, H, opts.straighten);
+    const stt = await transformCropSource(opts);
     const r = resolveCropRect(opts.rect, stt.W, stt.H);
-    const bytes = await sharp(stt.source, { failOn: 'none' })
-      .extract(r)
-      .png()
-      .toBuffer();
-    return { bytes };
+    let preview = sharp(stt.source, { failOn: 'none' }).extract(r);
+    if (opts.previewMaxEdge != null) {
+      const edge = Number(opts.previewMaxEdge);
+      if (!Number.isFinite(edge) || edge < 128 || edge > 2048) throw new Error('previewMaxEdge must be 128–2048');
+      preview = preview.resize({ width: Math.round(edge), height: Math.round(edge), fit: 'inside', withoutEnlargement: true });
+    }
+    const bytes = await preview.png().toBuffer();
+    return { bytes, outW: r.width, outH: r.height };
   });
 
   expose('images:cropImage', async (opts = {}) => {
-    const { row, absSrc, bytes: srcBytes, W, H } = await resolveImageForReframe(opts.productId, opts.filepath);
+    const stt = await transformCropSource(opts);
+    const { row, absSrc } = stt;
     const { productId, filepath } = opts;
     const dest = opts.destination === 'overwrite' ? 'overwrite' : 'newImage';
-    const stt = await applyStraighten(srcBytes, W, H, opts.straighten);
     const r = resolveCropRect(opts.rect, stt.W, stt.H);
 
     // Render once; both destinations consume the same bytes.
@@ -695,7 +725,17 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
       // Atomic in-place write — same contract as reframe / autoCrop. The
       // source\'s extension is preserved (re-encoded if needed) so a .jpg
       // stays a .jpg instead of bloating to .png on every crop.
-      const updated = await writeReframedInPlace(absSrc, outPng, productId, row);
+      const written = await writeReframedInPlace(absSrc, outPng, productId, row);
+      const current = productImages.getById(productId, row.id);
+      // Orientation is now baked into the source. Preserve unrelated settings
+      // from the latest row, while preventing a refresh from turning it twice.
+      const updated = current?.contentHash === written.contentHash
+        ? productImages.setProcessedById(productId, row.id, {
+          isProcessed: false,
+          processedFilepath: null,
+          workspaceSettings: { ...current.workspaceSettings, rotation: 0, sourceCropRect: null, cropStraighten: 0 },
+          expectedWorkspaceRevision: current.workspaceRevision,
+        }) : written;
       products.touchUpdated(productId);
       emitCatalogChange('images', 'crop', productId);
       auditImage(productId, 'image:crop', {

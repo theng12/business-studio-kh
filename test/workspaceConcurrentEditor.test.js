@@ -188,6 +188,20 @@ function settingsPanel(hook) {
   return findNode(hook.getOutput(), (node) => node.type?.name === 'SettingsPanel');
 }
 
+function canvasView(hook) {
+  return findNode(hook.getOutput(), (node) => node.type?.name === 'CanvasView');
+}
+
+async function readyCrop(hook, Component) {
+  canvasView(hook).props.onToggleCropMode();
+  await hook.settle(Component);
+  await delay(205);
+  await hook.settle(Component);
+  assert.ok(canvasView(hook).props.cropPreview);
+  canvasView(hook).props.onCropReady(canvasView(hook).props.cropPreview.url);
+  await hook.settle(Component);
+}
+
 /* UI pass, 2026-10: the save state and the explicit Save live in the header's
  * shared SaveStatus (`status` + `onSave`), no longer on the settings panel. */
 function saveBadge(hook) {
@@ -209,9 +223,124 @@ function apiWith(saveSettings) {
   return {
     workspace: { saveSettings, processImage: async () => ({}) },
     products: { get: async () => ({ sku: 'SKU', name: 'Product' }) },
-    images: { listByProduct: async () => [] },
+    images: { listByProduct: async () => [], cropPreview: async () => ({ bytes: new Uint8Array([1]), outW: 400, outH: 200 }) },
   };
 }
+
+for (const switchProduct of [false, true]) test(`crop completion preserves a newer ${switchProduct ? 'product' : 'image'} draft`, async () => {
+  const first = { id: 'crop-first', filepath: '1.png', contentHash: 'first-hash', workspaceSettings: {}, workspaceRevision: 1 };
+  const second = { id: 'crop-second', filepath: '2.png', contentHash: 'second-hash', workspaceSettings: {}, workspaceRevision: 1 };
+  const crop = deferred();
+  const writes = [];
+  const api = apiWith(async (_productId, imageId, _hash, settings) => {
+    writes.push({ imageId, settings });
+    return [{ ...(imageId === first.id ? first : second), workspaceSettings: settings, workspaceRevision: 2 }];
+  });
+  api.images.cropImage = () => crop.promise;
+  api.images.listByProduct = async () => [first, second];
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, first);
+    store.setState({ workspaceImages: [first, second] });
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, sourceCropRect: { x: 0.1, y: 0.1, width: 0.4, height: 0.4 } });
+    await hook.settle(Component);
+    await readyCrop(hook, Component);
+    const run = canvasView(hook).props.onApplyCrop('newImage');
+    store.setState(switchProduct ? { activeProductId: 'product-2', workspaceImages: [second], workspaceImageIndex: 0 } : { workspaceImageIndex: 1 });
+    await hook.settle(Component);
+    assert.equal(settingsPanel(hook).props.cropLocked, false, 'a different image remains editable while the old crop runs');
+    const newRect = { x: 0.2, y: 0.3, width: 0.6, height: 0.4 };
+    settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, sourceCropRect: newRect, cropStraighten: 9 });
+    await hook.settle(Component);
+    crop.resolve({ outW: 40, outH: 40 });
+    await run;
+    await hook.settle(Component);
+    assert.deepEqual(settingsPanel(hook).props.settings.sourceCropRect, newRect);
+    assert.equal(settingsPanel(hook).props.settings.cropStraighten, 9);
+    assert.equal(store.getState().workspaceImageIndex, switchProduct ? 0 : 1);
+    assert.equal(canvasView(hook).props.cropMode, true, 'old crop completion cannot close the new crop editor');
+    await delay(560);
+    assert.ok(writes.some((write) => write.imageId === second.id));
+    for (const write of writes.filter((write) => write.imageId === second.id)) {
+      assert.deepEqual(write.settings.sourceCropRect, newRect, 'only the new image’s own draft is autosaved');
+      assert.equal(write.settings.cropStraighten, 9);
+    }
+  } finally { hook.cleanup(); }
+});
+
+test('crop requires the latest authoritative preview and shares the process/flip operation guard', async () => {
+  const image = { id: 'preview-image', filepath: 'source.png', contentHash: 'source-hash', workspaceSettings: {}, workspaceRevision: 1 };
+  const pendingPreview = deferred(), pendingCrop = deferred();
+  let previews = 0, crops = 0, processes = 0, flips = 0;
+  const api = apiWith(async (_p, _i, _h, settings) => [{ ...image, workspaceSettings: settings, workspaceRevision: 2 }]);
+  api.images.cropPreview = async () => { previews++; return previews === 1 ? { bytes: new Uint8Array([1]), outW: 400, outH: 200 } : pendingPreview.promise; };
+  api.images.cropImage = async () => { crops++; return pendingCrop.promise; };
+  api.workspace.processImage = async () => { processes++; return {}; };
+  api.images.flipSource = async () => { flips++; return image; };
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, image);
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, sourceCropRect: { x: 0, y: 0, width: 0.5, height: 0.5 } });
+    await hook.settle(Component);
+    await readyCrop(hook, Component);
+    canvasView(hook).props.onRotationChange(90);
+    await hook.settle(Component);
+    assert.equal(canvasView(hook).props.cropPreview, null);
+    await canvasView(hook).props.onApplyCrop('newImage');
+    assert.equal(crops, 0, 'Apply cannot use old preview dimensions after rotation changes');
+    await delay(205);
+    pendingPreview.resolve({ bytes: new Uint8Array([2]), outW: 200, outH: 400 });
+    await delay(0);
+    await hook.settle(Component);
+    canvasView(hook).props.onCropReady(canvasView(hook).props.cropPreview.url);
+    await hook.settle(Component);
+    const run = canvasView(hook).props.onApplyCrop('newImage');
+    await hook.settle(Component);
+    assert.equal(settingsPanel(hook).props.cropLocked, true);
+    await settingsPanel(hook).props.onApplyThis();
+    await settingsPanel(hook).props.onApplyAll();
+    await findNode(hook.getOutput(), (node) => node.props?.['aria-label'] === 'Flip horizontally').props.onClick();
+    await canvasView(hook).props.onApplyCrop('newImage');
+    assert.deepEqual([crops, processes, flips], [1, 0, 0]);
+    pendingCrop.reject(new Error('Synthetic failed crop'));
+    await run;
+    await hook.settle(Component);
+    assert.ok(settingsPanel(hook).props.settings.sourceCropRect, 'failed crop retains the draft');
+    assert.equal(settingsPanel(hook).props.settings.rotation, 90);
+    assert.equal(settingsPanel(hook).props.cropLocked, false);
+  } finally { hook.cleanup(); }
+});
+
+test('active overwrite-crop adopts rotation zero without clearing legacy canvas crop or other settings', async () => {
+  const legacyRect = { x: 0, y: 0, width: 0.8, height: 1 };
+  const image = { id: 'overwrite-image', filepath: 'source.png', contentHash: 'source-hash', workspaceSettings: { brightness: 8, rotation: 90, cropRect: legacyRect }, workspaceRevision: 1 };
+  let savedImage = image;
+  const api = apiWith(async (_p, _i, _h, settings) => [{ ...image, workspaceSettings: settings, workspaceRevision: 2 }]);
+  api.images.cropImage = async () => {
+    savedImage = { ...image, contentHash: 'cropped-hash', workspaceSettings: { ...image.workspaceSettings, rotation: 0, sourceCropRect: null, cropStraighten: 0 }, workspaceRevision: 3 };
+    return { outW: 40, outH: 40, image: savedImage };
+  };
+  api.images.listByProduct = async () => [savedImage];
+  const hook = hookHarness();
+  const { Component, store } = await loadWorkspace(api, hook);
+  try {
+    seed(store, image);
+    await hook.settle(Component);
+    settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, sourceCropRect: { x: 0, y: 0, width: 0.4, height: 0.5 } });
+    await hook.settle(Component);
+    await readyCrop(hook, Component);
+    global.window.confirm = () => true;
+    await canvasView(hook).props.onApplyCrop('overwrite');
+    await hook.settle(Component);
+    const settings = settingsPanel(hook).props.settings;
+    assert.deepEqual([settings.rotation, settings.sourceCropRect, settings.cropStraighten, settings.brightness], [0, null, 0, 8]);
+    assert.deepEqual(settings.cropRect, legacyRect);
+  } finally { hook.cleanup(); }
+});
 
 test('ImageWorkspace adopts a newer same-image refresh after another editor saves and this editor is idle', async () => {
   const hook = hookHarness();
@@ -636,10 +765,11 @@ test('review follow-up: overwrite-crop flushes the pending draft before rewritin
     settingsPanel(hook).props.onChange({
       ...settingsPanel(hook).props.settings,
       brightness: 9,
-      cropRect: { x: 0, y: 0, width: 0.5, height: 0.5 },
+      sourceCropRect: { x: 0, y: 0, width: 0.5, height: 0.5 },
     });
     await hook.settle(Component);
     global.window.confirm = () => true;
+    await readyCrop(hook, Component);
     const canvas = findNode(hook.getOutput(), (node) => typeof node.props?.onApplyCrop === 'function');
     await canvas.props.onApplyCrop('overwrite');
     await hook.settle(Component);
@@ -666,10 +796,11 @@ test('review follow-up: a crop blocked by a conflict explains the conflict', asy
     settingsPanel(hook).props.onChange({
       ...settingsPanel(hook).props.settings,
       brightness: 9,
-      cropRect: { x: 0, y: 0, width: 0.5, height: 0.5 },
+      sourceCropRect: { x: 0, y: 0, width: 0.5, height: 0.5 },
     });
     await hook.settle(Component);
     global.window.confirm = () => true;
+    await readyCrop(hook, Component);
     const canvas = findNode(hook.getOutput(), (node) => typeof node.props?.onApplyCrop === 'function');
     await canvas.props.onApplyCrop('overwrite');
     await hook.settle(Component);

@@ -15,6 +15,50 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { getValidator } = require('../main/server/validators');
+const { validateArgs } = require('../main/util/validateArgs');
+
+test('crop preview and commit validate the current UI request identically on local and RPC paths', () => {
+  const valid = {
+    productId: 'synthetic-product', filepath: 'products/synthetic-001.png',
+    imageId: 'immutable-image', expectedContentHash: 'synthetic-content-hash',
+    rect: { x: 0, y: 0, width: 1, height: 1 },
+    rotation: 90, straighten: -12.5, previewMaxEdge: 1024, destination: 'newImage',
+  };
+  const invalid = [
+    [{ productId: '' }, 'productId required'],
+    [{ filepath: null }, 'filepath required'],
+    [{ rect: { ...valid.rect, width: 0 } }, 'rect.width must be a normalized crop fraction'],
+    [{ rect: { ...valid.rect, x: -0.1 } }, 'rect.x must be a normalized crop fraction'],
+    [{ rect: { ...valid.rect, height: NaN } }, 'rect.height must be a finite number'],
+    [{ rotation: 45 }, 'rotation must be a finite multiple of 90'],
+    [{ rotation: '90' }, 'rotation must be a finite multiple of 90'],
+    [{ rotation: Infinity }, 'rotation must be a finite multiple of 90'],
+    [{ imageId: '' }, 'imageId required'],
+    [{ imageId: 42 }, 'imageId required'],
+    [{ expectedContentHash: 42 }, 'expectedContentHash must be a string or null'],
+    [{ straighten: NaN }, 'straighten must be a finite number'],
+    [{ previewMaxEdge: 127 }, 'previewMaxEdge must be between 128 and 2048'],
+    [{ previewMaxEdge: 2049 }, 'previewMaxEdge must be between 128 and 2048'],
+    [{ previewMaxEdge: Infinity }, 'previewMaxEdge must be between 128 and 2048'],
+    [{ destination: 'replace' }, 'destination must be newImage or overwrite'],
+  ];
+  for (const channel of ['images:cropPreview', 'images:cropImage']) {
+    const validator = getValidator(channel);
+    assert.equal(validator(valid), true);
+    assert.doesNotThrow(() => validateArgs(channel, valid));
+    const overwrite = { ...valid, rotation: 270, expectedContentHash: null, previewMaxEdge: 2048, destination: 'overwrite' };
+    assert.equal(validator(overwrite), true);
+    assert.doesNotThrow(() => validateArgs(channel, overwrite));
+    const legacy = { productId: valid.productId, filepath: valid.filepath, rect: valid.rect };
+    assert.equal(validator(legacy), true, 'existing crop callers may omit the optional fields');
+    assert.doesNotThrow(() => validateArgs(channel, legacy));
+    for (const [patch, reason] of invalid) {
+      const input = { ...valid, ...patch };
+      assert.equal(validator(input), reason);
+      assert.throws(() => validateArgs(channel, input), { message: `Bad request: ${reason}` });
+    }
+  }
+});
 
 test('products:update — rejects missing id', () => {
   const v = getValidator('products:update');
