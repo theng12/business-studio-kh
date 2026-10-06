@@ -246,6 +246,8 @@ export function EditorCanvas({
     }, 250);
     return () => {
       if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+      // Invalidate at the edit/interaction boundary, before the next debounce.
+      guard.invalidate();
     };
   }, [template, backdropProductId, isInteracting, maxPx, previewKey]);
 

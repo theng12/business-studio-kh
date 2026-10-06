@@ -19,7 +19,7 @@ test('the editor uses the shared SaveStatus as the first header action, with bac
   const actions = src.slice(src.indexOf('actions={('));
   assert.ok(actions.indexOf('<SaveStatus') < actions.indexOf('<Button'), 'SaveStatus is not the first action');
   assert.match(src, /backTo=\{back\}/);
-  assert.match(src, /const back = \{ label: 'All templates', onClick: onClose \}/);
+  assert.match(src, /const back = \{ label: 'All templates', onClick: leave \}/);
 });
 
 test('no emoji in Overlay Studio UI', () => {

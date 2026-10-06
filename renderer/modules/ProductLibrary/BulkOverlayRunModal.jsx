@@ -49,7 +49,7 @@ function skipSummary(skipped) {
     .join('; ');
 }
 
-export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone }) {
+export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone, initialTemplateId }) {
   const addToast = useAppStore((s) => s.addToast);
   const refreshProducts = useAppStore((s) => s.refreshProducts);
   const allProducts = useAppStore((s) => s.allProducts);
@@ -88,13 +88,19 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
   // whenever the modal opens, nothing else."
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
+    // Editor opens use their current template; Library opens keep their existing
+    // remembered choice and first-template fallback.
+    if (initialTemplateId) setTemplateId(initialTemplateId);
     window.api.templates.list().then((rows) => {
+      if (cancelled) return;
       setTemplates(rows);
-      if (rows.length > 0 && !templateId) setTemplateId(rows[0].id);
-    }).catch((err) => addToast(err.message, 'error'));
+      if (rows.length > 0 && !templateId && !initialTemplateId) setTemplateId(rows[0].id);
+    }).catch((err) => { if (!cancelled) addToast(err.message, 'error'); });
     setScope('selection');
     imageChoice.reset();
     setFilterMatch(null);
+    return () => { cancelled = true; };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Dry-run lookup whenever the user picks "Current filter" so the

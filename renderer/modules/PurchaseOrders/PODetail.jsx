@@ -11,21 +11,18 @@
  * channel, which returns the full re-computed detail snapshot. The
  * renderer just rebinds state to the snapshot. No optimistic UI.
  *
- * Header fields auto-save on blur (200ms debounce per field) — same
- * pattern as the rest of the app, except for status, which is an
- * explicit dropdown click.
- *
- * Why no header Save button (compare CLAUDE.md §6 Workspace exception):
- * the PO header is mostly metadata (supplier, currency, dates). The
- * value-bearing edits happen on line items + components, which use
- * modal forms with explicit Save. So the §6 belt-and-braces concern
- * doesn't apply to the header.
+ * Header metadata is a controlled draft with serialized autosave and an
+ * explicit Save. Pending edits retain their revision until acknowledged.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Field, Input, Select, Textarea, Badge, EmptyState, Modal } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
+import { SaveStatus } from '../../components/SaveStatus.jsx';
+import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
+import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
+import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { STATUS_TONE, STATUS_LABEL } from './index.jsx';
@@ -99,6 +96,8 @@ function PAYMENT_TT_STATUS_LABEL(s) {
 
 export function PODetail({ poId, onBack }) {
   const addToast = useAppStore((s) => s.addToast);
+  const activeCompanyId = useAppStore((s) => s.activeCompanyId);
+  const companySwitching = useAppStore((s) => s.companySwitching);
   const { canManage } = useCostingCaps();
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -119,7 +118,157 @@ export function PODetail({ poId, onBack }) {
   const [addingPayment, setAddingPayment] = useState(false);
   const [editingPayment, setEditingPayment] = useState(null);
 
+  const [pendingHeader, setPendingHeader] = useState({});
+  const [saveState, setSaveState] = useState('saved');
+  const [savedAt, setSavedAt] = useState(null);
+  const [saveError, setSaveError] = useState('');
+  const pendingRef = useRef(null);
+  const activeHeaderRef = useRef(null);
+  const detailRef = useRef(null);
+  const revisionRef = useRef(null);
+  const queueRef = useRef(null);
+  const timerRef = useRef(null);
+  const generationRef = useRef(0);
+  const remoteSeq = useRef(0);
+  const contextRef = useRef(null);
+  contextRef.current = { poId, activeCompanyId };
   const header = detail?.header || null;
+  const draft = header ? { ...header, ...pendingHeader } : null;
+  const currentContext = () => contextRef.current?.poId === poId && contextRef.current?.activeCompanyId === activeCompanyId;
+
+  function applySnapshot(snap) {
+    if (!snap || !currentContext()) return;
+    if (Number(snap.header.updatedAt) < Number(detailRef.current?.header?.updatedAt)) return;
+    detailRef.current = snap; setDetail(snap);
+    // A remote snapshot may update nonedited controls, but cannot acknowledge
+    // the revision of a local draft that has never reached the server.
+    if (!pendingRef.current && !queueRef.current?.hasPending()) {
+      revisionRef.current = snap.header.updatedAt;
+      queueRef.current?.setRevision(snap.header.updatedAt);
+      setSavedAt(snap.header.updatedAt);
+    }
+  }
+
+  function headerInput(patch, expectedUpdatedAt) {
+    const input = { ...patch, ...(expectedUpdatedAt === undefined ? {} : { expectedUpdatedAt }) };
+    if ('exchangeRateToUsd' in input) {
+      const rate = Number(input.exchangeRateToUsd);
+      if (String(input.exchangeRateToUsd).trim() === '' || !Number.isFinite(rate) || rate <= 0) throw new Error('FX rate must be a number above 0.');
+      input.exchangeRateToUsd = rate;
+    }
+    if ('receivedAt' in input && !(Number(input.receivedAt) > 0)) throw new Error('Received date must be a valid date.');
+    return input;
+  }
+
+  const ensureQueue = useCallback(() => {
+    if (!queueRef.current) {
+      const generation = generationRef.current;
+      queueRef.current = createLatestSaveQueue({
+        initialRevision: revisionRef.current,
+        persist: (patch, expectedUpdatedAt) => {
+          if (generation !== generationRef.current || !currentContext()) throw new Error('Purchase order changed before saving');
+          return window.api.purchaseOrders.update(poId, headerInput(patch, expectedUpdatedAt));
+        },
+        onStart: (sent) => {
+          if (generation === generationRef.current) { activeHeaderRef.current = sent; setSaveState('saving'); setSaveError(''); }
+        },
+        onSuccess: (row, sent) => {
+          if (generation !== generationRef.current || !currentContext()) return;
+          activeHeaderRef.current = null;
+          revisionRef.current = row.updatedAt;
+          const remaining = { ...(pendingRef.current || {}) };
+          for (const key of Object.keys(sent)) if (remaining[key] === sent[key]) delete remaining[key];
+          pendingRef.current = Object.keys(remaining).length ? remaining : null;
+          setPendingHeader(remaining);
+          applySnapshot({ ...detailRef.current, header: { ...detailRef.current.header, ...row } });
+          setSavedAt(row.updatedAt); setSaveState(pendingRef.current ? 'dirty' : 'saved');
+          // FX/currency edits also change line calculations. A guarded fresh
+          // detail keeps those caches current without rebinding pending input.
+          const seq = ++remoteSeq.current;
+          window.api.purchaseOrders.getDetail(poId).then((snap) => {
+            if (generation === generationRef.current && seq === remoteSeq.current) applySnapshot(snap);
+          }).catch((error) => { if (generation === generationRef.current && seq === remoteSeq.current) addToast(error.message, 'error'); });
+        },
+        onError: (error) => {
+          if (generation !== generationRef.current || !currentContext()) return;
+          activeHeaderRef.current = null; setSaveState('error'); setSaveError(error.message);
+          if (!parseConflictError(error)) addToast(error.message, 'error');
+        },
+      });
+    }
+    return queueRef.current;
+    // Context and snapshot operations read refs; this queue belongs to one PO generation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poId, activeCompanyId, addToast]);
+
+  const flushPending = useCallback(() => {
+    clearTimeout(timerRef.current);
+    if (!pendingRef.current && !queueRef.current?.hasPending()) return Promise.resolve();
+    const generation = generationRef.current;
+    return ensureQueue().flush(() => generation === generationRef.current ? pendingRef.current : null);
+  }, [ensureQueue]);
+  useEffect(() => registerCompanySwitchFlusher(flushPending), [flushPending]);
+
+  async function saveNow() {
+    const generation = generationRef.current;
+    try { await flushPending(); return generation === generationRef.current && currentContext(); }
+    catch (error) {
+      if (generation !== generationRef.current || !currentContext()) return false;
+      try {
+        let sent;
+        const result = await resolveSaveConflict(error, {
+          refresh: () => window.api.purchaseOrders.getDetail(poId),
+          overwrite: async () => {
+            if (generation !== generationRef.current || !currentContext()) throw new Error('Purchase order changed before conflict resolution');
+            sent = pendingRef.current;
+            const row = await window.api.purchaseOrders.update(poId, headerInput(sent || {}));
+            return { ...detailRef.current, header: { ...detailRef.current.header, ...row } };
+          },
+        });
+        if (result.choice === 'cancel' || generation !== generationRef.current || !currentContext()) return false;
+        const snap = result.row;
+        if (result.choice === 'refresh') { pendingRef.current = null; setPendingHeader({}); }
+        else {
+          const remaining = { ...(pendingRef.current || {}) };
+          for (const key of Object.keys(sent || {})) if (remaining[key] === sent[key]) delete remaining[key];
+          pendingRef.current = Object.keys(remaining).length ? remaining : null; setPendingHeader(remaining);
+        }
+        revisionRef.current = snap.header.updatedAt; ensureQueue().setRevision(snap.header.updatedAt);
+        applySnapshot(snap); setSaveError(''); setSaveState(pendingRef.current ? 'dirty' : 'saved');
+        if (pendingRef.current) await flushPending();
+        return true;
+      } catch (nextError) {
+        if (generation === generationRef.current && currentContext()) { setSaveState('error'); setSaveError(nextError.message); addToast(nextError.message, 'error'); }
+        return false;
+      }
+    }
+  }
+
+  function changeHeader(patch) {
+    if (companySwitching || !canManage || !header) return;
+    remoteSeq.current += 1;
+    const next = { ...(pendingRef.current || {}) };
+    for (const [key, value] of Object.entries(patch)) {
+      const awaiting = activeHeaderRef.current && key in activeHeaderRef.current;
+      // Keep the desired value until the active write is acknowledged, even
+      // when it matches that write or reverts to the persisted header.
+      if (!awaiting && (header[key] ?? '') === (value ?? '')) delete next[key];
+      else next[key] = value;
+    }
+    pendingRef.current = Object.keys(next).length ? next : null;
+    setPendingHeader(next); setSaveState(queueRef.current?.hasPending() ? 'saving' : (pendingRef.current ? 'dirty' : 'saved')); setSaveError('');
+    if (!pendingRef.current && !queueRef.current?.hasPending()) {
+      revisionRef.current = header.updatedAt; queueRef.current?.setRevision(header.updatedAt);
+    }
+    clearTimeout(timerRef.current);
+    if (pendingRef.current) timerRef.current = setTimeout(() => {
+      // The queue reads the live remaining patch after each acknowledgment.
+      void flushPending().catch(() => { /* onError keeps the draft retryable */ });
+    }, 500);
+  }
+
+  async function leaveEditor() { if (await saveNow()) onBack(); }
+
 
   // Load the PO detail. Products for the Add-Line picker come from the
   // store's `allProducts` slice; make sure it's populated (it normally is
@@ -127,15 +276,19 @@ export function PODetail({ poId, onBack }) {
   // mounted before the catalog loaded).
   useEffect(() => {
     let cancelled = false;
+    const generation = ++generationRef.current;
+    remoteSeq.current += 1; clearTimeout(timerRef.current);
+    detailRef.current = null; pendingRef.current = null; activeHeaderRef.current = null; queueRef.current = null; revisionRef.current = null;
+    setDetail(null); setPendingHeader({}); setSaveState('saved'); setSaveError('');
     setLoading(true);
     if (!products.length) refreshAllProducts?.();
     window.api.purchaseOrders.getDetail(poId)
-      .then((d) => { if (!cancelled) setDetail(d); })
+      .then((d) => { if (!cancelled && generation === generationRef.current) applySnapshot(d); })
       .catch((err) => { if (!cancelled) addToast(`Failed to load PO: ${err.message}`, 'error'); })
       .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(timerRef.current); generationRef.current += 1; remoteSeq.current += 1; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poId, addToast]);
+  }, [poId, activeCompanyId, addToast]);
 
   // Another Mac changed this PO: refetch it (coalesced — a save and its own
   // echo land as one refetch).
@@ -144,121 +297,139 @@ export function PODetail({ poId, onBack }) {
     let timer = null;
     let alive = true;
     const off = window.api.events.onCatalogChanged((evt) => {
-      if (evt?.kind !== 'purchaseOrder' || (evt.poId && evt.poId !== poId)) return;
+      if (evt?.kind !== 'purchaseOrder' || (evt.poId && evt.poId !== poId) || (evt.companyId && evt.companyId !== activeCompanyId)) return;
       clearTimeout(timer);
       timer = setTimeout(() => {
+        const seq = ++remoteSeq.current;
         window.api.purchaseOrders.getDetail(poId)
-          .then((d) => { if (alive) setDetail(d); })
+          .then((d) => { if (alive && seq === remoteSeq.current) applySnapshot(d); })
           .catch(() => { /* the next event or a reopen retries */ });
       }, 250);
     });
     return () => { alive = false; clearTimeout(timer); if (typeof off === 'function') off(); };
-  }, [poId]);
-
-  function applySnapshot(snap) {
-    if (!snap) return;
-    setDetail(snap);
-  }
+  // Snapshot/context operations read current refs.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poId, activeCompanyId]);
 
   async function saveHeaderPatch(patch) {
-    try {
-      await window.api.purchaseOrders.update(poId, patch);
-      // Header-only update returns a header, not detail. Refetch the
-      // full detail to keep lines/components in lockstep with whatever
-      // the recompute did to per-line caches.
-      const fresh = await window.api.purchaseOrders.getDetail(poId);
-      applySnapshot(fresh);
-    } catch (err) {
-      addToast(`Failed to save: ${err.message}`, 'error');
-    }
+    changeHeader(patch);
+    return saveNow();
   }
 
-  /**
-   * A currency change re-reads every line and cost in the new currency and
-   * re-converts it to USD, so it is confirmed first and never saved without
-   * a rate: USD is always 1, any other currency asks for its rate in the
-   * same dialog (the server refuses a non-USD switch that has none). The
-   * select is uncontrolled, so a cancel puts the old value back by hand.
-   */
-  async function changeCurrency(select) {
-    const prev = header.currency;
-    const next = select.value;
+  /** Currency changes retain the explicit confirmation and required FX rate. */
+  async function changeCurrency(next) {
+    const generation = generationRef.current;
+    if (!await saveNow() || !currentContext()) return;
+    const before = detailRef.current.header;
+    const prev = before.currency;
     if (!next || next === prev) return;
     const toUsd = next === 'USD';
     const rateBox = { value: '' };
-    const received = isCostSource(header.status);
     const sure = await confirm({
       title: `Change the currency to ${next}?`,
       message: toUsd
-        ? `Every line and cost line will be read as USD and re-converted at rate 1. The current rate (1 ${prev} = ${Number(header.exchangeRateToUsd) || 0} USD) is discarded.`
+        ? `Every line and cost line will be read as USD and re-converted at rate 1. The current rate (1 ${prev} = ${Number(before.exchangeRateToUsd) || 0} USD) is discarded.`
         : `Every line and cost line will be read as ${next} and re-converted to USD at the rate you enter below.`,
-      detail: received
+      detail: isCostSource(before.status)
         ? 'This PO is received, so the landed cost of every product on it updates too.'
         : 'Unit prices keep the numbers you typed; only their currency changes.',
       confirmLabel: 'Change currency',
       extra: toUsd ? null : <CurrencyRateInput currency={next} box={rateBox} />,
     });
-    if (!sure) { select.value = prev; return; }
-    let exchangeRateToUsd = 1;
-    if (!toUsd) {
-      exchangeRateToUsd = Number(rateBox.value);
-      if (String(rateBox.value).trim() === '' || !Number.isFinite(exchangeRateToUsd) || exchangeRateToUsd <= 0) {
-        addToast(`Currency not changed — enter how many US dollars one ${next} is worth (a number above 0).`, 'error');
-        select.value = prev;
-        return;
-      }
+    if (!sure || generation !== generationRef.current || !currentContext()) return;
+    const exchangeRateToUsd = toUsd ? 1 : Number(rateBox.value);
+    if (!toUsd && (String(rateBox.value).trim() === '' || !Number.isFinite(exchangeRateToUsd) || exchangeRateToUsd <= 0)) {
+      addToast(`Currency not changed — enter how many US dollars one ${next} is worth (a number above 0).`, 'error'); return;
+    }
+    if (detailRef.current.header.updatedAt !== before.updatedAt) {
+      addToast('This purchase order changed while the currency confirmation was open. Review its current currency and try again.', 'error'); return;
     }
     await saveHeaderPatch({ currency: next, exchangeRateToUsd, exchangeRateDate: Date.now() });
   }
 
   async function changeStatus(newStatus) {
-    if (!header) return;
-    if (newStatus === header.status) return;
+    const generation = generationRef.current;
+    if (!header || !await saveNow() || !currentContext()) return;
+    const before = detailRef.current.header;
+    if (newStatus === before.status) return;
     let warnBody = null;
-    if (newStatus === 'received' && !isCostSource(header.status)) {
+    if (newStatus === 'received' && !isCostSource(before.status)) {
       warnBody = 'Every line’s landed cost will count toward each product’s cost history, dated today (you can change the received date afterwards). Moving the PO back to an earlier status takes it out again.';
-    } else if (isCostSource(header.status) && !isCostSource(newStatus)) {
+    } else if (isCostSource(before.status) && !isCostSource(newStatus)) {
       warnBody = `This PO was received, so its landed cost counts for every product on it. Moving it back to "${STATUS_LABEL(newStatus)}" removes that cost from those products and clears the received date.`;
     }
-    if (warnBody) {
-      const sure = await confirm({
-        title: `Change status to "${STATUS_LABEL(newStatus)}"?`,
-        body: warnBody,
-        confirmLabel: 'Change status',
-      });
-      if (!sure) return;
-    }
+    if (warnBody && !await confirm({ title: `Change status to "${STATUS_LABEL(newStatus)}"?`, message: warnBody, confirmLabel: 'Change status' })) return;
+    if (generation !== generationRef.current || !currentContext()) return;
     try {
-      await window.api.purchaseOrders.setStatus(poId, newStatus);
+      await window.api.purchaseOrders.setStatus(poId, newStatus, before.updatedAt);
       const fresh = await window.api.purchaseOrders.getDetail(poId);
-      applySnapshot(fresh);
-      addToast(`Status set to ${STATUS_LABEL(newStatus)}`, 'success');
+      if (generation !== generationRef.current || !currentContext()) return;
+      applySnapshot(fresh); addToast(`Status set to ${STATUS_LABEL(newStatus)}`, 'success');
     } catch (err) {
-      addToast(`Failed to change status: ${err.message}`, 'error');
+      if (generation !== generationRef.current || !currentContext()) return;
+      if (parseConflictError(err)) {
+        // A status transition has side effects: refresh its current state and
+        // require the warning again rather than overwriting a stale confirmation.
+        const fresh = await window.api.purchaseOrders.getDetail(poId).catch(() => null);
+        if (generation !== generationRef.current || !currentContext()) return;
+        applySnapshot(fresh); addToast('This purchase order changed elsewhere. Review its status and try again.', 'error');
+      } else addToast(`Failed to change status: ${err.message}`, 'error');
     }
   }
 
-  async function addLine(input) {
+  async function saveChildEdit(method, id, patch, editing, collection, setEditing, success) {
+    const generation = generationRef.current;
+    const isCurrent = () => generation === generationRef.current && currentContext();
     try {
+      await flushPending();
+      if (!isCurrent()) return;
+      let snap;
+      try { snap = await window.api.purchaseOrders[method](id, { ...patch, expectedUpdatedAt: editing.expectedUpdatedAt }); }
+      catch (error) {
+        if (!isCurrent()) return;
+        const result = await resolveSaveConflict(error, {
+          refresh: () => window.api.purchaseOrders.getDetail(poId),
+          overwrite: () => {
+            if (!isCurrent()) throw new Error('Purchase order changed before conflict resolution');
+            return window.api.purchaseOrders[method](id, patch);
+          },
+        });
+        if (!isCurrent() || result.choice === 'cancel') return;
+        snap = result.row;
+        if (result.choice === 'refresh') {
+          applySnapshot(snap);
+          const row = snap[collection].find((item) => item.id === id);
+          setEditing(row ? { ...row, expectedUpdatedAt: snap.header.updatedAt } : null);
+          return;
+        }
+      }
+      if (!isCurrent()) return;
+      applySnapshot(snap); setEditing(null); addToast(success, 'success');
+    } catch (error) { if (isCurrent()) addToast(error.message, 'error'); }
+  }
+
+  async function addLine(input) {
+    const generation = generationRef.current;
+    const isCurrent = () => generation === generationRef.current && currentContext();
+    try {
+      await flushPending();
+      if (!isCurrent()) return;
       const snap = await window.api.purchaseOrders.addLine(poId, input);
+      if (!isCurrent()) return;
       applySnapshot(snap);
       setAddingLine(false);
       addToast('Line added', 'success');
     } catch (err) {
+      if (!isCurrent()) return;
       addToast(`Failed to add line: ${err.message}`, 'error');
     }
   }
-  async function updateLine(lineId, patch) {
-    try {
-      const snap = await window.api.purchaseOrders.updateLine(lineId, patch);
-      applySnapshot(snap);
-      setEditingLine(null);
-      addToast('Line updated', 'success');
-    } catch (err) {
-      addToast(`Failed to update line: ${err.message}`, 'error');
-    }
+  function updateLine(lineId, patch) {
+    return saveChildEdit('updateLine', lineId, patch, editingLine, 'lines', setEditingLine, 'Line updated');
   }
   async function removeLine(line) {
+    const generation = generationRef.current;
+    const isCurrent = () => generation === generationRef.current && currentContext();
     const sure = await confirm({
       title: 'Delete this line?',
       body: `Removes ${line.productSku || line.productName || 'this line'} from the PO. Cannot be undone.`,
@@ -267,35 +438,40 @@ export function PODetail({ poId, onBack }) {
     });
     if (!sure) return;
     try {
+      await flushPending();
+      if (!isCurrent()) return;
       const snap = await window.api.purchaseOrders.removeLine(line.id);
+      if (!isCurrent()) return;
       applySnapshot(snap);
       addToast('Line removed', 'success');
     } catch (err) {
+      if (!isCurrent()) return;
       addToast(`Failed to remove line: ${err.message}`, 'error');
     }
   }
 
   async function addComponent(input) {
+    const generation = generationRef.current;
+    const isCurrent = () => generation === generationRef.current && currentContext();
     try {
+      await flushPending();
+      if (!isCurrent()) return;
       const snap = await window.api.purchaseOrders.addComponent(poId, input);
+      if (!isCurrent()) return;
       applySnapshot(snap);
       setAddingComponent(false);
       addToast('Cost component added', 'success');
     } catch (err) {
+      if (!isCurrent()) return;
       addToast(`Failed to add component: ${err.message}`, 'error');
     }
   }
-  async function updateComponent(componentId, patch) {
-    try {
-      const snap = await window.api.purchaseOrders.updateComponent(componentId, patch);
-      applySnapshot(snap);
-      setEditingComponent(null);
-      addToast('Component updated', 'success');
-    } catch (err) {
-      addToast(`Failed to update component: ${err.message}`, 'error');
-    }
+  function updateComponent(componentId, patch) {
+    return saveChildEdit('updateComponent', componentId, patch, editingComponent, 'components', setEditingComponent, 'Component updated');
   }
   async function removeComponent(c) {
+    const generation = generationRef.current;
+    const isCurrent = () => generation === generationRef.current && currentContext();
     const sure = await confirm({
       title: 'Delete this cost component?',
       body: 'Removes the line from the PO’s cost breakdown.',
@@ -304,36 +480,41 @@ export function PODetail({ poId, onBack }) {
     });
     if (!sure) return;
     try {
+      await flushPending();
+      if (!isCurrent()) return;
       const snap = await window.api.purchaseOrders.removeComponent(c.id);
+      if (!isCurrent()) return;
       applySnapshot(snap);
       addToast('Component removed', 'success');
     } catch (err) {
+      if (!isCurrent()) return;
       addToast(`Failed to remove component: ${err.message}`, 'error');
     }
   }
 
   // v0.49.50: payments.
   async function addPayment(input) {
+    const generation = generationRef.current;
+    const isCurrent = () => generation === generationRef.current && currentContext();
     try {
+      await flushPending();
+      if (!isCurrent()) return;
       const snap = await window.api.purchaseOrders.addPayment(poId, input);
+      if (!isCurrent()) return;
       applySnapshot(snap);
       setAddingPayment(false);
       addToast('Payment recorded', 'success');
     } catch (err) {
+      if (!isCurrent()) return;
       addToast(`Failed to record payment: ${err.message}`, 'error');
     }
   }
-  async function updatePayment(paymentId, patch) {
-    try {
-      const snap = await window.api.purchaseOrders.updatePayment(paymentId, patch);
-      applySnapshot(snap);
-      setEditingPayment(null);
-      addToast('Payment updated', 'success');
-    } catch (err) {
-      addToast(`Failed to update payment: ${err.message}`, 'error');
-    }
+  function updatePayment(paymentId, patch) {
+    return saveChildEdit('updatePayment', paymentId, patch, editingPayment, 'payments', setEditingPayment, 'Payment updated');
   }
   async function removePayment(p) {
+    const generation = generationRef.current;
+    const isCurrent = () => generation === generationRef.current && currentContext();
     const sure = await confirm({
       title: 'Delete this payment?',
       body: 'Removes the TT record from this PO. Cannot be undone.',
@@ -342,10 +523,14 @@ export function PODetail({ poId, onBack }) {
     });
     if (!sure) return;
     try {
+      await flushPending();
+      if (!isCurrent()) return;
       const snap = await window.api.purchaseOrders.removePayment(p.id);
+      if (!isCurrent()) return;
       applySnapshot(snap);
       addToast('Payment removed', 'success');
     } catch (err) {
+      if (!isCurrent()) return;
       addToast(`Failed to remove payment: ${err.message}`, 'error');
     }
   }
@@ -389,12 +574,12 @@ export function PODetail({ poId, onBack }) {
       <div className="page page--pos">
         <PageHeader
           title="Purchase order"
-          backTo={{ label: 'Purchase orders', onClick: onBack }}
+          backTo={{ label: 'Purchase orders', onClick: leaveEditor }}
         />
         <EmptyState
           title="Purchase order not found"
           body="It may have been deleted on this Mac or another one."
-          action={<Button onClick={onBack}>Back to purchase orders</Button>}
+          action={<Button onClick={leaveEditor}>Back to purchase orders</Button>}
         />
       </div>
     );
@@ -409,14 +594,16 @@ export function PODetail({ poId, onBack }) {
       <PageHeader
         title={`PO ${header.poNumber || '(no number)'}`}
         subtitle={`${header.supplierName || 'Unknown supplier'} • ${header.incoterm} • ${header.currency} → USD @ ${Number(header.exchangeRateToUsd).toFixed(4)}`}
-        backTo={{ label: 'Purchase orders', onClick: onBack }}
+        backTo={{ label: 'Purchase orders', onClick: leaveEditor }}
         actions={
           <>
+            {canManage && <SaveStatus state={saveState} savedAt={savedAt} error={saveError} onSave={saveNow} />}
             <Badge tone={STATUS_TONE(header.status)}>{STATUS_LABEL(header.status)}</Badge>
             {canManage ? (
               <Select
                 className="po-status-select"
                 value={header.status}
+                disabled={companySwitching}
                 onChange={(e) => changeStatus(e.target.value)}
                 aria-label="Change status"
               >
@@ -437,20 +624,19 @@ export function PODetail({ poId, onBack }) {
       {/* Header — editable inline. */}
       <section className="po-section">
         <h2 className="section-title">Order details</h2>
-        <fieldset className="po-header-fields form-grid" disabled={!canManage}>
+        <fieldset className="po-header-fields form-grid" disabled={!canManage || companySwitching}>
           <label className="field">
             <span className="field__label">PO number</span>
             <Input
-              defaultValue={header.poNumber || ''}
-              onBlur={(e) => saveHeaderPatch({ poNumber: e.target.value })}
+              value={draft.poNumber || ''}
+              onChange={(e) => changeHeader({ poNumber: e.target.value })}
             />
           </label>
           <label className="field">
             <span className="field__label">Currency</span>
             <Select
-              key={`cur-${header.currency}`}
-              defaultValue={header.currency}
-              onChange={(e) => changeCurrency(e.target)}
+              value={draft.currency}
+              onChange={(e) => changeCurrency(e.target.value)}
             >
               {['USD','CNY','THB','VND','KHR','EUR','JPY','KRW','INR','IDR','MYR','SGD'].map((c) =>
                 <option key={c} value={c}>{c}</option>)}
@@ -459,22 +645,11 @@ export function PODetail({ poId, onBack }) {
           <label className="field">
             <span className="field__label">FX rate (1 {header.currency} = ? USD)</span>
             <Input
-              key={`fx-${header.exchangeRateToUsd}`}
               type="number"
               step="0.0001"
               min="0"
-              defaultValue={header.exchangeRateToUsd}
-              onBlur={(e) => {
-                if (e.target.value === e.target.defaultValue) return; // untouched
-                const next = Number(e.target.value);
-                if (e.target.value.trim() === '' || !Number.isFinite(next) || next <= 0) {
-                  addToast('FX rate must be a number above 0.', 'error');
-                  e.target.value = header.exchangeRateToUsd ?? '';
-                  return;
-                }
-                if (next === Number(header.exchangeRateToUsd)) return;
-                saveHeaderPatch({ exchangeRateToUsd: next, exchangeRateDate: Date.now() });
-              }}
+              value={draft.exchangeRateToUsd ?? ''}
+              onChange={(e) => changeHeader({ exchangeRateToUsd: e.target.value, exchangeRateDate: Date.now() })}
             />
             <span className="field__hint">
               {header.currency !== 'USD' && Number(header.exchangeRateToUsd) === 1
@@ -485,8 +660,8 @@ export function PODetail({ poId, onBack }) {
           <label className="field">
             <span className="field__label">Incoterm</span>
             <Select
-              defaultValue={header.incoterm}
-              onChange={(e) => saveHeaderPatch({ incoterm: e.target.value })}
+              value={draft.incoterm}
+              onChange={(e) => changeHeader({ incoterm: e.target.value })}
             >
               <option value="EXW">EXW</option>
               <option value="FOB">FOB</option>
@@ -497,8 +672,8 @@ export function PODetail({ poId, onBack }) {
           <label className="field">
             <span className="field__label">Container</span>
             <Select
-              defaultValue={header.containerType || ''}
-              onChange={(e) => saveHeaderPatch({ containerType: e.target.value || null })}
+              value={draft.containerType || ''}
+              onChange={(e) => changeHeader({ containerType: e.target.value || null })}
             >
               <option value="">— none —</option>
               <option value="20">20' standard (33.2 CBM)</option>
@@ -511,35 +686,25 @@ export function PODetail({ poId, onBack }) {
             <span className="field__label">Ordered on</span>
             <Input
               type="date"
-              defaultValue={tsToDateInput(header.orderedAt)}
-              onBlur={(e) => saveHeaderPatch({ orderedAt: dateInputToTs(e.target.value) })}
+              value={tsToDateInput(draft.orderedAt)}
+              onChange={(e) => changeHeader({ orderedAt: dateInputToTs(e.target.value) })}
             />
           </label>
           <label className="field">
             <span className="field__label">ETA</span>
             <Input
               type="date"
-              defaultValue={tsToDateInput(header.eta)}
-              onBlur={(e) => saveHeaderPatch({ eta: dateInputToTs(e.target.value) })}
+              value={tsToDateInput(draft.eta)}
+              onChange={(e) => changeHeader({ eta: dateInputToTs(e.target.value) })}
             />
           </label>
           {isCostSource(header.status) && header.receivedAt ? (
             <label className="field">
               <span className="field__label">Received on</span>
               <Input
-                key={`recv-${header.receivedAt}`}
                 type="date"
-                defaultValue={tsToDateInput(header.receivedAt)}
-                onBlur={(e) => {
-                  if (e.target.value === e.target.defaultValue) return; // untouched
-                  const ts = dateInputToTs(e.target.value);
-                  if (ts == null) {
-                    addToast('Received date must be a valid date.', 'error');
-                    e.target.value = e.target.defaultValue;
-                    return;
-                  }
-                  saveHeaderPatch({ receivedAt: ts });
-                }}
+                value={tsToDateInput(draft.receivedAt)}
+                onChange={(e) => changeHeader({ receivedAt: dateInputToTs(e.target.value) })}
               />
               <span className="field__hint">Dates this PO in each product’s 3- and 12-month cost averages.</span>
             </label>
@@ -547,8 +712,8 @@ export function PODetail({ poId, onBack }) {
           <label className="field field--full">
             <span className="field__label">Notes</span>
             <Textarea
-              defaultValue={header.notes || ''}
-              onBlur={(e) => saveHeaderPatch({ notes: e.target.value })}
+              value={draft.notes || ''}
+              onChange={(e) => changeHeader({ notes: e.target.value })}
             />
           </label>
         </fieldset>
@@ -605,7 +770,7 @@ export function PODetail({ poId, onBack }) {
                       <td className="is-num">{fmtUsd((c.landedUnitCostUsd || 0) * (Number(line.qty) || 0))}</td>
                       {canManage ? (
                         <td className="is-actions">
-                          <Button size="sm" onClick={() => setEditingLine(line)}>Edit</Button>
+                          <Button size="sm" onClick={() => setEditingLine({ ...line, expectedUpdatedAt: header.updatedAt })}>Edit</Button>
                           <Button variant="danger" size="sm" onClick={() => removeLine(line)}>Remove</Button>
                         </td>
                       ) : null}
@@ -661,7 +826,7 @@ export function PODetail({ poId, onBack }) {
                     <td>{ALLOCATION_BASES.find((a) => a.value === c.allocationBasis)?.label || c.allocationBasis}</td>
                     {canManage ? (
                       <td className="is-actions">
-                        <Button size="sm" onClick={() => setEditingComponent(c)}>Edit</Button>
+                        <Button size="sm" onClick={() => setEditingComponent({ ...c, expectedUpdatedAt: header.updatedAt })}>Edit</Button>
                         <Button variant="danger" size="sm" onClick={() => removeComponent(c)}>Remove</Button>
                       </td>
                     ) : null}
@@ -760,7 +925,7 @@ export function PODetail({ poId, onBack }) {
                     <td>{p.reference || <span className="muted">—</span>}</td>
                     {canManage ? (
                       <td className="is-actions">
-                        <Button size="sm" onClick={() => setEditingPayment(p)}>Edit</Button>
+                        <Button size="sm" onClick={() => setEditingPayment({ ...p, expectedUpdatedAt: header.updatedAt })}>Edit</Button>
                         <Button variant="danger" size="sm" onClick={() => removePayment(p)}>Remove</Button>
                       </td>
                     ) : null}
@@ -807,6 +972,7 @@ export function PODetail({ poId, onBack }) {
       )}
       {editingLine && (
         <LineModal
+          key={`${editingLine.id}-${editingLine.expectedUpdatedAt}`}
           mode="edit"
           currency={header.currency}
           line={editingLine}
@@ -826,6 +992,7 @@ export function PODetail({ poId, onBack }) {
       )}
       {editingComponent && (
         <ComponentModal
+          key={`${editingComponent.id}-${editingComponent.expectedUpdatedAt}`}
           mode="edit"
           currency={header.currency}
           incoterm={header.incoterm}
@@ -846,6 +1013,7 @@ export function PODetail({ poId, onBack }) {
       )}
       {editingPayment && (
         <PaymentModal
+          key={`${editingPayment.id}-${editingPayment.expectedUpdatedAt}`}
           mode="edit"
           currency={header.currency}
           defaultFxRate={header.exchangeRateToUsd}

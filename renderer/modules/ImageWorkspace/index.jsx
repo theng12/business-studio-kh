@@ -7,6 +7,7 @@ import { Lightbox } from '../../components/Lightbox.jsx';
 import { ImageStrip } from './ImageStrip.jsx';
 import { CanvasView } from './CanvasView.jsx';
 import { SettingsPanel } from './SettingsPanel.jsx';
+import { parseAspectRatio, reshapeCropRect } from './cropGeometry.js';
 import { defaultSettings, mergeSettings } from '../../lib/workspaceSettings.js';
 import { removeBackground } from '../../lib/bgRemoval.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
@@ -55,6 +56,8 @@ export function ImageWorkspace() {
   const [settings, setSettings] = useState(defaultSettings());
   const [processingLabel, setProcessingLabel] = useState(null);
   const [cropMode, setCropMode] = useState(false);
+  const [cropPreviewState, setCropPreviewState] = useState(null);
+  const [cropFrameReadyUrl, setCropFrameReadyUrl] = useState(null);
   // Lightbox state for previewing strip thumbnails. v0.26.8 — matches the
   // Product Library's "click a thumb to preview" UX. The strip's primary
   // click still SELECTS the image as the active workspace target; preview
@@ -74,6 +77,7 @@ export function ImageWorkspace() {
   const flushPendingSaveRef = useRef(null);
   const workspaceImagesRef = useRef(images);
   const processingRunRef = useRef(false);
+  const cropRunEditorKeyRef = useRef(null);
   const mountedRef = useRef(true);
   workspaceImagesRef.current = images;
   useEffect(() => {
@@ -86,9 +90,12 @@ export function ImageWorkspace() {
   }, []);
 
   function handleCropChange(rect) {
-    setSettings((s) => ({ ...s, cropRect: rect }));
+    if (cropApplying && cropRunEditorKeyRef.current === activeEditorKeyRef.current) return;
+    setSettings((s) => ({ ...s, sourceCropRect: rect, ...(!cropMode && !rect ? { cropRect: null } : {}) }));
   }
   function toggleCropMode() {
+    if (cropApplying && cropRunEditorKeyRef.current === activeEditorKeyRef.current) return;
+    setCropPreviewState(null);
     setCropMode((v) => !v);
   }
   // v0.49.15: aspect-ratio picker.
@@ -99,6 +106,7 @@ export function ImageWorkspace() {
   // When the ratio changes AND a rect exists, re-shape it (keep center) so
   // the user sees their work re-proportioned instead of disappearing.
   function handleCropAspectChange(id) {
+    if (cropApplying && cropRunEditorKeyRef.current === activeEditorKeyRef.current) return;
     // v0.49.16: the slider piggybacks on this channel via a `__straighten:N`
     // sentinel so we don\'t have to add yet another prop. Match it first;
     // anything else is a real aspect-ratio change.
@@ -110,30 +118,15 @@ export function ImageWorkspace() {
     }
     setSettings((s) => {
       const next = { ...s, cropAspectRatio: id };
-      if (!s.cropRect) return next;
-      // Pull the numeric ratio out and re-shape the rect against the canvas dims.
-      const ratioStr = id === 'free' ? null
-        : id === 'custom' ? null
-        : id.startsWith('custom-') ? id.slice('custom-'.length)
-        : id;
-      const m = ratioStr ? String(ratioStr).match(/^(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)$/) : null;
-      const outputAspect = m ? Number(m[1]) / Number(m[2]) : null;
-      if (!outputAspect) return next; // 'free' or 'custom' (input incomplete) — leave rect alone
-      const rectAspect = outputAspect * (s.canvasHeight / s.canvasWidth);
-      const cx = s.cropRect.x + s.cropRect.width / 2;
-      const cy = s.cropRect.y + s.cropRect.height / 2;
-      let w = s.cropRect.width, h = w / rectAspect;
-      const altH = s.cropRect.height, altW = altH * rectAspect;
-      if (altW * altH > w * h) { w = altW; h = altH; }
-      if (h > 1) { h = 1; w = h * rectAspect; }
-      if (w > 1) { w = 1; h = w / rectAspect; }
-      const nx = Math.max(0, Math.min(1 - w, cx - w / 2));
-      const ny = Math.max(0, Math.min(1 - h, cy - h / 2));
-      return { ...next, cropRect: { x: nx, y: ny, width: w, height: h } };
+      if (!s.sourceCropRect) return next;
+      const ratio = parseAspectRatio(id);
+      if (!ratio || !cropPreview) return next;
+      return { ...next, sourceCropRect: reshapeCropRect(s.sourceCropRect, ratio, cropPreview.outW, cropPreview.outH) };
     });
   }
   function handleCancelCrop() {
-    setSettings((s) => ({ ...s, cropRect: null }));
+    if (cropApplying && cropRunEditorKeyRef.current === activeEditorKeyRef.current) return;
+    setSettings((s) => ({ ...s, sourceCropRect: null, cropStraighten: 0 }));
     setCropMode(false);
   }
   // v0.49.15: commit the crop via `images:cropImage`. Two destinations:
@@ -141,13 +134,21 @@ export function ImageWorkspace() {
   // - 'overwrite' → writes back to the source file (destructive, confirms)
   const [cropApplying, setCropApplying] = useState(false);
   async function handleApplyCrop(destination) {
-    if (!activeImage || !activeProductId || !settings.cropRect) return;
+    if (!activeImage || !activeProductId || !settings.sourceCropRect || processing || processingRunRef.current) return;
+    if (!cropMode || !cropPreview || cropFrameReadyUrl !== cropPreview.url) return;
+    const image = activeImage;
+    const productId = activeProductId;
+    const context = ensureEditorContext(image, productId);
+    const generation = activeEditorGenerationRef.current;
+    const cropSettings = settings;
     if (destination === 'overwrite') {
       const ok = window.confirm(
         'Overwrite the source image with the cropped version?\n\nThis rewrites the original file on disk — there\'s no undo.',
       );
       if (!ok) return;
     }
+    processingRunRef.current = true;
+    cropRunEditorKeyRef.current = activeEditorKeyRef.current;
     setCropApplying(true);
     try {
       if (destination === 'overwrite') {
@@ -157,7 +158,6 @@ export function ImageWorkspace() {
          * flips. Without this, a slider changed inside the 500 ms debounce
          * window before "Apply crop → overwrite" was stranded in latestDraft
          * and never written. */
-        const context = ensureEditorContext(activeImage, activeProductId);
         if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
         saveDebounceRef.current = null;
         try {
@@ -171,23 +171,25 @@ export function ImageWorkspace() {
           return;
         }
       }
+      if (!isCurrentContext(context, generation)) return;
       const res = await window.api.images.cropImage({
-        productId: activeProductId,
-        filepath: activeImage.filepath,
-        rect: settings.cropRect,
+        productId,
+        filepath: image.filepath,
+        imageId: image.id,
+        expectedContentHash: image.contentHash,
+        rect: cropSettings.sourceCropRect,
+        rotation: Number(cropSettings.rotation || 0),
         // v0.49.16: pre-extract rotation. Server applies sharp.rotate(straighten,
         // {background: white}) before resolving the rect against the rotated
         // bbox. Zero = skip (one less sharp pass).
-        straighten: Number(settings.cropStraighten || 0),
+        straighten: Number(cropSettings.cropStraighten || 0),
         destination,
       });
       // Successful commit — clear the rect + straighten, exit crop mode, refresh.
-      setSettings((s) => ({ ...s, cropRect: null, cropStraighten: 0 }));
+      if (!isCurrentContext(context, generation)) return;
+      setSettings((s) => ({ ...s, sourceCropRect: null, cropStraighten: 0, ...(destination === 'overwrite' ? { rotation: 0 } : {}) }));
       setCropMode(false);
-      await refreshWorkspaceImages(activeProductId);
-      if (activeProductIdRef.current !== activeProductId) return;
-      bumpProcessedTick();
-      useAppStore.getState().refreshProducts();
+      if (destination === 'overwrite') editorContextsRef.current.delete(context.identity);
       if (destination === 'overwrite') {
         addToast(`Cropped to ${res.outW}×${res.outH}px (source overwritten)`, 'success');
       } else if (res?.skipped) {
@@ -195,10 +197,22 @@ export function ImageWorkspace() {
       } else {
         addToast(`Cropped to ${res.outW}×${res.outH}px (added as new image)`, 'success');
       }
+      // The pixels are committed already. A failed view refresh must never
+      // invite retrying an overwrite against the newly cropped source.
+      try {
+        await refreshWorkspaceImages(productId);
+        if (activeProductIdRef.current !== productId) return;
+        bumpProcessedTick();
+        await useAppStore.getState().refreshProducts();
+      } catch (err) {
+        if (mountedRef.current && activeProductIdRef.current === productId) addToast(`Cropped, but the image list did not refresh: ${err.message}`, 'error');
+      }
     } catch (err) {
       addToast(`Crop failed: ${err.message}`, 'error');
     } finally {
-      setCropApplying(false);
+      processingRunRef.current = false;
+      cropRunEditorKeyRef.current = null;
+      if (mountedRef.current) setCropApplying(false);
     }
   }
 
@@ -236,6 +250,38 @@ export function ImageWorkspace() {
     activeEditorKeyRef.current = activeEditorKey;
     activeEditorGenerationRef.current += 1;
   }
+
+  const cropPreviewKey = `${activeEditorKey}::${activeEditorGenerationRef.current}::${settings.rotation || 0}::${settings.cropStraighten || 0}`;
+  const cropPreview = cropMode && cropPreviewState?.key === cropPreviewKey ? cropPreviewState : null;
+  useEffect(() => {
+    if (!cropMode || !activeImage) return undefined;
+    const context = ensureEditorContext(activeImage, activeProductId);
+    const generation = activeEditorGenerationRef.current;
+    let cancelled = false, url = null;
+    const timer = setTimeout(async () => {
+      try {
+        const result = await window.api.images.cropPreview({
+          productId: activeProductId, filepath: activeImage.filepath,
+          imageId: activeImage.id, expectedContentHash: activeImage.contentHash,
+          rotation: Number(settings.rotation || 0), straighten: Number(settings.cropStraighten || 0),
+          previewMaxEdge: 1024,
+          rect: { x: 0, y: 0, width: 1, height: 1 },
+        });
+        if (cancelled || !isCurrentContext(context, generation)) return;
+        url = URL.createObjectURL(new Blob([result.bytes instanceof Uint8Array ? result.bytes : new Uint8Array(result.bytes)], { type: 'image/png' }));
+        setCropPreviewState({ key: cropPreviewKey, url, outW: result.outW, outH: result.outH });
+        setSettings((s) => {
+          const ratio = parseAspectRatio(s.cropAspectRatio);
+          return ratio ? { ...s, sourceCropRect: reshapeCropRect(s.sourceCropRect, ratio, result.outW, result.outH) } : s;
+        });
+      } catch (err) {
+        if (!cancelled && isCurrentContext(context, generation)) addToast(`Crop preview failed: ${err.message}`, 'error');
+      }
+    }, 180);
+    return () => { cancelled = true; clearTimeout(timer); if (url) URL.revokeObjectURL(url); };
+    // Context identity/generation and transforms fully identify these pixels.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cropMode, cropPreviewKey]);
 
   function findWorkspaceImage(result, imageId) {
     return (Array.isArray(result) ? result : result?.images ?? [])
@@ -626,7 +672,7 @@ export function ImageWorkspace() {
   }
 
   async function handleApplyThis() {
-    if (!activeImage || processing || processingRunRef.current) return false;
+    if (!activeImage || processing || processingRunRef.current || cropApplying) return false;
     const image = activeImage;
     const productId = activeProductId;
     processingRunRef.current = true;
@@ -663,7 +709,7 @@ export function ImageWorkspace() {
   }
 
   async function handleApplyAll() {
-    if (images.length === 0 || processing || processingRunRef.current) return false;
+    if (images.length === 0 || processing || processingRunRef.current || cropApplying) return false;
     const runProductId = activeProductId;
     const runImages = [...images];
     processingRunRef.current = true;
@@ -836,7 +882,7 @@ export function ImageWorkspace() {
           type="button"
           className="segment ws-segment-icon"
           onClick={() => handleFlipActive('h')}
-          disabled={!activeImage || processing}
+          disabled={!activeImage || processing || cropApplying}
           title="Flip horizontally (mirror left ↔ right). Rewrites the source file on disk."
           aria-label="Flip horizontally"
         ><FlipIcon axis="h" />Flip H</button>
@@ -844,7 +890,7 @@ export function ImageWorkspace() {
           type="button"
           className="segment ws-segment-icon"
           onClick={() => handleFlipActive('v')}
-          disabled={!activeImage || processing}
+          disabled={!activeImage || processing || cropApplying}
           title="Flip vertically (mirror top ↕ bottom). Rewrites the source file on disk."
           aria-label="Flip vertically"
         ><FlipIcon axis="v" />Flip V</button>
@@ -918,9 +964,12 @@ export function ImageWorkspace() {
             onCropAspectChange={handleCropAspectChange}
             onApplyCrop={handleApplyCrop}
             onCancelCrop={handleCancelCrop}
-            cropApplying={cropApplying}
+            cropApplying={cropApplying && cropRunEditorKeyRef.current === activeEditorKey}
+            cropCommitBusy={cropApplying}
+            cropPreview={cropPreview}
+            onCropReady={setCropFrameReadyUrl}
             // v0.49.17: rotate buttons relocated from SettingsPanel.
-            onRotationChange={(deg) => setSettings((s) => ({ ...s, rotation: ((Math.round(Number(deg) / 90) * 90) % 360 + 360) % 360 }))}
+            onRotationChange={(deg) => { if (!processingRunRef.current) setSettings((s) => ({ ...s, rotation: ((Math.round(Number(deg) / 90) * 90) % 360 + 360) % 360 })); }}
           />
           <SettingsPanel
             settings={settings}
@@ -928,7 +977,8 @@ export function ImageWorkspace() {
             onApplyThis={handleApplyThis}
             onApplyAll={handleApplyAll}
             totalImages={images.length}
-            processing={processing}
+            processing={processing || cropApplying}
+            cropLocked={cropApplying && cropRunEditorKeyRef.current === activeEditorKey}
             hasImage={!!activeImage}
             watermarkSrc={watermarkSrc}
             onUploadWatermark={handleUploadWatermark}
@@ -953,7 +1003,7 @@ export function ImageWorkspace() {
         // inside the Lightbox. After the IPC returns, we refresh the
         // workspace's image list so the strip + canvas show the new
         // pixels too.
-        productId={activeProductId}
+        productId={processing || cropApplying ? null : activeProductId}
         onImageMutated={() => {
           const productId = activeProductId;
           // v0.1.28: this refresh was uncaught, so a failure left the strip stale

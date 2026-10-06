@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Input, Select } from '../../components/ui.jsx';
+import { Button, Input, Select } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { priceEntry, formatPriceEntry } from '../../lib/prices.js';
@@ -30,6 +30,9 @@ export function CostCalculator() {
   const [products, setProducts] = useState([]);
   const [productId, setProductId] = useState('');
   const [productSearch, setProductSearch] = useState('');
+  const [costState, setCostState] = useState('idle');
+  const [costError, setCostError] = useState('');
+  const [costRefresh, setCostRefresh] = useState(0);
   const [costData, setCostData] = useState(null); // { latest, avg3mo, avg12mo, latestPoId, ... }
   const [landedCostUsd, setLandedCostUsd] = useState('');
   const [targetMarginPct, setTargetMarginPct] = useState('40');
@@ -46,6 +49,8 @@ export function CostCalculator() {
     setProducts([]);
     setProductId('');
     setCostData(null);
+    setCostState('idle');
+    setCostError('');
     setLandedCostUsd('');
     if (!activeCompanyId) return;
     window.api.products.list(activeCompanyId, {})
@@ -60,38 +65,42 @@ export function CostCalculator() {
       });
   }, [activeCompanyId, addToast]);
 
-  // When user picks a product, fetch its landed cost cache and use the
-  // latest as the default landed cost.
+  // Product selection resets manual input; a PO event refreshes history only.
+  useEffect(() => {
+    manualCostEditRef.current = false;
+    setCostData(null);
+    setLandedCostUsd('');
+  }, [productId]);
+
   useEffect(() => {
     const request = ++costRequestRef.current;
     const companyRequest = productRequestRef.current;
-    manualCostEditRef.current = false;
-    if (!productId) {
-      setCostData(null);
-      setLandedCostUsd('');
-      return;
-    }
-    setCostData(null);
-    setLandedCostUsd('');
+    setCostError('');
+    if (!productId) { setCostState('idle'); return undefined; }
+    setCostState('loading');
     window.api.purchaseOrders.getProductCost(productId)
       .then((c) => {
         if (request !== costRequestRef.current || companyRequest !== productRequestRef.current) return;
         setCostData(c);
-        if (!manualCostEditRef.current && c?.latestLandedCostUsd != null) {
-          setLandedCostUsd(c.latestLandedCostUsd.toFixed(4));
-        } else if (!manualCostEditRef.current) {
-          setLandedCostUsd('');
-        }
+        setCostState(c ? 'ready' : 'empty');
+        if (!manualCostEditRef.current) setLandedCostUsd(c?.latestLandedCostUsd != null ? c.latestLandedCostUsd.toFixed(4) : '');
       })
-      .catch(() => {
+      .catch((err) => {
         if (request !== costRequestRef.current || companyRequest !== productRequestRef.current) return;
-        // v0.1.28: clear the landed cost too. Leaving it meant the panel showed
-        // the PREVIOUS product's cost next to this product's data, and the
-        // suggested retail was derived from it.
         setCostData(null);
+        setCostState('error');
+        setCostError(err.message);
         if (!manualCostEditRef.current) setLandedCostUsd('');
       });
-  }, [productId]);
+    return () => { costRequestRef.current += 1; };
+  }, [productId, costRefresh]);
+
+  useEffect(() => {
+    if (!productId || !window.api?.events?.onCatalogChanged) return undefined;
+    return window.api.events.onCatalogChanged((event) => {
+      if (event?.kind === 'purchaseOrder' && (!event.companyId || event.companyId === activeCompanyId)) setCostRefresh((value) => value + 1);
+    });
+  }, [productId, activeCompanyId]);
 
   // Two-way binding between margin% and retail$. Whichever field the
   // user typed in last drives the other.
@@ -127,13 +136,12 @@ export function CostCalculator() {
   }, [products, productSearch]);
 
   const selectedProduct = productId ? products.find((p) => p.id === productId) || null : null;
-  const margin = Number(targetMarginPct) || 0;
   const cost = Number(landedCostUsd) || 0;
   const retail = Number(retailUsd) || 0;
   const profit = retail - cost;
   // Nothing to report until there is both a cost and a price: before that,
   // "Realized margin 40.00%" just echoed the target back.
-  const priced = cost > 0 && retail > 0;
+  const priced = Number.isFinite(cost) && Number.isFinite(retail) && cost > 0 && retail > 0;
 
   if (!activeCompanyId) {
     return (
@@ -192,7 +200,9 @@ export function CostCalculator() {
               })}
             </div>
           )}
-          {productId && !costData && (
+          {productId && costState === 'loading' && <p className="section-hint costcalc__note" role="status">Loading received-PO cost history…</p>}
+          {productId && costState === 'error' && <div className="costcalc__note" role="alert"><p>{costError}</p><Button onClick={() => setCostRefresh((value) => value + 1)}>Retry</Button></div>}
+          {productId && costState === 'empty' && (
             <p className="section-hint costcalc__note">
               No received-PO cost history for this product yet — enter the landed cost manually below.
             </p>
@@ -250,7 +260,7 @@ export function CostCalculator() {
 
           <div className="costcalc__summary">
             <CostStat label="Profit per unit" value={priced ? fmtUsd(profit) : '—'} tone={priced ? (profit >= 0 ? 'emerald' : 'rose') : null} />
-            <CostStat label="Realized margin" value={priced ? `${margin.toFixed(2)}%` : '—'} />
+            <CostStat label="Realized margin" value={priced ? `${((profit / retail) * 100).toFixed(2)}%` : '—'} />
             <CostStat
               label="Markup over cost"
               value={priced ? `${(((retail - cost) / cost) * 100).toFixed(2)}%` : '—'}

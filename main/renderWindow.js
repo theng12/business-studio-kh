@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { BrowserWindow } = require('electron');
+const { writeUniqueFile } = require('./util/exclusiveFile');
 
 /**
  * v0.1.21: render offscreen HTML and hand the window to `task`.
@@ -188,6 +189,7 @@ async function captureImage(win, outputPath, options = {}) {
     bytes = options.format === 'jpeg' ? image.toJPEG(options.quality || 92) : image.toPNG();
   }
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+  if (options.unique) return writeUniqueFile(path.dirname(outputPath), path.basename(outputPath), bytes);
   await fs.promises.writeFile(outputPath, bytes);
   return outputPath;
 }
@@ -207,8 +209,9 @@ async function toImages(count, next, options = {}, onDone = null) {
   await withReusedWindow(options, async (render) => {
     for (let i = 0; i < count; i += 1) {
       const { html, outputPath } = await next(i);
-      written.push(await render(html, (win) => captureImage(win, outputPath, options)));
-      if (onDone) onDone(i, outputPath);
+      const actualPath = await render(html, (win) => captureImage(win, outputPath, options));
+      written.push(actualPath);
+      if (onDone) onDone(i, actualPath);
     }
   });
   return written;

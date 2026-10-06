@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
 const { getCallerUserId } = require('./_util');
-const { brandDir, companyDir } = require('../util/assetPath');
+const { brandDir, companyDir, productAssetDir } = require('../util/assetPath');
 
 // Late-required to break circular dependencies.
 let _imageManager;
@@ -112,8 +112,8 @@ function create({ companyId, name, color, icon }) {
  * Each company that holds this brand has at most one such dir, but the
  * brand row only stores company_id, so we just look up the owning
  * company's slug. Rewrites every product_images.filepath that lives
- * under the old prefix, then physically moves the dir. Disk move runs
- * after commit; boot recovery handles partial failures.
+ * under the old prefix. Ownership is checked before any changes; the
+ * folder mover rolls back if either the filesystem or DB transaction fails.
  */
 /**
  * v0.17.2: optimistic concurrency — see products.update for the
@@ -161,6 +161,49 @@ function update(id, patch) {
     if (company) companySlug = companyDir(company);
   }
 
+  if (nameChanged && companySlug) {
+    // Match products' case-insensitive, cross-company folder collision rule.
+    // A whole brand folder is moved, so even a brand with no photos owns it.
+    const db = getDb();
+    const companies = db.prepare('SELECT id, name FROM companies').all()
+      .filter((c) => companyDir(c).toLowerCase() === companySlug.toLowerCase());
+    const nextBrand = { ...existing, name: trimmedNewName };
+    const owners = new Map();
+    const renamedProducts = [];
+    for (const company of companies) {
+      const brandRows = db.prepare('SELECT id, name FROM brands WHERE company_id = ?').all(company.id);
+      for (const brand of brandRows) {
+        if (brand.id === id) continue;
+        const slug = brandDir(brand).toLowerCase();
+        if (slug === newBrandSlug.toLowerCase() || slug === oldBrandSlug.toLowerCase()) {
+          throw new Error(`Brand "${trimmedNewName}" would share an image folder with "${brand.name}". Choose a distinguishing brand name.`);
+        }
+      }
+      const brandById = new Map(brandRows.map((b) => [b.id, b.id === id ? nextBrand : b]));
+      for (const product of db.prepare('SELECT id, sku, brand_id FROM products WHERE company_id = ?').all(company.id)) {
+        const dir = productAssetDir(company, brandById.get(product.brand_id) ?? null, product).toLowerCase();
+        const list = owners.get(dir) ?? [];
+        list.push(product);
+        owners.set(dir, list);
+        if (product.brand_id === id) renamedProducts.push({ product, dir });
+      }
+    }
+    // Legacy rows can point outside their canonical product folder. A whole
+    // folder move must not take a different owner's currently stored photo.
+    const prefixes = [oldBrandSlug, newBrandSlug].map((slug) => `${companySlug}/${slug}/`.toLowerCase());
+    const foreignImages = db.prepare(`SELECT pi.filepath FROM product_images pi
+      JOIN products p ON p.id = pi.product_id WHERE p.brand_id IS NULL OR p.brand_id <> ?`).all(id);
+    for (const image of foreignImages) {
+      if (prefixes.some((prefix) => image.filepath?.toLowerCase().startsWith(prefix))) {
+        throw new Error(`Brand image folder contains another product's photo: ${image.filepath}. No photos were moved.`);
+      }
+    }
+    for (const { product, dir } of renamedProducts) {
+      const clash = owners.get(dir).find((p) => p.id !== product.id);
+      if (clash) throw new Error(`SKU "${product.sku}" would share an image folder with "${clash.sku}" after this brand rename. Choose a distinguishing SKU or brand name.`);
+    }
+  }
+
   const sets = [];
   const params = { id, updatedAt: Date.now() };
   if ('name' in patch && patch.name?.trim()) { sets.push('name = @name'); params.name = patch.name.trim(); }
@@ -190,20 +233,16 @@ function update(id, patch) {
         .all(id);
       const upd = db.prepare('UPDATE product_images SET filepath = ? WHERE id = ?');
       for (const r of rows) {
-        if (r.filepath && r.filepath.startsWith(oldPrefix)) {
+        if (r.filepath && r.filepath.toLowerCase().startsWith(oldPrefix.toLowerCase())) {
           upd.run(`${newPrefix}${r.filepath.slice(oldPrefix.length)}`, r.id);
         }
       }
     }
   });
-  tx();
-
   if (nameChanged && companySlug && oldBrandSlug !== newBrandSlug) {
-    try {
-      getImageManager().moveBrandDirEverywhere([companySlug], oldBrandSlug, newBrandSlug);
-    } catch (err) {
-      process.stderr.write(`[brands.update] moveBrandDirEverywhere failed (${oldBrandSlug} → ${newBrandSlug}): ${err.message}\n`);
-    }
+    getImageManager().moveBrandDirEverywhere([companySlug], oldBrandSlug, newBrandSlug, tx);
+  } else {
+    tx();
   }
 
   // Only the keys that changed (diffPatch drops the rest; a no-op logs nothing).

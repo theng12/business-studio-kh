@@ -9,6 +9,7 @@ export function SettingsPanel({
   onApplyAll,
   totalImages,
   processing,
+  cropLocked = false,
   hasImage,
   watermarkSrc,
   onUploadWatermark,
@@ -45,6 +46,7 @@ export function SettingsPanel({
   return (
     <aside className="ws-panel" aria-label="Processing settings">
       <div className="ws-panel__scroll">
+        <fieldset disabled={cropLocked} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
         <Section title="Background">
           <label className="toggle">
             <input
@@ -333,6 +335,7 @@ export function SettingsPanel({
             </>
           ) : null}
         </Section>
+        </fieldset>
       </div>
 
       {/* UI pass, 2026-10: one primary (Apply), one outlined secondary. The

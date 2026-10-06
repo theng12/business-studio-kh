@@ -1,7 +1,7 @@
 # HANDOFF — Business Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.91, 2026-10-06**. If it disagrees with the
+that produced it. Current for the **0.1.92 candidate, 2026-10-06**; repository integration remains pending. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -9,7 +9,7 @@ code, the code wins — and then fix this file in the same change.
 | | |
 |---|---|
 | App | Business Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.91** — Catalog correctness and editing workflow improvements; arm64 DMG in the current owner's `dist/`. Prior installed app is preserved. Source integrated through the Catalog workflow PR; see Git history for its merge commit. |
+| Current release | **0.1.92 candidate** — all eight batches, reviews, local and packaged checks, installed-app smoke, build and DMG integrity are verified. PR/merge, owner checkout sync and cleanup remain pending. No live-data test was performed. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top `CHANGELOG` entry in `renderer/components/WhatsNewModal.jsx`. A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into the owner's `$HOME/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` (the build worktree's own `_trash/` is not the place — it was erased with the worktree on 2026-10-02). |
@@ -29,32 +29,60 @@ Owner requested the complete Catalog audit fixes and workflow improvements. The 
 - This session's owner checkout is `$HOME/Developer/media-studio-kh`; managed build worktree is `$HOME/.codex/worktrees/catalog-workflow/media-studio-kh`. Historical `$HOME/` paths below belong to the previous Mac; use actual current paths.
 - Installed app is unchanged by this development session; the verified arm64 DMG is copied into the current owner's `dist/`. No tags/releases/publishing.
 
+
+## Whole-app improvements — 0.1.92 candidate (2026-10-06)
+
+- All eight confirmed audit batches are implemented and independently reviewed PASS. The compact
+  checkpoint and evidence list is in [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md). Implementation started at `e3af16d`; final app-source checkpoint is `d3d43a4`; branch `codex/app-improvements`; worktree
+  `$HOME/.codex/worktrees/app-improvements/media-studio-kh`.
+- Verification: `release-check.log` 1379/1379; `integrated-native.log` and post-dist
+  `release-native-postdist.log` each 240/240; production build succeeded; both release audit
+  reports show zero vulnerabilities; UI crawl 145/145. Rendered crop, Overlay (1100/1400/1920px),
+  PO save/focus, image, render, client/server and webclient checks passed. Native output includes
+  an actual A4 PDF with all three fixture SKUs and exact Social preview/export pixel matches.
+- The work reuses the existing save/revision queues, locks, image importer, unique-file writer and
+  renderer. No schema bump or new runtime dependency. `source-map-js@1.2.2` is dev-only; the scoped
+  `@electron/get` override pins `global-agent`. No provider spending, owner-data mutation or hosted
+  Actions were used.
+- Crop now stores source coordinates additively in per-image JSON; legacy `cropRect` retains canvas
+  semantics. The targeted reviews also corrected rename rollback, SVG path compatibility, queued PO
+  reverts, Product overwrite identity, stale Company completion and crop result reporting.
+- Candidate DMG `Business Studio KH-0.1.92-arm64.dmg` passed integrity verification and was copied to
+  the owner's `dist/`. SHA-256:
+  `10045fb4b04f08fb28fa616486abdb30ecffa64df2e869b83bb70855c135f765`. Pruning retained 0.1.91
+  and 0.1.92; older DMGs were moved to the owner's `_trash/old-dmgs/`.
+- Packaged client/server verification passed at probe checkpoint `77ee13a`. The isolated installed
+  app smoke passed: ready state, database ready, window shown, normal quit, and visible version
+  0.1.92. The previous 0.1.32 app was preserved under `_trash/installed-apps/`; no live-data test.
+- **Pending:** PR/merge, owner checkout synchronization and final cleanup. Do not call this shipped
+  until those integration steps are recorded complete.
+
 ## THE WORKING LOOP
 
-### Current planning work — 2026-10-06
+### Current release work — 2026-10-06
 
-The owner requested a distributed whole-app audit and per-area fix planning after Catalog 0.1.91. The current roadmap is [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md), with four area reports under `docs/tasks/app-audit-2026-10-06/`. This is documentation only: the application remains 0.1.91, implementation has not started, and the existing DMG/installed app are unchanged. Start with its file/company boundary batch, then Product Library save/image identity and AI lifecycle reliability. Do not describe these planned fixes as shipped.
+The owner authorized eight whole-app fix batches after Catalog 0.1.91. All eight are implemented and independently reviewed PASS. For the current verified candidate and evidence, see [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md). The final app-source checkpoint is `d3d43a4`; the final packaged-probe checkpoint is `77ee13a`. Packaged client/server verification, installed-app smoke, DMG integrity and local verification passed. PR/merge, owner checkout synchronization and cleanup remain pending; do not call the candidate shipped before those steps succeed.
 
-Audit baseline: fresh build, isolated UI crawl 145/145 without console errors; scoped suites 31/38/58 pass; mocked current-source checks and actual component-harness checks corroborate the listed edge cases. Current full/production dependency audits each report zero vulnerabilities. The previous release's full 1248/212 test counts are historical, not a new full-suite run. Local evidence is in the current owner's ignored `graphify-out/app-audit-2026-10-06/`. No paid provider calls, live-data mutations or hardware readiness claims. Closed decisions stay closed.
+Current candidate evidence: `npm run check` 1379 pass; `npm run test:native` 240 pass (also rerun after dist); clean-profile UI crawl 145/145; production build and both dependency audits passed, with zero reported vulnerabilities. The packaged probe passed after selectors were updated to match the current UI, and the isolated installed app reached ready state with version 0.1.92 visible. Evidence is in `graphify-out/app-improvements/`. No provider calls or live-data mutations; physical devices remain unverified. Closed decisions stay closed.
 
-Replace `<wt>` with a worktree that has `node_modules` installed — this project's build worktree is
-`$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh`. Order matters.
+Replace `<wt>` with the dependency-installed build worktree
+`$HOME/.codex/worktrees/app-improvements/media-studio-kh`. Order matters.
 
 | # | Command | Note / footgun |
 |---|---|---|
 | 1 | `cd <wt> && git switch main && git pull --ff-only` | Start from merged `main`. |
 | 2 | `git switch -c codex/<topic>` | One branch per change or release. |
-| 3 | `npm run check` | `npm run lint && npm test`. **1217 pass** at 0.1.90 (1216 at 0.1.89). Four eslint warnings are pre-existing (unused disable directives in three unrelated test files and `main/util/fileTrash.js`); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flakes, two kinds:** 0–2 tests can fail on a run, and the honest response is always the same — re-run before believing it. (1) Several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output); seen 2026-09-26, clean in four follow-up runs. (2) The client/overlay timeout tests in `test/clientRpc.test.js` ("overlay reconciliation bounds hanging HTTP status reads", the `body` subtest) are wall-clock sensitive and failed twice on a loaded machine during 0.1.85, then passed in three consecutive full runs with no code change. Neither kind has ever reproduced on a quiet re-run. |
-| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **211 pass** at 0.1.89 and 0.1.90. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
+| 3 | `npm run check` | `npm run lint && npm test`. **1379 pass** at 0.1.92. Four eslint warnings are pre-existing (unused disable directives in three unrelated test files and `main/util/fileTrash.js`); it was five until 0.1.80 removed two dead imports in `main/socialGridRenderer.js`. **Known flakes, two kinds:** 0–2 tests can fail on a run, and the honest response is always the same — re-run before believing it. (1) Several DB tests pick a free port by binding `:0`, closing it and rebinding the number, so under parallel load another test can win the race (`EADDRINUSE` in the output); seen 2026-09-26, clean in four follow-up runs. (2) The client/overlay timeout tests in `test/clientRpc.test.js` ("overlay reconciliation bounds hanging HTTP status reads", the `body` subtest) are wall-clock sensitive and failed twice on a loaded machine during 0.1.85, then passed in three consecutive full runs with no code change. Neither kind has ever reproduced on a quiet re-run. |
+| 4 | `npm run test:native` | Electron-ABI DB tests. **Required for any DB change** — plain `node --test` can silently skip them. **240 pass** at 0.1.92, including the post-dist rerun. **A new native test file does not run until it is added to this list in `package.json`** — 0.1.78 added `test/overlayPriceTokens.test.js`, which reported `skip` under `npm test` until it was listed. |
 | 4b | `node scripts/probe-webclient-context.js` | Real Chromium against `webclient/index.html` with loopback fixtures. **Any web-viewer change should run this** — it is the only check that loads the real page. Not in `package.json`; needs `env -u ELECTRON_RUN_AS_NODE`. |
 | 5 | `npm run check:images`, `check:render`, `check:client-server` | Electron probes. **This shell exports `ELECTRON_RUN_AS_NODE=1` globally**, so GUI probes need `env -u ELECTRON_RUN_AS_NODE npx electron …` or they behave as Node and fail. |
 | 6 | `env -u ELECTRON_RUN_AS_NODE npx electron . --remote-debugging-port=9333 --user-data-dir=/tmp/mskh-ui/userdata` | Launch for the crawl. **Footgun:** with no `config.json` in that user-data dir the app uses the owner's real data folder. Write `/tmp/mskh-ui/userdata/config.json` first: `{"dataDir":"/tmp/mskh-ui/data","firstLaunchHandled":true}`. |
-| 7 | `node scripts/probe-ui-crawl.js --port 9333 --out /tmp/mskh-ui/shots` | **145/145 at 0.1.89** (clean profile, no console errors; the 0.1.89 redesign needed the crawl's selectors updated — a step that fails after a UI change is checked by hand in the live app before it is called staleness); the only check that exercises real React screens. It creates companies and edits products — never point it at real data. **Run it against a fresh `--user-data-dir` and data folder**: re-running it over a previous crawl's profile flaked once on the label designer ("timed out waiting for the designer canvas"), and the clean re-run passed in full — so a failure here is not a finding until a clean-profile run reproduces it. Rebuild the renderer (`npm run build`) before a crawl that checks the shipped version: the crawl reads the *built* `dist-renderer` while the expected version comes from `package.json`, so a stale bundle fails "What's new shows the shipped version" on a correct tree. |
+| 7 | `node scripts/probe-ui-crawl.js --port 9333 --out /tmp/mskh-ui/shots` | **145/145 at 0.1.92** (clean profile, no console errors; the 0.1.89 redesign needed the crawl's selectors updated — a step that fails after a UI change is checked by hand in the live app before it is called staleness); the only check that exercises real React screens. It creates companies and edits products — never point it at real data. **Run it against a fresh `--user-data-dir` and data folder**: re-running it over a previous crawl's profile flaked once on the label designer ("timed out waiting for the designer canvas"), and the clean re-run passed in full — so a failure here is not a finding until a clean-profile run reproduces it. Rebuild the renderer (`npm run build`) before a crawl that checks the shipped version: the crawl reads the *built* `dist-renderer` while the expected version comes from `package.json`, so a stale bundle fails "What's new shows the shipped version" on a correct tree. |
 | 8 | Version bump | `npm version <next> --no-git-tag-version` (updates `package.json` + `package-lock.json`), then the top `WhatsNewModal.jsx` entry — plain-text bullets, `NEW —` / `FIX —` / `POLISH —` / `Internal —`. |
 | 9 | `npm run dist` | **One DMG (arm64) since 2026-09-27.** `predist` = `webclient:bundle` + `install:sharp` (both arches' sharp binaries stay installed so `dist:x64` still works); `postdist` = `native:host` (restores dev bindings). Emits the DMG plus `dist/mac-arm64/`. **A stale `dist/mac/` (Intel) from an older build may still be lying there — it is not this release.** |
 | 9b | `npm run dmgs:prune` | Keeps the newest two releases and **moves** older DMGs to `_trash/old-dmgs/` (never deletes). With one DMG per release that is two files, not four. Dry run: `npm run dmgs:prune:dry`. Theng's rule from 2026-09-26; pinned by `test/dmgRetention.test.js`. |
-| 9c | Copy the DMG into the owner's `dist/` | `$HOME/Developer/media-studio-kh/dist` is where he looks; `npm run dist` only fills the worktree. Verify with `shasum -a 256`. |
-| 10 | Install | Quit the running app, copy the app (or mount the DMG) to `/Applications`, then `xattr -dr com.apple.quarantine "/Applications/Business Studio KH.app"` (unsigned build). Move the replaced app into the owner's `_trash/installed-apps/` rather than deleting it. **Then actually launch it — with `env -u ELECTRON_RUN_AS_NODE`** (see the rule below); `ditto` is safer than `cp -R` for an app bundle. |
+| 9c | Copy the DMG into the owner's `dist/` | `$HOME/Developer/media-studio-kh/dist` is where he looks; `npm run dist` only fills the worktree. Verify with `shasum -a 256`. **Done for 0.1.92; hash matches the verified worktree DMG.** |
+| 10 | Install | Quit the running app, copy the app (or mount the DMG) to `/Applications`, then `xattr -dr com.apple.quarantine "/Applications/Business Studio KH.app"` (unsigned build). Move the replaced app into the owner's `_trash/installed-apps/` rather than deleting it. **Then actually launch it — with `env -u ELECTRON_RUN_AS_NODE`** (see the rule below); `ditto` is safer than `cp -R` for an app bundle. **0.1.92 isolated launch and sidebar version check passed.** |
 | 11 | Ship | `git add -A`, commit, `git push -u origin codex/<topic>`, `gh pr create`, then switch the worktree OFF the topic branch (`git switch worktree/scratch`), then `gh pr merge <number> --merge` **without `--delete-branch`**, then delete the branch yourself (step 12). See the rule below — `--delete-branch` erased this worktree on 2026-10-02. |
 | 12 | Record | Branch name + SHA into the owner's `$HOME/Developer/media-studio-kh/_trash/README-media-studio-kh-branch-log.md` **before** deleting it (`git push origin --delete codex/<topic>` and `git branch -d codex/<topic>`); update this file with the new version/commit and anything newly learned. |
 
@@ -65,13 +93,13 @@ test profiles out of Git — they are gitignored on purpose.
 
 | What | Where |
 |---|---|
-| Owner's checkout | `$HOME/Developer/media-studio-kh` (on `main`, **no** `node_modules`) |
-| Build worktree | `$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh` (deps installed) |
+| Owner's checkout | `$HOME/Developer/media-studio-kh` (on `main`; `node_modules` is present) |
+| Build worktree | `$HOME/.codex/worktrees/app-improvements/media-studio-kh` (deps installed) |
 | Live user data | `~/Pictures/Business Studio KH` — the real catalog + `assets/`. Never write here from a test. |
 | App config + logs | `~/Library/Application Support/Business Studio KH/` (`config.json`, `crash.log`); legacy data at `userData/data` |
 | Build inputs | `main/` (CommonJS), `renderer/` (ESM), `webclient/index.html` → generates `main/webclientHtml.js` via `npm run webclient:bundle` (edit the HTML, never the generated file) |
 | Build outputs | `dist/` (DMGs, `mac-arm64/`, `mac/`), `dist-electron/`, `dist-renderer/` — all gitignored |
-| Status / reference docs | Current as of 0.1.90 (docs pass 2026-10-02): `docs/Business Studio KH Project Status.md` (short status page), `README.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `AI_INTEGRATION.md`, `SIGNING.md`, `docs/HARDWARE_VALIDATION_RUNBOOK.md`, `docs/UI_GUIDE.md`. `docs/PICK_AND_PACK_PLAN.md` is a plan awaiting the owner's review (nothing built). |
+| Status / reference docs | Current for 0.1.92 candidate (docs pass 2026-10-06): `docs/Business Studio KH Project Status.md` (short status page), `README.md`, `MEDIA_STUDIO_KH_BRIEFING.md`, `AI_INTEGRATION.md`, `SIGNING.md`, `docs/HARDWARE_VALIDATION_RUNBOOK.md`, `docs/UI_GUIDE.md`. `docs/PICK_AND_PACK_PLAN.md` is a plan awaiting the owner's review (nothing built). |
 | Archive | `docs/archive/` — dated audits, completed plans (`plans/`, formerly `docs/superpowers/plans/`), the old SDD ledger (`progress.md`), the portable *_HANDOFF specs for other projects, and the long 0.1.34–0.1.72 status history. Historical only; `docs/archive/README.md` lists each. |
 | Reference app | `~/Developer/label-studio-kh` — the public sibling app whose designer interaction model this app copies. Another repo: read only. |
 
@@ -133,7 +161,7 @@ Each of these has already burned a session. They are instructions, not backgroun
 ## DO NOT TOUCH
 
 - **Other repositories**, especially `~/Developer/label-studio-kh` (read-only reference) and any other app's checkout.
-- **Other sessions' worktrees** under `$HOME/.codex/worktrees/`. Check `git worktree list` first; only the `workspace-concurrency/media-studio-kh` one belongs to this project.
+- **Other sessions' worktrees** under `$HOME/.codex/worktrees/`. Check `git worktree list` first; the active `app-improvements/media-studio-kh` worktree belongs to this release.
 - **The owner's live data** — `~/Pictures/Business Studio KH`, `~/Library/Application Support/Business Studio KH`, and any `*.iskhbackup` / `*.iskhbundle`. Read-only observation only, and only when asked.
 - **`_trash/`** (gitignored, owner's territory) and the install backup at `/tmp/mskh-install-backup/`.
 - **Hosted GitHub compute** — Actions stays disabled.
@@ -142,11 +170,11 @@ Each of these has already burned a session. They are instructions, not backgroun
 
 ## OPEN / IN FLIGHT
 
-At 0.1.91 nothing is mid-implementation. The honest gaps:
+At the 0.1.92 candidate, implementation, reviews, local suites, rendered UI/output, packaged client/server probe, installed-app smoke, build, audits, DMG copy and integrity are verified. PR/merge, owner checkout sync and cleanup remain pending. Physical-device checks and explicitly deferred optional work remain separate from the eight audit batches.
 
 | Gap | State |
 |---|---|
-| **0.1.87 audit leftovers (known, not done)** | Each was found, checked and deliberately left: (1) ~~brand icons overwrote each other~~ — fixed in 0.1.88 (owner said yes 2026-10-02: new icons claim a free `<slug>-N` slot, never overwrite; replaced icons are left in place); (2) product pairs that ALREADY share a folder by case (created before 0.1.87) are not migrated, and restoring one of them while the other exists is refused; (3) the boot asset-recovery sweep (`main/db/_assetRecovery.js`) still lists every product folder on every launch — gating it needs a renumber-in-progress marker; (4) reframe / crop / auto-enhance previews still render at full resolution as PNG (the overlay preview's `maxPx` approach would fix it); (5) client-mode images still revalidate on every mount (`no-store`, pinned by `test/imageTransport.test.js` for token isolation) — thumbnails made each one small, not fewer; (6) client-mode PNG/JPEG label export still opens one window per label (`main/client/index.js`); (7) AI Studio's selected source photo is remembered by path, so after a reorder elsewhere it points at whatever is now in that slot; (8) two product-panel saves that overlap (one taking > 500 ms) still conflict — shown cleanly now; the real fix is moving ProductForm onto `lib/latestSaveQueue.js`. |
+| **0.1.87 audit leftovers (known, not done)** | Each was found, checked and deliberately left: (1) ~~brand icons overwrote each other~~ — fixed in 0.1.88 (owner said yes 2026-10-02: new icons claim a free `<slug>-N` slot, never overwrite; replaced icons are left in place); (2) product pairs that ALREADY share a folder by case (created before 0.1.87) are not migrated, and restoring one of them while the other exists is refused; (3) the boot asset-recovery sweep (`main/db/_assetRecovery.js`) still lists every product folder on every launch — gating it needs a renumber-in-progress marker; (4) reframe / auto-enhance previews still render at full resolution as PNG; crop source references are now capped1024px while retaining source coordinate dimensions; (5) client-mode images still revalidate on every mount (`no-store`, pinned by `test/imageTransport.test.js` for token isolation) — thumbnails made each one small, not fewer; (6) client-mode PNG/JPEG label export still opens one window per label (`main/client/index.js`); (7) AI Studio's selected source photo is remembered by path, so after a reorder elsewhere it points at whatever is now in that slot; (8) product-panel overlapping saves were fixed in0.1.92 with `lib/latestSaveQueue.js`, advancing revisions and guarded navigation. |
 | 0.1.87 not proven on the second Mac | Thumbnails over the multi-Mac link are covered by `test/thumbServer.test.js` and the loopback `check:client-server` probe, not by a real client Mac over Tailscale. First thing to look at on the brother's/second Mac: the Library grid should fill noticeably faster. |
 | Web-viewer HTTPS | **Declined by Theng on 2026-09-27 — not a gap, do not re-raise (AGENTS.md §25.4).** *"can i just not use the https?"* — yes: the only thing it buys is `navigator.share` (the iOS share sheet, i.e. one-tap Save to Photos). Without it the viewer says "Open image to save" and the picture opens full-screen for press-and-hold → Save Image / Download image, which reaches Photos or the gallery anyway; batch zips, Files downloads, reframe, overlay, AI and everything else are unaffected. Over Tailscale the transport is already encrypted by WireGuard (the honest caveat is a shared Wi-Fi LAN, where HTTP is visible to that network). The helper `scripts/setup-web-https.js` and its tests stay — if he ever changes his mind, the runbook is: `node scripts/setup-web-https.js`, which needs (1) the **standalone** Tailscale build rather than the Mac App Store one, whose sandboxed extension never answers `set-serve-config` and hangs instead of failing (quit Tailscale, delete the app, empty the Trash, **reboot**, reinstall from tailscale.com/download/mac; never keep both — the swap was deliberately left to him because it removes his VPN and needs a reboot), and (2) HTTPS certificates enabled once for the tailnet in the admin console (DNS → HTTPS Certificates → Enable), which needs his browser login. |
 | **Blob press-and-hold is unproven, and the whole HTTP save path leans on it** | On plain HTTP the viewer saves by opening the picture full-screen and asking the user to press and hold. Every part of that is verifiable in code except the one that matters: whether the mobile browser offers its save/download item for an `<img>` whose `src` is a `blob:` URL. Neither the iPhone/iPad nor the brother's Android phone has been watched doing it (he sent a screenshot of the sheet, not of the save). If it fails, the fix is to serve the asset with a short-lived signed URL so the lightbox holds a real URL. |
@@ -169,7 +197,7 @@ At 0.1.91 nothing is mid-implementation. The honest gaps:
 | Docs reconciled 2026-10-02 (0.1.90) | README, the briefing, the status page, AI_INTEGRATION, SIGNING and the hardware runbook were re-checked against the code at 0.1.90, and the dated audits, plans, specs and the long status history moved to `docs/archive/`. The status page is now short and points here rather than repeating this file. If a doc drifts again, fix it in the change that caused it — the current truth for versions/commands is this file. |
 | Pick & Pack plan | `docs/PICK_AND_PACK_PLAN.md` (2026-09-28) — orders, packing evidence, returns. **Awaiting the owner's review; nothing is built.** Do not start it without his go-ahead. |
 | `docs/HARDWARE_VALIDATION_RUNBOOK.md` | Still accurate ("not performed", re-checked 2026-10-02); it now also lists the phone-viewer saves (iOS and the brother's Android) and client thumbnails. Filling its results table is the deliverable when the owner has the hardware. |
-| Owner decisions outstanding | Independent review, a signing purchase, real-data migration — all authorization-gated. Public distribution and licensing are closed decisions (AGENTS.md §25.3). |
+| Owner decisions outstanding | Signing purchase and real-data migration remain authorization-gated. Public distribution and licensing are closed decisions (AGENTS.md §25.3). |
 
 ## SECRETS
 

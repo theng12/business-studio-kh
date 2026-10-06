@@ -131,7 +131,7 @@ test('workspace handlers retain the selected image row across concurrent image c
     const { handlers, addProduct, addImage } = fixture();
     const product = addProduct('SAVE-REMOVED');
     const image = addImage(product, 0, 'hash-removed');
-    productImages.remove(product.id, image.filepath);
+    productImages.remove(product.id, productImages.listByProduct(product.id).find((row) => row.filepath === image.filepath).id);
 
     assert.throws(
       () => handlers.get('workspace:saveSettings')(identityPayload(product, image, { brightness: 11 })),

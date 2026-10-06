@@ -217,7 +217,7 @@ contextBridge.exposeInMainWorld('api', {
     importFromBytes:   (productId, bytes, ext)              => invoke('images:importFromBytes', { productId, bytes, ext }),
     setMainImage:      (productId, filepath)                => invoke('images:setMainImage', { productId, filepath }),
     reorderImages:     (productId, newOrder)                => invoke('images:reorderImages', { productId, newOrder }),
-    removeFromProduct: (productId, filepath)                => invoke('images:removeFromProduct', { productId, filepath }),
+    removeFromProduct: (productId, imageId, expectedContentHash) => invoke('images:removeFromProduct', { productId, imageId, expectedContentHash }),
     // v0.26.14: destructive flip of the source file (rewrites
     // bytes on disk + updates content_hash so the cache-bust kicks
     // in). axis: 'h' = mirror left/right, 'v' = mirror top/bottom.
@@ -308,7 +308,7 @@ contextBridge.exposeInMainWorld('api', {
     // Header CRUD
     create:           (input)                     => invoke('pos:create', input),
     update:           (id, patch)                 => invoke('pos:update', { id, patch }),
-    setStatus:        (id, status)                => invoke('pos:setStatus', { id, status }),
+    setStatus:        (id, status, expectedUpdatedAt) => invoke('pos:setStatus', { id, status, ...(expectedUpdatedAt !== undefined ? { expectedUpdatedAt } : {}) }),
     remove:           (id)                        => invoke('pos:remove', id),
     // Lines
     addLine:          (poId, input)               => invoke('pos:addLine', { poId, input }),

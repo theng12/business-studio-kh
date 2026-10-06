@@ -161,8 +161,11 @@ async function generateFor(task, model, apiKey) {
     const actual = usage ? aiCosts.actualForModel(model.modelId, usage) : null;
     await onDone(task, outputUrls, { usage, actualUsd: actual?.usd ?? null });
   } catch (err) {
-    inflight.delete(task.id);
     handleFailure(task, err.message);
+  } finally {
+    // Cancel stops accepting results; the synchronous provider request still
+    // owns its slot until generation and any already-started filing settle.
+    inflight.delete(task.id);
   }
 }
 
@@ -173,23 +176,32 @@ async function onDone(task, outputUrls, billing = {}) {
   // flight — the API call cannot be aborted mid-flight, so drop the result
   // rather than resurrecting a task the user stopped.
   const current = aiTasks.get(task.id);
-  if (!current) { inflight.delete(task.id); return; }
-  if (current.status === 'cancelled') { inflight.delete(task.id); return; }
+  if (!current) return;
+  // A completed provider call can be charged even when its result is declined
+  // or local filing fails. Repair reuses the id: retain all known charges.
+  aiTasks.update(task.id, {
+    costActual: billing.actualUsd == null ? current.costActual : (current.costActual ?? 0) + billing.actualUsd,
+    usageJson: billing.usage ? JSON.stringify(billing.usage) : null,
+  });
+  emitTaskUpdate(aiTasks.get(task.id));
+  if (!acceptsResults(task.id)) return;
 
   // Empty outputs after a "success" response would otherwise vanish
   // silently. Surface it as a Failed task so the user sees something
   // actionable instead of "Done" with nothing in the gallery.
   if (!Array.isArray(outputUrls) || outputUrls.length === 0) {
-    inflight.delete(task.id);
     aiTasks.update(task.id, {
       status: 'failed',
-      errorMessage: 'OpenAI reported success but returned no image data. Click Repair to try again.',
+      errorMessage: 'OpenAI reported success but returned no image data. Repair submits a new paid generation.',
       completedAt: Date.now(),
     });
     emitTaskUpdate(aiTasks.get(task.id));
     return;
   }
 
+  const failures = [];
+  const warnings = [];
+  let saved = 0;
   try {
     const product = task.productId ? products.get(task.productId) : null;
     // For per-product tasks, outputs land in `ai-gallery/<sku>/`. For
@@ -207,6 +219,7 @@ async function onDone(task, outputUrls, billing = {}) {
     }
     const galleryDir = path.join(getDataDir(), relativeDir);
     await fs.promises.mkdir(galleryDir, { recursive: true });
+    if (!acceptsResults(task.id)) return;
 
     /* Bulk-mode output naming + optional external export.
        - Naming: when the task has a sourceImagePath (always true for bulk
@@ -218,14 +231,15 @@ async function onDone(task, outputUrls, billing = {}) {
        - exportDir: if `task.options.exportDir` is an absolute path, also
          write a copy of each output there. The internal gallery copy
          remains so favorite/promote/preview still work; the external
-         copy is purely a user-facing convenience. Failures to write to
-         exportDir are non-fatal (logged but don't fail the task). */
+         copy is purely a user-facing convenience. Failures are visible
+         warnings and never discard the internal gallery result. */
     const exportDir = (!product && typeof task.options?.exportDir === 'string' && path.isAbsolute(task.options.exportDir))
       ? task.options.exportDir
       : null;
     if (exportDir) {
       try { await fs.promises.mkdir(exportDir, { recursive: true }); }
-      catch (err) { process.stderr.write(`[ai/queue] mkdir exportDir failed: ${err.message}\n`); }
+      catch (err) { warnings.push(`Export folder: ${err.message}`); }
+      if (!acceptsResults(task.id)) return;
     }
 
     const sourceBasename = (!product && task.sourceImagePath)
@@ -234,9 +248,11 @@ async function onDone(task, outputUrls, billing = {}) {
 
     let i = 0;
     for (const url of outputUrls) {
+      if (!acceptsResults(task.id)) return;
       i += 1;
       try {
         const buf = await readImageBytes(url);
+        if (!acceptsResults(task.id)) return;
         const ext = guessExt(url);
 
         // Pick a non-colliding filename inside galleryDir.
@@ -261,10 +277,23 @@ async function onDone(task, outputUrls, billing = {}) {
           }
         } else {
           name = `${task.id}-${i}${ext}`;
+          // A settled task can be explicitly submitted again through Repair.
+          // Its earlier durable outputs must keep their original bytes.
+          // ponytail: 9998 suffix candidates; wx fails safely at the ceiling.
+          // Raise the bound if repeated explicit submissions reach that limit.
+          let n = 2;
+          while (fs.existsSync(path.join(galleryDir, name))) {
+            name = `${task.id}-${i}-${n}${ext}`;
+            n += 1;
+            if (n > 9999) break;
+          }
         }
 
         const abs = path.join(galleryDir, name);
-        await fs.promises.writeFile(abs, buf);
+        await fs.promises.writeFile(abs, buf, { flag: 'wx' });
+        // A started write may complete after Cancel. Preserve its bytes, but
+        // stop before publishing it or beginning another variant/attachment.
+        if (!acceptsResults(task.id)) return;
         const relative = `${relativeDir}/${name}`;
         const entry = aiGallery.create({
           taskId: task.id,
@@ -275,7 +304,9 @@ async function onDone(task, outputUrls, billing = {}) {
           provider: task.provider,
           model: task.model,
         });
+        saved += 1;
         emitGalleryAdded(entry);
+        if (!acceptsResults(task.id)) return;
 
         // Auto-attach. Two distinct modes:
         //   `autoPromoteAsMain`: add to product AND move to position 0 —
@@ -295,7 +326,7 @@ async function onDone(task, outputUrls, billing = {}) {
               originalFilepath: abs,
             });
             const relativePath = addedImage?.filepath;
-            if (wantPromote && relativePath) {
+            if (wantPromote && relativePath && acceptsResults(task.id)) {
               // By row id — the path can be renumbered while the add is awaited.
               productImages.setMainById(task.productId, addedImage.id);
             }
@@ -308,12 +339,13 @@ async function onDone(task, outputUrls, billing = {}) {
             events.broadcast('catalog:changed', { kind: 'images', op: wantPromote ? 'promote' : 'add', id: task.productId });
             events.broadcast('catalog:changed', { kind: 'aiGallery', op: 'promote', id: entry.id, productId: task.productId });
           } catch (err) {
-            process.stderr.write(`[ai/queue] auto-${wantPromote ? 'promote' : 'add'} failed for task ${task.id}: ${err.message}\n`);
+            warnings.push(`Image ${i} auto-${wantPromote ? 'promote' : 'add'}: ${err.message}`);
           }
         }
 
         // Best-effort copy to the user's export folder. Same filename
         // rules as the gallery copy, with its own collision suffix.
+        if (!acceptsResults(task.id)) return;
         if (exportDir) {
           try {
             const baseExternal = exportName || name;
@@ -327,28 +359,38 @@ async function onDone(task, outputUrls, billing = {}) {
             }
             await fs.promises.copyFile(abs, path.join(exportDir, externalName));
           } catch (err) {
-            process.stderr.write(`[ai/queue] export copy failed for ${name}: ${err.message}\n`);
+            warnings.push(`Image ${i} export copy: ${err.message}`);
           }
         }
       } catch (err) {
-        process.stderr.write(`[ai/queue] download failed for task ${task.id}: ${err.message}\n`);
+        failures.push(`Image ${i}: ${err.message}`);
       }
     }
 
-    inflight.delete(task.id);
+    if (!acceptsResults(task.id)) return;
+    const messages = [...failures, ...warnings];
     aiTasks.update(task.id, {
-      status: 'done',
-      progress: 1,
+      status: saved > 0 ? 'done' : 'failed',
+      progress: saved / outputUrls.length,
       completedAt: Date.now(),
-      errorMessage: null,
-      costActual: billing.actualUsd ?? null,
-      usageJson: billing.usage ? JSON.stringify(billing.usage) : null,
+      errorMessage: messages.length ? `${saved} of ${outputUrls.length} images saved to gallery. ${messages.join('; ')}` : null,
     });
     emitTaskUpdate(aiTasks.get(task.id));
   } catch (err) {
-    inflight.delete(task.id);
     handleFailure(task, err.message);
+  } finally {
+    // Cancel preserves completed saves and any failures already observed.
+    // Updating their message must never turn the task back into Done/Failed.
+    const messages = [...failures, ...warnings];
+    if (aiTasks.get(task.id)?.status === 'cancelled' && messages.length) {
+      aiTasks.update(task.id, { errorMessage: `${saved} of ${outputUrls.length} images saved to gallery. ${messages.join('; ')}` });
+      emitTaskUpdate(aiTasks.get(task.id));
+    }
   }
+}
+
+function acceptsResults(taskId) {
+  return aiTasks.get(taskId)?.status === 'running';
 }
 
 /* ── Failure ─────────────────────────────────────────────────
@@ -357,7 +399,7 @@ async function onDone(task, outputUrls, billing = {}) {
 
 function handleFailure(task, message) {
   const current = aiTasks.get(task.id);
-  if (!current) return;
+  if (!current || current.status === 'cancelled') return;
   aiTasks.update(task.id, {
     status: 'failed',
     errorMessage: message,
@@ -463,10 +505,10 @@ function interruptStaleTasks() {
     const all = aiTasks.listPendingForRunner();
     const now = Date.now();
     for (const t of all) {
-      if (t.status === 'running') {
+      if (t.status === 'running' && !inflight.has(t.id)) {
         aiTasks.update(t.id, {
           status: 'failed',
-          errorMessage: 'Interrupted before OpenAI returned a result. Click Repair to try again, or Queue fresh to start over.',
+          errorMessage: 'Interrupted before a result was saved. Repair and Queue fresh submit a new paid generation.',
           completedAt: now,
         });
         emitTaskUpdate(aiTasks.get(t.id));
@@ -478,18 +520,21 @@ function interruptStaleTasks() {
 }
 
 /**
- * Repair: re-queue a failed / cancelled / stuck task. OpenAI has no
+ * Repair: re-queue a settled failed / cancelled task. OpenAI has no
  * provider-side task to re-poll, so a fresh submission is the only
  * recovery path.
  */
 function repair(taskId) {
   const t = aiTasks.get(taskId);
   if (!t) return null;
-  inflight.delete(t.id);
+  if (inflight.has(t.id)) throw new Error('This request is still active. Wait for it to settle before Repair; Repair submits a new paid generation.');
+  if (t.status !== 'failed' && t.status !== 'cancelled') throw new Error('Repair is only available for settled failed or cancelled tasks; queued or running tasks must wait.');
   aiTasks.update(taskId, {
     status: 'queued',
     progress: 0,
     errorMessage: null,
+    startedAt: null,
+    completedAt: null,
   });
   emitTaskUpdate(aiTasks.get(taskId));
   nudge();
@@ -522,7 +567,7 @@ function queueFresh(taskId) {
 function cancel(taskId) {
   const t = aiTasks.get(taskId);
   if (!t) return null;
-  inflight.delete(t.id);
+  if (t.status !== 'queued' && t.status !== 'running') return t;
   aiTasks.update(taskId, { status: 'cancelled', completedAt: Date.now() });
   emitTaskUpdate(aiTasks.get(taskId));
   return aiTasks.get(taskId);
