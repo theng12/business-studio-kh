@@ -11,7 +11,7 @@
  */
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
-const { parseJson } = require('./_util');
+const { parseJson, prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
 
 function rowToTemplate(row) {
   if (!row) return null;
@@ -107,8 +107,9 @@ const UPDATABLE = {
 function update(id, patch) {
   const existing = get(id);
   if (!existing) throw new Error('Template not found');
+  patch = prepareOptimisticPatch(existing, patch, 'imageTemplate');
   const sets = [];
-  const params = { id, updatedAt: Date.now() };
+  const params = { id, updatedAt: nextUpdatedAt(existing.updatedAt) };
   for (const [k, def] of Object.entries(UPDATABLE)) {
     if (!(k in patch)) continue;
     sets.push(`${def.col} = @${k}`);
