@@ -40,67 +40,52 @@ function blockAfter(src, marker) {
   throw new Error(`unbalanced block after ${marker}`);
 }
 
-const FLUSH = blockAfter(FORM, 'const flushOwed = useCallback(() =>');
-const PRODUCT_EFFECT = blockAfter(FORM, 'useEffect(() => {\n    flushOwed();');
+const FLUSH = blockAfter(FORM, 'const flushOwed = useCallback(async () =>');
+const PRODUCT_EFFECT = blockAfter(FORM, 'useEffect(() => {\n    selectionGen.current += 1;');
 const SAVE = blockAfter(FORM, 'async function handleSave()');
-const AUTOSAVE = blockAfter(FORM, 'autoSaveTimer.current = setTimeout(async () =>');
 const DUPLICATE = blockAfter(FORM, 'async function handleDuplicate()');
 
-test('a flush writes the payload to the id and token it was captured with', () => {
-  assert.match(FLUSH, /updateProduct\(owed\.id, \{ \.\.\.owed\.payload, expectedUpdatedAt: owed\.expectedUpdatedAt \}\)/,
-    'flushOwed must write to the payload\'s own id with its own token');
-  assert.doesNotMatch(FLUSH, /activeProductIdRef\.current|lastSavedUpdatedAt\.current/,
-    'flushOwed must not read the refs — they may already point at another product');
-  assert.match(FLUSH, /clearTimeout\(autoSaveTimer\.current\)/, 'a flush must disarm the debounce');
-  assert.match(FLUSH, /autoSavePayload\.current = null/, 'a flush must claim the payload so it is written once');
-  assert.match(FORM, /autoSavePayload\.current = \{\s*id: activeProductId,\s*expectedUpdatedAt: lastSavedUpdatedAt\.current,\s*payload: buildPayload\(\),/,
-    'the owed payload must carry its id and token from the moment it is built');
+test('autosave, explicit Save and navigation share the latest-save queue', () => {
+  assert.match(FORM, /createLatestSaveQueue/);
+  assert.match(FLUSH, /await saveQueue\.current\?\.flush\(\(\) => autoSavePayload\.current\)/);
+  assert.doesNotMatch(FLUSH, /autoSavePayload\.current = null|catch/);
+  assert.match(SAVE, /await flushOwed\(\)/);
+  assert.match(FORM, /saveQueue\.current\?\.enqueue\(owed\)/);
+  assert.match(FORM, /persist: \(draft, expectedUpdatedAt\) => updateProduct\(id/);
 });
 
-test('switching products flushes the owed edit before the refs move', () => {
-  const flushAt = PRODUCT_EFFECT.indexOf('flushOwed();');
-  const repointAt = PRODUCT_EFFECT.indexOf('activeProductIdRef.current = product.id');
-  const tokenAt = PRODUCT_EFFECT.indexOf('lastSavedUpdatedAt.current = source.updatedAt');
-  assert.ok(flushAt >= 0 && repointAt > flushAt && tokenAt > flushAt,
-    'flushOwed() must run before the panel is re-pointed at the next product');
-  assert.match(PRODUCT_EFFECT, /selectionGen\.current \+= 1/, 'a switch must start a new selection generation');
-  assert.match(FORM, /useEffect\(\(\) => \(\) => flushOwed\(\), \[flushOwed\]\)/,
-    'unmount must flush through the same path');
+test('selection and all navigation exits await persistence before repointing or unmounting', () => {
+  assert.match(FORM, /registerCompanySwitchFlusher\(flushOwed\)/);
+  assert.match(FORM, /onRegisterFlush\?\.\(flushOwed\)/);
+  assert.match(LIBRARY, /await panelFlush\.current\?\.\(\)/);
+  for (const marker of ['const handleOpen = useCallback', 'const startNewProduct = useCallback', 'const closePanel = useCallback']) {
+    assert.match(blockAfter(LIBRARY, marker), /await beforePanelChange\(\)/);
+  }
+  assert.doesNotMatch(FORM, /useEffect\(\(\) => \(\) => flushOwed/);
+  assert.match(PRODUCT_EFFECT, /selectionGen\.current \+= 1/);
 });
 
-test('async completions are dropped once the selection has moved', () => {
-  assert.doesNotMatch(FORM, /listByProduct\([^)]*\)\s*\.then\(setImages\)/,
-    'an image list must not be applied without checking it is still for the product on screen');
-  const guardedFetches = FORM.match(/listByProduct\([^)]*\)\s*\.then\(\(rows\) => \{ if \(gen === selectionGen\.current\) setImages\(rows\); \}\)/g) || [];
-  assert.ok(guardedFetches.length >= 3, `expected the panel's image fetches to be generation-guarded, found ${guardedFetches.length}`);
-  assert.match(FORM, /function noteSaved\(gen, id, updatedAt\) \{\s*if \(gen !== selectionGen\.current\) return false;/,
-    'a token must only be recorded for the selection it was written for');
-  assert.match(AUTOSAVE, /if \(!noteSaved\(gen, owed\.id, updated\?\.updatedAt\)\) return;/);
-  assert.match(SAVE, /const gen = selectionGen\.current;/, 'Save must capture the selection before awaiting');
+test('async completions only advance the current product revision', () => {
+  assert.doesNotMatch(FORM, /listByProduct\([^)]*\)\s*\.then\(setImages\)/);
+  assert.match(FORM, /gen !== selectionGen\.current \|\| id !== activeProductIdRef\.current/);
+  assert.match(SAVE, /const gen = selectionGen\.current;/);
 });
 
-test('a finished create points the refs at the created row, not only the state', () => {
+test('a finished create points the refs and queue at the created row', () => {
   const create = blockAfter(SAVE, 'if (isCreate)');
-  assert.match(create, /if \(!current\(\)\) return;/, 'a create that resolves after a switch must not re-point the panel');
+  assert.match(create, /if \(!current\(\)\) return;/);
   assert.match(create, /setActiveProductId\(created\.id\)/);
   assert.match(create, /activeProductIdRef\.current = created\.id/);
   assert.match(create, /lastSavedUpdatedAt\.current = created\.updatedAt \?\? null/);
+  assert.match(create, /saveQueue\.current = makeSaveQueue\(created\.id/);
 });
 
-test('Save supersedes a pending autosave', () => {
-  const clearAt = SAVE.indexOf('clearTimeout(autoSaveTimer.current)');
-  const dropAt = SAVE.indexOf('autoSavePayload.current = null');
-  const writeAt = SAVE.indexOf('await ');
-  assert.ok(clearAt >= 0 && dropAt >= 0, 'Save must cancel the debounce and drop the owed payload');
-  assert.ok(clearAt < writeAt && dropAt < writeAt, 'and must do it before it writes');
-});
-
-test('an autosave CONFLICT never toasts the raw sentinel', () => {
-  const catchBlock = blockAfter(AUTOSAVE, '} catch (err)');
-  assert.match(catchBlock, /if \(parseConflictError\(err\)\)/, 'the autosave must recognise a conflict');
-  const conflictBranch = blockAfter(catchBlock, 'if (parseConflictError(err))');
-  assert.doesNotMatch(conflictBranch, /err\.message/, 'a conflict must be explained, not printed');
-  assert.match(conflictBranch, /Click Save/, 'the message must say how to resolve it');
+test('failed drafts stay present and conflict copy explains the Save recovery', () => {
+  const onError = blockAfter(FORM, 'onError: (err, draft) =>');
+  assert.doesNotMatch(onError, /autoSavePayload\.current = null/);
+  assert.match(onError, /parseConflictError\(err\)/);
+  assert.match(onError, /Click Save/);
+  assert.match(onError, /err\.message/);
 });
 
 test('Esc already handled by a control does not close the panel', () => {
