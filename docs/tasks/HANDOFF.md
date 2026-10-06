@@ -1,7 +1,7 @@
 # HANDOFF — Business Studio KH
 
 **Read this first.** This file is written for a session that knows nothing about the conversation
-that produced it. It was true at **v0.1.91, 2026-10-05**. If it disagrees with the
+that produced it. It was true at **v0.1.91, 2026-10-06**. If it disagrees with the
 code, the code wins — and then fix this file in the same change.
 
 ## WHERE THINGS STAND
@@ -30,6 +30,12 @@ Owner requested the complete Catalog audit fixes and workflow improvements. The 
 - Installed app is unchanged by this development session; the verified arm64 DMG is copied into the current owner's `dist/`. No tags/releases/publishing.
 
 ## THE WORKING LOOP
+
+### Current planning work — 2026-10-06
+
+The owner requested a distributed whole-app audit and per-area fix planning after Catalog 0.1.91. The current roadmap is [APP_IMPROVEMENT_PLAN.md](APP_IMPROVEMENT_PLAN.md), with four area reports under `docs/tasks/app-audit-2026-10-06/`. This is documentation only: the application remains 0.1.91, implementation has not started, and the existing DMG/installed app are unchanged. Start with its file/company boundary batch, then Product Library save/image identity and AI lifecycle reliability. Do not describe these planned fixes as shipped.
+
+Audit baseline: fresh build, isolated UI crawl 145/145 without console errors; scoped suites 31/38/58 pass; mocked current-source checks and actual component-harness checks corroborate the listed edge cases. Current full/production dependency audits each report zero vulnerabilities. The previous release's full 1248/212 test counts are historical, not a new full-suite run. Local evidence is in the current owner's ignored `graphify-out/app-audit-2026-10-06/`. No paid provider calls, live-data mutations or hardware readiness claims. Closed decisions stay closed.
 
 Replace `<wt>` with a worktree that has `node_modules` installed — this project's build worktree is
 `$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh`. Order matters.
