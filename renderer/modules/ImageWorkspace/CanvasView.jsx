@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { SliderField } from '../../components/ui.jsx';
+import { parseAspectRatio, rectAspectFromOutput, buildDragRect, resize, moveRect, containedImageBounds } from './cropGeometry.js';
 
 // v0.49.15: aspect-ratio presets exposed on the crop toolbar. The chip ids
 // are also the value persisted in `settings.cropAspectRatio`. "free" is
@@ -13,115 +14,6 @@ const ASPECT_PRESETS = [
   { id: '16:9',  label: '16:9' },
   { id: '9:16',  label: '9:16' },
 ];
-
-// Parse a "w:h" string into a numeric ratio (w/h). Accepts ':' / 'x' / '/'
-// separators. Returns null on bad input or 'free'.
-function parseAspectRatio(str) {
-  if (!str || str === 'free') return null;
-  const m = String(str).match(/^\s*(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)\s*$/);
-  if (!m) return null;
-  const w = Number(m[1]), h = Number(m[2]);
-  if (!w || !h) return null;
-  return w / h;
-}
-
-// The crop rect is normalised against the CANVAS dimensions. A 1:1 OUTPUT
-// crop on a non-square canvas needs a non-square normalised rect to
-// compensate. This helper converts "user wants output to be ratio R" into
-// "rect.width / rect.height should be N" in normalised-canvas terms.
-function rectAspectFromOutput(outputAspect, canvasW, canvasH) {
-  if (!outputAspect || !canvasW || !canvasH) return null;
-  return outputAspect * (canvasH / canvasW);
-}
-
-
-
-// Given anchor + current pointer (both in normalised canvas coords) and
-// an optional aspect lock, build a rect. For free mode this is just the
-// drag bounding box. For ratio mode the larger axis of the drag wins and
-// the other dimension is derived from ratio; the rect stays anchored at
-// the original mousedown point so the drag still feels direct.
-function buildDragRect(anchor, current, rectAspectVal) {
-  let w = Math.abs(current.x - anchor.x);
-  let h = Math.abs(current.y - anchor.y);
-  if (rectAspectVal) {
-    // Pick the dimension the user dragged "more" of (normalised by the
-    // ratio) and derive the other.
-    if (w / rectAspectVal > h) h = w / rectAspectVal;
-    else                       w = h * rectAspectVal;
-  }
-  // Anchor on whichever corner of the mousedown point the drag direction
-  // implies.
-  const x = current.x < anchor.x ? anchor.x - w : anchor.x;
-  const y = current.y < anchor.y ? anchor.y - h : anchor.y;
-  return clampRect({ x, y, width: Math.max(0.02, w), height: Math.max(0.02, h) });
-}
-
-// Clamp a rect into [0,1] × [0,1], shrinking from the overflowing side(s)
-// rather than translating, so a near-edge rect doesn\'t suddenly jump.
-function clampRect(r) {
-  let { x, y, width, height } = r;
-  if (x < 0) { width += x; x = 0; }
-  if (y < 0) { height += y; y = 0; }
-  if (x + width > 1)  width  = 1 - x;
-  if (y + height > 1) height = 1 - y;
-  width  = Math.max(0.02, width);
-  height = Math.max(0.02, height);
-  return { x, y, width, height };
-}
-
-// v0.49.16: unified resize for both corner (nw/ne/sw/se, 2 chars) and edge
-// (n/s/e/w, 1 char) handles. Corner: opposite corner stays anchored.
-// Edge: opposite edge stays anchored, perpendicular dim recenters around
-// the rect\'s old center. Ratio lock applies in both modes.
-function resize(origin, handle, current, rectAspectVal) {
-  const isCorner = handle.length === 2;
-  if (isCorner) {
-    const ox1 = origin.x, oy1 = origin.y;
-    const ox2 = origin.x + origin.width, oy2 = origin.y + origin.height;
-    const anchorX = handle.includes('w') ? ox2 : ox1;
-    const anchorY = handle.includes('n') ? oy2 : oy1;
-    let w = Math.max(0.02, Math.abs(current.x - anchorX));
-    let h = Math.max(0.02, Math.abs(current.y - anchorY));
-    if (rectAspectVal) {
-      if (w / rectAspectVal > h) h = w / rectAspectVal;
-      else                       w = h * rectAspectVal;
-    }
-    const x = handle.includes('w') ? anchorX - w : anchorX;
-    const y = handle.includes('n') ? anchorY - h : anchorY;
-    return clampRect({ x, y, width: w, height: h });
-  }
-  // Edge handle. cx/cy = rect center; used to recenter the perpendicular
-  // axis when ratio is locked.
-  const cx = origin.x + origin.width / 2;
-  const cy = origin.y + origin.height / 2;
-  let x1 = origin.x, y1 = origin.y;
-  let x2 = origin.x + origin.width, y2 = origin.y + origin.height;
-  if (handle === 'n') y1 = Math.max(0, Math.min(y2 - 0.02, current.y));
-  if (handle === 's') y2 = Math.min(1, Math.max(y1 + 0.02, current.y));
-  if (handle === 'w') x1 = Math.max(0, Math.min(x2 - 0.02, current.x));
-  if (handle === 'e') x2 = Math.min(1, Math.max(x1 + 0.02, current.x));
-  let rect = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
-  if (rectAspectVal) {
-    if (handle === 'n' || handle === 's') {
-      const w = Math.min(1, rect.height * rectAspectVal);
-      rect.x = Math.max(0, Math.min(1 - w, cx - w / 2));
-      rect.width = w;
-    } else {
-      const h = Math.min(1, rect.width / rectAspectVal);
-      rect.y = Math.max(0, Math.min(1 - h, cy - h / 2));
-      rect.height = h;
-    }
-  }
-  return clampRect(rect);
-}
-
-// Shift a rect by a normalised delta, keeping it inside [0,1].
-function moveRect(rect, dx, dy) {
-  const x = Math.max(0, Math.min(1 - rect.width,  rect.x + dx));
-  const y = Math.max(0, Math.min(1 - rect.height, rect.y + dy));
-  return { ...rect, x, y };
-}
 
 // v0.49.17: rotate-arrow glyph used by the 90° buttons in the canvas tools
 // row. Same shape used to live in SettingsPanel; moved here when the rotate
@@ -164,6 +56,9 @@ export function CanvasView({
   onCropAspectChange,         // (id: string) — picks a chip
   onApplyCrop,                // (destination: 'newImage' | 'overwrite') — commits
   onCancelCrop,               // () — clears rect + exits crop mode
+  cropPreview = null,
+  onCropReady,
+  cropCommitBusy = false,
   cropApplying = false,       // disables Apply while IPC is in flight
   // v0.49.17: 90° rotate buttons relocated from SettingsPanel into the
   // canvas tools row. onRotationChange(deg) — parent updates settings.rotation.
@@ -171,6 +66,22 @@ export function CanvasView({
 }) {
   const containerRef = useRef(null);
   const cropRef = useRef(null);
+  const [boardSize, setBoardSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const board = containerRef.current;
+    if (!board || !cropMode) return undefined;
+    const measure = () => setBoardSize({ width: board.clientWidth, height: board.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(board);
+    return () => observer.disconnect();
+  }, [cropMode, image?.id]);
+  const cropBounds = containedImageBounds(cropPreview?.outW, cropPreview?.outH, boardSize.width, boardSize.height);
+  const [loadedCropUrl, setLoadedCropUrl] = useState(null);
+  const hasCropSource = !!cropPreview && !!cropBounds;
+  const cropReady = hasCropSource && loadedCropUrl === cropPreview.url;
+  useEffect(() => { onCropReady?.(cropReady ? cropPreview.url : null); }, [cropReady, cropPreview?.url, onCropReady]);
+  useEffect(() => { setCropDrag(null); }, [cropMode, image?.id, image?.contentHash, cropPreview?.url]);
   const [dragging, setDragging] = useState(false);
   // v0.49.15: cropDrag now tracks one of three modes:
   //   { mode: 'create', anchor: {x,y} }
@@ -214,19 +125,19 @@ export function CanvasView({
     };
   }, [dragging, onDividerChange]);
 
-  // v0.49.15: rect-aspect lock derived from the current ratio chip + canvas dims.
+  // Aspect lock uses the authoritative transformed-source pixel dimensions.
   // Recomputed on every render; cheap.
   const outputAspect = parseAspectRatio(settings.cropAspectRatio);
   const rectAspectLock = rectAspectFromOutput(
     outputAspect,
-    settings.canvasWidth,
-    settings.canvasHeight,
+    cropPreview?.outW,
+    cropPreview?.outH,
   );
 
   // v0.49.15: crop drag handles three modes — create / move / resize.
   // Mode is chosen at mousedown time based on the event target (see
   // handleCropMouseDown). Pointer coords are converted to normalised
-  // 0..1 fractions of the visible canvas frame so the rect survives zoom.
+  // 0..1 fractions of the displayed source, excluding letterboxing and zoom.
   useEffect(() => {
     if (!cropDrag) return undefined;
     function pointFromEvent(e) {
@@ -264,7 +175,7 @@ export function CanvasView({
   //   - else if target is inside .ws-crop__rect (and we have a rect) → move
   //   - else → create new rect from this point
   function handleCropMouseDown(e) {
-    if (!cropMode || !cropRef.current || cropApplying) return;
+    if (!cropMode || !cropRef.current || cropApplying || !cropReady) return;
     e.preventDefault();
     const r = cropRef.current.getBoundingClientRect();
     const p = {
@@ -272,13 +183,13 @@ export function CanvasView({
       y: Math.max(0, Math.min(1, (e.clientY - r.top)  / r.height)),
     };
     const handle = e.target?.getAttribute?.('data-crop-handle');
-    if (handle && settings.cropRect) {
-      setCropDrag({ mode: 'resize', anchor: p, origin: settings.cropRect, handle });
+    if (handle && settings.sourceCropRect) {
+      setCropDrag({ mode: 'resize', anchor: p, origin: settings.sourceCropRect, handle });
       return;
     }
     const isMove = e.target?.classList?.contains('ws-crop__move-zone');
-    if (isMove && settings.cropRect) {
-      setCropDrag({ mode: 'move', anchor: p, origin: settings.cropRect });
+    if (isMove && settings.sourceCropRect) {
+      setCropDrag({ mode: 'move', anchor: p, origin: settings.sourceCropRect });
       return;
     }
     // Create — snap to ratio if one is locked.
@@ -305,7 +216,7 @@ export function CanvasView({
           {settings.canvasWidth} × {settings.canvasHeight}px · {settings.colorProfile}
         </div>
         <div className="ws-canvas__top-info">
-          {image?.isProcessed
+          {cropMode ? <span className="ws-canvas__badge">Crop raw source</span> : image?.isProcessed
             ? <span className="ws-canvas__badge ws-canvas__badge--done">Processed</span>
             : <span className="ws-canvas__badge">Raw</span>}
         </div>
@@ -332,6 +243,11 @@ export function CanvasView({
                 : undefined;
               if (!image) {
                 return <div className="ws-canvas__placeholder">No image selected.</div>;
+              }
+              if (cropMode) {
+                return hasCropSource
+                  ? <img className="ws-canvas__img" src={cropPreview.url} alt="Raw crop source" onLoad={() => setLoadedCropUrl(cropPreview.url)} style={{ position: 'absolute', ...cropBounds }} />
+                  : <div className="ws-canvas__placeholder">Preparing crop preview…</div>;
               }
               if (isBeforeAfter) {
                 return (
@@ -376,20 +292,21 @@ export function CanvasView({
             {cropMode && Number(settings.cropStraighten || 0) !== 0 ? (
               <div className="ws-crop__level" aria-hidden />
             ) : null}
-            {cropMode && image ? (
+            {cropMode && image && cropReady ? (
               <div
                 ref={cropRef}
                 className="ws-crop"
+                style={{ inset: 'auto', ...cropBounds }}
                 onMouseDown={handleCropMouseDown}
               >
-                {settings.cropRect ? (
+                {settings.sourceCropRect ? (
                   <div
                     className="ws-crop__rect"
                     style={{
-                      left:   `${settings.cropRect.x * 100}%`,
-                      top:    `${settings.cropRect.y * 100}%`,
-                      width:  `${settings.cropRect.width  * 100}%`,
-                      height: `${settings.cropRect.height * 100}%`,
+                      left:   `${settings.sourceCropRect.x * 100}%`,
+                      top:    `${settings.sourceCropRect.y * 100}%`,
+                      width:  `${settings.sourceCropRect.width  * 100}%`,
+                      height: `${settings.sourceCropRect.height * 100}%`,
                     }}
                   >
                     {/* v0.49.15: drag-anywhere-inside-the-rect-to-move zone.
@@ -410,16 +327,16 @@ export function CanvasView({
                     <span className="ws-crop__handle ws-crop__handle--e"  data-crop-handle="e" />
                     <span className="ws-crop__handle ws-crop__handle--w"  data-crop-handle="w" />
                     <span className="ws-crop__hint">
-                      {Math.round(settings.cropRect.width * settings.canvasWidth)}
+                      {Math.round(settings.sourceCropRect.width * cropPreview.outW)}
                       ×
-                      {Math.round(settings.cropRect.height * settings.canvasHeight)}
+                      {Math.round(settings.sourceCropRect.height * cropPreview.outH)}
                     </span>
                   </div>
                 ) : (
                   <div className="ws-crop__instr">
                     {settings.cropAspectRatio && settings.cropAspectRatio !== 'free'
-                      ? `Drag on the canvas to set a ${settings.cropAspectRatio} crop`
-                      : 'Drag on the canvas to set the crop area'}
+                      ? `Drag on the image to set a ${settings.cropAspectRatio} crop`
+                      : 'Drag on the image to set the crop area'}
                   </div>
                 )}
               </div>
@@ -485,6 +402,7 @@ export function CanvasView({
           className="ws-tool"
           title="Rotate 90° left"
           aria-label="Rotate 90° left"
+          disabled={cropCommitBusy || processing}
           onClick={() => onRotationChange?.(((Number(settings?.rotation ?? 0) - 90) + 360) % 360)}
         >
           <RotateGlyph direction="left" />
@@ -494,6 +412,7 @@ export function CanvasView({
           className="ws-tool"
           title="Rotate 90° right"
           aria-label="Rotate 90° right"
+          disabled={cropCommitBusy || processing}
           onClick={() => onRotationChange?.((Number(settings?.rotation ?? 0) + 90) % 360)}
         >
           <RotateGlyph direction="right" />
@@ -503,7 +422,8 @@ export function CanvasView({
             type="button"
             className="ws-tool ws-tool--text"
             title="Reset rotation to 0°"
-            onClick={() => onRotationChange?.(0)}
+            disabled={cropCommitBusy || processing}
+          onClick={() => onRotationChange?.(0)}
           >Reset {(((Number(settings?.rotation ?? 0)) % 360) + 360) % 360}°</button>
         ) : null}
         <div className="ws-tool__sep" />
@@ -511,9 +431,10 @@ export function CanvasView({
           type="button"
           className={`ws-tool ws-tool--text${cropMode ? ' is-active' : ''}`}
           title="Crop tool — pick a ratio, drag a rectangle, then Apply"
+          disabled={cropCommitBusy || processing}
           onClick={onToggleCropMode}
         >Crop</button>
-        {settings.cropRect && !cropMode ? (
+        {(settings.sourceCropRect || settings.cropRect) && !cropMode ? (
           <button
             type="button"
             className="ws-tool ws-tool--text"
@@ -535,6 +456,7 @@ export function CanvasView({
                 role="radio"
                 aria-checked={(settings.cropAspectRatio || 'free') === p.id}
                 className={`segment${(settings.cropAspectRatio || 'free') === p.id ? ' is-active' : ''}`}
+                disabled={cropApplying}
                 onClick={() => onCropAspectChange?.(p.id)}
                 title={p.id === 'free' ? 'Free — no aspect lock' : `Lock to ${p.id}`}
               >{p.label}</button>
@@ -544,7 +466,8 @@ export function CanvasView({
               role="radio"
               aria-checked={settings.cropAspectRatio === 'custom'}
               className={`segment${settings.cropAspectRatio === 'custom' ? ' is-active' : ''}`}
-              onClick={() => onCropAspectChange?.('custom')}
+              disabled={cropApplying}
+                onClick={() => onCropAspectChange?.('custom')}
               title="Custom — set a numeric W:H ratio below"
             >Custom</button>
           </div>
@@ -567,6 +490,7 @@ export function CanvasView({
               <button
                 type="button"
                 className="ws-tool ws-tool--text"
+                disabled={cropApplying}
                 onClick={() => onCropAspectChange?.('__straighten:0')}
                 title="Reset to 0°"
               >Reset</button>
@@ -634,7 +558,7 @@ export function CanvasView({
               type="button"
               className="btn btn--primary"
               onClick={() => onApplyCrop?.(cropDestination)}
-              disabled={!settings.cropRect || cropApplying}
+              disabled={!settings.sourceCropRect || cropCommitBusy || !cropReady}
             >{cropApplying ? 'Cropping…' : 'Apply crop'}</button>
           </div>
         </div>
