@@ -7708,6 +7708,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .ovl-editor__head .field { margin-bottom: 0; }
 .ovl-editor__head-left {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--s-3);
   flex: 1;
@@ -7731,11 +7732,18 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 .ovl-editor__backdrop-picker {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
   gap: var(--s-2);
   margin-left: auto;
 }
-.ovl-editor__backdrop-picker .input { width: 280px; }
+.ovl-editor__backdrop-picker .input { width: 280px; max-width: 100%; }
+.ovl-editor__toolbar > .ws-toolbar__group { max-width: 100%; flex-wrap: wrap; }
+.ovl-canvas__meta { max-width: 100%; flex-wrap: wrap; }
+.page--overlay .ovl-editor,
+.page--overlay .ovl-editor__body,
+.page--overlay .ovl-canvas-wrap { min-width: 0; }
 
 /* v0.27.0: bulk-inset controls in the editor toolbar. */
 .ovl-inset-controls {
@@ -7766,7 +7774,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 
 .ovl-editor__body {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: 340px minmax(0, 1fr);
   gap: var(--s-3);
   flex: 1;
   min-height: 0;
