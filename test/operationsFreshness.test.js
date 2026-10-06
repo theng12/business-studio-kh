@@ -25,6 +25,7 @@ function hookHarness() {
   const depsChanged = (previous, next) => !previous || !next || previous.length !== next.length
     || next.some((value, i) => !Object.is(value, previous[i]));
   const React = {
+    memo: (component) => component,
     useState(initial) {
       const index = cursor++;
       if (!hooks[index]) hooks[index] = { value: typeof initial === 'function' ? initial() : initial };
@@ -120,7 +121,7 @@ function removeManualCostGuards(source) {
   return changed;
 }
 
-async function loadComponent(file, exportName, api, hook) {
+async function loadComponent(file, exportName, api, hook, extraSource = '') {
   installBrowser(api);
   const esbuild = require('esbuild');
   const { createRequire } = require('node:module');
@@ -140,8 +141,8 @@ async function loadComponent(file, exportName, api, hook) {
   const out = await esbuild.build({
     entryPoints: [entry], bundle: true, write: false, format: 'cjs', platform: 'node', jsx: 'automatic',
     external: ['react', 'react/jsx-runtime', 'react-dom/client', 'zustand'], logLevel: 'silent',
-    plugins: MUTATE_GUARDS || (MUTATE_MANUAL_COST && exportName === 'CostCalculator') ? [{ name: 'remove-response-guards', setup(build) {
-      build.onLoad({ filter: new RegExp(`${entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }, () => ({ contents: (MUTATE_MANUAL_COST ? removeManualCostGuards : removeResponseGuards)(fs.readFileSync(entry, 'utf8')), loader: 'jsx' }));
+    plugins: MUTATE_GUARDS || (MUTATE_MANUAL_COST && exportName === 'CostCalculator') || extraSource ? [{ name: 'remove-response-guards', setup(build) {
+      build.onLoad({ filter: new RegExp(`${entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }, () => ({ contents: (extraSource ? fs.readFileSync(entry, 'utf8') + extraSource : (MUTATE_MANUAL_COST ? removeManualCostGuards : removeResponseGuards)(fs.readFileSync(entry, 'utf8'))), loader: 'jsx' }));
     } }] : [],
   });
   const mod = { exports: {} };
@@ -152,7 +153,7 @@ async function loadComponent(file, exportName, api, hook) {
     if (id === 'zustand') return zustand;
     return req(id);
   }, mod, mod.exports);
-  return { Component: mod.exports[exportName], store: storeHook };
+  return { Component: mod.exports[exportName], ConflictHost: mod.exports.ConflictModalHost, store: storeHook };
 }
 
 function setStore(store, patch) {
@@ -344,5 +345,246 @@ test('PurchaseOrders keeps B supplier choices and rows when A and older searches
 
     assert.match(textOf(hook.getOutput()), /PO-B-fresh/);
     assert.doesNotMatch(textOf(hook.getOutput()), /PO-A-stale|PO-B-old/);
+  } finally { hook.cleanup(); }
+});
+
+test('CostCalculator refreshes PO history without replacing a manual cost, and reports lookup errors truthfully', async () => {
+  let event;
+  let amount = 10;
+  let failure = null;
+  const api = {
+    products: { list: async () => [{ id: 'product', sku: 'A', name: 'Apple' }] },
+    events: { onCatalogChanged: (handler) => { event = handler; return () => {}; } },
+    purchaseOrders: { getProductCost: async () => { if (failure) throw new Error(failure); return amount == null ? null : { latestLandedCostUsd: amount }; } },
+  };
+  const hook = hookHarness();
+  const { Component, store } = await loadComponent('renderer/modules/CostCalculator/index.jsx', 'CostCalculator', api, hook);
+  try {
+    setStore(store, { activeCompanyId: 'company' });
+    await hook.settle(Component); await flush(); await hook.settle(Component);
+    select(hook.getOutput(), (props) => props.value === '').props.onChange({ target: { value: 'product' } });
+    await hook.settle(Component); await flush(); await hook.settle(Component);
+    assert.equal(input(hook.getOutput(), (props) => props.step === '0.0001').props.value, '10.0000');
+    assert.equal(typeof event, 'function', 'selected costs subscribe to PO updates');
+    amount = 22; event({ kind: 'purchaseOrder' });
+    await hook.settle(Component); await flush(); await hook.settle(Component);
+    assert.equal(input(hook.getOutput(), (props) => props.step === '0.0001').props.value, '22.0000');
+    input(hook.getOutput(), (props) => props.step === '0.0001').props.onChange({ target: { value: '9.50' } });
+    await hook.settle(Component);
+    amount = 30; event({ kind: 'purchaseOrder' });
+    await hook.settle(Component); await flush(); await hook.settle(Component);
+    assert.equal(input(hook.getOutput(), (props) => props.step === '0.0001').props.value, '9.50');
+    assert.ok(findAll(hook.getOutput(), (node) => node.props?.label === 'Latest landed' && node.props.value === '$30.00').length);
+    failure = 'Server connection lost'; event({ kind: 'purchaseOrder' });
+    await hook.settle(Component); await flush(); await hook.settle(Component);
+    assert.match(textOf(hook.getOutput()), /Server connection lost/);
+    assert.doesNotMatch(textOf(hook.getOutput()), /No received-PO cost history/);
+    failure = null; amount = null;
+    findAll(hook.getOutput(), (node) => node.type?.name === 'Button' && node.props.children === 'Retry')[0].props.onClick();
+    await hook.settle(Component); await flush(); await hook.settle(Component);
+    assert.match(textOf(hook.getOutput()), /No received-PO cost history/);
+    assert.equal(input(hook.getOutput(), (props) => props.step === '0.0001').props.value, '9.50');
+  } finally { hook.cleanup(); }
+});
+
+test('CostCalculator realized margin uses rounded retail while the target remains unchanged', async () => {
+  const hook = hookHarness();
+  const { Component, store } = await loadComponent('renderer/modules/CostCalculator/index.jsx', 'CostCalculator', { products: { list: async () => [] } }, hook);
+  try {
+    setStore(store, { activeCompanyId: 'company' });
+    await hook.settle(Component);
+    input(hook.getOutput(), (props) => props.step === '0.0001').props.onChange({ target: { value: '0.01' } });
+    await hook.settle(Component);
+    assert.equal(input(hook.getOutput(), (props) => props.step === '0.01').props.value, '0.02');
+    assert.equal(input(hook.getOutput(), (props) => props.step === '0.1').props.value, '40');
+    assert.ok(findAll(hook.getOutput(), (node) => node.props?.label === 'Realized margin' && node.props.value === '50.00%').length);
+  } finally { hook.cleanup(); }
+});
+
+test('Settings failed config load ends loading and Retry can render ready without a company', async () => {
+  let fail = true;
+  const api = { settings: { getAll: async () => { if (fail) throw new Error('Config unavailable'); return { mode: 'standalone' }; } }, app: { getVersionInfo: async () => null } };
+  const hook = hookHarness();
+  const { Component, store } = await loadComponent('renderer/modules/Settings/index.jsx', 'Settings', api, hook);
+  try {
+    setStore(store, { activeCompanyId: null });
+    await hook.settle(Component); await flush(); await hook.settle(Component);
+    assert.match(textOf(hook.getOutput()), /Config unavailable/);
+    assert.doesNotMatch(textOf(hook.getOutput()), /Loading…/);
+    fail = false;
+    findAll(hook.getOutput(), (node) => node.type?.name === 'Button' && node.props.children === 'Retry')[0].props.onClick();
+    await hook.settle(Component); await flush(); await hook.settle(Component);
+    assert.match(textOf(hook.getOutput()), /General/);
+    assert.doesNotMatch(textOf(hook.getOutput()), /Config unavailable/);
+  } finally { hook.cleanup(); }
+});
+
+const poSnapshot = (notes = 'Original', updatedAt = 1, poNumber = 'PO-1') => ({
+  header: { id: 'po', companyId: 'company', poNumber, notes, updatedAt, currency: 'USD', exchangeRateToUsd: 1, status: 'draft', incoterm: 'FOB' },
+  lines: [], components: [], payments: [], calc: {},
+});
+
+test('PO metadata stays controlled across a remote refresh, saves unchanged blur once, and preserves a failed draft for retry', async () => {
+  let snapshot = poSnapshot(); let event; let failure = true; const saves = []; const toasts = [];
+  const api = {
+    events: { onCatalogChanged(handler) { event = handler; return () => {}; } },
+    purchaseOrders: {
+      getDetail: async () => structuredClone(snapshot),
+      update: async (_id, patch) => { saves.push(patch); if (failure) throw new Error('PO offline'); snapshot = { ...snapshot, header: { ...snapshot.header, ...patch, updatedAt: 3 } }; return snapshot.header; },
+    },
+  };
+  const hook = hookHarness();
+  const { Component, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook);
+  const render = () => Component({ poId: 'po', onBack() {} });
+  const notes = () => findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0];
+  try {
+    setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }], addToast: (...args) => toasts.push(args) });
+    await hook.settle(render); await flush(); await hook.settle(render);
+    assert.equal(notes().props.value, 'Original', 'metadata has a controlled draft');
+    notes().props.onChange({ target: { value: 'Pending' } }); await hook.settle(render);
+    snapshot = poSnapshot('Remote', 2, 'REMOTE-PO'); event({ kind: 'purchaseOrder', poId: 'po' });
+    await delay(270); await flush(); await hook.settle(render);
+    assert.equal(notes().props.value, 'Pending');
+    assert.equal(input(hook.getOutput(), (props) => props.value === 'REMOTE-PO').props.value, 'REMOTE-PO', 'nonedited metadata refreshes');
+    const status = () => findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0];
+    await status().props.onSave(); await hook.settle(render);
+    assert.equal(status().props.state, 'error');
+    assert.equal(notes().props.value, 'Pending');
+    assert.equal(saves[0].expectedUpdatedAt, 1, 'remote refresh cannot advance a pending draft token');
+    assert.match(toasts.at(-1)[0], /PO offline/);
+    failure = false; await status().props.onSave(); await hook.settle(render);
+    assert.equal(status().props.state, 'saved');
+    const count = saves.length; notes().props.onBlur?.(); await delay(550); await hook.settle(render);
+    assert.equal(saves.length, count, 'unchanged blur sends nothing');
+  } finally { hook.cleanup(); }
+});
+
+test('PO delayed save retains newer input including a revert, and Back waits for the latest acknowledgment', async () => {
+  const first = deferred(); const saves = []; let back = 0;
+  const api = { purchaseOrders: {
+    getDetail: async () => poSnapshot(),
+    update: (_id, patch) => { saves.push(patch); return saves.length === 1 ? first.promise : Promise.resolve({ ...poSnapshot().header, ...patch, updatedAt: 3 }); },
+  } };
+  const hook = hookHarness(); const { Component, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook);
+  const render = () => Component({ poId: 'po', onBack() { back += 1; } });
+  const notes = () => findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0];
+  try {
+    setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }] });
+    await hook.settle(render); await flush(); await hook.settle(render);
+    notes().props.onChange({ target: { value: 'Changed' } }); await hook.settle(render);
+    const saving = findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.onSave();
+    await hook.settle(render);
+    notes().props.onChange({ target: { value: 'Original' } }); await hook.settle(render);
+    const header = findAll(hook.getOutput(), (node) => node.props?.backTo)[0];
+    const leaving = header.props.backTo.onClick();
+    assert.equal(back, 0, 'Back waits while save is in flight');
+    first.resolve({ ...poSnapshot().header, notes: 'Changed', updatedAt: 2 });
+    await saving; await leaving; await hook.settle(render);
+    assert.equal(saves.at(-1).notes, 'Original', 'the local revert is saved after the delayed first write');
+    assert.equal(saves.at(-1).expectedUpdatedAt, 2);
+    assert.equal(notes().props.value, 'Original'); assert.equal(back, 1);
+  } finally { hook.cleanup(); }
+});
+
+test('PO save conflict Cancel keeps the draft and blocks Back without an implicit overwrite', async () => {
+  let back = 0; const writes = [];
+  const hook = hookHarness();
+  const api = { purchaseOrders: { getDetail: async () => poSnapshot(), update: async (_id, patch) => { writes.push(patch); throw new Error('CONFLICT|{"kind":"purchaseOrder","id":"po","updatedAt":2}'); } } };
+  const { Component, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook);
+  const render = () => Component({ poId: 'po', onBack() { back += 1; } });
+  try {
+    setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }] });
+    await hook.settle(render); await flush(); await hook.settle(render);
+    findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0].props.onChange({ target: { value: 'Keep my draft' } });
+    await hook.settle(render);
+    await findAll(hook.getOutput(), (node) => node.props?.backTo)[0].props.backTo.onClick(); await hook.settle(render);
+    assert.equal(back, 0);
+    assert.equal(findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0].props.value, 'Keep my draft');
+    assert.equal(writes.length, 1); assert.equal(writes[0].expectedUpdatedAt, 1);
+    assert.equal(findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.state, 'error');
+  } finally { hook.cleanup(); }
+});
+
+test('PO conflict Refresh uses the latest detail and Overwrite requires the explicit choice', async () => {
+  for (const choice of ['Refresh', 'Overwrite']) {
+    let snapshot = poSnapshot(); const writes = []; let conflict = true;
+    const hook = hookHarness();
+    const api = { purchaseOrders: {
+      getDetail: async () => structuredClone(snapshot),
+      update: async (_id, patch) => {
+        writes.push(patch);
+        if (conflict) { snapshot = poSnapshot('Remote', 2); throw new Error('CONFLICT|{"kind":"purchaseOrder","id":"po","updatedAt":2}'); }
+        snapshot = { ...snapshot, header: { ...snapshot.header, ...patch, updatedAt: 3 } }; return snapshot.header;
+      },
+    } };
+    const { Component, ConflictHost, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook, "\nexport { ConflictModalHost } from '../../components/ConflictModal.jsx';");
+    const render = () => ({ type: 'div', props: { children: [Component({ poId: 'po', onBack() {} }), ConflictHost()] } });
+    const notes = () => findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0];
+    try {
+      setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }] });
+      await hook.settle(render); await flush(); await hook.settle(render);
+      notes().props.onChange({ target: { value: 'Local' } }); await hook.settle(render);
+      const saving = findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.onSave();
+      await flush(); await hook.settle(render);
+      assert.equal(writes.length, 1, 'conflict waits for a choice');
+      conflict = false;
+      findAll(hook.getOutput(), (node) => node.type?.name === 'Button' && node.props.children === choice)[0].props.onClick();
+      await saving; await hook.settle(render);
+      assert.equal(notes().props.value, choice === 'Refresh' ? 'Remote' : 'Local');
+      assert.equal(findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.state, 'saved');
+      if (choice === 'Overwrite') { assert.equal(writes.length, 2); assert.equal('expectedUpdatedAt' in writes[1], false); }
+      else assert.equal(writes.length, 1);
+    } finally { hook.cleanup(); }
+  }
+});
+
+test('PO child conflict Refresh rebinds the actual row and its PO revision before retry', async () => {
+  const line = { id: 'line', productId: 'product', productSku: 'A', qty: 1, unitPriceSupplierCurrency: 5 };
+  let snapshot = { ...poSnapshot(), lines: [line] }; let conflict = true; const writes = [];
+  const hook = hookHarness();
+  const api = { purchaseOrders: {
+    getDetail: async () => structuredClone(snapshot),
+    updateLine: async (_id, patch) => {
+      writes.push(patch);
+      if (conflict) { snapshot = { ...poSnapshot('Remote', 2), lines: [{ ...line, qty: 8 }] }; throw new Error('CONFLICT|{"kind":"purchaseOrder","id":"po","updatedAt":2}'); }
+      snapshot = { ...poSnapshot('Remote', 3), lines: [{ ...line, ...patch }] }; return snapshot;
+    },
+  } };
+  const { Component, ConflictHost, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook, "\nexport { ConflictModalHost } from '../../components/ConflictModal.jsx';");
+  const render = () => ({ type: 'div', props: { children: [Component({ poId: 'po', onBack() {} }), ConflictHost()] } });
+  const modal = () => findAll(hook.getOutput(), (node) => node.type?.name === 'LineModal')[0];
+  try {
+    setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }] });
+    await hook.settle(render); await flush(); await hook.settle(render);
+    findAll(hook.getOutput(), (node) => node.type?.name === 'Button' && node.props.children === 'Edit')[0].props.onClick(); await hook.settle(render);
+    const saving = modal().props.onSave({ qty: 2 }); await flush(); await hook.settle(render);
+    assert.equal(writes[0].expectedUpdatedAt, 1);
+    findAll(hook.getOutput(), (node) => node.type?.name === 'Button' && node.props.children === 'Refresh')[0].props.onClick();
+    await saving; await hook.settle(render);
+    assert.equal(modal().props.line.qty, 8); assert.equal(modal().props.line.expectedUpdatedAt, 2);
+    conflict = false; await modal().props.onSave({ qty: 9 }); await hook.settle(render);
+    assert.equal(writes[1].expectedUpdatedAt, 2); assert.equal(modal(), undefined);
+  } finally { hook.cleanup(); }
+});
+
+test('PO acknowledgments and remote reads from an old context cannot replace the current order', async () => {
+  const first = deferred(); const reads = []; let poId = 'po-a';
+  const api = { purchaseOrders: {
+    getDetail: async (id) => { reads.push(id); return { ...poSnapshot(id, id === 'po-a' ? 1 : 10), header: { ...poSnapshot(id, id === 'po-a' ? 1 : 10).header, id } }; },
+    update: () => first.promise,
+  } };
+  const hook = hookHarness(); const { Component, store } = await loadComponent('renderer/modules/PurchaseOrders/PODetail.jsx', 'PODetail', api, hook);
+  const render = () => Component({ poId, onBack() {} });
+  try {
+    setStore(store, { activeCompanyId: 'company', allProducts: [{ id: 'product' }] });
+    await hook.settle(render); await flush(); await hook.settle(render);
+    findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0].props.onChange({ target: { value: 'Pending A' } }); await hook.settle(render);
+    const saving = findAll(hook.getOutput(), (node) => node.type?.name === 'SaveStatus')[0].props.onSave();
+    poId = 'po-b'; await hook.settle(render); await flush(); await hook.settle(render);
+    findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0].props.onChange({ target: { value: 'Pending B' } }); await hook.settle(render);
+    first.resolve({ ...poSnapshot('Saved A', 2).header, id: 'po-a' });
+    await saving; await flush(); await hook.settle(render);
+    assert.equal(findAll(hook.getOutput(), (node) => node.type?.name === 'Textarea')[0].props.value, 'Pending B');
+    assert.deepEqual(reads, ['po-a', 'po-b'], 'old ack cannot launch a fresh read into the current editor');
   } finally { hook.cleanup(); }
 });

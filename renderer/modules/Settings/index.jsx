@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { hasCap } from '../../lib/capabilities.js';
 import { Button, Input, Modal, Select } from '../../components/ui.jsx';
@@ -64,6 +64,10 @@ export function Settings() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
 
+  const [configState, setConfigState] = useState('loading');
+  const [configError, setConfigError] = useState('');
+  const [configRetry, setConfigRetry] = useState(0);
+  const configRequest = useRef(0);
   const [config, setConfig] = useState(null);
   // v0.26.25: snapshot the restart-sensitive values at the moment
   // Settings first loaded. The client runtime + the server runtime
@@ -90,8 +94,11 @@ export function Settings() {
   // both of which are gone with the paid bg-removal engine.
 
   useEffect(() => {
-    window.api?.settings.getAll().then((cfg) => {
-      setConfig(cfg);
+    const request = ++configRequest.current;
+    setConfigState('loading'); setConfigError('');
+    window.api.settings.getAll().then((cfg) => {
+      if (request !== configRequest.current) return;
+      setConfig(cfg); setConfigState('ready');
       // v0.26.25: take the boot snapshot once, on first config load.
       // Subsequent patches mutate `config` but not `bootSnapshot`, so
       // the comparison in RestartBanner stays anchored to the values
@@ -101,8 +108,17 @@ export function Settings() {
         clientServerUrl: cfg?.clientServerUrl ?? '',
         clientToken: cfg?.clientToken ?? '',
       });
-    }).catch(() => setConfig(null));
-    window.api?.app.getVersionInfo().then(setVersionInfo).catch(() => setVersionInfo(null));
+    }).catch((error) => {
+      if (request !== configRequest.current) return;
+      setConfigState('error'); setConfigError(error.message);
+    });
+    return () => { configRequest.current += 1; };
+  }, [configRetry]);
+
+  useEffect(() => {
+    let alive = true;
+    window.api?.app.getVersionInfo().then((info) => { if (alive) setVersionInfo(info); }).catch(() => { if (alive) setVersionInfo(null); });
+    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
@@ -125,11 +141,11 @@ export function Settings() {
   // thing this round set out to remove.
   const canManageSystem = hasCap(caps, 'system.manage');
 
-  if (!config) {
+  if (configState !== 'ready') {
     return (
       <div className="page">
         <PageHeader title="Settings" />
-        <div className="muted" style={{ padding: 'var(--s-5)' }}>Loading…</div>
+        {configState === 'error' ? <div className="card" role="alert"><p>{configError}</p><Button onClick={() => setConfigRetry((value) => value + 1)}>Retry</Button></div> : <div className="muted" role="status" style={{ padding: 'var(--s-5)' }}>Loading…</div>}
       </div>
     );
   }
