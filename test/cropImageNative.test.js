@@ -50,6 +50,24 @@ test('crop preview and both destinations use the displayed raw-source rotation a
     assert.deepEqual([boundedMeta.width, boundedMeta.height], [1024, 512], 'UI reference PNG transfer is bounded');
     assert.ok(bounded.bytes.length < largeBytes.length && bounded.bytes.length < 1024 * 1024 * 4);
     await assert.rejects(handlers.get('images:cropPreview')({ ...largeOpts, previewMaxEdge: 0 }), /previewMaxEdge/);
+    const squareBytes = await sharp(Buffer.from('<svg width="1600" height="1600"><rect width="1600" height="1600" fill="#44aa66"/><rect width="800" height="800" fill="#cc3344"/><rect x="800" y="800" width="800" height="800" fill="#3344cc"/></svg>')).png().toBuffer();
+    const { image: square } = await images.addFromBytes(product.id, squareBytes, '.png', { originalFilepath: 'straighten-cap.png' });
+    const squareOpts = { productId: product.id, imageId: square.id, expectedContentHash: square.contentHash, filepath: square.filepath, rect: full, rotation: 90, straighten: 45 };
+    const squarePreview = await handlers.get('images:cropPreview')(squareOpts);
+    assert.deepEqual([squarePreview.outW, squarePreview.outH], [2263, 2263], 'preview coordinates retain the expanded raw source');
+    const squareSaved = await handlers.get('images:cropImage')({ ...squareOpts, destination: 'newImage' });
+    const squareSavedBytes = fs.readFileSync(images.assetAbsPath(squareSaved.image.filepath));
+    const squareMeta = await sharp(squareSavedBytes).metadata();
+    assert.deepEqual([squareSaved.outW, squareSaved.outH], [squareMeta.width, squareMeta.height], 'new-copy reports persisted dimensions after import scaling');
+    assert.deepEqual([squareMeta.width, squareMeta.height], [1600, 1600], 'the existing product import ceiling is preserved');
+    const expectedCopy = await sharp(squarePreview.bytes).rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true }).png({ compressionLevel: 9 }).toBuffer();
+    assert.deepEqual(await sharp(squareSavedBytes).raw().toBuffer(), await sharp(expectedCopy).raw().toBuffer(), 'selected crop pixels agree after the established import resize');
+    const cropAudit = require('../main/db/auditLog').listForEntity('product', product.id).find((entry) => entry.action === 'image:crop' && entry.after?.destination === 'newImage');
+    assert.deepEqual([cropAudit.after.outW, cropAudit.after.outH], [1600, 1600], 'audit records dimensions that exist on disk');
+    const reusedSquare = await handlers.get('images:cropImage')({ ...squareOpts, destination: 'newImage' });
+    assert.equal(reusedSquare.skipped, true);
+    assert.equal(reusedSquare.image.id, squareSaved.image.id);
+    assert.deepEqual([reusedSquare.outW, reusedSquare.outH], [1600, 1600], 'dedup returns actual reused-file dimensions');
     for (const [W, H] of [[400, 200], [200, 400]]) {
       const pixels = Buffer.alloc(W * H * 3);
       const colors = [[240, 20, 30], [20, 220, 40], [20, 40, 230], [230, 210, 20]];

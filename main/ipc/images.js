@@ -756,16 +756,22 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     const { image, skipped } = await productImages.addFromBytes(productId, outPng, '.png', {
       originalFilepath: `crop:${lastSegment(filepath)}`,
     });
+    // The existing importer caps product copies at 1600px; a straighten
+    // bbox may exceed that. Report the persisted file, including dedup hits.
+    const saved = readImageNow(productId, image.id);
+    if (!saved) throw new Error('Saved crop source file is missing');
+    const savedMeta = await sharp(saved.bytes, { failOn: 'none' }).metadata();
+    const outW = savedMeta.width, outH = savedMeta.height;
     if (!skipped) {
       products.touchUpdated(productId);
       emitCatalogChange('images', 'add', productId);
       auditImage(productId, 'image:crop', {
         filename: lastSegment(filepath),
         destination: 'newImage',
-        outW: r.width, outH: r.height,
+        outW, outH,
       });
     }
-    return { destination: 'newImage', image, skipped: !!skipped, outW: r.width, outH: r.height };
+    return { destination: 'newImage', image, skipped: !!skipped, outW, outH };
   });
 
   // Sample the image's own background colour for the eyedropper.
