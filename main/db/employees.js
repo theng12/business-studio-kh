@@ -3,7 +3,9 @@
  *
  * Only what fuel needs now: code, names (English + Khmer), phone, photo,
  * position, driver / pump-attendant flags, status, optional app account.
- * HR1 extends the same table additively.
+ * HR1 extends the same table additively (main/db/hrSchema.js): the profile
+ * fields below (`updateHrProfile`), status `suspended`, the supervisor link,
+ * and the kiosk PIN (main/db/hrPeople.js).
  *
  * No delete. Someone who leaves is marked `left` (with the date and reason)
  * and keeps every fill, dip and delivery that names them — fuel history
@@ -14,14 +16,24 @@ const { getDb } = require('./index');
 const { prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
 const { uuid, audit, str, badRequest, getCallerUserId, isCalendarDate } = require('./_fuelUtil');
 
-const STATUSES = ['active', 'left'];
+const STATUSES = ['active', 'suspended', 'left'];
+const GENDERS = ['female', 'male', 'other'];
+const EMPLOYMENT_TYPES = ['monthly', 'daily', 'hourly', 'contract'];
 
 /**
- * What goes into History for a staff change: never the phone number or the
- * notes themselves (personal data; History is readable more widely than the
- * staff list) — only that they were set or changed.
+ * HR1: fields only `hr.manage` sees (docs/PEOPLE_AND_FUEL_PLAN.md §6) — ID
+ * and NSSF numbers, bank details, date of birth and home address. `hr.view`
+ * and `fuel.manage` get the directory without them (main/ipc/hrAccess.js).
  */
-const PRIVATE_FIELDS = ['phone', 'notes'];
+const SENSITIVE_FIELDS = ['dob', 'address', 'nationalIdNo', 'nssfNo', 'bankName', 'bankAccountName', 'bankAccountNo'];
+
+/**
+ * What goes into History for a staff change: never the phone number, the
+ * notes or a sensitive HR field themselves (personal data; History is
+ * readable more widely than the staff list) — only that they were set or
+ * changed.
+ */
+const PRIVATE_FIELDS = ['phone', 'notes', ...SENSITIVE_FIELDS];
 function redact(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   const out = { ...obj };
@@ -48,6 +60,23 @@ function rowToEmployee(row) {
     leftReason: row.left_reason ?? null,
     userId: row.user_id ?? null,
     notes: row.notes ?? null,
+    // HR1 profile
+    gender: row.gender ?? null,
+    dob: row.dob ?? null,
+    address: row.address ?? null,
+    nationalIdNo: row.national_id_no ?? null,
+    nssfNo: row.nssf_no ?? null,
+    bankName: row.bank_name ?? null,
+    bankAccountName: row.bank_account_name ?? null,
+    bankAccountNo: row.bank_account_no ?? null,
+    positionId: row.position_id ?? null,
+    hireDate: row.hire_date ?? null,
+    endDate: row.end_date ?? null,
+    employmentType: row.employment_type ?? null,
+    supervisorEmployeeId: row.supervisor_employee_id ?? null,
+    statusReason: row.status_reason ?? null,
+    hasPin: !!row.kiosk_pin_hash,
+    pinLockedUntil: row.pin_locked_until && row.pin_locked_until > Date.now() ? row.pin_locked_until : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     updatedByUserId: row.updated_by_user_id ?? null,
@@ -61,13 +90,14 @@ function list(companyId, { status = null, role = null, q = null, searchPhone = t
   if (status && STATUSES.includes(status)) { where.push('status = @status'); params.status = status; }
   if (role === 'driver') where.push('is_driver = 1');
   if (role === 'attendant') where.push('is_fuel_attendant = 1');
+  if (role === 'supervisor') where.push('id IN (SELECT supervisor_employee_id FROM employees WHERE supervisor_employee_id IS NOT NULL)');
   if (q && String(q).trim()) {
     // A recorder's tile search must not reveal phone numbers by matching them.
     where.push(`(staff_code LIKE @q OR name_en LIKE @q OR name_km LIKE @q${searchPhone ? ' OR phone LIKE @q' : ''})`);
     params.q = `%${String(q).trim()}%`;
   }
   return getDb()
-    .prepare(`SELECT * FROM employees WHERE ${where.join(' AND ')} ORDER BY status = 'left', COALESCE(name_en, name_km, staff_code) COLLATE NOCASE`)
+    .prepare(`SELECT * FROM employees WHERE ${where.join(' AND ')} ORDER BY status = 'left', status = 'suspended', COALESCE(name_en, name_km, staff_code) COLLATE NOCASE`)
     .all(params)
     .map(rowToEmployee);
 }
@@ -89,11 +119,32 @@ function getByUserId(companyId, userId) {
   ).get(companyId, userId));
 }
 
-function checkUser(userId) {
+/**
+ * An app account may be linked to one staff record per company (HR1: the
+ * phone's "clock me in" and the kiosk manager check both resolve the person
+ * from the account, so two records for one account would be ambiguous).
+ */
+function checkUser(userId, companyId = null, employeeId = null) {
   if (userId == null) return null;
   const u = getDb().prepare('SELECT id FROM users WHERE id = ?').get(userId);
   if (!u) throw badRequest('That app account does not exist');
+  if (companyId) {
+    const other = getDb().prepare(`SELECT staff_code, name_en, name_km FROM employees WHERE company_id = ? AND user_id = ? AND id <> ? AND status <> 'left'`)
+      .get(companyId, userId, employeeId || '');
+    if (other) throw badRequest(`That app account is already linked to ${other.name_en || other.name_km || other.staff_code}`);
+  }
   return userId;
+}
+
+/** HR1: keep users.employee_id in step with employees.user_id (the source of truth). */
+function syncUserLink(employeeId, previousUserId, nextUserId) {
+  const db = getDb();
+  try {
+    if (previousUserId && previousUserId !== nextUserId) {
+      db.prepare('UPDATE users SET employee_id = NULL WHERE id = ? AND employee_id = ?').run(previousUserId, employeeId);
+    }
+    if (nextUserId) db.prepare('UPDATE users SET employee_id = ? WHERE id = ?').run(employeeId, nextUserId);
+  } catch (_) { /* the mirror is informational; employees.user_id decides */ }
 }
 
 function create(input = {}) {
@@ -121,11 +172,12 @@ function create(input = {}) {
     position: str(input.position, 80),
     isDriver: input.isDriver ? 1 : 0,
     isFuelAttendant: input.isFuelAttendant ? 1 : 0,
-    userId: checkUser(input.userId ?? null),
+    userId: checkUser(input.userId ?? null, companyId, id),
     notes: str(input.notes, 2000),
     now,
     by: getCallerUserId(),
   });
+  syncUserLink(id, null, input.userId ?? null);
   const created = get(id);
   audit('employee', id, 'create', { after: redact(created) });
   return created;
@@ -139,7 +191,7 @@ const EDITABLE = {
   position: ['position', (v) => str(v, 80)],
   isDriver: ['is_driver', (v) => (v ? 1 : 0)],
   isFuelAttendant: ['is_fuel_attendant', (v) => (v ? 1 : 0)],
-  userId: ['user_id', (v) => checkUser(v ?? null)],
+  userId: ['user_id', (v, e) => checkUser(v ?? null, e.companyId, e.id)],
   notes: ['notes', (v) => str(v, 2000)],
 };
 
@@ -152,7 +204,7 @@ function update(id, rawPatch = {}) {
   const changed = {};
   for (const [key, [col, conv]] of Object.entries(EDITABLE)) {
     if (!(key in patch)) continue;
-    const value = conv(patch[key]);
+    const value = conv(patch[key], existing);
     sets.push(`${col} = @${key}`);
     params[key] = value;
     changed[key] = typeof value === 'number' && (key === 'isDriver' || key === 'isFuelAttendant') ? !!value : value;
@@ -170,8 +222,100 @@ function update(id, rawPatch = {}) {
   params.updatedAt = nextUpdatedAt(existing.updatedAt);
   params.by = getCallerUserId();
   getDb().prepare(`UPDATE employees SET ${sets.join(', ')} WHERE id = @id`).run(params);
+  if ('userId' in changed) syncUserLink(id, existing.userId, changed.userId);
   const diff = require('./auditLog').diffPatch(existing, changed);
   if (diff) audit('employee', id, 'update', { before: redact(diff.before), after: redact(diff.after) });
+  return get(id);
+}
+
+/* ─── HR1: the full profile ───────────────────────────────────── */
+
+function dateField(label) {
+  return (v) => {
+    const s = v == null ? null : String(v).trim();
+    if (!s) return null;
+    if (!isCalendarDate(s)) throw badRequest(`${label} must be a real date like 2026-10-08`);
+    return s;
+  };
+}
+
+const HR_EDITABLE = {
+  gender: ['gender', (v) => { if (v == null || v === '') return null; if (!GENDERS.includes(v)) throw badRequest('Gender must be female, male or other'); return v; }],
+  dob: ['dob', dateField('Date of birth')],
+  address: ['address', (v) => str(v, 500)],
+  nationalIdNo: ['national_id_no', (v) => str(v, 40)],
+  nssfNo: ['nssf_no', (v) => str(v, 40)],
+  bankName: ['bank_name', (v) => str(v, 80)],
+  bankAccountName: ['bank_account_name', (v) => str(v, 120)],
+  bankAccountNo: ['bank_account_no', (v) => str(v, 40)],
+  positionId: ['position_id', (v, e) => {
+    if (v == null || v === '') return null;
+    const p = getDb().prepare('SELECT company_id FROM positions WHERE id = ?').get(v);
+    if (!p || p.company_id !== e.companyId) throw badRequest('That position is not in this company');
+    return v;
+  }],
+  hireDate: ['hire_date', dateField('Hire date')],
+  endDate: ['end_date', dateField('End date')],
+  employmentType: ['employment_type', (v) => { if (v == null || v === '') return null; if (!EMPLOYMENT_TYPES.includes(v)) throw badRequest('Employment type must be monthly, daily, hourly or contract'); return v; }],
+  supervisorEmployeeId: ['supervisor_employee_id', (v, e) => {
+    if (v == null || v === '') return null;
+    if (v === e.id) throw badRequest('Someone cannot be their own supervisor');
+    const db = getDb();
+    const sup = db.prepare('SELECT company_id FROM employees WHERE id = ?').get(v);
+    if (!sup || sup.company_id !== e.companyId) throw badRequest('The supervisor is not on this company\'s staff list');
+    // No loops: walking up from the new supervisor must never reach this person.
+    let cur = v;
+    for (let i = 0; i < 100 && cur; i += 1) {
+      if (cur === e.id) throw badRequest('That would make a loop of supervisors');
+      cur = db.prepare('SELECT supervisor_employee_id AS s FROM employees WHERE id = ?').get(cur)?.s ?? null;
+    }
+    return v;
+  }],
+};
+
+/** Edit the HR profile fields (hr.manage). Audited as sensitive ('hr'); sensitive values never enter History. */
+function updateHrProfile(id, rawPatch = {}) {
+  const existing = get(id);
+  if (!existing) throw badRequest('Staff member not found');
+  const patch = prepareOptimisticPatch({ ...existing, name: existing.nameEn || existing.nameKm }, rawPatch, 'employee');
+  const sets = [];
+  const params = { id };
+  const changed = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'expectedUpdatedAt') continue;
+    if (!(key in HR_EDITABLE)) throw badRequest(`${key} is not a profile field`);
+    const [col, conv] = HR_EDITABLE[key];
+    const v = conv(value, existing);
+    sets.push(`${col} = @${key}`);
+    params[key] = v;
+    changed[key] = v;
+  }
+  if (!sets.length) return existing;
+  const hire = 'hireDate' in changed ? changed.hireDate : existing.hireDate;
+  const end = 'endDate' in changed ? changed.endDate : existing.endDate;
+  if (hire && end && end < hire) throw badRequest('The end date cannot be before the hire date');
+  sets.push('updated_at = @updatedAt', 'updated_by_user_id = @by');
+  params.updatedAt = nextUpdatedAt(existing.updatedAt);
+  params.by = getCallerUserId();
+  getDb().prepare(`UPDATE employees SET ${sets.join(', ')} WHERE id = @id`).run(params);
+  const diff = require('./auditLog').diffPatch(existing, changed);
+  if (diff) audit('employee', id, 'profile', { before: redact(diff.before), after: redact(diff.after), sensitivity: 'hr' });
+  return get(id);
+}
+
+/** Suspend or bring back from suspension (left is markLeft / reactivate). */
+function setStatus(id, status, reason = null) {
+  const existing = get(id);
+  if (!existing) throw badRequest('Staff member not found');
+  if (!['active', 'suspended'].includes(status)) throw badRequest('Status must be active or suspended (use Mark as left for someone leaving)');
+  if (existing.status === 'left') throw badRequest('This person has left — reactivate them first');
+  if (existing.status === status) return existing;
+  if (status === 'suspended' && !str(reason, 500)) throw badRequest('Say why the person is suspended');
+  getDb().prepare('UPDATE employees SET status = ?, status_reason = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ?')
+    .run(status, status === 'suspended' ? str(reason, 500) : null, nextUpdatedAt(existing.updatedAt), getCallerUserId(), id);
+  audit('employee', id, status === 'suspended' ? 'suspend' : 'unsuspend', {
+    before: { status: existing.status }, after: { status, reason: str(reason, 500) }, sensitivity: 'hr',
+  });
   return get(id);
 }
 
@@ -182,8 +326,8 @@ function markLeft(id, { leftOn = null, reason = null } = {}) {
   if (existing.status === 'left') return existing;
   if (leftOn != null && leftOn !== '' && !isCalendarDate(leftOn)) throw badRequest('Left on must be a real date like 2026-10-08');
   const date = leftOn || new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
-  getDb().prepare(`UPDATE employees SET status = 'left', left_on = ?, left_reason = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ?`)
-    .run(date, str(reason, 500), nextUpdatedAt(existing.updatedAt), getCallerUserId(), id);
+  getDb().prepare(`UPDATE employees SET status = 'left', left_on = ?, left_reason = ?, end_date = COALESCE(end_date, ?), updated_at = ?, updated_by_user_id = ? WHERE id = ?`)
+    .run(date, str(reason, 500), date, nextUpdatedAt(existing.updatedAt), getCallerUserId(), id);
   audit('employee', id, 'mark-left', { before: { status: existing.status }, after: { status: 'left', leftOn: date, reason: str(reason, 500) } });
   return get(id);
 }
@@ -192,9 +336,11 @@ function reactivate(id) {
   const existing = get(id);
   if (!existing) throw badRequest('Staff member not found');
   if (existing.status === 'active') return existing;
-  getDb().prepare(`UPDATE employees SET status = 'active', left_on = NULL, left_reason = NULL, updated_at = ?, updated_by_user_id = ? WHERE id = ?`)
-    .run(nextUpdatedAt(existing.updatedAt), getCallerUserId(), id);
-  audit('employee', id, 'reactivate', { before: { status: 'left', leftOn: existing.leftOn }, after: { status: 'active' } });
+  // The end date markLeft wrote goes with it; one an HR manager typed separately stays.
+  getDb().prepare(`UPDATE employees SET status = 'active', left_on = NULL, left_reason = NULL,
+      end_date = CASE WHEN end_date = ? THEN NULL ELSE end_date END, status_reason = NULL, updated_at = ?, updated_by_user_id = ? WHERE id = ?`)
+    .run(existing.leftOn, nextUpdatedAt(existing.updatedAt), getCallerUserId(), id);
+  audit('employee', id, 'reactivate', { before: { status: existing.status, leftOn: existing.leftOn }, after: { status: 'active' } });
   return get(id);
 }
 
@@ -207,4 +353,7 @@ function setPhoto(id, { relPath, sha256 }) {
   return get(id);
 }
 
-module.exports = { list, get, getRow, getByUserId, create, update, markLeft, reactivate, setPhoto, rowToEmployee };
+module.exports = {
+  list, get, getRow, getByUserId, create, update, updateHrProfile, setStatus, markLeft, reactivate, setPhoto, rowToEmployee,
+  STATUSES, GENDERS, EMPLOYMENT_TYPES, SENSITIVE_FIELDS, HR_EDITABLE,
+};

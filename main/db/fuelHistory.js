@@ -14,6 +14,14 @@ const HISTORY_TABLES = [
   ['fuel_deliveries', 'fuel delivery'],
   ['fuel_transfers', 'fuel transfer'],
   ['fuel_meter_resets', 'meter reset'],
+  // HR1
+  ['attendance_events', 'attendance entry'],
+  ['attendance_corrections', 'attendance correction'],
+  ['overtime_approvals', 'overtime approval'],
+  ['lateness_confirmations', 'lateness confirmation'],
+  ['leave_requests', 'leave request'],
+  ['leave_ledger', 'leave ledger entry'],
+  ['employee_documents', 'staff document'],
 ];
 
 function companyHistoryCounts(companyId) {
@@ -35,7 +43,7 @@ function assertCompanyRemovable(companyId) {
   const parts = HISTORY_TABLES
     .filter(([t]) => counts[t] > 0)
     .map(([t, label]) => `${counts[t].toLocaleString('en-US')} ${label}${counts[t] === 1 ? '' : 's'}`);
-  const err = new Error(`This company cannot be deleted: it holds staff and fuel history (${parts.join(', ')}). History is kept for good — staff are marked as left and records are voided, never deleted.`);
+  const err = new Error(`This company cannot be deleted: it holds staff, attendance and fuel history (${parts.join(', ')}). History is kept for good — staff are marked as left and records are voided, never deleted.`);
   err.code = 'HAS_HISTORY';
   throw err;
 }

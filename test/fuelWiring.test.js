@@ -52,10 +52,16 @@ test('the Editor preset does NOT get the fuel capabilities (§2 gap 3)', () => {
 
 test('every fuel/staff channel maps to a fuel capability (none fall through to legacy)', () => {
   assert.ok(ALL_EXPOSED.length > 50, `expected the full channel set, saw ${ALL_EXPOSED.length}`);
+  // HR1: the staff directory is shared with HR (hr.view / hr.manage), and
+  // staff:me also answers a phone that clocks itself in (attendance.self /
+  // attendance.supervise). fuel:* stays fuel-only.
+  const HR = ['hr.view', 'hr.manage', 'attendance.self', 'attendance.supervise'];
   for (const ch of [...ALL_EXPOSED, ...FUEL.local]) {
     const cap = channelCapability(ch);
     const list = Array.isArray(cap) ? cap : [cap];
-    assert.ok(list.every((c) => c === 'fuel.record' || c === 'fuel.manage'), `${ch} → ${JSON.stringify(cap)}`);
+    const ok = (c) => c === 'fuel.record' || c === 'fuel.manage' || (ch.startsWith('staff:') && HR.includes(c));
+    assert.ok(list.every(ok), `${ch} → ${JSON.stringify(cap)}`);
+    assert.ok(list.some((c) => c === 'fuel.record' || c === 'fuel.manage'), `${ch} must stay reachable with a fuel capability`);
   }
 });
 

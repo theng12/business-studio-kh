@@ -590,6 +590,14 @@ app.whenReady().then(() => {
     logEvent('fuel:scheduler-failed', err.message);
   }
 
+  /* HR1: monthly leave accrual / year-end carry-over and the 24-month
+   * clock-in photo retention, 45 s after start and every 12 hours. */
+  try {
+    require('./hrScheduler').startHrScheduler({ log: logEvent });
+  } catch (err) {
+    logEvent('hr:scheduler-failed', err.message);
+  }
+
   // v0.14.2: in server mode, boot the HTTP server after IPC handlers
   // have registered themselves in the registry. Don't block app startup
   // on it — if the port is taken, log and continue (the UI will show

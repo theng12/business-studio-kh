@@ -1,6 +1,6 @@
 # People & Fuel — design plan (2026-10-08)
 
-**Status: approved by the owner on 2026-10-08 with the decisions in §7a; being built stage by stage (F1 first).** Written for the owner (Theng) after he asked for employee
+**Status: approved by the owner on 2026-10-08 with the decisions in §7a/§7b; being built stage by stage (F1 shipped in 0.1.95; HR1 backend built — §10).** Written for the owner (Theng) after he asked for employee
 management (20+ staff on paper today) and reported fuel theft. §0 is the short version; the rest is
 the spec an implementation would follow.
 
@@ -369,7 +369,7 @@ client proxy, preload, `CHANNEL_RULES`).
 | Overtime rates | Start with the **Labour Law defaults** (150% normal-day extra hours; 200% night, weekly day off, public holidays) — editable; confirm with the accountant. Overtime is approved before payroll. |
 | Lateness | Recorded after a grace period and **deducted from pay in payroll (HR2) after approval**; HR1 computes and shows late minutes. |
 | Leave types | Prefilled with **Cambodian law defaults** (annual 1.5 days per month worked, sick, special 7 days, maternity 90 days) for the owner to edit and confirm with the accountant. |
-| Public holidays | **Prefilled with Cambodia's official list** for 2026 (and 2027 where announced), editable each year. |
+| Public holidays | **Prefilled with Cambodia's official list** for 2026 (and 2027 where announced), editable each year. *Built:* 2026 from Sub-Decree No. 167 (18 Sep 2025); for 2027 only the fixed-date holidays (no 2027 sub-decree yet on 2026-10-08) — see §10. |
 
 ## 7. Open questions for the owner (remaining)
 
@@ -587,3 +587,211 @@ move to Recently deleted (kind `fuel-photo`, restorable) and from there to the T
 for a record with an open or confirmed flag, which is kept. `fuel:voidPrice` gives the period before
 the voided price its end back. Dates (`effectiveFrom`, `leftOn`) must be real calendar dates.
 Backups and server bundles carry and restore `fuel/` and `hr/`.
+
+## 10. HR1 API (backend, built 2026-10-08)
+
+For the Mac screens (Staff, Attendance, Leave, Settings → People), the shop-Mac kiosk and the phone
+page. Same conventions as §9: every channel is `expose()`d (this Mac, a client Mac, `/api/rpc` with a
+token) unless marked **local**; everything acts on the caller's **active company** and refuses an id
+from another one; errors are plain sentences, bad arguments `Bad request: <reason>`. Renderer:
+`window.api.hr.*`, `.attendance.*`, `.leave.*`, `.kiosk.*` (main/preload.js); live updates:
+`window.api.hr.onChanged(cb)` receives `hr:changed { kind, op, id, companyId, originUserId }` (ids only).
+Code: schema `main/db/hrSchema.js`; data `main/db/{hr,hrPeople,attendance,leave,employees}.js`; channels
+`main/ipc/{hr,attendance,kiosk,staff}.js`; validators `main/server/hrValidators.js`; pure arithmetic
+`main/util/{attendanceCalc,leaveCalc,kioskPin}.js` (unit-tested); files `main/hrPhotos.js`; jobs
+`main/hrScheduler.js` (45 s after start, then every 12 h; never on a client Mac).
+
+**Capabilities** (group "People", all opt-in, none in the Editor preset): **K** = `attendance.kiosk`
+(or `hr.manage`); **Me** = `attendance.self`; **Sup** = `attendance.supervise`; **V** = `hr.view` or
+`hr.manage`; **M** = `hr.manage`. Local calls on the server Mac's own window are not gated.
+What comes back is narrowed by caller (`main/ipc/hrAccess.js`):
+
+| Caller | Staff record | Attendance | Documents / clock-in photos | History |
+|---|---|---|---|---|
+| `hr.manage` | everything | everything | yes | all HR rows |
+| `hr.view` | directory: no national ID, NSSF no., bank, date of birth, address | figures, review list (no photos) | **no** | HR rows (`sensitivity 'hr'`) |
+| `fuel.manage` | directory (as F1) | — | — | staff rows that are not `hr` |
+| `fuel.record` | tile | — | — | — |
+| kiosk / self / supervisor | tile of themselves (kiosk: tiles of all active staff) | their own | — | — |
+
+**First use** of any HR channel prefills the company once (`hr_settings.prefilled_at`): Cambodia's 2026
+public holidays (Sub-Decree No. 167 of 18 Sep 2025 — 22 holidays on 21 dates; checked 2026-10-08 against
+Andersen Cambodia and Cambodia Investment Review) plus the 2027 holidays whose date is fixed (11, each
+marked "check against the 2027 sub-decree"; Khmer New Year and the lunar holidays are never guessed —
+the owner adds them when announced); one schedule "Standard day" 07:00–17:00, 60 min break, Mon–Sat,
+5 min grace, night 22:00–05:00; the leave types below; `accrualFromMonth` = that month. Source notes
+are in `main/util/cambodiaHolidays.js`.
+
+**Time rules.** Every kiosk, phone and supervisor event is dated by the **server clock**. A phone that
+was offline sends `queuedForMs`; it is capped at `phoneQueueMaxHours` (12) and the event never lands at
+or before the person's previous event; a wait over `queuedReviewMinutes` (15) shows as `queuedLong` in
+the review list. In / out is decided by the server from the person's last event (an `in` of today →
+`out`; a night shift's `in` within `maxShiftHours` (16) → `out` of the day it started; otherwise a new
+`in` — an `in` left open the day before stays open as a missing clock-out). A second tap within
+`doubleTapMinutes` (2) returns the first event (`duplicate: true, doubleTap: true`). `clientRef`
+(6–100 `[A-Za-z0-9_.:-]`) + a hash of the content (incl. the photo's sha256) makes a phone upload
+idempotent, answered only to the account that saved it; same ref, other content → "already used for a
+different entry". Only `attendance:addManual` (M, reason required) chooses a time.
+
+**Calculation** (`main/util/attendanceCalc.js`, per person per day, at read time; nothing derived is
+stored): pairs of in→out (a second `in` and an orphan `out` are ignored and flagged; an `in` never
+closed counts 0 and is `missingOut`); gross = Σ pairs; break: if gross > `breakDeductAfterMin` (300)
+deduct max(0, schedule break − minutes clocked out between pairs); worked = gross − break; **late** =
+first in − (start + grace) once past start + grace (`lateCountsFrom: 'start'` counts from the start
+instead); early leave = end − last out; **absent** = a scheduled work day that is over, not a holiday,
+not on leave, no events (0.5 beside a half day of leave); **overtime** — public holiday: every worked
+minute `holiday` (200 %); weekly day off: every worked minute `restDay` (200 %); work day: minutes after
+the scheduled end (and before the start only with `countEarlyArrival`), of which the ones in the
+night window are `night` (200 %) and the rest `normal` (150 %); a day under `otMinMinutes` (15) is
+none; each category rounded down to `otRoundMinutes` (15). Rates live in settings (`otRates`, Labour
+Law defaults — confirm with the accountant). Payroll (HR2) will pay **approved** overtime only and
+deduct lateness only for a **confirmed** month.
+
+### Settings, positions, schedules, holidays
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `hr:getSettings` | — | `{ otRates: { normal, night, restDay, holiday }, otMinMinutes, otRoundMinutes, countEarlyArrival, lateCountsFrom, breakDeductAfterMin, maxShiftHours, doubleTapMinutes, phoneQueueMaxHours, queuedReviewMinutes, photoRetentionMonths, pinMaxTries, pinLockMinutes, kioskSessionSeconds, kioskSessionMaxMinutes, defaultScheduleId, accrualFromMonth }` | V |
+| `hr:updateSettings` | any of the above (`accrualFromMonth: 'YYYY-MM'`) — unknown keys / out-of-range values refused | settings | M |
+| `hr:listPositions` | `{ includeArchived? }` | `Position[]` `{ id, nameEn, nameKm, department, sort, archived }` | V |
+| `hr:createPosition` / `hr:updatePosition` | `{ nameEn?, nameKm?, department?, sort? }` / `{ id, patch }` (`archived: true`) | `Position` | M |
+| `hr:listSchedules` | `{ includeArchived? }` | `Schedule[]` `{ id, name, startTime, endTime, breakMin, workDays ('1111110', Monday first), graceMin, nightStart, nightEnd, crossesMidnight, archived }` | V |
+| `hr:createSchedule` / `hr:updateSchedule` | `{ name, startTime, endTime, breakMin?, workDays?, graceMin?, nightStart?, nightEnd? }` / `{ id, patch }` (`archived`; the default schedule cannot be archived) | `Schedule` | M |
+| `hr:assignSchedule` | `{ employeeId, scheduleId, effectiveFrom: 'YYYY-MM-DD' }` (same date replaces) | the person's schedule history | M |
+| `hr:listEmployeeSchedules` | `employeeId` | `[{ scheduleId, scheduleName, effectiveFrom, … }]` (none → the company default) | V |
+| `hr:listHolidays` | `{ year?, from?, to?, includeArchived? }` | `Holiday[]` `{ id, date, nameEn, nameKm, paid, sourceNote, archived }` | V |
+| `hr:createHoliday` / `hr:updateHoliday` | `{ date, nameEn?, nameKm?, paid?, sourceNote? }` / `{ id, patch }` (`archived: true` instead of delete) | `Holiday` | M |
+
+### Staff profiles, PINs, documents
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `staff:list` / `staff:get` | as §9 (`role` also `'supervisor'`) | `Employee` narrowed to the caller (table above) | fuel.record, fuel.manage, V |
+| `staff:create` / `update` / `markLeft` / `reactivate` / `setPhoto` | as §9 (`markLeft` also sets `endDate`) | `Employee` | fuel.manage or M |
+| `staff:me` | — | the caller's tile | as §9, or Me / Sup |
+| `hr:getProfile` | `id` | `Employee` (narrowed) + `{ position, positionText, schedules, documents (count, M only) }` | V |
+| `hr:updateProfile` | `{ id, patch: { gender ('female'\|'male'\|'other'), dob, address, nationalIdNo, nssfNo, bankName, bankAccountName, bankAccountNo, positionId, hireDate, endDate, employmentType ('monthly'\|'daily'\|'hourly'\|'contract'), supervisorEmployeeId } }` (no loops; History records only "(set)" for sensitive fields) | `Employee` | M |
+| `hr:setStatus` | `{ id, status: 'active'\|'suspended', reason? }` (reason required to suspend; left is `staff:markLeft`) | `Employee` | M |
+| `hr:setPin` | `{ id, pin }` — 4–8 digits, not one repeated digit, not a straight run | `{ id, hasPin }` | M |
+| `hr:clearPin` / `hr:unlockPin` | `id` | `{ id, hasPin }` / `{ id, locked: false }` | M |
+| `hr:listDocuments` | `{ employeeId, includeVoided? }` | `Document[]` `{ id, kind, title, mime, sha256, bytes, uploadedAt, voided, … }` | M |
+| `hr:addDocument` | `{ employeeId, kind: 'id_card'\|'contract'\|'certificate'\|'photo'\|'other', title?, bytes }` (PDF kept as sent; a photo/scan → JPEG ≤ 2400 px; 15 MB) | `Document` | M |
+| `hr:readDocument` | `{ id, thumb? }` (each read is audited) | `{ bytes, mime, sha256, intact, kind, title, voided }` | M |
+| `hr:voidDocument` | `{ id, reason }` (never deleted; the file stays) | `Document` | M |
+
+`Employee` adds to §9: `gender, dob, address, nationalIdNo, nssfNo, bankName, bankAccountName,
+bankAccountNo, positionId, hireDate, endDate, employmentType, supervisorEmployeeId, statusReason, hasPin,
+pinLockedUntil`; `status` may be `suspended` (cannot clock in). Linking `userId` also sets
+`users.employee_id`; one account can be linked to only one active staff record per company.
+
+### Attendance (manager / viewer)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `attendance:day` | `{ date? }` (default today) | `{ date, rows: [{ employeeId, staffCode, names, status ('present'\|'late'\|'incomplete'\|'absent'\|'leave'\|'holiday'\|'off'\|'future'), firstIn, lastOut, workedMin, lateMin, earlyLeaveMin, overtime, missingOut, holiday, leave, flags }] }` | V |
+| `attendance:monthSummary` | `{ month?, employeeId?, withDays? }` | `{ month, settings: { otRates, lateCountsFrom }, rows: [{ employeeId, …, totals: { daysWorked, workedMin, regularMin, lateDays, lateMin, earlyLeaveDays, earlyLeaveMin, absentDays, leaveDays, holidays, missingOutDays, overtimeComputed, overtimeApproved, overtimePending, otRates }, lateness, days? }] }` (days always when one person is asked) | V |
+| `attendance:listEvents` | `{ employeeId?, from?, to? (work dates), includeVoided?, limit?, offset? }` | `{ items: Event[] (+ supersededById), total }` | V |
+| `attendance:getPhoto` | `{ eventId, thumb? }` | `{ bytes, mime, sha256, intact, at, kind, source }` or `null`; a photo past retention → "in Recently deleted" | **M** |
+| `attendance:addManual` | `{ employeeId, kind: 'in'\|'out', at, workDate?, reason }` | `Event` (`source: 'manual'`) | M |
+| `attendance:void` | `{ id, reason }` | `{ event, already }` | M |
+| `attendance:listReview` | `{ status?: 'pending' (default) \| 'accepted' \| 'rejected' \| 'all', source?: 'phone'\|'supervisor', employeeId?, from?, to? (ms), limit?, offset? }` | `{ items: Event & { queuedLong }[], total }` | V |
+| `attendance:review` | `{ id, decision: 'accept'\|'reject', reason? }` (reject needs a reason and voids the event) | `Event` | M |
+| `attendance:listCorrections` | `{ status?, employeeId?, limit?, offset? }` | `{ items: Correction[], total }` | V |
+| `attendance:requestCorrection` | `{ employeeId, workDate, inTime?: 'HH:MM', outTime?: 'HH:MM', reason }` | `Correction` (pending — no event yet) | M |
+| `attendance:decideCorrection` | `{ id, decision: 'approve'\|'reject', note?, inTime?, outTime? }` (approve may adjust the times; each time becomes a `correction` event superseding that day's first in / last out) | `{ correction, events }` | M |
+| `attendance:listOvertime` | `{ month?, employeeId?, includeVoided? }` | `Overtime[]` `{ id, employeeId, workDate, minutes: { normal, night, restDay, holiday }, note, approvedAt, voided }` | V |
+| `attendance:approveOvertime` | `{ employeeId, workDate, minutes: { normal?, night?, restDay?, holiday? }, note? }` (never more than the day shows; re-approving replaces) | `Overtime` | M |
+| `attendance:revokeOvertime` | `{ id, reason }` | `Overtime` | M |
+| `attendance:listLateness` | `{ month?, employeeId? }` | `Lateness[]` | V |
+| `attendance:confirmLateness` | `{ employeeId, month, lateMinutes?, earlyLeaveMinutes?, note? }` (a month that has ended; default = computed; lower = a waiver, note required) | `Lateness` `{ computedLateMin, confirmedLateMin, computedEarlyLeaveMin, confirmedEarlyLeaveMin, … }` | M |
+
+`Event = { id, employeeId, kind, at, workDate, source ('kiosk'|'phone'|'supervisor'|'manual'|'correction'),
+recordedByUserId, deviceLabel, hasPhoto, photoRetired, supersedesEventId, correctionId, note, queuedForMs,
+reviewStatus ('none'|'pending'|'accepted'|'rejected'), reviewedByUserId, reviewedAt, reviewNote, voided,
+voidedAt, voidReason, createdAt }`. `Correction = { id, employeeId, workDate, proposedInAt, proposedOutAt,
+reason, requestedVia ('kiosk'|'phone'|'manager'), status, decidedByUserId, decidedAt, decisionNote,
+resultingInEventId, resultingOutEventId }`.
+
+### Phone: my own (attendance.self) and my crew (attendance.supervise)
+The person is the staff record linked to the calling account (`employees.user_id`) in the active
+company — never an id from the phone ("This account is not linked to a staff record…" otherwise).
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `attendance:clockSelf` | `{ photo (selfie, required), clientRef?, queuedForMs? }` | `{ event, duplicate, doubleTap }` — `source 'phone'`, `reviewStatus 'pending'` | Me |
+| `attendance:mine` | — | `OwnView` | Me |
+| `attendance:requestCorrectionSelf` | `{ workDate, inTime?, outTime?, reason }` | `Correction` (`via 'phone'`) | Me |
+| `leave:requestSelf` | `{ leaveTypeId, fromDate, toDate?, halfDay?: 'am'\|'pm', reason? }` | `LeaveRequest` (`via 'phone'`) | Me |
+| `leave:cancelSelf` | `{ id, reason? }` (own, still pending) | `LeaveRequest` | Me |
+| `attendance:crew` | — | `[tile + { today: { status, firstIn, lastOut }, lastEvent }]` — active staff whose `supervisorEmployeeId` is the caller's record | Sup |
+| `attendance:markCrew` | `{ employeeId (crew only, not yourself), kind?: 'in'\|'out' (default: decided), photo?, note?, clientRef?, queuedForMs? }` | `{ event, duplicate, doubleTap }` — `source 'supervisor'`, pending review | Sup |
+
+`OwnView = { employee (tile), today (day result), lastEvent, thisMonth: { month, totals, days,
+latenessConfirmed }, lastMonth: { … }, leave: Balance[], requests: { leave: pending[], corrections:
+pending[] } }` — no photos, nobody else's data.
+
+### Leave
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `leave:listTypes` | `{ includeArchived? }` | `LeaveType[]` `{ id, code, nameEn, nameKm, paid, accrual ('monthly'\|'yearly'\|'none'), accrualDays, tracksBalance, maxBalance, carryOverMax, maxDaysPerRequest, countCalendarDays, needsDocument, note, archived }` | V |
+| `leave:createType` / `leave:updateType` | `{ code, nameEn?, … }` / `{ id, patch }` (code fixed; `archived`) | `LeaveType` | M |
+| `leave:balances` | `{ employeeId }` | `Balance[]` `{ leaveTypeId, code, names, paid, tracksBalance, balance (Σ ledger, tracked types), takenThisYear, pendingDays }` | V |
+| `leave:ledger` | `{ employeeId, leaveTypeId?, limit? }` | `[{ date, kind ('accrual'\|'taken'\|'adjustment'\|'carry_over'\|'expiry'), days (signed), period, requestId, note }]` | V |
+| `leave:listRequests` | `{ status?, employeeId?, from?, to?, limit?, offset? }` | `{ items: LeaveRequest[], total }` | V |
+| `leave:request` | `{ employeeId, leaveTypeId, fromDate, toDate?, halfDay?, reason? }` | `LeaveRequest` (pending; `days` = work days of the person's schedule minus holidays, or calendar days for maternity; overlaps refused) | M |
+| `leave:decide` | `{ id, decision: 'approve'\|'reject', note?, allowNegative? }` (re-counts the days; a tracked type without enough balance is refused unless `allowNegative`; reject needs a note) | `LeaveRequest` | M |
+| `leave:cancel` | `{ id, reason? }` (approved → the days go back as an `adjustment`; reason required) | `LeaveRequest` | M |
+| `leave:adjust` | `{ employeeId, leaveTypeId, days (±), date?, note }` (opening balances) | `{ balance }` | M |
+
+Prefilled types (Labour Law defaults, each noted "confirm with the accountant"): **annual** — paid,
+1.5 days per eligible month (employed ≥ half the month), carry-over max 18; **special** — paid, 7 days
+granted each calendar year, carry-over 0 (lapses 31 Dec); **sick** — paid, not balance-tracked, document
+needed; **maternity** — paid, 90 calendar days per request, document; **unpaid**. The job (`hr:runJobs`,
+scheduler) writes monthly accruals for every complete month from `accrualFromMonth`, yearly grants and
+the 31 December expiry of anything over the carry-over limit — each unique per employee + type + period,
+so it is safe to run any number of times; earlier service is entered once with `leave:adjust`.
+
+### Kiosk (the shop Mac's account — attendance.kiosk)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `kiosk:tiles` | — | `[{ id, nameEn, nameKm, hasPhoto, photoSha256, hasPin, isManager }]` (active staff only) | K |
+| `kiosk:tilePhoto` | `{ id }` | `{ bytes, mime, sha256 }` (320 px) or `null` | K |
+| `kiosk:signIn` | `{ employeeId, pin }` | `{ sessionToken, expiresInSeconds, employee, nextKind, lastEvent }`; wrong PIN → "Wrong PIN. N tries left." / after `pinMaxTries` (5) "Locked for 10 min — ask a manager" | K |
+| `kiosk:clock` | `{ sessionToken, photo (required) }` | `{ event, duplicate, doubleTap }` — `source 'kiosk'`, server time | K |
+| `kiosk:me` | `{ sessionToken }` | `OwnView` | K |
+| `kiosk:requestLeave` | `{ sessionToken, leaveTypeId, fromDate, toDate?, halfDay?, reason? }` | `LeaveRequest` (`via 'kiosk'`) | K |
+| `kiosk:requestCorrection` | `{ sessionToken, workDate, inTime?, outTime?, reason }` ("I forgot to clock out" — a request, never an event) | `Correction` | K |
+| `kiosk:signOut` | `{ sessionToken }` | `{ ended }` | K |
+| `kiosk:verifyManagerPin` | `{ employeeId, pin }` — a staff member linked to an account with `hr.manage` (or admin); same PIN lock | `{ ok: true, managerId }` | K |
+
+A session token is random, held in the server's memory, bound to the kiosk **account** that signed in
+and the company, valid `kioskSessionSeconds` (120) after its last use and `kioskSessionMaxMinutes` (10)
+at most; a restart ends every session. After sign-in nothing the screen sends names an employee.
+
+### Jobs and export
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `hr:runJobs` | — | `{ accruals: { accrued, granted, expired }, photos: { retired, missing } }` | M |
+| `hr:getMonthWorkbook` | `{ month? }` | `{ filename, bytes }` (.xlsx: Summary — per person days worked, hours, late / early-leave minutes and their confirmation, absences, missing clock-outs, overtime by category computed / approved / pending, leave days by type, holidays; Days; Notes). No ID / bank data. | V |
+| `hr:saveMonthWorkbook` **local** | `{ month? }` | saved path or `null` (Save dialog on this Mac; client mode has its own) | V |
+
+**Files.** Clock-in photos: `<dataDir>/hr/attendance/<yyyy-mm>/<event-id>.jpg` (≤ 1280 px JPEG,
+sha256 on the event), kept `photoRetentionMonths` (24) then moved to Recently deleted (kind `hr-photo`,
+labelled with the date only, restorable) and from there to the Trash; a photo of an event still waiting
+for review is kept. Documents: `<dataDir>/hr/employees/<id>/docs/` — never swept. Both are under `hr/`,
+already in `BACKUP_DATA_ENTRIES` and `ARCHIVE_TOP_LEVEL_DIRS`; neither is reachable through `/assets/`
+or `app-image://`.
+
+**History.** Every HR write is audited with `audit_log.sensitivity = 'hr'` (sensitive values are written
+as "(set)"; PINs never). History hides `hr` rows from callers without `hr.view`/`hr.manage`, `employee`
+rows from callers without `fuel.manage`/`hr.view`/`hr.manage`, `fuel_*` rows from callers without
+`fuel.manage`, and `payroll` rows (HR2) from everyone but admins. `audit:clearHistory` never removes
+staff, fuel, HR or payroll rows and reports them as `kept`.
+
+**Not deletable, by design.** No channel deletes an attendance event, correction, overtime approval,
+lateness confirmation, leave request, ledger row or document: void, supersede, reverse, cancel.
+`companies:remove` refuses while any of them exists. Holidays, schedules, positions and leave types are
+archived.
+
+**Realistic data.** `ELECTRON_RUN_AS_NODE=1 npx electron scripts/seed-realistic.js --out <dir> --hr
+--products 0` (≈2.5 min) adds 92 days (`--hr-days N`) of HR on top of the fuel dataset: ≈2,350 kiosk,
+≈920 phone (some sent late) and ≈610 supervisor clock-ins through `/api/rpc` with a kiosk-only account,
+lateness, all four overtime categories, five leave requests (one rejected), monthly overtime approvals
+and lateness confirmations, a forgotten clock-out fixed by a kiosk correction, a buddy-punch attempt
+(the PIN locks after five guesses) and a supervisor mark rejected on review; `hr-truth.json` lists them.
