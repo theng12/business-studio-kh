@@ -18,9 +18,16 @@ function register({ exposeLocal }) {
   const h = makeKioskModeHandlers({
     verifyManagerPin: (args) => require('./kiosk').verifyManagerPin(args),
     getCaps: () => ['*'],
-    // The data is on this Mac: the office Mac is never "unreachable" here, so
-    // the recovery code is refused and a manager PIN is the way out.
-    isServerReachable: () => true,
+    // The data is on this Mac, so it can check there is a way out before the
+    // screen is locked: an active manager (hr.manage account) with a kiosk PIN.
+    // (The recovery code works here whenever no manager PIN does — there is no
+    // office Mac to lose; see makeKioskModeHandlers.)
+    countManagersWithPin: () => {
+      const companyId = require('./fuelAccess').activeCompanyId();
+      const people = require('../db/hrPeople');
+      return require('../db/employees').list(companyId, { status: 'active' })
+        .filter((e) => e.hasPin && people.isManagerEmployee(e)).length;
+    },
   });
   exposeLocal('kioskMode:status', () => h.status());
   exposeLocal('kioskMode:askCamera', () => h.askCamera());
@@ -29,6 +36,7 @@ function register({ exposeLocal }) {
   exposeLocal('kioskMode:recover', (args) => h.recover(args));
   exposeLocal('kioskMode:leave', (args) => h.leave(args));
   exposeLocal('kioskMode:quit', (args) => h.quit(args));
+  exposeLocal('kioskMode:logError', (args) => h.logError(args));
 }
 
 module.exports = { register };

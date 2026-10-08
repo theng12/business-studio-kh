@@ -19,14 +19,14 @@
 
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Badge, Button, EmptyState, Field, Input, Modal, Select, Textarea } from '../../components/ui.jsx';
+import { Badge, Button, EmptyState, Field, Input, Modal, Pagination, Select, Textarea, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { ReasonModal, StaffAvatar } from '../Fuel/FuelShared.jsx';
 import { fmtShort } from '../Fuel/fuelModel.js';
-import { useAutosave, useDocumentUrl, useHrCaps, useHrLookups, useHrTick, useStaffTick } from '../People/hrHooks.js';
-import { DayDetailModal, DayStatusBadge, MonthSelect, ToneBadge } from '../People/HrShared.jsx';
+import { useAutosave, useDocumentUrl, useHrCaps, useHrLookups, useHrTick, usePager, useStaffTick } from '../People/hrHooks.js';
+import { DayDetailModal, DayStatusBadge, MonthSelect, ToneBadge, clampServerPage } from '../People/HrShared.jsx';
 import { AdjustBalanceModal, LeaveRequestModal, LedgerTable, useLeaveDecisions } from '../People/LeaveModals.jsx';
 import { BalanceTable } from '../People/Leave.jsx';
 import {
@@ -660,8 +660,12 @@ function AttendanceSection({ profile, canManage }) {
 function LeaveSection({ profile, lookups, canManage }) {
   const tick = useHrTick(['leave', 'leaveType']);
   const [balances, setBalances] = useState([]);
-  const [requests, setRequests] = useState([]);
+  const [requests, setRequests] = useState({ items: [], total: 0 });
   const [ledger, setLedger] = useState([]);
+  // Review fix L6: requests are paged on the server, the ledger on screen (§10).
+  const pager = usePager([profile.id]);
+  const [ledgerPage, setLedgerPage] = useState(0);
+  const [ledgerSize, setLedgerSize] = useState(50);
   const [retry, setRetry] = useState(0);
   const [requesting, setRequesting] = useState(false);
   const [adjusting, setAdjusting] = useState(false);
@@ -671,14 +675,26 @@ function LeaveSection({ profile, lookups, canManage }) {
     let alive = true;
     Promise.all([
       window.api.leave.balances(profile.id),
-      window.api.leave.listRequests({ employeeId: profile.id, limit: 50 }),
       window.api.leave.ledger(profile.id),
-    ]).then(([b, r, l]) => {
+    ]).then(([b, l]) => {
       if (!alive) return;
-      setBalances(b || []); setRequests(r?.items || []); setLedger(l || []); setError(null);
+      setBalances(b || []); setLedger(l || []); setError(null);
     }).catch((err) => { if (alive) setError(errText(err)); });
     return () => { alive = false; };
   }, [profile.id, tick, retry]);
+  useEffect(() => {
+    let alive = true;
+    window.api.leave.listRequests({ employeeId: profile.id, limit: pager.pageSize, offset: pager.offset })
+      .then((r) => {
+        if (!alive) return;
+        setRequests({ items: r?.items || [], total: r?.total || 0 });
+        clampServerPage(r?.total, pager.page, pager.pageSize, pager.setPage);
+      })
+      .catch((err) => { if (alive) setError(errText(err)); });
+    return () => { alive = false; };
+  }, [profile.id, pager.page, pager.pageSize, pager.offset, tick, retry]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reqPage = paginate(requests.total, pager.page, pager.pageSize);
+  const led = paginate(ledger.length, ledgerPage, ledgerSize);
   return (
     <div className="hr-sections">
       <section className="card hr-card">
@@ -696,12 +712,12 @@ function LeaveSection({ profile, lookups, canManage }) {
       </section>
       <section className="card hr-card">
         <h2 className="section-title">Requests</h2>
-        {requests.length === 0 ? <p className="muted">No leave requests yet.</p> : (
+        {requests.items.length === 0 ? <p className="muted">No leave requests yet.</p> : (
           <div className="data-table-wrap">
             <table className="data-table">
               <thead><tr><th>Leave</th><th>When</th><th className="is-num">Days</th><th>Reason</th><th>Status</th>{canManage ? <th className="is-actions" /> : null}</tr></thead>
               <tbody>
-                {requests.map((r) => (
+                {requests.items.map((r) => (
                   <tr key={r.id}>
                     <td>{leaveTypeName(lookups.maps.leaveTypes.get(r.leaveTypeId))}</td>
                     <td>{fmtDateRange(r.fromDate, r.toDate)}{r.halfDay ? <span className="muted"> ({r.halfDay === 'am' ? 'morning' : 'afternoon'})</span> : null}</td>
@@ -723,10 +739,14 @@ function LeaveSection({ profile, lookups, canManage }) {
             </table>
           </div>
         )}
+        <Pagination total={requests.total} pageStart={reqPage.pageStart} pageEnd={Math.min(reqPage.pageStart + requests.items.length, requests.total)}
+          currentPage={reqPage.currentPage} maxPage={reqPage.maxPage} pageSize={pager.pageSize} onPageChange={pager.setPage} onPageSizeChange={pager.setPageSize} />
       </section>
       <section className="card hr-card">
         <h2 className="section-title">Ledger</h2>
-        <LedgerTable rows={ledger} types={lookups.maps.leaveTypes} />
+        <LedgerTable rows={ledger.slice(led.pageStart, led.pageEnd)} types={lookups.maps.leaveTypes} />
+        <Pagination total={ledger.length} pageStart={led.pageStart} pageEnd={led.pageEnd} currentPage={led.currentPage} maxPage={led.maxPage}
+          pageSize={ledgerSize} onPageChange={setLedgerPage} onPageSizeChange={(n) => { setLedgerSize(n); setLedgerPage(0); }} />
       </section>
       <LeaveRequestModal open={requesting} staff={lookups.staff} types={lookups.leaveTypes} employeeId={profile.id} onClose={() => { setRequesting(false); setRetry((n) => n + 1); }} />
       <AdjustBalanceModal open={adjusting} employee={profile} types={lookups.leaveTypes} onClose={() => { setAdjusting(false); setRetry((n) => n + 1); }} />

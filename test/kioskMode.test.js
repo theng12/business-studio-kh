@@ -86,12 +86,13 @@ test('the generic settings setters refuse the kiosk keys — on both paths, thro
 
 /* ── the handlers (shared by both registration paths) ── */
 
-function handlers({ caps = ['*'], verify, reachable = true } = {}) {
+function handlers({ caps = ['*'], verify, reachable = true, managers } = {}) {
   const seen = [];
   const h = kiosk.makeKioskModeHandlers({
     verifyManagerPin: async (args) => { seen.push(args); if (verify) return verify(args); return { ok: true, managerId: args.employeeId }; },
     getCaps: () => caps,
     isServerReachable: () => reachable,
+    countManagersWithPin: managers == null ? null : () => managers,
   });
   return { h, seen };
 }
@@ -167,7 +168,34 @@ test('quit: needs the manager PIN (purpose quit), then quits', async () => {
   assert.equal(calls.quit, 1);
 });
 
-test('recovery code: refused while the office Mac answers; 5 wrong → 15-min local lock; the right code turns kiosk mode off', async () => {
+test('standalone / server: enabling is refused until an active manager has a PIN (no code is even shown)', async () => {
+  const none = handlers({ managers: 0 });
+  await assert.rejects(none.h.newRecoveryCode(), /No manager can leave kiosk mode yet/);
+  await assert.rejects(none.h.enable({}), /No manager can leave kiosk mode yet/);
+  assert.equal(config.loadConfig().kioskMode, false);
+  const one = handlers({ managers: 1 });
+  assert.ok((await one.h.newRecoveryCode()).code);
+  // The standalone registration passes the real count; a client (which cannot see managers) does not.
+  assert.match(strip(read('main/ipc/kioskMode.js')), /countManagersWithPin: \(\) => \{[\s\S]*?e\.hasPin && people\.isManagerEmployee\(e\)/);
+  assert.doesNotMatch(strip(read('main/client/index.js')), /countManagersWithPin/);
+});
+
+test('standalone / server: the recovery code works without any office-Mac check (there is none)', async () => {
+  config.updateConfig({ mode: 'standalone' });
+  const setup = handlers({ managers: 1 });
+  const { code } = await setup.h.newRecoveryCode();
+  await setup.h.enable({});
+  await flushTimers();
+  assert.equal((await setup.h.status()).recoveryNeedsOffline, false);
+  // "reachable" is never asked on a standalone Mac.
+  assert.deepEqual(await handlers({ reachable: true }).h.recover({ code }), { ok: true });
+  assert.equal(config.loadConfig().kioskMode, false);
+  await flushTimers();
+});
+
+test('client: recovery code refused while the office Mac answers; 5 wrong → 15-min local lock; the right code turns kiosk mode off', async () => {
+  config.updateConfig({ mode: 'client' });
+  t_after_mode_reset();
   const setup = handlers();
   const { code } = await setup.h.newRecoveryCode();
   await setup.h.enable({ openAtLogin: true });
@@ -203,7 +231,10 @@ test('recovery code: refused while the office Mac answers; 5 wrong → 15-min lo
   await flushTimers();
   assert.equal(calls.relaunch, relaunches + 1);
   await assert.rejects(offline.h.recover({ code }), /not in kiosk mode/);
+  config.updateConfig({ mode: 'standalone' });
 });
+
+function t_after_mode_reset() { /* mode is put back at the end of the test */ }
 
 test('recovery code: a kiosk turned on without one says so', async () => {
   config.updateConfig({ kioskMode: true, kioskRecoveryHash: null, kioskRecoverySalt: null });
@@ -269,7 +300,7 @@ test('who may enable the kiosk', () => {
 
 /* ── wiring ── */
 
-const KIOSK_MODE_CHANNELS = ['kioskMode:askCamera', 'kioskMode:enable', 'kioskMode:leave', 'kioskMode:newRecoveryCode', 'kioskMode:quit', 'kioskMode:recover', 'kioskMode:status'];
+const KIOSK_MODE_CHANNELS = ['kioskMode:askCamera', 'kioskMode:enable', 'kioskMode:leave', 'kioskMode:logError', 'kioskMode:newRecoveryCode', 'kioskMode:quit', 'kioskMode:recover', 'kioskMode:status'];
 
 test('kioskMode:* are LOCAL on both paths (exposeLocal + handleLocal), same names, same shared handlers', () => {
   const standalone = strip(read('main/ipc/kioskMode.js'));
@@ -284,7 +315,7 @@ test('kioskMode:* are LOCAL on both paths (exposeLocal + handleLocal), same name
   assert.match(standalone, /require\('\.\/kiosk'\)\.verifyManagerPin\(args\)/);
   assert.match(client, /rpc\('kiosk:verifyManagerPin', args\)/);
   // Recovery code: refused on the data Mac; on a client only when /api\/whoami fails.
-  assert.match(standalone, /isServerReachable: \(\) => true/);
+  assert.doesNotMatch(standalone, /isServerReachable/, 'standalone has no office Mac to ask');
   assert.match(client, /isServerReachable: async \(\) => \{[\s\S]*?\/api\/whoami[\s\S]*?return res\.ok;/);
   const proxied = client.match(/PROXIED_CHANNELS\s*=\s*\[([\s\S]*?)\n\];/)[1];
   assert.ok(proxied.includes("'kiosk:verifyManagerPin'"), 'the proxied list was found');
@@ -313,7 +344,16 @@ test('kioskMode:* validators: same rule both paths, bad shapes refused', () => {
     assert.equal(typeof v('5820'), 'string');
   }
   const vm = getValidator('kiosk:verifyManagerPin');
-  for (const purpose of [undefined, 'leave', 'quit', 'no-photo']) assert.equal(vm({ employeeId: 'm', pin: '1234', purpose }), true);
+  for (const purpose of [undefined, 'leave', 'quit']) assert.equal(vm({ employeeId: 'm', pin: '1234', purpose }), true);
+  assert.equal(typeof vm({ employeeId: 'm', pin: '1234', purpose: 'no-photo' }), 'string', 'no-photo needs the signed-in session');
+  assert.equal(vm({ employeeId: 'm', pin: '1234', purpose: 'no-photo', sessionToken: 'tok' }), true);
+  assert.equal(vm({ employeeId: 'm', pin: '1234', preview: true }), true);
+  assert.equal(typeof vm({ employeeId: 'm', pin: '1234', preview: 'yes' }), 'string');
+  const vc = getValidator('kiosk:clock');
+  assert.equal(vc({ sessionToken: 'tok', noPhoto: true }), true);
+  assert.equal(typeof vc({ sessionToken: 'tok' }), 'string', 'a photo, or noPhoto');
+  assert.equal(typeof vc({ sessionToken: 'tok', noPhoto: true, photo: new Uint8Array([1]) }), 'string', 'not both');
+  assert.equal(getValidator('kiosk:signIn')({ employeeId: 'e', pin: '1234', preview: true }), true);
   assert.equal(typeof vm({ employeeId: 'm', pin: '1234', purpose: 'payroll' }), 'string');
 });
 
@@ -322,7 +362,9 @@ test('preload: kioskMode methods, the quit-request event, and verifyManagerPin w
   for (const ch of KIOSK_MODE_CHANNELS) assert.ok(preload.includes(`invoke('${ch}'`), `preload has no method for ${ch}`);
   assert.match(preload, /ipcRenderer\.on\('kioskMode:quitRequested'/);
   assert.match(read('main/kioskWindow.js'), /webContents\.send\('kioskMode:quitRequested'\)/);
-  assert.match(preload, /invoke\('kiosk:verifyManagerPin', \{ employeeId, pin, purpose \}\)/);
+  assert.match(preload, /invoke\('kiosk:verifyManagerPin', \{ employeeId, pin, purpose, sessionToken, preview \}\)/);
+  assert.match(preload, /invoke\('kiosk:clock', \{ sessionToken, photo, noPhoto \}\)/);
+  assert.match(preload, /invoke\('kiosk:signIn', \{ employeeId, pin, preview \}\)/);
 });
 
 test('the kiosk window replaces the normal one in kiosk mode, on both boot paths, and loads #kiosk', () => {
@@ -332,8 +374,30 @@ test('the kiosk window replaces the normal one in kiosk mode, on both boot paths
   assert.match(create, /kioskWindow\.createKioskWindow\(/);
   assert.match(index, /kioskWindow\.configureKiosk\(\{ log: logEvent \}\)/);
   assert.equal(kiosk.KIOSK_HASH, 'kiosk');
-  assert.match(read('renderer/main.jsx'), /window\.location\.hash === '#kiosk'/);
-  assert.match(read('renderer/main.jsx'), /isKioskWindow \? <KioskApp \/> : <App \/>/);
+  // The renderer learns it is the kiosk window from MAIN (additionalArguments → preload), not the hash.
+  const main = strip(read('renderer/main.jsx'));
+  assert.match(main, /const isKioskWindow = window\.api\?\.kioskMode\?\.isKioskWindow === true;/);
+  assert.doesNotMatch(main, /location\.hash/);
+  assert.match(main, /isKioskWindow \? <KioskErrorBoundary><KioskApp \/><\/KioskErrorBoundary> : <App \/>/);
+  assert.match(read('main/preload.js'), /isKioskWindow: {3}process\.argv\.includes\('--mskh-kiosk-window'\)/);
+  assert.equal(kiosk.KIOSK_WINDOW_ARG, '--mskh-kiosk-window');
+  assert.deepEqual(kiosk.kioskWindowOptions({ preloadPath: '/p.js' }).webPreferences.additionalArguments, ['--mskh-kiosk-window']);
+  // Navigation: only the exact kiosk URL.
+  const target = kiosk.kioskUrl('app://local/index.html');
+  assert.equal(kiosk.isKioskNavigationAllowed(target, target), true);
+  for (const url of ['app://local/index.html', 'app://local/index.html#home', 'app://local/other.html#kiosk', 'file:///etc/hosts', 'https://example.com/#kiosk']) {
+    assert.equal(kiosk.isKioskNavigationAllowed(url, target), false, url);
+  }
+});
+
+test('a crash on the kiosk screen is logged by main', async () => {
+  const lines = [];
+  kiosk.configureKiosk({ log: (e, d) => lines.push(`${e} ${d}`) });
+  await handlers().h.logError({ message: 'boom', stack: 'Error: boom\n at A\n at B' });
+  kiosk.configureKiosk({ log: () => {} });
+  assert.match(lines[0], /^kiosk:render-error boom :: Error: boom \|/);
+  assert.equal(typeof getValidator('kioskMode:logError')({ message: 'x'.repeat(2001) }), 'string');
+  assert.equal(getValidator('kioskMode:logError')({ message: 'boom', stack: 's' }), true);
 });
 
 test('the kiosk screen talks only to kiosk:* (the server) and kioskMode:* (this Mac)', () => {
@@ -349,7 +413,9 @@ test('the kiosk screen talks only to kiosk:* (the server) and kioskMode:* (this 
   assert.deepEqual([...domains].sort(), ['kiosk', 'kioskMode']);
   // Never an employee id after sign-in: clock / me / requests carry the session token only.
   const index = read('renderer/modules/Kiosk/index.jsx');
-  assert.match(index, /api\.kiosk\.clock\(s\.session\.token, bytes\)/);
+  assert.match(index, /api\.kiosk\.clock\(s\.session\.token, bytes \|\| null, !bytes && !!noPhotoBy\)/);
+  // No client-made stand-in picture: a no-photo clock is the server's decision.
+  for (const f of screenFiles) assert.doesNotMatch(read(`renderer/modules/Kiosk/${f}`), /makeNoPhotoImage|toBlob\(resolve, 'image\/jpeg', 0\.9\)/);
   assert.match(index, /api\.kiosk\.me\(token\)/);
   // No local queue of clock-ins: nothing is stored to send later.
   for (const f of screenFiles) assert.doesNotMatch(read(`renderer/modules/Kiosk/${f}`), /indexedDB|localStorage|sessionStorage/);

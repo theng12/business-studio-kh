@@ -16,7 +16,7 @@ import { LoadError, ReasonModal } from '../Fuel/FuelShared.jsx';
 import { fmtShort } from '../Fuel/fuelModel.js';
 import { useHrCaps, useHrLookups, useHrTick, usePager } from './hrHooks.js';
 import { DayDetailModal, HrPermissionNote, PersonCell, ToneBadge, clampServerPage } from './HrShared.jsx';
-import { CORRECTION_STATUS, VIA_LABELS, correctionForm, errText, fmtHmOn, fmtWorkDate, personName, validateCorrectionForm } from './hrModel.js';
+import { CORRECTION_STATUS, VIA_LABELS, correctionDecision, correctionForm, errText, fmtHmOn, fmtWorkDate, personName, validateCorrectionForm } from './hrModel.js';
 
 const STATUS_VIEWS = [
   { value: 'pending', label: 'Waiting' },
@@ -153,9 +153,7 @@ function ApproveCorrectionModal({ open, correction, employee, onClose }) {
     if (Object.keys(errs).length) return;
     setBusy(true);
     try {
-      await window.api.attendance.decideCorrection({
-        id: correction.id, decision: 'approve', inTime: form.inTime || undefined, outTime: form.outTime || undefined, note: form.note.trim() || undefined,
-      });
+      await window.api.attendance.decideCorrection({ id: correction.id, decision: 'approve', ...correctionDecision(correction, form) });
       addToast('Approved — the day is corrected.', 'success');
       onClose();
     } catch (err) { addToast(errText(err), 'error'); setBusy(false); }
@@ -173,10 +171,10 @@ function ApproveCorrectionModal({ open, correction, employee, onClose }) {
       </p>
       {correction?.reason ? <p className="muted">Their reason: {correction.reason}</p> : null}
       <div className="form-grid">
-        <Field label="Clock-in" error={errors.inTime} hint={correction?.proposedInAt ? 'As asked for' : 'Not asked for — leave empty to keep the day as it is'}>
+        <Field label="Clock-in" error={errors.inTime} hint={correction?.proposedInAt ? 'As asked for. Empty it to approve without a clock-in.' : 'Not asked for — empty keeps the day\'s clock-in.'}>
           {({ id }) => <Input id={id} type="time" value={form.inTime} invalid={!!errors.inTime} onChange={set('inTime')} />}
         </Field>
-        <Field label="Clock-out" error={errors.outTime} hint={correction?.proposedOutAt ? 'As asked for' : 'Not asked for — leave empty to keep the day as it is'}>
+        <Field label="Clock-out" error={errors.outTime} hint={correction?.proposedOutAt ? 'As asked for. Empty it to approve without a clock-out.' : 'Not asked for — empty keeps the day\'s clock-out.'}>
           {({ id }) => <Input id={id} type="time" value={form.outTime} invalid={!!errors.outTime} onChange={set('outTime')} />}
         </Field>
         <Field label="Note" span="full">

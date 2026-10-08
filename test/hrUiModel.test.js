@@ -285,3 +285,63 @@ test('capabilities and error text', () => {
   assert.equal(M.errText(new Error('Bad request: Say why the entry is rejected')), 'Say why the entry is rejected');
   assert.match(M.errText(new Error('CONFLICT|{}')), /Someone else changed this/);
 });
+
+/* ── review fixes (2026-10-08) ──────────────────────────────────────────── */
+
+test('M1: a day / ledger dialog shows only what was loaded for its current person and day', () => {
+  const loaded = { key: 'co|A|2026-10-01', events: [{ id: 'a-event' }], day: null, error: null };
+  assert.equal(M.loadedFor(loaded, 'co|A|2026-10-01', M.EMPTY_DAY_LOAD), loaded);
+  assert.equal(M.loadedFor(loaded, 'co|B|2026-10-01', M.EMPTY_DAY_LOAD), M.EMPTY_DAY_LOAD, 'the next person never sees A\'s entries');
+  assert.equal(M.loadedFor(loaded, 'co|A|2026-10-02', M.EMPTY_DAY_LOAD), M.EMPTY_DAY_LOAD, 'nor the next day');
+  assert.equal(M.loadedFor(loaded, null, M.EMPTY_DAY_LOAD), M.EMPTY_DAY_LOAD, 'a closed dialog shows nothing');
+  assert.deepEqual(M.EMPTY_DAY_LOAD.events, []);
+});
+
+test('L1: batch answers merge without flicker; one failed row never blanks the others', () => {
+  let b = M.mergeBatch(M.EMPTY_BATCH, { byEmployee: { a: [1], b: [2] }, errors: { x: 'Staff member not found' } });
+  assert.deepEqual(b, { values: { a: [1], b: [2] }, errors: { x: 'Staff member not found' } });
+  // A refresh of page 2 keeps page 1's values on screen until they are asked again.
+  b = M.mergeBatch(b, { byEmployee: { c: [3] }, errors: {} });
+  assert.deepEqual(Object.keys(b.values).sort(), ['a', 'b', 'c']);
+  // A row that now fails drops its stale value; one that recovers drops its error.
+  b = M.mergeBatch(b, { byEmployee: { x: [9] }, errors: { a: 'boom' } });
+  assert.equal(b.values.a, undefined);
+  assert.equal(b.errors.a, 'boom');
+  assert.deepEqual(b.values.x, [9]);
+  assert.equal(b.errors.x, undefined);
+  assert.deepEqual(M.mergeBatch(b, null), b, 'an empty answer changes nothing');
+});
+
+test('L2: an emptied correction time is sent as null (remove), an untouched empty one is left out', () => {
+  const c = { proposedInAt: at('2026-10-01', '07:00'), proposedOutAt: at('2026-10-01', '17:00') };
+  assert.deepEqual(M.correctionDecision(c, { inTime: '07:00', outTime: '17:10', note: '' }), { inTime: '07:00', outTime: '17:10' });
+  assert.deepEqual(M.correctionDecision(c, { inTime: '', outTime: '17:00', note: ' ok ' }), { inTime: null, outTime: '17:00', note: 'ok' });
+  const outOnly = { proposedInAt: null, proposedOutAt: at('2026-10-01', '17:00') };
+  const d = M.correctionDecision(outOnly, { inTime: '', outTime: '17:00', note: '' });
+  assert.equal(d.inTime, undefined, 'never asked for: nothing to remove');
+  assert.ok(!('note' in d));
+  assert.match(read('main/db/attendance.js'), /null REMOVES it/, 'the server treats null as "remove"');
+});
+
+test('L3: Adjust starts at min(approved, computed) and never locks a field holding a value', () => {
+  const row = { computed: { normal: 30, night: 0, restDay: 0, holiday: 0 }, approved: { normal: 90, night: 15, restDay: 0, holiday: 0 }, approval: { note: 'x' } };
+  const f = M.overtimeAdjustForm(row);
+  assert.deepEqual([f.normal, f.night, f.restDay, f.holiday, f.note], ['30', '0', '0', '0', 'x'], 'an approval that outgrew the day starts at what can still be approved');
+  assert.deepEqual(M.overtimeAdjustForm({ computed: { normal: 45, night: 15, restDay: 0, holiday: 0 } }).night, '15', 'no approval yet: the computed minutes');
+  assert.equal(M.overtimeFieldLocked({ night: '0' }, row.computed, 'night'), true, 'nothing to approve and empty: locked');
+  assert.equal(M.overtimeFieldLocked({ night: '15' }, row.computed, 'night'), false, 'a value is never locked away');
+  assert.equal(M.overtimeFieldLocked({ normal: '0' }, row.computed, 'normal'), false);
+});
+
+test('L8: re-confirming a month keeps the earlier waiver as minutes waived', () => {
+  assert.equal(M.reconfirmLateness({ totals: { lateMin: 30 } }), null, 'never confirmed: nothing to keep');
+  const plain = M.reconfirmLateness({ totals: { lateMin: 50, earlyLeaveMin: 0 }, lateness: { computedLateMin: 40, confirmedLateMin: 40, computedEarlyLeaveMin: 0, confirmedEarlyLeaveMin: 0 } });
+  assert.deepEqual(plain, { args: {}, waived: { late: 0, early: 0 } }, 'no waiver: today\'s computed minutes');
+  const waived = M.reconfirmLateness({
+    totals: { lateMin: 55, earlyLeaveMin: 5 },
+    lateness: { computedLateMin: 40, confirmedLateMin: 25, computedEarlyLeaveMin: 10, confirmedEarlyLeaveMin: 10, note: 'Flat tyre on the 12th' },
+  });
+  assert.deepEqual(waived, { args: { lateMinutes: 40, earlyLeaveMinutes: 5, note: 'Flat tyre on the 12th' }, waived: { late: 15, early: 0 } });
+  const shrunk = M.reconfirmLateness({ totals: { lateMin: 10, earlyLeaveMin: 0 }, lateness: { computedLateMin: 40, confirmedLateMin: 25, note: 'x' } });
+  assert.equal(shrunk.args.lateMinutes, 0, 'never below zero');
+});

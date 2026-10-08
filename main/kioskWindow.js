@@ -40,7 +40,7 @@
  * kiosk keys (main/config.js assertValidConfigValues), so there is no other way
  * to turn it off from the app.
  *
- * The seven `kioskMode:*` channels are LOCAL (they act on this Mac): registered
+ * The eight `kioskMode:*` channels are LOCAL (they act on this Mac): registered
  * with exposeLocal() in main/ipc/kioskMode.js and handleLocal() in
  * main/client/index.js, both from `makeKioskModeHandlers` below, both validated
  * by main/server/hrValidators.js.
@@ -50,6 +50,7 @@ const { app, BrowserWindow, Menu, powerMonitor, systemPreferences } = require('e
 const { loadConfig, updateConfig } = require('./config');
 
 const KIOSK_HASH = 'kiosk';
+const KIOSK_WINDOW_ARG = '--mskh-kiosk-window';
 const RELAUNCH_DELAY_MS = 300;
 
 let log = (event, detail) => process.stdout.write(`[kiosk] ${event}${detail ? ` :: ${detail}` : ''}\n`);
@@ -129,6 +130,9 @@ function kioskWindowOptions({ preloadPath, windowed = false, devTools = false })
       webSecurity: true,
       devTools,
       spellcheck: false,
+      // The renderer learns it is THE kiosk window from main, not from the URL
+      // (preload → window.api.kioskMode.isKioskWindow; renderer/main.jsx).
+      additionalArguments: [KIOSK_WINDOW_ARG],
     },
   };
 }
@@ -137,6 +141,11 @@ function kioskWindowOptions({ preloadPath, windowed = false, devTools = false })
 function canEnableKiosk(caps) {
   if (!Array.isArray(caps)) return false;
   return caps.includes('*') || caps.includes('attendance.kiosk') || caps.includes('hr.manage');
+}
+
+/** Only the exact kiosk URL may load in the kiosk window. */
+function isKioskNavigationAllowed(url, target) {
+  return String(url) === String(target);
 }
 
 /** The URL of the kiosk screen for a given renderer URL. */
@@ -189,9 +198,12 @@ function createKioskWindow({ preloadPath, rendererUrl }) {
   win.webContents.on('before-input-event', (e, input) => {
     if (isBlockedShortcut(input)) e.preventDefault();
   });
-  // A file dropped on the window, or a link, must not navigate away from the kiosk.
+  // A file dropped on the window, a link or a changed hash: nothing but the exact kiosk URL.
   win.webContents.on('will-navigate', (e, url) => {
-    if (url.split('#')[0] !== target.split('#')[0]) e.preventDefault();
+    if (!isKioskNavigationAllowed(url, target)) e.preventDefault();
+  });
+  win.webContents.on('will-redirect', (e, url) => {
+    if (!isKioskNavigationAllowed(url, target)) e.preventDefault();
   });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('did-finish-load', () => {
@@ -291,16 +303,29 @@ const CLEARED_RECOVERY = {
  * @param {() => Promise<string[]|null>|string[]|null} deps.getCaps
  *   this Mac's account capabilities ('*' for the owner's own window)
  * @param {() => Promise<boolean>|boolean} [deps.isServerReachable]
- *   can the office Mac answer for this account right now? The recovery code is
- *   refused while it can (a manager PIN is the way out then). Always true on a
- *   standalone / server Mac, whose data is local.
+ *   client Mac only: can the office Mac answer for this account right now? The
+ *   recovery code is refused while it can (a manager PIN is the way out then).
+ *   On a standalone / server Mac there is no office Mac, and the code works
+ *   whenever no manager PIN does.
+ * @param {() => Promise<number>|number} [deps.countManagersWithPin]
+ *   standalone / server only (the data is local): active staff who are managers
+ *   and have a PIN. Enabling is refused at 0. A client cannot see who is a
+ *   manager, so it does not check.
  */
-function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = () => true }) {
+function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = () => false, countManagersWithPin = null }) {
   async function assertMayEnable() {
     const caps = await Promise.resolve().then(getCaps).catch(() => null);
     if (caps == null) throw new Error('Could not check this Mac\'s account. Connect to the office Mac first, then try again.');
     if (!canEnableKiosk(caps)) {
       throw new Error('This account cannot run the attendance kiosk. Connect this Mac with the shop kiosk account (permission "Shop kiosk") or a manager account.');
+    }
+    // On the Mac that holds the data, check there is a way out before locking the screen:
+    // at least one active staff member who is a manager (account with hr.manage) and has a PIN.
+    if (countManagersWithPin) {
+      const n = await Promise.resolve().then(countManagersWithPin).catch(() => 0);
+      if (!n) {
+        throw new Error('No manager can leave kiosk mode yet. Link a manager\'s staff record to their account (with "Manage staff & attendance") and give them a kiosk PIN in People → Staff first.');
+      }
     }
   }
 
@@ -317,6 +342,8 @@ function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = 
         packaged: app.isPackaged,
         windowed: isWindowedForTesting(),
         hasRecoveryCode: !!cfg.kioskRecoveryHash,
+        // Client: the code works only while the office Mac cannot answer. Standalone / server: always (no office Mac to lose).
+        recoveryNeedsOffline: cfg.mode === 'client',
         recoveryLockedUntil: recovery.lockState(recoveryCounters(cfg)).retryAt || null,
       };
     },
@@ -379,8 +406,12 @@ function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = 
         const counters = recoveryCounters(cfg);
         const lock = recovery.lockState(counters);
         if (lock.locked) throw new Error(`Too many wrong recovery codes. Try again in ${Math.ceil(lock.retryInSeconds / 60)} min.`);
-        const reachable = await Promise.resolve().then(isServerReachable).catch(() => false);
-        if (reachable) throw new Error('The office Mac can be reached, so the recovery code is not needed: a manager uses their PIN instead.');
+        // Client Mac: refused while the office Mac answers (a manager PIN is the way out then).
+        // Standalone / server: there is no office Mac — the code works whenever no manager PIN does.
+        if (cfg.mode === 'client') {
+          const reachable = await Promise.resolve().then(isServerReachable).catch(() => false);
+          if (reachable) throw new Error('The office Mac can be reached, so the recovery code is not needed: a manager uses their PIN instead.');
+        }
         const correct = await recovery.verifyCode(code, { hash: cfg.kioskRecoveryHash, salt: cfg.kioskRecoverySalt });
         const next = recovery.afterAttempt(counters, { correct });
         if (!correct) {
@@ -399,6 +430,12 @@ function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = 
       }
     },
 
+    /** The kiosk screen crashed (renderer/modules/Kiosk/KioskErrorBoundary.jsx): one line to crash.log. */
+    logError: ({ message, stack } = {}) => {
+      log('kiosk:render-error', `${String(message || '').slice(0, 500)}${stack ? ` :: ${String(stack).split('\n').slice(0, 4).join(' | ').slice(0, 1000)}` : ''}`);
+      return { ok: true };
+    },
+
     quit: async ({ employeeId, pin } = {}) => {
       await verifyManagerPin({ employeeId, pin, purpose: 'quit' });
       log('kiosk:quit', `manager=${employeeId}`);
@@ -415,7 +452,9 @@ module.exports = {
   isKioskMode,
   createKioskWindow,
   makeKioskModeHandlers,
+  KIOSK_WINDOW_ARG,
   // pure, for tests
+  isKioskNavigationAllowed,
   isBlockedShortcut,
   kioskMenuTemplate,
   kioskWindowOptions,

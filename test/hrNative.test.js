@@ -147,6 +147,12 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   assert.deepEqual(Object.keys(tileA).sort(), ['hasPhoto', 'hasPin', 'id', 'nameEn', 'nameKm', 'photoSha256'], 'tiles never say who is a manager');
   assert.equal(await ok(kioskUser.token, 'kiosk:tilePhoto', { id: A.id }), null);
 
+  // HR1 review: locks, pauses and unlocks reach Review / the badge / the Staff list live.
+  const eventsMod = require('../main/events');
+  const realBroadcast = eventsMod.broadcast;
+  const hrEvents = [];
+  eventsMod.broadcast = (channel, payload) => { if (channel === 'hr:changed') hrEvents.push(payload); return realBroadcast(channel, payload); };
+  t.after(() => { eventsMod.broadcast = realBroadcast; });
   // Buddy-punch attempt: someone tries C's tile with guessed PINs → locked after 5.
   for (let i = 0; i < 4; i += 1) await fails(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '0000' }, 500, /Wrong PIN/);
   await fails(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '0000' }, 500, /Locked for 10 min/);
@@ -163,10 +169,14 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   await fails(kiosk2.token, 'kiosk:signIn', { employeeId: A.id, pin: '4071' }, 500, /paused/);
   await fails(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '3958' }, 500, /Only a manager can unlock/);
   const alertList = (await ok(manager.token, 'attendance:listReview', {})).alerts;
+  assert.equal(hrEvents.filter((e) => e.kind === 'alert' && e.op === 'create').length, 4, 'three PIN locks + one kiosk pause, each announced');
+  assert.ok(hrEvents.some((e) => e.kind === 'staff' && e.id === C.id && e.companyId === company.id), 'the locked person\'s record changed');
+  const beforeUnlock = hrEvents.length;
   assert.equal(alertList.filter((a) => a.kind === 'pin_locked' && a.employeeId === C.id).length, 3);
   assert.equal(alertList.filter((a) => a.kind === 'kiosk_paused').length, 1);
   assert.equal((await ok(manager.token, 'attendance:ackAlert', { id: alertList[0].id })).status, 'seen');
   await ok(manager.token, 'hr:unlockPin', C.id);
+  assert.ok(hrEvents.slice(beforeUnlock).some((e) => e.kind === 'staff' && e.op === 'update' && e.id === C.id), 'an unlock is announced');
   await ok(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '3958' });
 
   const signIn = await ok(kioskUser.token, 'kiosk:signIn', { employeeId: A.id, pin: '4071' });
@@ -394,6 +404,16 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const cDay = (await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: C.id })).rows[0].days.find((d) => d.date === d3);
   assert.equal(cDay.status, 'present');
   assert.equal(cDay.workedMin, 500);
+  // Review fix L2: approving with a time emptied (null) leaves that time out; undefined keeps the proposal.
+  const E = emp('E1', 'Correction tester');
+  const both = await ok(manager.token, 'attendance:requestCorrection', { employeeId: E.id, workDate: d1, inTime: '07:00', outTime: '17:00', reason: 'Forgot both' });
+  const outOnly = await ok(manager.token, 'attendance:decideCorrection', { id: both.id, decision: 'approve', inTime: null });
+  assert.deepEqual(outOnly.events.map((e) => [e.kind, e.at]), [['out', calc.timeOnDate(d1, '17:00')]]);
+  assert.equal(outOnly.correction.proposedInAt, null, 'the stored decision says no clock-in was added');
+  const both2 = await ok(manager.token, 'attendance:requestCorrection', { employeeId: E.id, workDate: d3, inTime: '07:00', outTime: '17:00', reason: 'Forgot both again' });
+  await fails(manager.token, 'attendance:decideCorrection', { id: both2.id, decision: 'approve', inTime: null, outTime: null }, 500, /Keep a clock-in or a clock-out/);
+  const kept = await ok(manager.token, 'attendance:decideCorrection', { id: both2.id, decision: 'approve', outTime: '17:30' });
+  assert.deepEqual(kept.events.map((e) => e.kind).sort(), ['in', 'out'], 'an omitted time keeps the proposal');
 
   /* ─── leave: balances, requests, the accrual job ─── */
   await ok(manager.token, 'hr:updateProfile', { id: B.id, patch: { hireDate: '2024-03-01' } });
@@ -405,6 +425,22 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const monthsAccrued = (() => { let n = 0; for (let m = '2025-10'; m < calc.ppMonth(Date.now()); m = calc.nextMonth(m)) n += 1; return n; })();
   assert.equal(balB.find((x) => x.code === 'annual').balance, Math.min(monthsAccrued * 1.5, 1000));
   assert.equal(balB.find((x) => x.code === 'special').balance, 7, '2025 special leave lapsed at the year end; 2026 granted');
+  // Review fix L1: batch reads for the Balances grid and the Staff list — one bad id fails only its own row.
+  const other = companies.create({ name: 'Other farm' });
+  const stranger = employees.create({ companyId: other.id, staffCode: 'X1', nameEn: 'Not ours' });
+  const batchBal = await ok(viewer.token, 'leave:balances', { employeeIds: [B.id, A.id, 'nope', stranger.id, B.id] });
+  assert.deepEqual(batchBal.byEmployee[B.id], balB);
+  assert.ok(Array.isArray(batchBal.byEmployee[A.id]));
+  assert.match(batchBal.errors.nope, /not found/);
+  assert.match(batchBal.errors[stranger.id], /not found/, 'another company\'s person is never read');
+  assert.equal(batchBal.byEmployee[stranger.id], undefined);
+  const batchSch = await ok(viewer.token, 'hr:listEmployeeSchedules', { employeeIds: [B.id, 'nope'] });
+  assert.deepEqual(batchSch.byEmployee[B.id], await ok(viewer.token, 'hr:listEmployeeSchedules', B.id));
+  assert.match(batchSch.errors.nope, /not found/);
+  assert.deepEqual(await ok(viewer.token, 'leave:balances', { employeeIds: [] }), { byEmployee: {}, errors: {} });
+  await fails(viewer.token, 'leave:balances', { employeeIds: Array.from({ length: 501 }, (_, i) => `id${i}`) }, 400, /at most 500/);
+  await fails(viewer.token, 'hr:listEmployeeSchedules', { employeeIds: 'x' }, 400, /list of staff ids/);
+  await fails(recorder.token, 'leave:balances', { employeeIds: [B.id] }, 403);
   const ledgerSpecial = await ok(viewer.token, 'leave:ledger', { employeeId: B.id, leaveTypeId: types.find((x) => x.code === 'special').id });
   assert.ok(ledgerSpecial.some((r) => r.kind === 'expiry' && r.days === -7 && r.date === '2025-12-31'));
   const nextMon = (() => { let d = calc.addDays(calc.ppDate(Date.now()), 21); while (calc.weekdayMon0(d) !== 0 || holidaySet.has(d)) d = calc.addDays(d, 1); return d; })();

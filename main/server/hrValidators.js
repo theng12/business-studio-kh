@@ -31,6 +31,12 @@ function first(...checks) { for (const c of checks) if (c !== true) return c; re
 function obj(fn) { return (a) => (isObject(a) ? fn(a) : 'expected an object argument'); }
 function optObj(fn = () => true) { return (a) => (a == null ? true : isObject(a) ? fn(a) : 'expected an object or nothing'); }
 function idArg(label) { return (a) => (isId(a) ? true : `${label} must be a non-empty string`); }
+/** A batch of staff ids (HR1 review fix L1): up to 500 non-empty strings (none → an empty answer). */
+function idList(v) {
+  if (!Array.isArray(v)) return 'employeeIds must be a list of staff ids';
+  if (v.length > 500) return 'employeeIds must hold at most 500 ids';
+  return v.every(isId) ? true : 'each of employeeIds must be a non-empty string';
+}
 function need(a, name) { return isId(a[name]) ? true : `${name} is required`; }
 function numbers(a, names) { for (const n of names) if (!optNum(a[n])) return `${n} must be a number`; return true; }
 function strings(a, names, max = 1000) { for (const n of names) if (!optStr(a[n], max)) return `${n} must be text`; return true; }
@@ -83,7 +89,7 @@ const HR_VALIDATORS = {
   'hr:createSchedule': obj((a) => first(isString(a.name) && a.name.trim() ? true : 'name is required', isString(a.startTime) && isString(a.endTime) ? true : 'startTime and endTime are required', scheduleFields(a), strings(a, ['companyId'], 200))),
   'hr:updateSchedule': idPatch('schedule'),
   'hr:assignSchedule': obj((a) => first(need(a, 'employeeId'), need(a, 'scheduleId'), isString(a.effectiveFrom) && DATE_RE.test(a.effectiveFrom) ? true : 'effectiveFrom must be a date like 2026-10-01')),
-  'hr:listEmployeeSchedules': idArg('staff id'),
+  'hr:listEmployeeSchedules': (a) => (isObject(a) ? idList(a.employeeIds) : idArg('staff id')(a)),
   'hr:listHolidays': optObj((a) => first(a.year == null || (isString(a.year) && /^\d{4}$/.test(a.year)) || (Number.isInteger(a.year)) ? true : 'year must look like 2026', dates(a, ['from', 'to']), bools(a, ['includeArchived']))),
   'hr:createHoliday': obj((a) => first(isString(a.date) && DATE_RE.test(a.date) ? true : 'date must look like 2026-04-14', strings(a, ['nameEn', 'nameKm', 'sourceNote', 'companyId'], 300), bools(a, ['paid']))),
   'hr:updateHoliday': idPatch('holiday'),
@@ -138,7 +144,7 @@ const HR_VALIDATORS = {
   'leave:listTypes': optObj((a) => bools(a, ['includeArchived'])),
   'leave:createType': obj((a) => first(need(a, 'code'), strings(a, ['nameEn', 'nameKm', 'accrual', 'note', 'companyId'], 1000), numbers(a, ['accrualDays', 'maxBalance', 'carryOverMax', 'maxDaysPerRequest', 'sort']), bools(a, ['paid', 'tracksBalance', 'needsDocument', 'countCalendarDays']))),
   'leave:updateType': idPatch('leave type'),
-  'leave:balances': obj((a) => need(a, 'employeeId')),
+  'leave:balances': obj((a) => (a.employeeIds != null ? idList(a.employeeIds) : need(a, 'employeeId'))),
   'leave:ledger': obj((a) => first(need(a, 'employeeId'), strings(a, ['leaveTypeId'], 200), numbers(a, ['limit']))),
   'leave:listRequests': optObj((a) => first(strings(a, ['status', 'employeeId'], 200), dates(a, ['from', 'to']), LIST_PAGE(a))),
   'leave:request': obj((a) => first(need(a, 'employeeId'), need(a, 'leaveTypeId'), isString(a.fromDate) && DATE_RE.test(a.fromDate) ? true : 'fromDate must look like 2026-10-08', dates(a, ['toDate']), halfDay(a), strings(a, ['reason'], 1000))),
@@ -151,13 +157,16 @@ const HR_VALIDATORS = {
   /* kiosk */
   'kiosk:tiles': () => true,
   'kiosk:tilePhoto': obj((a) => need(a, 'id')),
-  'kiosk:signIn': obj((a) => first(need(a, 'employeeId'), pin(a))),
+  'kiosk:signIn': obj((a) => first(need(a, 'employeeId'), pin(a), bools(a, ['preview']))),
   'kiosk:signOut': obj((a) => token(a)),
-  'kiosk:clock': obj((a) => first(token(a), photo(a.photo, { required: true }))),
+  // A photo, or `noPhoto: true` (accepted by the handler only after a manager allowed it on this session).
+  'kiosk:clock': obj((a) => first(token(a), bools(a, ['noPhoto']),
+    a.noPhoto === true ? (a.photo == null ? true : 'send a photo or noPhoto, not both') : photo(a.photo, { required: true }))),
   'kiosk:me': obj((a) => token(a)),
   'kiosk:requestLeave': obj((a) => first(token(a), need(a, 'leaveTypeId'), isString(a.fromDate) && DATE_RE.test(a.fromDate) ? true : 'fromDate must look like 2026-10-08', dates(a, ['toDate']), halfDay(a), strings(a, ['reason'], 1000))),
   'kiosk:requestCorrection': obj((a) => first(token(a), isString(a.workDate) && DATE_RE.test(a.workDate) ? true : 'workDate must look like 2026-10-08', optHm(a.inTime) && optHm(a.outTime) ? true : 'times must look like 07:30', need(a, 'reason'))),
-  'kiosk:verifyManagerPin': obj((a) => first(need(a, 'employeeId'), pin(a), purpose(a))),
+  'kiosk:verifyManagerPin': obj((a) => first(need(a, 'employeeId'), pin(a), purpose(a), bools(a, ['preview']),
+    a.purpose === 'no-photo' ? token(a) : (a.sessionToken == null || isId(a.sessionToken) ? true : 'sessionToken must be text'))),
 
   /* kioskMode:* — LOCAL channels of the kiosk Mac itself (main/kioskWindow.js):
    * exposeLocal in main/ipc/kioskMode.js, handleLocal in main/client/index.js.
@@ -166,6 +175,7 @@ const HR_VALIDATORS = {
   'kioskMode:askCamera': () => true,
   'kioskMode:newRecoveryCode': () => true,
   'kioskMode:enable': optObj((a) => bools(a, ['openAtLogin'])),
+  'kioskMode:logError': obj((a) => first(isString(a.message) && a.message.length <= 2000 ? true : 'message must be text (at most 2000 characters)', strings(a, ['stack'], 8000))),
   'kioskMode:recover': obj((a) => (isString(a.code) && a.code.length > 0 && a.code.length <= 64 ? true : 'code must be text')),
   'kioskMode:leave': obj((a) => first(need(a, 'employeeId'), pin(a))),
   'kioskMode:quit': obj((a) => first(need(a, 'employeeId'), pin(a))),

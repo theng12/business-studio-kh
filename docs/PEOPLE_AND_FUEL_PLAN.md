@@ -669,7 +669,7 @@ confirmation is marked `needsReapproval` (with the reason) — not voided; re-ap
 | `hr:listSchedules` | `{ includeArchived? }` | `Schedule[]` `{ id, name, startTime, endTime, breakMin, workDays ('1111110', Monday first), graceMin, nightStart, nightEnd, crossesMidnight, archived }` | V |
 | `hr:createSchedule` / `hr:updateSchedule` | `{ name, startTime, endTime, breakMin?, workDays?, graceMin?, nightStart?, nightEnd? }` / `{ id, patch }` (`archived`; the default schedule cannot be archived) | `Schedule` | M |
 | `hr:assignSchedule` | `{ employeeId, scheduleId, effectiveFrom: 'YYYY-MM-DD' }` (same date replaces) | the person's schedule history | M |
-| `hr:listEmployeeSchedules` | `employeeId` | `[{ scheduleId, scheduleName, effectiveFrom, … }]` (none → the company default) | V |
+| `hr:listEmployeeSchedules` | `employeeId`, or `{ employeeIds: [≤ 500] }` (a page of the Staff list in one call) | `[{ scheduleId, scheduleName, effectiveFrom, … }]` (none → the company default); for `employeeIds`: `{ byEmployee: { id: […] }, errors: { id: message } }` — a person not found or in another company fails only their own row | V |
 | `hr:listHolidays` | `{ year?, from?, to?, includeArchived? }` | `Holiday[]` `{ id, date, nameEn, nameKm, paid, sourceNote, archived }` | V |
 | `hr:createHoliday` / `hr:updateHoliday` | `{ date, nameEn?, nameKm?, paid?, sourceNote? }` / `{ id, patch }` (`archived: true` instead of delete) | `Holiday` | M |
 
@@ -756,7 +756,7 @@ pending[] } }` — no photos, nobody else's data.
 |---|---|---|---|
 | `leave:listTypes` | `{ includeArchived? }` | `LeaveType[]` `{ id, code, nameEn, nameKm, paid, accrual ('monthly'\|'yearly'\|'none'), accrualDays, tracksBalance, maxBalance, carryOverMax, maxDaysPerRequest, countCalendarDays, needsDocument, note, archived }` | V |
 | `leave:createType` / `leave:updateType` | `{ code, nameEn?, … }` / `{ id, patch }` (code fixed; `archived`) | `LeaveType` | M |
-| `leave:balances` | `{ employeeId }` | `Balance[]` `{ leaveTypeId, code, names, paid, tracksBalance, balance (Σ ledger, tracked types), takenThisYear, pendingDays }` | V |
+| `leave:balances` | `{ employeeId }` or `{ employeeIds: [≤ 500] }` | `Balance[]` `{ leaveTypeId, code, names, paid, tracksBalance, balance (Σ ledger, tracked types), takenThisYear, pendingDays }`; for `employeeIds`: `{ byEmployee: { id: Balance[] }, errors: { id: message } }` (one bad row never fails the others) | V |
 | `leave:ledger` | `{ employeeId, leaveTypeId?, limit? }` | `[{ date, kind ('accrual'\|'taken'\|'adjustment'\|'carry_over'\|'expiry'), days (signed), period, requestId, note }]` | V |
 | `leave:listRequests` | `{ status?, employeeId?, from?, to?, limit?, offset? }` | `{ items: LeaveRequest[], total }` | V |
 | `leave:request` | `{ employeeId, leaveTypeId, fromDate, toDate?, halfDay?, reason? }` | `LeaveRequest` (pending; `days` = work days of the person's schedule minus holidays, or calendar days for maternity; overlaps refused) | M |
@@ -780,19 +780,25 @@ in January, its cancellation, a back-dated adjustment) writes a compensating `ad
 |---|---|---|---|
 | `kiosk:tiles` | — | `[{ id, nameEn, nameKm, hasPhoto, photoSha256, hasPin }]` (active staff only; who is a manager is never shown) | K |
 | `kiosk:tilePhoto` | `{ id }` | `{ bytes, mime, sha256 }` (320 px) or `null` | K |
-| `kiosk:signIn` | `{ employeeId, pin }` | `{ sessionToken, expiresInSeconds, employee, nextKind, nextNeedsCheck, lastEvent }`; wrong PIN → "Wrong PIN. N tries left." / after `pinMaxTries` (5) "Locked for 10 min" (20 for the 2nd lock that day; the 3rd: "only a manager can unlock it"); 10 wrong PINs on one kiosk in 10 min → "PIN entry is paused for 5 min"; every lock / pause is an alert in the review list | K |
-| `kiosk:clock` | `{ sessionToken, photo (required) }` | `{ event, duplicate, doubleTap }` — `source 'kiosk'`, server time | K |
+| `kiosk:signIn` | `{ employeeId, pin, preview? }` (`preview`: owner's window / hr.manage only — a dry-run session, see below) | `{ sessionToken, expiresInSeconds, employee, nextKind, nextNeedsCheck, lastEvent }`; wrong PIN → "Wrong PIN. N tries left." / after `pinMaxTries` (5) "Locked for 10 min" (20 for the 2nd lock that day; the 3rd: "only a manager can unlock it"); 10 wrong PINs on one kiosk in 10 min → "PIN entry is paused for 5 min"; every lock / pause is an alert in the review list | K |
+| `kiosk:clock` | `{ sessionToken, photo }` or `{ sessionToken, noPhoto: true }` — the second only within 2 min of a manager allowing it on THIS session | `{ event, duplicate, doubleTap }` — `source 'kiosk'`, server time. Without a photo: note "No photo — allowed by <manager> …", `reviewStatus 'pending'` (in the review list), alert `kiosk_no_photo`, History `kiosk:no-photo` naming the person and the event | K |
 | `kiosk:me` | `{ sessionToken }` | `OwnView` | K |
 | `kiosk:requestLeave` | `{ sessionToken, leaveTypeId, fromDate, toDate?, halfDay?, reason? }` | `LeaveRequest` (`via 'kiosk'`) | K |
 | `kiosk:requestCorrection` | `{ sessionToken, workDate, inTime?, outTime?, reason }` ("I forgot to clock out" — a request, never an event) | `Correction` | K |
 | `kiosk:signOut` | `{ sessionToken }` | `{ ended }` | K |
-| `kiosk:verifyManagerPin` | `{ employeeId, pin, purpose? }` — a staff member linked to an account with `hr.manage` (or admin); the PIN is checked first, with the same per-person and per-kiosk limits. `purpose`: `'leave'` (default) / `'quit'` → History `kiosk:manager-exit`; `'no-photo'` (a manager lets someone clock while the camera is broken) → `kiosk:manager-no-photo` | `{ ok: true, managerId }` | K |
+| `kiosk:verifyManagerPin` | `{ employeeId, pin, purpose?, sessionToken?, preview? }` — a staff member linked to an account with `hr.manage` (or admin); the PIN is checked first, with the same per-person and per-kiosk limits. `purpose`: `'leave'` (default) / `'quit'` → History `kiosk:manager-exit`; `'no-photo'` needs the signed-in person's `sessionToken`, is refused for the manager's own session, and marks that session (History `kiosk:manager-no-photo` with the person's name) | `{ ok: true, managerId }` | K |
 
 A session token is random, held in the server's memory, bound to the kiosk **account** that signed in
 and the company, valid `kioskSessionSeconds` (120) after its last use and `kioskSessionMaxMinutes` (10)
 at most; a restart ends every session. After sign-in nothing the screen sends names an employee.
 PINs are scrypt-hashed asynchronously (never blocking the server); the per-kiosk counter is in memory,
 the per-person locks are in the database.
+
+**Preview (dry run).** Settings → Multi-Mac → "Preview the kiosk screen" runs the real screen inside the
+app with `preview: true`: allowed for this Mac's own window or an `hr.manage` account only; PINs are checked
+but wrong ones are not counted and no lock is written; a preview session's clock, leave and correction calls
+validate and answer `{ preview: true }` without writing anything (no events, requests, alerts or History).
+The badge says "Preview — nothing is saved".
 
 **The kiosk Mac itself (`kioskMode:*`, local).** `config.json` `kioskMode` (+ `kioskOpenAtLogin`) turns
 the Mac into the kiosk: one full-screen window on `index.html#kiosk` (`renderer/modules/Kiosk`, only
@@ -802,7 +808,13 @@ chord except ⌘A/C/V/X/Z swallowed, any other quit (Dock, AppleScript, `kill`) 
 and the generic settings setters refuse both keys on both paths (`assertValidConfigValues`). Code:
 `main/kioskWindow.js` (+ `main/ipc/kioskMode.js` exposeLocal, `main/client/index.js` handleLocal — same
 handlers; validators in `main/server/hrValidators.js`). `kioskMode:enable` re-checks `/api/whoami` caps
-on a client; `leave` / `quit` call `kiosk:verifyManagerPin` (in-process, or over RPC on a client).
+on a client; on a standalone / server Mac it is refused until at least one active staff member is a manager
+(account with `hr.manage`) and has a PIN. `leave` / `quit` call `kiosk:verifyManagerPin` (in-process, or over
+RPC on a client). The window is told it is the kiosk by main (`additionalArguments` → preload
+`window.api.kioskMode.isKioskWindow`), so `renderer/main.jsx` never mounts the full app there whatever the
+URL; only the exact kiosk URL may load. A render error is caught (`KioskErrorBoundary`): logged to crash.log
+(`kioskMode:logError` → `kiosk:render-error`), a bilingual "Restarting…" screen with a manager PIN form and
+the recovery code, reload after 5 s then 10 s, and no more reloads after 3 crashes in 2 minutes.
 | Channel | Args | Returns |
 |---|---|---|
 | `kioskMode:status` | — | `{ enabled, openAtLogin, mode, canEnable (attendance.kiosk / hr.manage / owner's window), camera ('granted'\|'denied'\|'restricted'\|'not-determined'), packaged, windowed }` |
@@ -811,18 +823,19 @@ on a client; `leave` / `quit` call `kiosk:verifyManagerPin` (in-process, or over
 | `kioskMode:enable` | `{ openAtLogin? }` | `{ ok }`, then relaunches as the kiosk (refused unless a recovery code was just shown) |
 | `kioskMode:leave` | `{ employeeId, pin }` (a manager) | `{ ok }`, then relaunches as the normal app |
 | `kioskMode:quit` | `{ employeeId, pin }` (a manager) | `{ ok }`, then quits |
-| `kioskMode:recover` | `{ code }` | `{ ok }`, then relaunches as the normal app — **only while the office Mac cannot answer** (a client whose `/api/whoami` fails; never on a standalone / server Mac); 5 wrong codes → local lock 15 min, then 30, 60 … ≤ 24 h, kept in config.json; each use / wrong try is written to crash.log (`kiosk:recovery-used`, `kiosk:recovery-wrong`) |
+| `kioskMode:logError` | `{ message, stack? }` | `{ ok }` — the kiosk screen crashed; one line in crash.log |
+| `kioskMode:recover` | `{ code }` | `{ ok }`, then relaunches as the normal app — on a client **only while the office Mac cannot answer** (`/api/whoami` fails); on a standalone / server Mac (no office Mac to lose) whenever it is entered; 5 wrong codes → local lock 15 min, then 30, 60 … ≤ 24 h, kept in config.json; each use / wrong try is written to crash.log (`kiosk:recovery-used`, `kiosk:recovery-wrong`) |
 Main → screen: `kioskMode:quitRequested` (a quit was refused; the screen asks for a manager). Without the
-camera a clock-in needs a manager PIN (`purpose: 'no-photo'`) and the photo saved is a plain card saying
-"NO CAMERA PHOTO — allowed by <manager>". The screen never queues a clock-in on the shop Mac: when the
+camera a clock-in needs another manager's PIN (`purpose: 'no-photo'`, server-checked, see `kiosk:clock`). The screen never queues a clock-in on the shop Mac: when the
 office Mac cannot be reached it says so and retries every 15 s. Dev/test only (ignored when packaged):
 `MSKH_KIOSK_WINDOWED=1` (a normal window), `MSKH_KIOSK_FAKE_CAMERA=granted|denied`.
 
 **The recovery code** (`main/util/kioskRecovery.js`): 12 characters from `ABCDEFGHJKMNPQRTWXYZ2346789` (no
 0/O, 1/I/L, U/V, 5/S), ≈57 bits; config keys `kioskRecoveryHash`, `kioskRecoverySalt`,
 `kioskRecoveryFailures`, `kioskRecoveryLockedUntil`, `kioskRecoveryLockCount` — machine-local, not portable,
-refused by `settings:setOne`/`setMany`. The kiosk offers "Office Mac unreachable? Use recovery code" (manager
-menu, the offline screen, the quit screen) only while it cannot reach the office Mac. Leaving with a manager
+refused by `settings:setOne`/`setMany`. On a client the kiosk offers "Office Mac unreachable? Use recovery
+code" (manager menu, the offline screen, the quit screen) only while it cannot reach the office Mac; on a
+standalone / server kiosk it is always in the manager menu (for when no manager PIN works). Leaving with a manager
 PIN or the code drops the stored hash; the next turn-on makes a new code. Its use is in this Mac's crash.log
 only (not in History).
 

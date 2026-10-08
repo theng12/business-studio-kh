@@ -14,7 +14,7 @@ import { StaffAvatar, ReasonModal } from '../Fuel/FuelShared.jsx';
 import { recentMonths } from '../Fuel/fuelModel.js';
 import { useAttendancePhotoUrl, useHrTick } from './hrHooks.js';
 import {
-  OT_CATEGORIES, dayStatusOf, errText, eventBadges, fmtHmOn, fmtMinutes, fmtWorkDate, hmToMs, isHm, otTotal,
+  EMPTY_DAY_LOAD, OT_CATEGORIES, dayStatusOf, errText, eventBadges, fmtHmOn, fmtMinutes, fmtWorkDate, hmToMs, isHm, loadedFor, otTotal,
   personName, ppDateKey, sortDayEvents, sourceLabel,
 } from './hrModel.js';
 
@@ -122,32 +122,39 @@ export function DayDetailModal({ open, employee, date, day: dayProp = null, canM
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
   const tick = useHrTick(['attendance', 'correction', 'leave', 'holiday', 'schedule', 'staff']);
-  const [events, setEvents] = useState([]);
-  const [day, setDay] = useState(dayProp);
-  const [error, setError] = useState(null);
+  // Review fix M1: what was loaded is kept WITH the person + day it belongs to,
+  // and shown only while it matches the dialog's current person + day — the
+  // previous person's entries (and their Void… buttons) never show for the next.
+  const employeeId = employee?.id || employee?.employeeId;
+  const key = open && employeeId && date && activeCompanyId ? `${activeCompanyId}|${employeeId}|${date}` : null;
+  const [loaded, setLoaded] = useState(EMPTY_DAY_LOAD);
   const [voiding, setVoiding] = useState(null);
   const [viewing, setViewing] = useState(null);
   const [form, setForm] = useState({ kind: 'in', time: '', nextDay: false, reason: '' });
   const [formErrors, setFormErrors] = useState({});
   const [busy, setBusy] = useState(false);
-  const employeeId = employee?.id || employee?.employeeId;
 
-  useEffect(() => { if (open) { setForm({ kind: 'in', time: '', nextDay: false, reason: '' }); setFormErrors({}); setDay(dayProp); } }, [open, employeeId, date]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!open || !employeeId || !date || !activeCompanyId) return undefined;
+    setForm({ kind: 'in', time: '', nextDay: false, reason: '' }); setFormErrors({}); setVoiding(null); setViewing(null);
+  }, [key]);
+  useEffect(() => {
+    if (!key) return undefined;
     let alive = true;
-    setError(null);
     Promise.all([
       window.api.attendance.listEvents({ employeeId, from: date, to: date, includeVoided: true, limit: 200 }),
       window.api.attendance.monthSummary({ month: date.slice(0, 7), employeeId }),
     ]).then(([evs, summary]) => {
       if (!alive) return;
-      setEvents(evs?.items || []);
-      const found = summary?.rows?.[0]?.days?.find((d) => d.date === date);
-      if (found) setDay(found);
-    }).catch((err) => { if (alive) setError(errText(err)); });
+      const found = summary?.rows?.[0]?.days?.find((d) => d.date === date) || null;
+      setLoaded({ key, events: evs?.items || [], day: found, error: null });
+    }).catch((err) => { if (alive) setLoaded({ key, events: [], day: null, error: errText(err) }); });
     return () => { alive = false; };
-  }, [open, employeeId, date, activeCompanyId, tick]);
+  }, [key, tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const current = loadedFor(loaded, key, EMPTY_DAY_LOAD);
+  const events = current.events;
+  const error = current.error;
+  const day = current.day || (dayProp && dayProp.date === date ? dayProp : null);
+  const loading = !!key && loaded.key !== key;
 
   async function addManual() {
     const errs = {};
@@ -189,7 +196,7 @@ export function DayDetailModal({ open, employee, date, day: dayProp = null, canM
         ) : null}
         {error ? <p className="field__error">Couldn't load this day: {error}</p> : null}
         <h3 className="section-title hr-subhead">Clock entries</h3>
-        {sorted.length === 0 ? <p className="muted">No clock entries for this day.</p> : (
+        {loading ? <p className="muted">Loading…</p> : sorted.length === 0 ? <p className="muted">No clock entries for this day.</p> : (
           <div className="data-table-wrap">
             <table className="data-table">
               <thead><tr><th>Time</th><th>Entry</th><th>From</th><th>State</th>{canManage ? <th>Photo</th> : null}{canManage ? <th className="is-actions" /> : null}</tr></thead>

@@ -94,10 +94,19 @@ function register({ expose, exposeLocal }) {
     emitHrChange('staff', 'update', employeeId, e.companyId);
     return out;
   });
-  expose('hr:listEmployeeSchedules', (employeeId) => {
-    company();
-    staffMember(employeeId);
-    return hr.listEmployeeSchedules(employeeId);
+  /**
+   * `employeeId` → the person's schedule history (as before). `{ employeeIds }`
+   * (HR1 review fix L1: the Staff list's schedule column in one round trip) →
+   * `{ byEmployee: { id: history }, errors: { id: message } }`; a bad id fails
+   * only its own row.
+   */
+  expose('hr:listEmployeeSchedules', (arg) => {
+    const companyId = company();
+    if (arg && typeof arg === 'object' && Array.isArray(arg.employeeIds)) {
+      return require('./attendance').batchPerEmployee(companyId, arg.employeeIds, (id) => hr.listEmployeeSchedules(id));
+    }
+    staffMember(arg);
+    return hr.listEmployeeSchedules(arg);
   });
 
   /* ─── holidays ─── */
@@ -162,8 +171,10 @@ function register({ expose, exposeLocal }) {
   });
   expose('hr:unlockPin', (id) => {
     company();
-    staffMember(id);
+    const e = staffMember(id);
     people.unlockPin(id);
+    // HR1 review: the Staff list / profile / Review drop the "locked" mark live.
+    emitHrChange('staff', 'update', id, e.companyId);
     return { id, locked: false };
   });
 

@@ -26,7 +26,7 @@ import { useFuelCaps, useFuelTick } from '../Fuel/fuelHooks.js';
 import { ManageOnlyNote, StaffAvatar } from '../Fuel/FuelShared.jsx';
 import { errText, ppDateKey, validateStaffForm } from '../Fuel/fuelModel.js';
 import { useHrCaps, useHrLookups, useHrTick } from '../People/hrHooks.js';
-import { pinStatus, scheduleOn, staffStatus } from '../People/hrModel.js';
+import { EMPTY_BATCH, mergeBatch, pinStatus, scheduleOn, staffStatus } from '../People/hrModel.js';
 import { StaffProfile } from './StaffProfile.jsx';
 import { PositionsModal } from './PositionsModal.jsx';
 
@@ -90,7 +90,8 @@ export function Staff() {
   };
   const defaultSchedule = lookups.settings?.defaultScheduleId ? lookups.maps.schedules.get(lookups.settings.defaultScheduleId) : null;
   const scheduleName = (e) => {
-    const hist = schedules[e.id];
+    if (schedules.errors[e.id]) return '—';
+    const hist = schedules.values[e.id];
     if (!hist) return '…';
     const cur = scheduleOn(hist, ppDateKey());
     return cur ? cur.scheduleName : (defaultSchedule ? `${defaultSchedule.name} (default)` : 'Default');
@@ -197,21 +198,25 @@ export function Staff() {
   );
 }
 
-/** Schedule history for the people on screen (hr.view), fetched per page and cached until a change. */
+/**
+ * Schedule history for the people on screen (hr.view): ONE batch call per page
+ * (review fix L1). What is shown stays until the new answer arrives (no flicker
+ * when a change event refreshes it); a person whose history failed shows "—".
+ */
 function useSchedulesFor(people, tick) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
-  const [map, setMap] = useState({});
+  const [batch, setBatch] = useState(EMPTY_BATCH);
   const key = people.map((e) => e.id).join(',');
-  useEffect(() => { setMap({}); }, [activeCompanyId, tick]);
+  useEffect(() => { setBatch(EMPTY_BATCH); }, [activeCompanyId]);
   useEffect(() => {
     if (!key) return undefined;
     let alive = true;
-    const ids = key.split(',');
-    Promise.all(ids.map((id) => window.api.hr.listEmployeeSchedules(id).then((h) => [id, h || []]).catch(() => [id, []])))
-      .then((pairs) => { if (alive) setMap((m) => ({ ...m, ...Object.fromEntries(pairs) })); });
+    window.api.hr.listEmployeeSchedulesFor(key.split(','))
+      .then((res) => { if (alive) setBatch((b) => mergeBatch(b, res)); })
+      .catch(() => { /* the column shows "…" and the next change retries */ });
     return () => { alive = false; };
   }, [key, activeCompanyId, tick]);
-  return map;
+  return batch;
 }
 
 function staffForm(e) {

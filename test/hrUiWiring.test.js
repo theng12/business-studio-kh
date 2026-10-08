@@ -246,3 +246,60 @@ test('dates are Phnom Penh and nothing hand-rolls a time zone', () => {
   }
   assert.match(code('renderer/modules/People/hrModel.js'), /import \{ ppDateKey, ppMonthKey, monthLabel \} from '\.\.\/Fuel\/fuelModel\.js';/);
 });
+
+/* ── review fixes (2026-10-08) ──────────────────────────────────────────── */
+
+test('M1: the day and ledger dialogs key what they load to the person + day they show', () => {
+  const shared = code('renderer/modules/People/HrShared.jsx');
+  const day = shared.slice(shared.indexOf('export function DayDetailModal'), shared.indexOf('export function ManualEntryModal'));
+  assert.match(day, /const key = open && employeeId && date && activeCompanyId \? `\$\{activeCompanyId\}\|\$\{employeeId\}\|\$\{date\}` : null;/);
+  assert.match(day, /setLoaded\(\{ key, events: evs\?\.items \|\| \[\], day: found, error: null \}\)/);
+  assert.match(day, /const current = loadedFor\(loaded, key, EMPTY_DAY_LOAD\);/);
+  assert.doesNotMatch(day, /setEvents\(/, 'no unkeyed event list left');
+  assert.match(day, /setVoiding\(null\); setViewing\(null\);\s*\}, \[key\]\);/, 'a pending Void… never carries over to the next person');
+  const leave = code('renderer/modules/People/Leave.jsx');
+  const ledger = leave.slice(leave.indexOf('export function LedgerModal'));
+  assert.match(ledger, /const \{ balances, ledger, error \} = loadedFor\(loaded, key, EMPTY_LEDGER_LOAD\);/);
+});
+
+test('L1: the Balances grid and the Staff schedule column read a whole page in one call', () => {
+  const leave = code('renderer/modules/People/Leave.jsx');
+  assert.match(leave, /window\.api\.leave\.balancesFor\(ids\)/);
+  assert.match(leave, /setBatch\(\(b\) => mergeBatch\(b, res\)\)/);
+  assert.doesNotMatch(leave, /ids\.map\(\(id\) => window\.api\.leave\.balances/, 'no per-row calls');
+  const staff = code('renderer/modules/Staff/index.jsx');
+  assert.match(staff, /window\.api\.hr\.listEmployeeSchedulesFor\(key\.split\(','\)\)/);
+  assert.doesNotMatch(staff, /ids\.map\(\(id\) => window\.api\.hr\.listEmployeeSchedules/);
+  assert.doesNotMatch(staff.slice(staff.indexOf('function useSchedulesFor')), /\}, \[activeCompanyId, tick\]\);/, 'a refresh no longer blanks the column');
+  const v = read('main/server/hrValidators.js');
+  assert.match(v, /'leave:balances': obj\(\(a\) => \(a\.employeeIds != null \? idList\(a\.employeeIds\) : need\(a, 'employeeId'\)\)\)/);
+  assert.match(v, /'hr:listEmployeeSchedules': \(a\) => \(isObject\(a\) \? idList\(a\.employeeIds\)/);
+  assert.match(read('docs/PEOPLE_AND_FUEL_PLAN.md'), /`\{ employeeIds: \[≤ 500\] \}`/);
+});
+
+test('L6: the profile\'s leave requests are paged on the server, its ledger on screen', () => {
+  const src = code('renderer/modules/Staff/StaffProfile.jsx');
+  const sec = src.slice(src.indexOf('function LeaveSection'), src.indexOf('function AccountSection'));
+  assert.match(sec, /listRequests\(\{ employeeId: profile\.id, limit: pager\.pageSize, offset: pager\.offset \}\)/);
+  assert.doesNotMatch(sec, /limit: 50 \}/);
+  assert.equal((sec.match(/<Pagination\b/g) || []).length, 2);
+});
+
+test('L7: the HR1 styles use colour tokens, not raw hex', () => {
+  const css = read('renderer/index.css');
+  const block = css.slice(css.indexOf('═══ HR1 — People screens'), css.indexOf('═══ end HR1 ═══'));
+  assert.ok(block.length > 1000);
+  assert.doesNotMatch(block, /#[0-9a-fA-F]{3,8}\b/);
+  for (const tone of ['emerald', 'amber', 'rose', 'blue', 'slate']) {
+    assert.equal((css.match(new RegExp(`--c-${tone}-soft:`, 'g')) || []).length, 2, `${tone} tint has a light and a dark value`);
+  }
+});
+
+test('L8 and live alerts: re-confirm asks first; unlocks and alerts announce themselves', () => {
+  const late = code('renderer/modules/People/Lateness.jsx');
+  const fn = late.slice(late.indexOf('async function confirmRow'));
+  assert.ok(fn.indexOf('await confirm(') > 0 && fn.indexOf('await confirm(') < fn.indexOf('attendance.confirmLateness('), 'the waiver question comes before the call');
+  assert.match(fn, /\.\.\.\(again\?\.args \|\| \{\}\)/);
+  assert.match(code('main/ipc/hr.js'), /people\.unlockPin\(id\);\s*emitHrChange\('staff', 'update', id, e\.companyId\);/);
+  assert.match(code('main/db/attendance.js'), /emitHrChange\('alert', 'create', id, companyId\);/);
+});

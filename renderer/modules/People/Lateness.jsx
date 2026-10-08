@@ -18,7 +18,7 @@ import { LoadError } from '../Fuel/FuelShared.jsx';
 import { useHrCaps, useHrLookups, useHrTick } from './hrHooks.js';
 import { HrPermissionNote, MonthSelect, PersonCell, ToneBadge } from './HrShared.jsx';
 import {
-  LATENESS_STATE, errText, latenessState, monthEnded, monthLabel, personName, ppMonthKey, prevMonth, validateLatenessForm,
+  LATENESS_STATE, errText, latenessState, reconfirmLateness, monthEnded, monthLabel, personName, ppMonthKey, prevMonth, validateLatenessForm,
 } from './hrModel.js';
 
 const VIEWS = [{ value: 'late', label: 'Someone late' }, { value: 'all', label: 'Everyone' }];
@@ -62,9 +62,19 @@ export function Lateness() {
   const refresh = () => setRetry((n) => n + 1);
 
   async function confirmRow(r) {
+    // Review fix L8: re-confirming keeps an earlier waiver — and says so first.
+    const again = reconfirmLateness(r);
+    if (again && (again.waived.late || again.waived.early)) {
+      const ok = await confirm({
+        title: `Re-confirm ${personName(r)}'s ${monthLabel(month)}?`,
+        message: `The earlier waiver is kept: ${again.waived.late} min late and ${again.waived.early} min early leave stay waived${r.lateness?.note ? ` (“${r.lateness.note}”)` : ''}, so ${again.args.lateMinutes} min late and ${again.args.earlyLeaveMinutes} min early leave are confirmed. Use Waive some… to change the waiver.`,
+        confirmLabel: 'Re-confirm',
+      });
+      if (!ok) return;
+    }
     setBusy(r.employeeId);
     try {
-      await window.api.attendance.confirmLateness({ employeeId: r.employeeId, month });
+      await window.api.attendance.confirmLateness({ employeeId: r.employeeId, month, ...(again?.args || {}) });
       addToast(`Confirmed ${personName(r)}'s ${monthLabel(month)}.`, 'success');
       refresh();
     } catch (err) { addToast(errText(err), 'error'); }
@@ -75,7 +85,7 @@ export function Lateness() {
     if (!list.length) return;
     const ok = await confirm({
       title: `Confirm ${list.length} ${list.length === 1 ? 'person' : 'people'} for ${monthLabel(month)}?`,
-      message: 'Each is confirmed at the minutes the attendance shows now — no waivers. Payroll can then deduct them.',
+      message: 'Each is confirmed at the minutes the attendance shows now. A waiver given before is kept (the same minutes stay waived). Payroll can then deduct them.',
       confirmLabel: 'Confirm all',
     });
     if (!ok) return;
@@ -83,7 +93,7 @@ export function Lateness() {
     let done = 0;
     const failed = [];
     for (const r of list) {
-      try { await window.api.attendance.confirmLateness({ employeeId: r.employeeId, month }); done += 1; }
+      try { await window.api.attendance.confirmLateness({ employeeId: r.employeeId, month, ...(reconfirmLateness(r)?.args || {}) }); done += 1; }
       catch (err) { failed.push(`${personName(r)}: ${errText(err)}`); }
     }
     setBusy(null);

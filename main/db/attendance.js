@@ -165,6 +165,13 @@ function addAlert({ companyId, employeeId = null, kind, kioskUserId = null, mess
   getDb().prepare('INSERT INTO attendance_alerts (id, company_id, employee_id, kind, at, kiosk_user_id, message, details_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, companyId, employeeId, kind, Date.now(), kioskUserId, str(message, 500), details ? JSON.stringify(details) : null);
   hrAudit('attendance_alert', id, kind, { after: { employeeId, message: str(message, 500) } });
+  // HR1 review: a locked PIN or a paused kiosk reaches Review, the People badge
+  // and the Staff list live (ids only). Lazy require: ipc/hrAccess loads db modules.
+  try {
+    const { emitHrChange } = require('../ipc/hrAccess');
+    emitHrChange('alert', 'create', id, companyId);
+    if (employeeId) emitHrChange('staff', 'update', employeeId, companyId);
+  } catch (_) { /* best effort */ }
   return id;
 }
 function listAlerts(companyId, { status = 'open', limit = 200 } = {}) {
@@ -210,6 +217,8 @@ function activeEmployeeIn(companyId, employeeId) {
 async function clock({
   companyId, employeeId, source, photoBytes = null, requirePhoto = false, deviceLabel = null,
   clientRef = null, queuedForMs = null, note = null, kind: explicitKind = null,
+  // HR1 kiosk: a clock-in a manager allowed without the camera waits in the review list.
+  reviewRequired = false,
 }) {
   if (!SOURCES.includes(source) || source === 'manual' || source === 'correction') throw badRequest('source must be kiosk, phone or supervisor');
   if (explicitKind != null && !['in', 'out'].includes(explicitKind)) throw badRequest('kind must be in or out');
@@ -254,7 +263,7 @@ async function clock({
         .run({
           id, companyId, employeeId: emp.id, kind, at, workDate, source, uid, deviceLabel: str(deviceLabel, 120),
           photoPath: staged?.relPath ?? null, photoSha: staged?.sha256 ?? null, note: str([note, flagNote].filter(Boolean).join(' · '), 500), queued: queued.queuedForMs,
-          clientRef, hash, review: REVIEW_SOURCES.has(source) || lateClose ? 'pending' : 'none', now,
+          clientRef, hash, review: REVIEW_SOURCES.has(source) || lateClose || reviewRequired ? 'pending' : 'none', now,
         });
       return { event: getEvent(id), duplicate: false, doubleTap: false };
     })();
@@ -471,14 +480,23 @@ function decideCorrection(id, { decision, note = null, inTime, outTime } = {}) {
     hrAudit('attendance_correction', id, 'reject', { before: { status: 'pending' }, after: { status: 'rejected', note: str(note, 500) } });
     return { correction: getCorrection(id), events: [] };
   }
-  // A manager may adjust the proposed times while approving.
+  // A manager may adjust the proposed times while approving: a time left out
+  // (undefined) keeps the proposal, 'HH:MM' replaces it, and null REMOVES it
+  // (HR1 review fix L2 — e.g. approve only the forgotten clock-out). At least
+  // one time must remain; to change nothing, reject instead.
   let { proposedInAt: inAt, proposedOutAt: outAt } = c;
   if (inTime !== undefined || outTime !== undefined) {
     const newIn = inTime === undefined ? inAt : (inTime ? calc.timeOnDate(c.workDate, inTime) : null);
-    const t = proposedTimes(c.workDate, inTime === undefined ? null : inTime, outTime === undefined ? null : outTime,
-      { anchorIn: newIn ?? anchorInFor(c.companyId, c.employeeId, c.workDate) });
-    inAt = inTime === undefined ? inAt : t.inAt;
-    outAt = outTime === undefined ? outAt : t.outAt;
+    if (inTime && newIn == null) throw badRequest('inTime must be a time like 07:30');
+    let newOut = outAt;
+    if (outTime !== undefined) {
+      newOut = outTime ? calc.timeOnDate(c.workDate, outTime, { after: newIn ?? anchorInFor(c.companyId, c.employeeId, c.workDate) }) : null;
+      if (outTime && newOut == null) throw badRequest('outTime must be a time like 17:05');
+    }
+    if (newIn == null && newOut == null) throw badRequest('Keep a clock-in or a clock-out time — to change nothing, reject the request');
+    if (Math.max(newIn ?? 0, newOut ?? 0) > Date.now() + FUTURE_SLACK_MS) throw badRequest('That time is in the future');
+    inAt = newIn;
+    outAt = newOut;
     if (inAt != null && outAt != null && outAt <= inAt) throw badRequest('The out time must be after the in time');
   }
   const events = [];
