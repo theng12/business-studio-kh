@@ -9,9 +9,10 @@ const productsDb = require('../db/products');
 const brandsDb = require('../db/brands');
 const companies = require('../db/companies');
 const { labelsDocument, barcodeUri } = require('../studioRenderer');
+const { outputBaseName, freeOutputPath } = require('../util/outputNames');
 const renderer = require('../renderWindow');
 const events = require('../events');
-const { slugify } = require('../util/slug');
+const { slugify, slugifyUnicode } = require('../util/slug');
 const imageManager = require('../imageManager');
 const { writeUniqueFile } = require('../util/exclusiveFile');
 
@@ -199,7 +200,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     try {
       if (format === 'pdf') {
         const html = await labelsDocument({ template, products, brands, layout });
-        const target = path.join(outputFolder, `${slugify(template.name, 'labels')}-${Date.now()}.pdf`);
+        // Khmer template names survive; readable date; never over an earlier file.
+        const target = freeOutputPath(outputFolder, outputBaseName(template.name, 'labels'), 'pdf');
         await renderer.toPdf(html, target, { orientation: layout.orientation });
         made.push(target);
         events.broadcast('progress:event', { id: opId, kind: 'labels', done: products.length, total: products.length, phase: 'finishing', label: template.name });
@@ -217,7 +219,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
           const product = products[i];
           return {
             html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single' } }),
-            outputPath: path.join(outputFolder, `${slugify(product.sku || product.name, 'label')}-${slugify(template.name, 'label')}.${ext}`),
+            outputPath: path.join(outputFolder, `${slugifyUnicode(product.sku || product.name, 'label')}-${slugifyUnicode(template.name, 'label')}.${ext}`),
           };
         }, { format, width: Math.ceil(template.widthMm * scale), height: Math.ceil(template.heightMm * scale), quality: 92, dpi, zoomFactor: dpi / 96, unique: true }, (i, target) => {
           made.push(target);

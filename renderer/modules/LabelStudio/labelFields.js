@@ -59,3 +59,18 @@ export function labelPriceAmount(entry) {
   if (!entry || entry.amount == null) return '';
   return formatAmount(entry.amount, entry.currency);
 }
+
+/**
+ * Line height for a label text box when the template does not set one.
+ * Khmer stacks subscript consonants and vowel signs below the baseline (and
+ * vowels above the line), so at the Latin default of 1.15 the second line of
+ * a two-line Khmer name ran into the first. Text with any Khmer gets 1.45.
+ * Mirrored in main/studioRenderer.js (`labelLineHeight`) so the designer and
+ * the printed label agree; test/studiosAudit.test.js pins the two together.
+ */
+export const KHMER_RE = /[\u1780-\u17FF\u19E0-\u19FF]/;
+export function labelLineHeight(element, text) {
+  const explicit = Number(element?.lineHeight);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return KHMER_RE.test(String(text ?? '')) ? 1.45 : 1.15;
+}

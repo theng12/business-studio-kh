@@ -573,6 +573,15 @@ app.whenReady().then(() => {
   registerRendererProtocol(path.join(__dirname, '..', '..', 'dist-renderer'));
   registerIpc({ getMainWindow: () => mainWindow });
 
+  /* 0.1.94: weekly automatic backups while the app is open, newest 4 kept
+   * (owner's decision). Standalone / server only — this is the boot path
+   * that owns the data; client mode returned above. Best-effort. */
+  try {
+    require('./backupManager').startAutoBackupScheduler({ log: logEvent });
+  } catch (err) {
+    logEvent('backup:auto-scheduler-failed', err.message);
+  }
+
   // v0.14.2: in server mode, boot the HTTP server after IPC handlers
   // have registered themselves in the registry. Don't block app startup
   // on it — if the port is taken, log and continue (the UI will show

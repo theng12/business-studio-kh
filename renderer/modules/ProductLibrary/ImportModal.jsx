@@ -462,7 +462,7 @@ export function ImportModal({ open, onClose }) {
     );
 
   return (
-    <Modal open={open} onClose={handleClose} closeOnBackdrop={!busy} title="Import Excel / CSV" footer={footer} size="xl">
+    <Modal open={open} onClose={handleClose} closeOnBackdrop={!busy} busy={busy} title="Import Excel / CSV" footer={footer} size="xl">
       {step === 'pick' ? (
         <>
           <p>Imports run as three steps: pick file → map columns → review.</p>
@@ -566,7 +566,8 @@ export function ImportModal({ open, onClose }) {
  * conflicts.
  *
  * Three policies, surfaced as a segmented control:
- *   - Merge     — only fill empty fields on existing rows (safest, default)
+ *   - Merge     — write every non-empty cell over the existing value; blank
+ *                 cells leave the existing value alone (safest, default)
  *   - Overwrite — apply every mapped field, including blanks (use when the
  *                 import IS the source of truth)
  *   - Skip      — leave existing rows alone; only inserts new SKUs
@@ -642,7 +643,7 @@ export function ImportPreview({ preview, conflictPolicy, onChangePolicy, busy })
               className={`segment${conflictPolicy === 'merge' ? ' is-active' : ''}`}
               disabled={busy}
               onClick={() => onChangePolicy('merge')}
-              title="Only fill empty fields on existing rows. Safest — won't blank out values you didn't include in the import."
+              title="Update existing rows with every non-empty cell. Blank cells and missing columns leave the existing value alone, so nothing is cleared."
             >Merge</button>
             <button
               type="button"

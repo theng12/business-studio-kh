@@ -16,12 +16,35 @@
  * are kept in component state and reset on module unmount.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
-import { Button, Input, Select } from '../../components/ui.jsx';
+import { Button, Input } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
+import { SearchableSelect } from '../../components/SearchableSelect.jsx';
+import { confirm } from '../../components/ConfirmModal.jsx';
+import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { priceEntry, formatPriceEntry } from '../../lib/prices.js';
+import { formatPrice } from '../../lib/currencies.js';
+import { marginAgainst, retailInCurrency } from './costMath.js';
+
+// Stable getters for SearchableSelect (its filter memo depends on them). The
+// label carries SKU and name, so typing either finds the product — and the
+// whole catalog is searchable, not the first 50.
+const productLabel = (p) => `${p?.sku || ''}${p?.name ? ` — ${p.name}` : ''}`;
+const productValue = (p) => p?.id ?? '';
+
+// "1 USD = 4,100 KHR" rates typed here to compare riel (or baht…) prices with
+// the USD landed cost. The app keeps no house rate, so it is the viewer's own
+// scratch figure, remembered on this Mac only.
+const RATES_KEY = 'costcalc.ratesPerUsd';
+function loadRates() {
+  try { const v = JSON.parse(window.localStorage.getItem(RATES_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; }
+  catch { return {}; }
+}
+function saveRates(rates) {
+  try { window.localStorage.setItem(RATES_KEY, JSON.stringify(rates)); } catch { /* private window: keep it in memory */ }
+}
 
 export function CostCalculator() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
@@ -29,7 +52,8 @@ export function CostCalculator() {
 
   const [products, setProducts] = useState([]);
   const [productId, setProductId] = useState('');
-  const [productSearch, setProductSearch] = useState('');
+  const [ratesPerUsd, setRatesPerUsd] = useState(loadRates);
+  const [savingRetail, setSavingRetail] = useState(false);
   const [costState, setCostState] = useState('idle');
   const [costError, setCostError] = useState('');
   const [costRefresh, setCostRefresh] = useState(0);
@@ -126,16 +150,76 @@ export function CostCalculator() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [landedCostUsd, targetMarginPct, lastEdited === 'retail' ? retailUsd : null]);
 
-  const filteredProducts = useMemo(() => {
-    const q = productSearch.trim().toLowerCase();
-    if (!q) return products.slice(0, 50);
-    return products.filter((p) => {
-      const hay = `${p.sku || ''} ${p.name || ''}`.toLowerCase();
-      return hay.includes(q);
-    }).slice(0, 50);
-  }, [products, productSearch]);
-
   const selectedProduct = productId ? products.find((p) => p.id === productId) || null : null;
+  // Non-USD currencies the picked product is priced in — each needs a rate
+  // before its margin against the USD landed cost means anything.
+  const foreignCurrencies = selectedProduct
+    ? [...new Set(['retail', 'wholesale']
+      .map((src) => priceEntry(selectedProduct, src))
+      .filter((e) => e.amount != null && e.currency && e.currency !== 'USD')
+      .map((e) => e.currency))]
+    : [];
+  function setRate(currency, text) {
+    setRatesPerUsd((prev) => {
+      const next = { ...prev, [currency]: text };
+      saveRates(next);
+      return next;
+    });
+  }
+
+  /**
+   * Write the retail price on the product (products:update, with the row's
+   * revision so an edit made elsewhere since the pick is not overwritten
+   * silently). Saved in the product's own retail currency when a rate for it
+   * is set here (riel rounded to whole riel), otherwise in USD.
+   */
+  async function saveAsRetail() {
+    const p = selectedProduct;
+    const usd = Number(retailUsd);
+    if (!p || !(usd > 0) || savingRetail) return;
+    const current = priceEntry(p, 'retail');
+    const target = retailInCurrency(usd, current.currency, ratesPerUsd);
+    const before = current.amount != null ? formatPriceEntry(current) : 'no retail price';
+    const after = formatPrice(target.amount, target.currency);
+    const switching = current.amount != null && (current.currency || 'USD') !== target.currency;
+    const ok = await confirm({
+      title: `Set ${p.sku || 'this product'}’s retail price to ${after}?`,
+      message: `Replaces ${before}.`,
+      detail: switching
+        ? `The retail price changes currency from ${current.currency || 'USD'} to ${target.currency}. Enter a rate for ${current.currency} above to keep it in ${current.currency}.`
+        : 'Labels, catalogs and exports use the new price from now on.',
+      confirmLabel: 'Save retail price',
+    });
+    if (!ok) return;
+    const patch = { priceRetail: target.amount, priceRetailCurrency: target.currency };
+    setSavingRetail(true);
+    try {
+      let row;
+      try {
+        row = await window.api.products.update(p.id, { ...patch, expectedUpdatedAt: p.updatedAt });
+      } catch (err) {
+        if (!parseConflictError(err)) throw err;
+        const result = await resolveSaveConflict(err, {
+          refresh: () => window.api.products.get(p.id),
+          overwrite: () => window.api.products.update(p.id, patch),
+        });
+        if (result.choice === 'cancel') return;
+        if (result.choice === 'refresh') {
+          if (result.row) setProducts((list) => list.map((x) => (x.id === p.id ? { ...x, ...result.row } : x)));
+          addToast('Reloaded the product’s current prices — check them, then save again.', 'info');
+          return;
+        }
+        row = result.row;
+      }
+      setProducts((list) => list.map((x) => (x.id === p.id ? { ...x, ...patch, ...(row || {}) } : x)));
+      useAppStore.getState().refreshProducts?.();
+      addToast(`Retail price saved: ${after}`, 'success');
+    } catch (err) {
+      addToast(`Could not save the retail price: ${err.message}`, 'error');
+    } finally {
+      setSavingRetail(false);
+    }
+  }
   const cost = Number(landedCostUsd) || 0;
   const retail = Number(retailUsd) || 0;
   const profit = retail - cost;
@@ -162,24 +246,21 @@ export function CostCalculator() {
       <div className="costcalc__layout">
         <section className="po-section">
           <h2 className="section-title">1. Pick a product <span className="section-hint">optional</span></h2>
-          <Input
-            type="search"
-            aria-label="Search products"
-            placeholder="Search SKU or name…"
-            value={productSearch}
-            onChange={(e) => setProductSearch(e.target.value)}
-          />
-          <Select
-            className="costcalc__picker"
-            aria-label="Product"
-            value={productId}
-            onChange={(e) => setProductId(e.target.value)}
-          >
-            <option value="">— manual entry —</option>
-            {filteredProducts.map((p) => (
-              <option key={p.id} value={p.id}>{p.sku} — {p.name}</option>
-            ))}
-          </Select>
+          {/* One searchable picker: the old search box + native select
+              (capped at 50) could show "manual entry" while still using
+              the previous product's figures. */}
+          <div className="costcalc__picker">
+            <SearchableSelect
+              value={productId}
+              options={products}
+              onChange={(v) => setProductId(v || '')}
+              getLabel={productLabel}
+              getValue={productValue}
+              emptyLabel="— Manual entry (no product) —"
+              emptyValue=""
+              placeholder={products.length ? 'Search SKU or name…' : 'No products yet'}
+            />
+          </div>
           {productId && costData && (
             <div className="costcalc__history">
               <CostStat label="Latest landed" value={fmtUsd(costData.latestLandedCostUsd)} />
@@ -192,7 +273,7 @@ export function CostCalculator() {
               {['retail', 'wholesale'].map((src) => {
                 const entry = priceEntry(selectedProduct, src);
                 const label = src === 'retail' ? 'Retail' : 'Wholesale';
-                const m = marginAgainst(entry, Number(landedCostUsd) || 0);
+                const m = marginAgainst(entry, Number(landedCostUsd) || 0, ratesPerUsd);
                 return [
                   <CostStat key={`${src}-price`} label={`Current ${label.toLowerCase()}`} value={entry.amount == null ? '—' : formatPriceEntry(entry)} />,
                   <CostStat key={`${src}-margin`} label={`Margin at ${label.toLowerCase()}`} value={m.text} tone={m.tone} />,
@@ -200,6 +281,20 @@ export function CostCalculator() {
               })}
             </div>
           )}
+          {foreignCurrencies.map((c) => (
+            <label className="field costcalc__rate" key={c}>
+              <span className="field__label">Exchange rate for {c} prices (1 USD = ? {c})</span>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                value={ratesPerUsd[c] ?? ''}
+                placeholder={c === 'KHR' ? 'e.g. 4100' : ''}
+                onChange={(e) => setRate(c, e.target.value)}
+              />
+              <span className="field__hint">Landed cost is in USD, so a {c} price needs a rate to show its margin. Kept on this Mac only.</span>
+            </label>
+          ))}
           {productId && costState === 'loading' && <p className="section-hint costcalc__note" role="status">Loading received-PO cost history…</p>}
           {productId && costState === 'error' && <div className="costcalc__note" role="alert"><p>{costError}</p><Button onClick={() => setCostRefresh((value) => value + 1)}>Retry</Button></div>}
           {productId && costState === 'empty' && (
@@ -258,6 +353,25 @@ export function CostCalculator() {
             </label>
           </div>
 
+          {selectedProduct ? (
+            <div className="setting-control-row costcalc__save">
+              <Button
+                onClick={saveAsRetail}
+                disabled={savingRetail || !(Number(retailUsd) > 0)}
+                title={Number(retailUsd) > 0 ? `Write this price to ${selectedProduct.sku || 'the product'}’s retail price` : 'Enter a retail price first'}
+              >
+                {savingRetail ? 'Saving…' : `Save as ${selectedProduct.sku || 'product'}’s retail price`}
+              </Button>
+              {(() => {
+                const cur = priceEntry(selectedProduct, 'retail').currency;
+                const target = Number(retailUsd) > 0 ? retailInCurrency(Number(retailUsd), cur, ratesPerUsd) : null;
+                return target && target.currency !== 'USD'
+                  ? <span className="section-hint">Saved as {formatPrice(target.amount, target.currency)} at your rate.</span>
+                  : null;
+              })()}
+            </div>
+          ) : null}
+
           <div className="costcalc__summary">
             <CostStat label="Profit per unit" value={priced ? fmtUsd(profit) : '—'} tone={priced ? (profit >= 0 ? 'emerald' : 'rose') : null} />
             <CostStat label="Realized margin" value={priced ? `${((profit / retail) * 100).toFixed(2)}%` : '—'} />
@@ -302,20 +416,6 @@ function CostStat({ label, value, tone }) {
       <div className={`po-stat__value${tone ? ` po-stat__value--${tone}` : ''}`}>{value}</div>
     </div>
   );
-}
-
-/**
- * Margin of a stored price over the landed cost (USD). Landed cost is always
- * USD, so a price in another currency cannot be compared without a rate —
- * say so instead of printing a wrong percentage. A price with no currency
- * (rows from before v0.1.55) is taken as USD, as the rest of the app does.
- */
-function marginAgainst(entry, cost) {
-  if (!entry || entry.amount == null || entry.amount <= 0) return { text: '—', tone: null };
-  if (entry.currency && entry.currency !== 'USD') return { text: `— (price in ${entry.currency})`, tone: null };
-  if (!(cost > 0)) return { text: '—', tone: null };
-  const pct = ((entry.amount - cost) / entry.amount) * 100;
-  return { text: `${pct.toFixed(1)}%`, tone: pct >= 0 ? 'emerald' : 'rose' };
 }
 
 function fmtUsd(n) {

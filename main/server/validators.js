@@ -30,7 +30,7 @@ const { exportSubfolder, relativeMediaPath } = require('../util/mediaPaths');
 function validateExportProfile(input) {
   if (!isObject(input)) return 'profile must be an object';
   try { exportSubfolder(input.outputSubfolder); } catch (err) { return err.message; }
-  return true;
+  return optionalImageScope(input.imageScope);
 }
 
 function isString(v)  { return typeof v === 'string'; }
@@ -119,6 +119,18 @@ function optionalRunId(v) {
   return true;
 }
 
+/** Export Center image scope: absent, or { mode: 'all'|'main'|'first', count? }
+ *  with count a whole number 1–50 for 'first'. */
+function optionalImageScope(v) {
+  if (v == null) return true;
+  if (!isObject(v)) return 'imageScope must be an object';
+  if (!['all', 'main', 'first'].includes(v.mode)) return "imageScope.mode must be 'all', 'main' or 'first'";
+  if (v.mode === 'first' && !(Number.isInteger(v.count) && v.count >= 1 && v.count <= 50)) {
+    return 'imageScope.count must be a whole number from 1 to 50';
+  }
+  return true;
+}
+
 /** Combinator: args must be a string id OR an object with the field. */
 function requireScalarOrField(name) {
   return (args) => {
@@ -196,7 +208,10 @@ function validateOptionalPositions(positions) {
 // rather than only in the handler because client mode has its own implementation
 // of the files:* handlers — a handler-level check does not exist there, but the
 // validator runs in both modes.
-const { isImagePath, isWorkbookPath } = require('../util/fileKinds');
+const { isImagePath, isWorkbookPath, isAbsolutePath } = require('../util/fileKinds');
+function pathExists(p) {
+  try { return require('node:fs').existsSync(p); } catch { return false; }
+}
 
 const EXEMPT = {
   // Only genuinely argument-free channels belong here. v0.1.17 moved the
@@ -372,7 +387,8 @@ const VALIDATORS = {
     if (!isObject(a)) return 'expected object';
     if (!isString(a.profileId)) return 'profileId required';
     if (!isArray(a.productIds)) return 'productIds must be an array';
-    return optionalRunId(a.runId);
+    const scope = optionalImageScope(a.imageScope);
+    return scope === true ? optionalRunId(a.runId) : scope;
   },
   // v0.26.40: added during the audit. Collisions check takes a
   // user-controlled outputRoot string — validating shape so a
@@ -384,7 +400,7 @@ const VALIDATORS = {
     if (!isArray(a.productIds)) return 'productIds must be an array';
     if (a.productIds.length > 50_000) return 'productIds too large (max 50000)';
     if (a.outputRoot != null && !isString(a.outputRoot)) return 'outputRoot must be a string';
-    return true;
+    return optionalImageScope(a.imageScope);
   },
   // v0.26.50: pure expected-filename compute for the client-mode
   // collision-check bridge. No outputRoot — the client supplies that
@@ -394,7 +410,7 @@ const VALIDATORS = {
     if (!isString(a.profileId)) return 'profileId required';
     if (!isArray(a.productIds)) return 'productIds must be an array';
     if (a.productIds.length > 50_000) return 'productIds too large (max 50000)';
-    return true;
+    return optionalImageScope(a.imageScope);
   },
 
   // AI -------------------------------------------------------------
@@ -634,7 +650,11 @@ const VALIDATORS = {
   'catalogStudio:update':    requireVersionedPatch,
   'catalogStudio:delete':    requireFields('id'),
   'catalogStudio:duplicate': requireFields('id'),
-  'catalogStudio:preview':   requireFields('id'),
+  'catalogStudio:preview':   (a) => {
+    const base = requireFields('id')(a);
+    if (base !== true) return base;
+    return a.fontsKey == null || (isString(a.fontsKey) && a.fontsKey.length <= 500) ? true : 'fontsKey must be a short string';
+  },
   'catalogStudio:export':    requireFields('id', 'outputFolder'),
   'catalogStudio:print':     requireNonEmptyStringFields('id'),
   // v0.1.63 catalog templates. The config blob is normalized server-side by
@@ -975,6 +995,10 @@ const VALIDATORS = {
   'files:scanImageFiles':        requireNonEmptyStringArg('absolute folder path'),
   'files:parseWorkbook':         (a) => (isWorkbookPath(a) ? true
     : 'an absolute path to a workbook (.xlsx, .xls, .csv, .tsv) is required'),
+  // "Show in Finder" / "Open folder" after a run: an absolute path that
+  // exists on this Mac (checked here so client mode applies the same rule).
+  'files:revealPath':            (a) => (isAbsolutePath(a) && pathExists(a) ? true
+    : 'an absolute path to an existing file or folder is required'),
   'files:pickImageFile':         (a) => a == null || (isObject(a) && (a.multiple === undefined || isBool(a.multiple)))
     ? true : 'expected { multiple?: boolean }',
   'samples:generateProductSheet': () => true,
@@ -1033,6 +1057,9 @@ const VALIDATORS = {
 
   /* client mode — this Mac connecting to a server Mac */
   'client:connectionState':      () => true,
+  // Connectivity pass (0.1.94): ping now + reconnect the live-update socket.
+  'client:reconnectNow':         (a) => (a == null || (isObject(a) && (a.reason === undefined || a.reason === 'retry' || a.reason === 'test')))
+    ? true : "expected { reason?: 'retry' | 'test' }",
   'client:syncStats':            () => true,
   'client:diagnoseServer':       (a) => (a == null || isObject(a)) ? true : 'expected an object or null',
   'client:testConnection':       (a) => isObject(a) ? true : 'expected an object argument',
@@ -1074,7 +1101,9 @@ const VALIDATORS = {
   /* export — runs in-process and writes to a local folder */
   'exports:run': (a) => {
     const base = requireNonEmptyStringFields('profileId')(a);
-    return base === true ? optionalRunId(a.runId) : base;
+    if (base !== true) return base;
+    const scope = optionalImageScope(a.imageScope);
+    return scope === true ? optionalRunId(a.runId) : scope;
   },
 };
 

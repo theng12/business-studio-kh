@@ -27,7 +27,12 @@ export const DEFAULT_SORT = { key: 'updated', dir: 'desc' };
 // the table/grid actually offers. Old saves pointing at a deprecated
 // key fall back to DEFAULT_SORT silently.
 const PRODUCT_SORT_STORAGE_KEY = 'ProductLibrary.sort';
-const VALID_SORT_KEYS = new Set(['updated', 'sku', 'name', 'brand', 'category', 'color', 'images']);
+// 0.1.94: + the optional data columns (barcode, retail, wholesale, stock) and
+// any company price group (`price:<key>`).
+const VALID_SORT_KEYS = new Set(['updated', 'sku', 'name', 'brand', 'category', 'color', 'images', 'barcode', 'retail', 'wholesale', 'stock']);
+export function isValidSortKey(key) {
+  return VALID_SORT_KEYS.has(key) || (typeof key === 'string' && /^price:[^\s]+$/.test(key));
+}
 
 export function loadProductSort() {
   try {
@@ -35,7 +40,7 @@ export function loadProductSort() {
     if (!raw) return { ...DEFAULT_SORT };
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_SORT };
-    const key = VALID_SORT_KEYS.has(parsed.key) ? parsed.key : DEFAULT_SORT.key;
+    const key = isValidSortKey(parsed.key) ? parsed.key : DEFAULT_SORT.key;
     const dir = parsed.dir === 'asc' ? 'asc' : 'desc';
     return { key, dir };
   } catch {

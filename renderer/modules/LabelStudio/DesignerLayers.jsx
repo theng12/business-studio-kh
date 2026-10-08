@@ -1,4 +1,39 @@
+import { useEffect, useRef, useState } from 'react';
 import { elementLabel, inPaintOrder, toggleSelected } from './designerGeometry.js';
+
+/**
+ * The inline rename box. Enter or leaving the box keeps the name, Esc cancels.
+ * It replaced the browser prompt() dialog, which Electron does not implement — double-click
+ * "rename" silently did nothing.
+ */
+function LayerRename({ element, onDone }) {
+  const [value, setValue] = useState(element.name || '');
+  const done = useRef(false);
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); inputRef.current?.select(); }, []);
+  const finish = (name) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(name);
+  };
+  return (
+    <input
+      ref={inputRef}
+      className="input ld-layers__rename"
+      aria-label="Layer name"
+      value={value}
+      placeholder={elementLabel({ ...element, name: undefined })}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => finish(value)}
+      onKeyDown={(e) => {
+        // Keep Delete / arrows / Esc away from the designer's own shortcuts.
+        e.stopPropagation();
+        if (e.key === 'Enter') { e.preventDefault(); finish(value); }
+        else if (e.key === 'Escape') { e.preventDefault(); finish(null); }
+      }}
+    />
+  );
+}
 
 /**
  * v0.1.64: the layer list.
@@ -13,7 +48,7 @@ import { elementLabel, inPaintOrder, toggleSelected } from './designerGeometry.j
  * The list is drawn top-most first, which is the opposite of paint order —
  * that is how every design tool shows it.
  */
-export function DesignerLayers({ elements, selectedIds, onSelect, onAction }) {
+export function DesignerLayers({ elements, selectedIds, onSelect, onAction, renamingId = null, onRename }) {
   const ordered = [...inPaintOrder(elements)].reverse();
   return (
     <div className="ld-layers">
@@ -32,18 +67,22 @@ export function DesignerLayers({ elements, selectedIds, onSelect, onAction }) {
               key={el.id}
               className={`${selectedIds.includes(el.id) ? 'is-selected' : ''}${el.visible === false ? ' is-hidden' : ''}`}
             >
-              <button
-                type="button"
-                className="ld-layers__name"
-                onClick={(e) => onSelect(e.shiftKey
-                  ? toggleSelected(selectedIds, el.id)
-                  : [el.id])}
-                onDoubleClick={() => onAction({ kind: 'rename', id: el.id })}
-                title="Click to select, double-click to rename"
-              >
-                <span className={`ld-layers__type ld-layers__type--${el.type}`} aria-hidden />
-                {elementLabel(el)}
-              </button>
+              {renamingId === el.id && onRename ? (
+                <LayerRename element={el} onDone={(name) => onRename(el.id, name)} />
+              ) : (
+                <button
+                  type="button"
+                  className="ld-layers__name"
+                  onClick={(e) => onSelect(e.shiftKey
+                    ? toggleSelected(selectedIds, el.id)
+                    : [el.id])}
+                  onDoubleClick={() => onAction({ kind: 'rename', id: el.id })}
+                  title="Click to select, double-click to rename"
+                >
+                  <span className={`ld-layers__type ld-layers__type--${el.type}`} aria-hidden />
+                  {elementLabel(el)}
+                </button>
+              )}
               <button
                 type="button"
                 className={`ld-layers__toggle${el.visible === false ? ' is-on' : ''}`}

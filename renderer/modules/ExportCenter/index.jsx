@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { useAppStore } from '../../store/index.js';
-import { Button, Badge, EmptyState, Modal, Pagination, paginate, Select } from '../../components/ui.jsx';
+import { Button, Badge, EmptyState, Input, Modal, Pagination, paginate, Select } from '../../components/ui.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { ProfileForm } from './ProfileForm.jsx';
+import { exportReadiness, isExportReady, clearLegacyImageScope, loadBrandFilter, loadLegacyImageScope, normalizeImageScope, saveBrandFilter, imageScopeLabel } from './exportCenterState.js';
 
 /**
  * v0.26.29: persist the Export Center category filter per-company.
@@ -47,9 +48,16 @@ export function ExportCenter() {
   const setSaveToLibrary = useAppStore((s) => s.setExportSaveToLibrary);
   const running = useAppStore((s) => s.exportRunning);
   const lastResult = useAppStore((s) => s.exportLastResult);
-  const products = useAppStore((s) => s.products);
+  // Every product in the company — NOT `products`, which mirrors whatever
+  // the Library is searching or filtering. After a Library search the queue
+  // used to show only those rows and "Select all" silently meant "the
+  // Library's search results".
+  const products = useAppStore((s) => s.allProducts);
+  const refreshAllProducts = useAppStore((s) => s.refreshAllProducts);
   const categories = useAppStore((s) => s.categories);
   const refreshCategories = useAppStore((s) => s.refreshCategories);
+  const brands = useAppStore((s) => s.brands);
+  const refreshBrands = useAppStore((s) => s.refreshBrands);
   const refreshProfiles = useAppStore((s) => s.refreshExportProfiles);
   const createProfile = useAppStore((s) => s.createExportProfile);
   const updateProfile = useAppStore((s) => s.updateExportProfile);
@@ -62,10 +70,9 @@ export function ExportCenter() {
 
   const [editing, setEditing] = useState(null);
   const [queuePage, setQueuePage] = useState(0);
-  // Default page size is intentionally small (10) so the toolbar — page nav,
-  // output folder, Run export — stays visible without scrolling once a real
-  // company-sized product list is loaded.
-  const [queuePageSize, setQueuePageSize] = useState(10);
+  // §10: 50 by default. The run bar is sticky at the top of the column, so a
+  // longer page no longer pushes Run export out of view.
+  const [queuePageSize, setQueuePageSize] = useState(50);
   const [queueSearch, setQueueSearch] = useState('');
   // v0.26.28: category filter for the queue list. '' = all categories;
   // anything else = filter to products whose categoryId matches. Sits
@@ -84,13 +91,29 @@ export function ExportCenter() {
     setCategoryFilterRaw(v);
     saveCategoryFilter(activeCompanyId, v);
   };
+  // Brand filter, beside the category one — same per-company persistence.
+  // '' = all brands, '__none' = products with no brand.
+  const [brandFilter, setBrandFilterRaw] = useState(() => loadBrandFilter(activeCompanyId));
+  const setBrandFilter = (v) => {
+    setBrandFilterRaw(v);
+    saveBrandFilter(activeCompanyId, v);
+  };
   // Re-seed when the active company changes mid-session. The Sidebar
   // company-switcher swaps activeCompanyId on the fly; without this
   // effect the dropdown would still show the previous company's
   // filter id (which is gibberish in the new company).
   useEffect(() => {
     setCategoryFilterRaw(loadCategoryFilter(activeCompanyId));
+    setBrandFilterRaw(loadBrandFilter(activeCompanyId));
   }, [activeCompanyId]);
+  useEffect(() => {
+    if (!brandFilter || brandFilter === '__none') return;
+    if (brands.length === 0) return;
+    if (!brands.some((b) => b.id === brandFilter)) {
+      setBrandFilterRaw('');
+      saveBrandFilter(activeCompanyId, '');
+    }
+  }, [brands, brandFilter, activeCompanyId]);
   // After categories load, validate the persisted filter. If the
   // saved id doesn't match any current category, fall back to ''
   // rather than show "0 of N in filter selected" forever.
@@ -114,12 +137,62 @@ export function ExportCenter() {
   useEffect(() => {
     if (activeCompanyId && categories.length === 0) refreshCategories?.();
   }, [activeCompanyId, categories.length, refreshCategories]);
+  useEffect(() => {
+    if (activeCompanyId && brands.length === 0) refreshBrands?.();
+  }, [activeCompanyId, brands.length, refreshBrands]);
+  // The full list is normally kept fresh by the store; load it if this is
+  // the first screen that needs it.
+  useEffect(() => {
+    if (activeCompanyId && products.length === 0) refreshAllProducts?.();
+    // Only on company change — an empty company would otherwise refetch forever.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCompanyId]);
 
   const selected = profiles.find((p) => p.id === selectedId) ?? null;
+  // Which of each product's images this profile exports. Stored on the profile
+  // (so it syncs between Macs); default "All images" = what every run did before.
+  const imageScope = useMemo(() => normalizeImageScope(selected?.imageScope), [selected?.imageScope]);
+  const setImageScope = async (next) => {
+    if (!selectedId) return;
+    try {
+      await updateProfile(selectedId, { imageScope: normalizeImageScope(next) });
+    } catch (err) {
+      addToast(err.message, 'error');
+    }
+  };
+  // One-time move of the old per-Mac (localStorage) scope onto the profile.
+  // A profile that already has a scope wins; either way the old value is
+  // cleared so it is never read again.
+  useEffect(() => {
+    if (!selected) return;
+    const legacy = loadLegacyImageScope(selected.id);
+    if (!legacy) return;
+    clearLegacyImageScope(selected.id);
+    if (imageScope.mode === 'all' && legacy.mode !== 'all') {
+      updateProfile(selected.id, { imageScope: legacy }).catch((err) => addToast(err.message, 'error'));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.id]);
+  const [firstNDraft, setFirstNDraft] = useState(String(imageScope.count || 3));
+  useEffect(() => { setFirstNDraft(String(imageScope.count || 3)); }, [imageScope.count]);
+  const commitFirstN = () => {
+    const n = Math.round(Number(firstNDraft));
+    if (!Number.isFinite(n) || n < 1) { setFirstNDraft(String(imageScope.count || 3)); return; }
+    const clamped = Math.min(50, n);
+    setFirstNDraft(String(clamped));
+    if (clamped !== imageScope.count) setImageScope({ mode: 'first', count: clamped });
+  };
   const queueSet = useMemo(() => new Set(queueIds), [queueIds]);
+  // Images per product that this profile's scope will write.
+  const scopedCount = useMemo(() => (p) => {
+    const total = p.imageCount || 0;
+    if (imageScope.mode === 'main') return Math.min(1, total);
+    if (imageScope.mode === 'first') return Math.min(imageScope.count || 1, total);
+    return total;
+  }, [imageScope.mode, imageScope.count]);
   const totalImagesQueued = useMemo(
-    () => products.filter((p) => queueSet.has(p.id)).reduce((n, p) => n + (p.imageCount || 0), 0),
-    [products, queueSet],
+    () => products.filter((p) => queueSet.has(p.id)).reduce((n, p) => n + scopedCount(p), 0),
+    [products, queueSet, scopedCount],
   );
 
   // Pre-flight: walk the selected products and bucket them so the user can
@@ -138,15 +211,14 @@ export function ExportCenter() {
     let exportableImages = 0;  // total images that will export
     for (const p of products) {
       if (!queueSet.has(p.id)) continue;
-      const total = p.imageCount ?? 0;
-      const proc = p.processedImageCount ?? 0;
-      if (total === 0)        noImages += 1;
-      else if (proc === 0)    { rawOnly += 1;   exportableImages += total; }
-      else if (proc < total)  { mixed += 1;     exportableImages += total; }
-      else                    { processed += 1; exportableImages += total; }
+      const state = exportReadiness(p);
+      if (state === 'none')       noImages += 1;
+      else if (state === 'raw')   { rawOnly += 1;   exportableImages += scopedCount(p); }
+      else if (state === 'mixed') { mixed += 1;     exportableImages += scopedCount(p); }
+      else                        { processed += 1; exportableImages += scopedCount(p); }
     }
     return { processed, rawOnly, mixed, noImages, exportableImages };
-  }, [products, queueSet]);
+  }, [products, queueSet, scopedCount]);
 
   // Client-side search: matches SKU + Name (case-insensitive, multi-word
   // AND so "BF 1611" finds "BF-M1611-CH"). The Pagination operates on the
@@ -157,11 +229,13 @@ export function ExportCenter() {
     return products.filter((p) => {
       // v0.26.28: category filter — empty string = no filter.
       if (categoryFilter && p.categoryId !== categoryFilter) return false;
+      if (brandFilter === '__none' && p.brandId) return false;
+      if (brandFilter && brandFilter !== '__none' && p.brandId !== brandFilter) return false;
       if (terms.length === 0) return true;
-      const hay = `${p.sku ?? ''} ${p.name ?? ''}`.toLowerCase();
+      const hay = `${p.sku ?? ''} ${p.name ?? ''} ${p.barcode ?? ''}`.toLowerCase();
       return terms.every((t) => hay.includes(t));
     });
-  }, [products, queueSearch, categoryFilter]);
+  }, [products, queueSearch, categoryFilter, brandFilter]);
 
   // Pagination state for the queue list (CLAUDE.md §10).
   const queuePager = useMemo(
@@ -301,10 +375,11 @@ export function ExportCenter() {
   function selectAll() {
     setQueue(filteredProducts.map((p) => p.id));
   }
+  // "Ready" here is exactly the green Ready badge in the table: every image
+  // already processed. It used to read `processStatus`, which disagreed with
+  // the badge, so "Ready only" picked products the table called Raw.
   function selectReadyOnly() {
-    setQueue(filteredProducts
-      .filter((p) => p.imageCount > 0 && (p.processStatus === 'done' || p.processStatus === 'exported'))
-      .map((p) => p.id));
+    setQueue(filteredProducts.filter(isExportReady).map((p) => p.id));
   }
 
   // Why Run export is greyed out, for its tooltip (§18: say what to change).
@@ -313,7 +388,7 @@ export function ExportCenter() {
     : !outputRoot ? 'Pick an output folder first'
       : queueIds.length === 0 ? 'Tick at least one product below'
         : null;
-  const filterActive = !!(queueSearch || categoryFilter);
+  const filterActive = !!(queueSearch || categoryFilter || brandFilter);
 
   return (
     noCompanySelected ? (
@@ -389,43 +464,79 @@ export function ExportCenter() {
                   to start a run. The summary on the left always reflects
                   selection counts, not the filtered view. */}
               <div className="export-runbar export-runbar--top">
-                <div className="export-runbar__summary">
-                  {queueIds.length} product{queueIds.length === 1 ? '' : 's'} ·
-                  {' '}{totalImagesQueued} image{totalImagesQueued === 1 ? '' : 's'} queued
-                </div>
                 <div className="export-runbar__folder">
-                  <span className="muted">Output folder:</span>{' '}
-                  {outputRoot ? <code>{outputRoot}</code> : <span className="muted">not set</span>}
-                  <Button size="sm" onClick={handlePickOutputFolder}>{outputRoot ? 'Change…' : 'Pick…'}</Button>
+                  <span className="export-runbar__label">Output folder</span>
+                  {outputRoot
+                    ? <code title={outputRoot}>{outputRoot}</code>
+                    : <span className="muted">Not chosen yet</span>}
+                  <Button size="sm" onClick={handlePickOutputFolder}>{outputRoot ? 'Change…' : 'Choose…'}</Button>
                 </div>
-                {/* v0.31.0: also append the exported (web-size) copy back
-                    onto each product as its main image. Flagged dedup-exempt
-                    so the duplicate scan never pits it against the original. */}
-                <label className="export-runbar__tolib" title="Append each exported web-size image onto its product as the new main image. Marked exempt from the duplicate scan.">
-                  <input
-                    type="checkbox"
-                    checked={!!saveToLibrary}
-                    onChange={(e) => setSaveToLibrary(e.target.checked)}
-                  />
-                  <span>Also save to product library</span>
-                </label>
-                {running ? (
-                  <Button
-                    onClick={handleCancelRun}
-                    disabled={!runId || cancelling}
-                    title="Stop after the photo being written now. Files already written stay in the folder."
+                <div className="export-runbar__row">
+                  <div className="export-runbar__summary">
+                    {queueIds.length} product{queueIds.length === 1 ? '' : 's'} · {totalImagesQueued} image{totalImagesQueued === 1 ? '' : 's'}
+                  </div>
+                  {/* Which images of each product this profile writes. */}
+                  <label className="export-runbar__scope">
+                    <span>Images</span>
+                    <Select
+                      aria-label="Images to export from each product"
+                      value={imageScope.mode}
+                      onChange={(e) => {
+                        const mode = e.target.value;
+                        setImageScope(mode === 'first' ? { mode, count: Math.max(1, Number(firstNDraft) || 3) } : { mode });
+                      }}
+                    >
+                      <option value="all">All images</option>
+                      <option value="main">Main image only</option>
+                      <option value="first">First few…</option>
+                    </Select>
+                    {imageScope.mode === 'first' ? (
+                      <Input
+                        type="number"
+                        min="1"
+                        max="50"
+                        className="export-runbar__count"
+                        aria-label="How many images from the start"
+                        value={firstNDraft}
+                        onChange={(e) => setFirstNDraft(e.target.value)}
+                        onBlur={commitFirstN}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commitFirstN(); } }}
+                      />
+                    ) : null}
+                  </label>
+                  {/* v0.31.0: add the export back onto the product. Only the
+                      MAIN image's export goes back (one per product, set as the
+                      new main) — the rest stay in the folder only. */}
+                  <label
+                    className="export-runbar__tolib"
+                    title="After the run, the exported copy of each product's main image is added to that product and becomes its main image. Other exported images stay in the folder only. The copy is left out of the duplicate scan."
                   >
-                    {cancelling ? 'Stopping…' : 'Cancel'}
+                    <input
+                      type="checkbox"
+                      checked={!!saveToLibrary}
+                      onChange={(e) => setSaveToLibrary(e.target.checked)}
+                    />
+                    <span>Also add the main image&apos;s export to the product as its new main image</span>
+                  </label>
+                  <div className="toolbar__spacer" />
+                  {running ? (
+                    <Button
+                      onClick={handleCancelRun}
+                      disabled={!runId || cancelling}
+                      title="Stop after the photo being written now. Files already written stay in the folder."
+                    >
+                      {cancelling ? 'Stopping…' : 'Cancel'}
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="primary"
+                    onClick={handleRun}
+                    disabled={running || !outputRoot || queueIds.length === 0}
+                    title={runBlockedReason || undefined}
+                  >
+                    {running ? 'Exporting…' : 'Run export'}
                   </Button>
-                ) : null}
-                <Button
-                  variant="primary"
-                  onClick={handleRun}
-                  disabled={running || !outputRoot || queueIds.length === 0}
-                  title={runBlockedReason || undefined}
-                >
-                  {running ? 'Exporting…' : 'Run export'}
-                </Button>
+                </div>
               </div>
 
               <div className="export-queue">
@@ -465,6 +576,18 @@ export function ExportCenter() {
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </Select>
+                  <Select
+                    className="export-queue__cat-filter"
+                    value={brandFilter}
+                    onChange={(e) => { setBrandFilter(e.target.value); setQueuePage(0); }}
+                    aria-label="Filter by brand"
+                  >
+                    <option value="">All brands</option>
+                    <option value="__none">No brand</option>
+                    {brands.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </Select>
                   <div className="toolbar__spacer" />
                   {/* v0.26.28: "Ready" is explained in its tooltip, and
                       "Select all" says "in filter" when one is active. */}
@@ -475,12 +598,12 @@ export function ExportCenter() {
                       ? `Select the ${filteredProducts.length} product${filteredProducts.length === 1 ? '' : 's'} matching the current filter`
                       : `Select every product in the company catalog (${products.length})`}
                   >
-                    {filterActive ? `Select all in filter (${filteredProducts.length})` : 'Select all'}
+                    {filterActive ? `Select all ${filteredProducts.length}` : 'Select all'}
                   </Button>
                   <Button
                     variant="ghost"
                     onClick={selectReadyOnly}
-                    title='"Ready" = has at least one image AND its processing status is "done" (Workspace finished) or "exported" (already exported once). Skips products that are still raw / unprocessed / missing images.'
+                    title='Select only the products marked Ready below: every image already processed in Image Workspace. Raw, Mixed and products with no images are left out.'
                   >Ready only</Button>
                   {queueIds.length ? (
                     <Button variant="ghost" onClick={clearExportQueue}>Clear</Button>
@@ -498,7 +621,6 @@ export function ExportCenter() {
                     pageSize={queuePageSize}
                     onPageChange={setQueuePage}
                     onPageSizeChange={(n) => { setQueuePageSize(n); setQueuePage(0); }}
-                    pageSizeOptions={[10, 25, 50, 100, 200]}
                   />
                 ) : null}
                 {products.length === 0 ? (
@@ -510,8 +632,12 @@ export function ExportCenter() {
                 ) : filteredProducts.length === 0 ? (
                   <EmptyState
                     title="Nothing matches"
-                    body={emptyFilterMessage(queueSearch, categories.find((c) => c.id === categoryFilter)?.name)}
-                    action={<Button onClick={() => { setQueueSearch(''); setCategoryFilter(''); setQueuePage(0); }}>Clear filters</Button>}
+                    body={emptyFilterMessage(
+                      queueSearch,
+                      categories.find((c) => c.id === categoryFilter)?.name,
+                      brandFilter === '__none' ? 'No brand' : brands.find((b) => b.id === brandFilter)?.name,
+                    )}
+                    action={<Button onClick={() => { setQueueSearch(''); setCategoryFilter(''); setBrandFilter(''); setQueuePage(0); }}>Clear filters</Button>}
                   />
                 ) : (
                   <div className="data-table-wrap">
@@ -530,6 +656,7 @@ export function ExportCenter() {
                           const checked = queueSet.has(p.id);
                           const total = p.imageCount ?? 0;
                           const proc = p.processedImageCount ?? 0;
+                          const readiness = exportReadiness(p);
                           return (
                             <tr key={p.id} className={checked ? 'is-selected' : undefined}>
                               <td className="is-check">
@@ -561,11 +688,11 @@ export function ExportCenter() {
                                       Ready = all images processed; Mixed = some
                                       processed, some raw (exports both); Raw = exports
                                       the source as-is; No images = genuine skip. */}
-                                {total === 0 ? (
+                                {readiness === 'none' ? (
                                   <Badge tone="slate">No images</Badge>
-                                ) : proc === total ? (
+                                ) : readiness === 'ready' ? (
                                   <Badge tone="emerald">Ready</Badge>
-                                ) : proc > 0 ? (
+                                ) : readiness === 'mixed' ? (
                                   <Badge tone="amber">Mixed · {proc}/{total} processed</Badge>
                                 ) : (
                                   <Badge tone="amber">Raw</Badge>
@@ -587,7 +714,14 @@ export function ExportCenter() {
               ) : null}
 
               {lastResult ? (
-                <ExportResultPanel result={lastResult} />
+                <ExportResultPanel
+                  result={lastResult}
+                  scopeLabel={imageScopeLabel(imageScope)}
+                  onReveal={async (target) => {
+                    try { await window.api.files.revealPath(target); }
+                    catch (err) { addToast(err.message, 'error'); }
+                  }}
+                />
               ) : null}
             </>
           ) : (
@@ -762,15 +896,19 @@ function fmtBytes(n) {
 
 /** v0.1.89: the empty-list line names whichever filter emptied it. With only
  *  a category chosen it used to read: No products match “”. */
-export function emptyFilterMessage(search, categoryName) {
+export function emptyFilterMessage(search, categoryName, brandName) {
   const q = String(search || '').trim();
+  if (brandName) {
+    const where = categoryName ? `“${categoryName}” · “${brandName}”` : `the brand “${brandName}”`;
+    return q ? `No products in ${where} match “${q}”.` : `No products in ${where}.`;
+  }
   if (q && categoryName) return `No products in “${categoryName}” match “${q}”.`;
   if (q) return `No products match “${q}”.`;
   if (categoryName) return `No products in the category “${categoryName}”.`;
   return 'No products match these filters.';
 }
 
-function ExportResultPanel({ result }) {
+function ExportResultPanel({ result, onReveal, scopeLabel }) {
   const grouped = useMemo(() => {
     const m = new Map();
     for (const s of result.skips ?? []) {
@@ -792,10 +930,16 @@ function ExportResultPanel({ result }) {
   const avg = result.exported > 0 && total > 0 ? Math.round(total / result.exported) : 0;
   return (
     <div className={`export-result${result.skipped > 0 ? ' export-result--warn' : ' export-result--ok'}`}>
-      <strong>
-        Exported {result.exported} image{result.exported === 1 ? '' : 's'}
-        {result.outputPath ? <> to <code>{result.outputPath}</code></> : null}.
-      </strong>
+      <div className="export-result__head">
+        <strong>
+          Exported {result.exported} image{result.exported === 1 ? '' : 's'}
+          {result.outputPath ? <> to <code>{result.outputPath}</code></> : null}.
+        </strong>
+        {result.outputPath && onReveal ? (
+          <Button size="sm" onClick={() => onReveal(result.outputPath)}>Show in Finder</Button>
+        ) : null}
+      </div>
+      {scopeLabel ? <div className="export-result__note">Images per product: {scopeLabel}.</div> : null}
       {result.cancelled ? (
         <div className="export-result__note">
           Cancelled before the end. The files listed here were written and stay in the folder; the rest of the queue was not exported.
@@ -820,8 +964,8 @@ function ExportResultPanel({ result }) {
       ) : null}
       {result.savedToLibrary > 0 ? (
         <div className="export-result__note">
-          Saved {result.savedToLibrary} copy{result.savedToLibrary === 1 ? '' : 'ies'} back into the product
-          library as the main image (exempt from the duplicate scan).
+          Added {result.savedToLibrary} main-image export{result.savedToLibrary === 1 ? '' : 's'} back to {result.savedToLibrary === 1 ? 'its product' : 'their products'} as
+          the new main image (left out of the duplicate scan).
         </div>
       ) : null}
       {fromRaw > 0 ? (

@@ -19,6 +19,13 @@ export const COLUMN_DEFS = [
   { key: 'name',     label: 'Name',           defaultVisible: true,  optional: true },
   { key: 'category', label: 'Category',       defaultVisible: true,  optional: true },
   { key: 'color',    label: 'Color / Finish', defaultVisible: true,  optional: true },
+  // 0.1.94: optional data columns, off by default. Prices are read through
+  // priceEntry / formatPriceEntry (renderer/lib/prices.js); the company's own
+  // price groups are added at run time — see priceGroupColumnDefs.
+  { key: 'barcode',  label: 'Barcode',        defaultVisible: false, optional: true },
+  { key: 'retail',   label: 'Retail price',   defaultVisible: false, optional: true },
+  { key: 'wholesale', label: 'Wholesale price', defaultVisible: false, optional: true },
+  { key: 'stock',    label: 'Stock',          defaultVisible: false, optional: true },
   { key: 'images',   label: 'Images',         defaultVisible: true,  optional: true },
   // v0.49.48: landed cost from the latest received PO. Default OFF —
   // most users browse the catalog without cost in view, and the data is
@@ -30,6 +37,13 @@ export const COLUMN_DEFS = [
   { key: 'edited',   label: 'Edited',         defaultVisible: true,  optional: true },
 ];
 const COLUMNS_STORAGE_KEY = 'ProductLibrary.visibleColumns';
+
+/** 0.1.94: one optional column per company price group (`price:<key>`), off by default. */
+export function priceGroupColumnDefs(priceGroups) {
+  return (priceGroups || [])
+    .filter((g) => g && g.key)
+    .map((g) => ({ key: `price:${g.key}`, label: `${g.label || g.key} price`, defaultVisible: false, optional: true }));
+}
 export function loadVisibleColumns() {
   // localStorage stores a comma-separated list of visible keys. Missing
   // keys fall back to their `defaultVisible`. That way adding a new
@@ -62,6 +76,9 @@ export function loadVisibleColumns() {
         else if (off.has(c.key)) continue;              // explicitly hidden
         else if (c.defaultVisible) upgraded.add(c.key);  // new column → default
       }
+      // 0.1.94: price-group columns are per company, so they are not in
+      // COLUMN_DEFS; a group the user switched on stays on.
+      for (const key of on) if (key.startsWith('price:')) upgraded.add(key);
       return upgraded;
     }
 
@@ -82,7 +99,10 @@ export function loadVisibleColumns() {
 export function saveVisibleColumns(set) {
   try {
     // v0.1.27: write ON and OFF explicitly — see loadVisibleColumns.
-    const on = COLUMN_DEFS.filter((c) => set.has(c.key)).map((c) => c.key);
+    const on = [
+      ...COLUMN_DEFS.filter((c) => set.has(c.key)).map((c) => c.key),
+      ...[...set].filter((key) => String(key).startsWith('price:')),
+    ];
     const off = COLUMN_DEFS.filter((c) => !set.has(c.key)).map((c) => c.key);
     localStorage.setItem(COLUMNS_STORAGE_KEY, `v2|${on.join(',')}|${off.join(',')}`);
   } catch {}

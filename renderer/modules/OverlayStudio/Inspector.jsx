@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ANCHORS, BARCODE_FORMATS, IMAGE_SOURCES, TOKENS } from './elementDefaults.js';
+import { ANCHORS, BARCODE_FORMATS, IMAGE_SOURCES, TOKENS, priceGroupTokens } from './elementDefaults.js';
 import { Button, Field, Input, Select, Textarea, SliderField } from '../../components/ui.jsx';
 import { FontFamilyPicker } from './FontFamilyPicker.jsx';
 import { EyeIcon, EyeOffIcon, LockIcon, UnlockIcon } from './icons.jsx';
@@ -104,7 +104,8 @@ function NumberInput({
  * Numeric inputs that represent fractions accept percentages (0–100) for
  * readability and convert to 0–1 fractions on the way out.
  */
-export function Inspector({ element, onChange, onDelete }) {
+export function Inspector({ element, onChange, onDelete, priceGroups = [] }) {
+  const priceTokens = priceGroupTokens(priceGroups);
   if (!element) {
     return (
       <div className="ovl-inspector ovl-inspector--empty">
@@ -214,10 +215,10 @@ export function Inspector({ element, onChange, onDelete }) {
       ) : null}
 
       {element.type === 'text' ? (
-        <TextProps element={element} patchEl={patchEl} patchFont={patchFont} patchBg={patchBg} />
+        <TextProps element={element} patchEl={patchEl} patchFont={patchFont} patchBg={patchBg} priceTokens={priceTokens} />
       ) : null}
       {element.type === 'barcode' ? (
-        <BarcodeProps element={element} patchEl={patchEl} patchBg={patchBg} />
+        <BarcodeProps element={element} patchEl={patchEl} patchBg={patchBg} priceTokens={priceTokens} />
       ) : null}
       {element.type === 'image' ? (
         <ImageProps element={element} patchEl={patchEl} />
@@ -291,7 +292,7 @@ function AnchorPicker({ value, onChange }) {
 /** Re-usable content field with a chip-row of available tokens. Clicking
  *  a chip appends the token to the textarea so users don't have to remember
  *  the exact spelling. */
-function TokenContentField({ value, onChange, multiline = false }) {
+function TokenContentField({ value, onChange, multiline = false, priceTokens = [] }) {
   function appendToken(tok) {
     onChange((value ?? '') + tok);
   }
@@ -322,6 +323,16 @@ function TokenContentField({ value, onChange, multiline = false }) {
                 onClick={() => appendToken(tok)}
               >{tok}</button>
             ))}
+            {/* The company's own price groups (Settings → Price groups). */}
+            {priceTokens.map(({ token, label }) => (
+              <button
+                key={token}
+                type="button"
+                className="ovl-token-chip"
+                onClick={() => appendToken(token)}
+                title={`${label} price`}
+              >{token}</button>
+            ))}
           </div>
         </>
       )}
@@ -331,11 +342,11 @@ function TokenContentField({ value, onChange, multiline = false }) {
 
 /* ── Per-type property panels ──────────────────────────────────── */
 
-function TextProps({ element, patchEl, patchFont, patchBg }) {
+function TextProps({ element, patchEl, patchFont, patchBg, priceTokens }) {
   return (
     <>
       <Section title="Text">
-        <TokenContentField value={element.content} onChange={(v) => patchEl({ content: v })} multiline />
+        <TokenContentField value={element.content} onChange={(v) => patchEl({ content: v })} multiline priceTokens={priceTokens} />
         <Field label="Align">
           {({ id }) => (
             <Select id={id} value={element.align ?? 'left'} onChange={(e) => patchEl({ align: e.target.value })}>
@@ -417,11 +428,11 @@ function TextProps({ element, patchEl, patchFont, patchBg }) {
   );
 }
 
-function BarcodeProps({ element, patchEl, patchBg }) {
+function BarcodeProps({ element, patchEl, patchBg, priceTokens }) {
   return (
     <>
       <Section title="Barcode">
-        <TokenContentField value={element.content} onChange={(v) => patchEl({ content: v })} />
+        <TokenContentField value={element.content} onChange={(v) => patchEl({ content: v })} priceTokens={priceTokens} />
         <Field label="Format" hint="EAN-13 needs 12 digits; UPC-A needs 11 digits. Code 128 accepts anything alphanumeric.">
           {({ id }) => (
             <Select id={id} value={element.format ?? 'code128'} onChange={(e) => patchEl({ format: e.target.value })}>

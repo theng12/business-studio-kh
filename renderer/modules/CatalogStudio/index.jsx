@@ -13,6 +13,7 @@ import { DesignControls } from './DesignControls.jsx';
 import { CatalogTemplateBuilder } from './TemplateBuilder.jsx';
 import { ProductManager } from './ProductManager.jsx';
 import { CatalogPreview } from './CatalogPreview.jsx';
+import { previewFontsKey, rememberPreviewFonts } from './previewFonts.js';
 import { keepTypedName } from '../LabelStudio/editorRules.js';
 import { timeAgo } from '../../lib/format.js';
 
@@ -149,7 +150,12 @@ function ProjectCard({ project, onOpen, onDuplicate, onDelete }) {
 }
 
 export function CatalogEditor({ projectId, onBack }) {
-  const products = useAppStore((s) => s.products);
+  // Every product in the company. `products` is the Library's filtered view,
+  // so after a Library search the catalog's own products showed as "missing"
+  // and the picker offered only the search results. (`?? s.products` only
+  // for component tests that stub the old field.)
+  const products = useAppStore((s) => s.allProducts ?? s.products);
+  const refreshAllProducts = useAppStore((s) => s.refreshAllProducts);
   const brands = useAppStore((s) => s.brands) ?? []; const categories = useAppStore((s) => s.categories) ?? []; const addToast = useAppStore((s) => s.addToast);
   const companySwitching = useAppStore((s) => s.companySwitching);
   // v0.1.55: this company's named price groups, so the catalog can print one.
@@ -158,12 +164,19 @@ export function CatalogEditor({ projectId, onBack }) {
   const companies = useAppStore((s) => s.companies) ?? [];
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const catalogPriceGroups = (companies.find((c) => c.id === activeCompanyId)?.priceGroups) ?? [];
+  useEffect(() => {
+    if (activeCompanyId && !(Array.isArray(products) && products.length)) refreshAllProducts?.();
+    // Once per company — an empty company must not refetch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCompanyId]);
   const [project, setProject] = useState(null); const [preview, setPreview] = useState(''); const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null);
   const [working, setWorking] = useState(false); const [progress, setProgress] = useState(0); const [tab, setTab] = useState('products'); const timer = useRef(null);
   // The PDF this session exported last, for the "Open PDF" button.
   const [lastExport, setLastExport] = useState(null);
   const [printing, setPrinting] = useState(false);
   const [previewState, setPreviewState] = useState('refreshing'); const [previewError, setPreviewError] = useState('');
+  // Which remembered font set the current preview HTML expects (previewFonts.js).
+  const [previewFonts, setPreviewFonts] = useState('');
   const previewSeq = useRef(0);
   // ponytail: keep at most 20 local snapshots; durable history would require its own product direction.
   const history = useRef({ past: [], future: [] }); const [historyVersion, setHistoryVersion] = useState(0);
@@ -279,9 +292,9 @@ export function CatalogEditor({ projectId, onBack }) {
     try {
       await flushPending();
       if (seq !== previewSeq.current || generation !== editorGeneration.current) return;
-      const r = await window.api.catalogStudio.preview(projectId);
+      const r = await window.api.catalogStudio.preview(projectId, previewFontsKey());
       if (seq !== previewSeq.current || generation !== editorGeneration.current) return;
-      setPreview(r.html); setPreviewState('idle');
+      setPreviewFonts(rememberPreviewFonts(r)); setPreview(r.html); setPreviewState('idle');
     } catch (e) {
       if (seq !== previewSeq.current || generation !== editorGeneration.current) return;
       setPreviewState('error'); setPreviewError(parseConflictError(e) ? 'This catalog changed elsewhere. Use Save to review it, then refresh the preview.' : e.message);
@@ -424,7 +437,7 @@ export function CatalogEditor({ projectId, onBack }) {
         <button type="button" role="tab" tabIndex={tab === 'design' ? 0 : -1} aria-selected={tab === 'design'} className={`segment${tab === 'design' ? ' is-active' : ''}`} onClick={() => setTab('design')} title="Style pages and product cards">Layout & design</button>
       </div>
     </div>
-    {tab === 'products' ? <div className="catalog-product-workspace"><ProductManager products={products} brands={brands} categories={categories} config={c} onChange={updateConfig} /><CatalogPreview preview={preview} onRefresh={refreshPreview} config={c} state={previewState} error={previewError} /></div> :
+    {tab === 'products' ? <div className="catalog-product-workspace"><ProductManager products={products} brands={brands} categories={categories} config={c} onChange={updateConfig} /><CatalogPreview preview={preview} fontsKey={previewFonts} onRefresh={refreshPreview} config={c} state={previewState} error={previewError} /></div> :
       <div className="catalog-editor">
         <aside className="catalog-sidebar">
           <section className="catalog-sidebar__section">
@@ -442,7 +455,7 @@ export function CatalogEditor({ projectId, onBack }) {
             coverSubtitle={{ value: c.cover?.subtitle || '', onChange: (subtitle) => updateConfig({ cover: { ...c.cover, subtitle } }) }}
           />
         </aside>
-        <CatalogPreview preview={preview} onRefresh={refreshPreview} config={c} state={previewState} error={previewError} />
+        <CatalogPreview preview={preview} fontsKey={previewFonts} onRefresh={refreshPreview} config={c} state={previewState} error={previewError} />
       </div>}
     <GenerationExperience open={working} title="Building your catalog" progress={progress} phase={Math.min(3, Math.floor(progress / 28))} detail={project.name} />
   </section>;
@@ -673,7 +686,7 @@ export function CatalogTemplates() {
       footer={<><Button onClick={() => setCreateTemplate(null)}>Cancel</Button><Button variant="primary" disabled={creating} onClick={create}>{creating ? 'Creating…' : 'Create and add products'}</Button></>}
     >
       <Field label="Project name" hint={`Using ${createTemplate?.builtIn ? 'the' : 'your'} ${createTemplate?.name} template. You can change every layout setting later.`}>
-        {({ id }) => <Input id={id} autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. 2026 Wholesale Collection" />}
+        {({ id }) => <Input id={id} autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent?.isComposing && !creating) { e.preventDefault(); void create(); } }} placeholder="e.g. 2026 Wholesale Collection" />}
       </Field>
     </Modal>
   </section>;

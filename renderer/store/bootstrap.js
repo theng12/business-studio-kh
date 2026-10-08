@@ -12,6 +12,27 @@ let _bootstrapReady = false;
 let _reconcilePending = false;
 let _reconcileTimer = null;
 let _reconcilePromise = null;
+let _bootstrapDoneAt = 0;
+let _hellosThisBoot = 0;
+
+/* Connectivity pass (0.1.94): the socket's greeting (`server:hello`) arrives
+ * a moment after launch — usually while bootstrap is still loading, or just
+ * after. Treating that greeting as a reconnect re-ran the whole company load
+ * (companies, dashboard, products…) on top of the bootstrap that had just
+ * fetched the same data: every boot paid for its catalog twice.
+ *
+ * Main publishes how many times the socket has opened (`wsOpenCount` in the
+ * connection state). The greeting of the session's FIRST socket is skipped
+ * when it is the first hello this boot and bootstrap is still running or
+ * ended less than HELLO_RESYNC_GRACE_MS ago. Every other hello — a real
+ * reconnect, after which events may have been missed — still reconciles. */
+export const HELLO_RESYNC_GRACE_MS = 5_000;
+
+export function shouldSkipHelloResync({ wsOpenCount, helloIndex, bootstrapReady, bootstrapDoneAt, now }) {
+  if (wsOpenCount !== 1 || helloIndex !== 1) return false;
+  if (!bootstrapReady) return true;
+  return now - bootstrapDoneAt < HELLO_RESYNC_GRACE_MS;
+}
 
 function disposeAll() {
   for (const fn of [..._aiUnsubs, ..._catalogUnsubs, _clientUnsub]) {
@@ -37,6 +58,9 @@ export function isConnectionPushWorthStoring(prev, next) {
   if (prev.status !== next.status) return true;
   if ((prev.lastError ?? null) !== (next.lastError ?? null)) return true;
   if ((prev.serverVersion ?? null) !== (next.serverVersion ?? null)) return true;
+  if ((prev.serverName ?? null) !== (next.serverName ?? null)) return true;
+  if ((prev.reconnectCount ?? 0) !== (next.reconnectCount ?? 0)) return true;
+  if ((prev.wsOpenCount ?? 0) !== (next.wsOpenCount ?? 0)) return true;
   if (JSON.stringify(prev.user ?? null) !== JSON.stringify(next.user ?? null)) return true;
   if (prev.lastOkAt === next.lastOkAt) return false;
   return Math.abs((next.lastOkAt || 0) - (prev.lastOkAt || 0)) >= LAST_OK_REFRESH_MS;
@@ -107,6 +131,14 @@ function installSubscriptions(set, get) {
   }
   if (window.api?.events?.onServerHello) {
     const off = window.api.events.onServerHello(() => {
+      _hellosThisBoot += 1;
+      if (shouldSkipHelloResync({
+        wsOpenCount: get().clientConnection?.wsOpenCount,
+        helloIndex: _hellosThisBoot,
+        bootstrapReady: _bootstrapReady,
+        bootstrapDoneAt: _bootstrapDoneAt,
+        now: Date.now(),
+      })) return;
       requestReconciliation(set, get);
     });
     if (typeof off === 'function') _catalogUnsubs.push(off);
@@ -167,6 +199,8 @@ export function createBootstrapSlice(set, get) {
     async bootstrap() {
       if (!window.api) return;
       _bootstrapReady = false;
+      _bootstrapDoneAt = 0;
+      _hellosThisBoot = 0;
       _reconcilePending = false;
       if (_reconcileTimer) clearTimeout(_reconcileTimer);
       _reconcileTimer = null;
@@ -209,6 +243,7 @@ export function createBootstrapSlice(set, get) {
       await Promise.allSettled([...activeKeys].map((key) => allLoaders[key]()));
 
       _bootstrapReady = true;
+      _bootstrapDoneAt = Date.now();
       if (_reconcilePending) {
         requestReconciliation(set, get);
       } else {

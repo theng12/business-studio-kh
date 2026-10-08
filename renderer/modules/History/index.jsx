@@ -104,6 +104,7 @@ export function History() {
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
   const addToast = useAppStore((s) => s.addToast);
+  const activeCompanyId = useAppStore((s) => s.activeCompanyId);
 
   const [entries, setEntries] = useState([]);
   const [total, setTotal] = useState(0);
@@ -217,6 +218,29 @@ export function History() {
 
   function entityLabel(entry) {
     const { entityType: et, entityId } = entry;
+    // The server names each row from the live tables across EVERY company
+    // (main/db/auditLog.js attachEntityNames). The store's lists below only
+    // hold the active company, so they are the fallback for an older server.
+    const live = entry.entity;
+    const otherCompany = live?.companyName && live.companyId !== activeCompanyId ? live.companyName : null;
+    if (live && (et === 'product' || et === 'image')) {
+      const kind = et === 'image' ? 'image' : 'product';
+      if (live.exists) {
+        const subtitle = [live.name, otherCompany].filter(Boolean).join(' · ') || null;
+        return { kind, text: live.sku || '(no SKU)', subtitle, productId: entityId };
+      }
+      const recordedSku = entry.before?.sku || entry.after?.sku || null;
+      return { kind, text: recordedSku ? `${recordedSku} (deleted)` : '(deleted product)', subtitle: null, productId: null };
+    }
+    if (live && (et === 'brand' || et === 'category')) {
+      const recorded = entry.before?.name || entry.after?.name || null;
+      const gone = et === 'brand' ? '(deleted brand)' : '(deleted category)';
+      return {
+        kind: et,
+        text: live.exists ? (live.name || '(no name)') : (recorded ? `${recorded} (deleted)` : gone),
+        subtitle: live.exists ? otherCompany : null,
+      };
+    }
     if (et === 'product' || et === 'image') {
       const p = productById.get(entityId);
       if (p) return { kind: et === 'image' ? 'image' : 'product', text: p.sku || '(no SKU)', subtitle: p.name || null, productId: p.id };

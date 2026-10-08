@@ -25,6 +25,7 @@ import { appImageSrc } from '../../lib/imageUrl.js';
 import { CURRENCIES } from '../../lib/currencies.js';
 import { STATUS_OPTIONS } from './libraryConstants.js';
 import { GRID_MAX_ROWS, planPaste } from './bulkGridPaste.js';
+import { sortProducts } from './librarySort.js';
 import { productValue, buildSaveRows } from './bulkTableRows.js';
 import { ColumnsControl } from './LibraryColumns.jsx';
 import {
@@ -94,9 +95,19 @@ function saveColumnWidths(map) {
  * on focus, and on paste directly. `overflow: hidden` + a synced height is
  * the standard auto-grow; nothing gets its own scrollbar.
  */
+/* 0.1.94: the growing is CSS now (`field-sizing: content` on
+ * .bulk-table__textarea, Chromium 123+ — Electron 44 has it). The JS sync
+ * below wrote `height: auto`, read scrollHeight and wrote the height back for
+ * EVERY long-text cell on open — 1,000 textareas, 5,018 forced layouts and a
+ * 3.9–4.8 s freeze (measured) — and twice more per keystroke. It now runs only
+ * where field-sizing is missing. */
+const CSS_FIELD_SIZING = typeof CSS !== 'undefined' && typeof CSS.supports === 'function'
+  && CSS.supports('field-sizing', 'content');
+
 function AutoGrowTextarea({ value, className, onFocus, ...props }) {
   const ref = useRef(null);
   const sync = () => {
+    if (CSS_FIELD_SIZING) return;
     const el = ref.current;
     if (!el) return;
     el.style.height = 'auto';
@@ -108,7 +119,7 @@ function AutoGrowTextarea({ value, className, onFocus, ...props }) {
       el.style.height = `${needed + (el.scrollHeight - el.clientHeight)}px`;
     }
   };
-  useLayoutEffect(sync, [value]);
+  useLayoutEffect(() => { if (!CSS_FIELD_SIZING) sync(); }, [value]);
   return (
     <textarea
       ref={ref}
@@ -242,7 +253,24 @@ const BulkTableRowCells = memo(function BulkTableRowCells({
 }, sameRowCells);
 
 
-export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
+/**
+ * 0.1.94: the rows follow the LIBRARY's order. `orderedIds` is the order the
+ * Library is showing (filtered, sorted, kept stable); without it the store's
+ * sort is applied. Pure, for tests: candidates in display order, with any
+ * candidate the order does not know about kept after the known ones.
+ */
+export function orderLikeLibrary(candidates, orderedIds, fallbackSort, brandsById, categoriesById) {
+  if (Array.isArray(orderedIds) && orderedIds.length) {
+    const at = new Map(orderedIds.map((id, i) => [id, i]));
+    return candidates
+      .map((p, i) => ({ p, i, k: at.has(p.id) ? at.get(p.id) : orderedIds.length + i }))
+      .sort((a, b) => a.k - b.k)
+      .map((x) => x.p);
+  }
+  return fallbackSort ? sortProducts(candidates, fallbackSort, brandsById, categoriesById) : candidates;
+}
+
+export function BulkTableModal({ open, productIds, filters, orderedIds, onClose, onDone }) {
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
   const companies = useAppStore((s) => s.companies);
@@ -260,6 +288,10 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
   // under the user's cursor (an edit would then land on the wrong product).
   const [rows, setRows] = useState([]);
   const [candidateCount, setCandidateCount] = useState(0);
+  // 0.1.94: every candidate (Library order) and which 200 are on screen.
+  const [candidates, setCandidates] = useState([]);
+  const [windowStart, setWindowStart] = useState(0);
+  const [pagePrompt, setPagePrompt] = useState(null); // { start } while unsaved edits block a move
   const [scope, setScope] = useState('selected');
   // edits['<rowIndex>:<columnKey>'] = the string the user typed or pasted.
   const [edits, setEdits] = useState({});
@@ -305,6 +337,9 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
 
   function buildCandidates(scopeValue) {
     const state = useAppStore.getState();
+    const brandsById = new Map((state.brands ?? []).map((b) => [b.id, b]));
+    const categoriesById = new Map((state.categories ?? []).map((c) => [c.id, c]));
+    const order = (list) => orderLikeLibrary(list, orderedIds, state.productSort, brandsById, categoriesById);
     if (scopeValue === 'selected') {
       // Look in BOTH slices: `products` is the freshest filtered view and
       // `allProducts` is the filter-agnostic cache. A product created moments
@@ -312,17 +347,20 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
       const byId = new Map();
       for (const p of state.allProducts ?? []) byId.set(p.id, p);
       for (const p of state.products ?? []) byId.set(p.id, p);
-      return (productIds ?? []).map((id) => byId.get(id)).filter(Boolean);
+      return order((productIds ?? []).map((id) => byId.get(id)).filter(Boolean));
     }
     let arr = state.products ?? [];
     const f = filters ?? state.productFilters ?? {};
     if (f.hasImages === 'with') arr = arr.filter((p) => Number(p.imageCount ?? 0) > 0);
     if (f.hasImages === 'without') arr = arr.filter((p) => Number(p.imageCount ?? 0) === 0);
-    return arr;
+    return order(arr);
   }
 
   function resetLocalState(base, nextScope) {
     setScope(nextScope);
+    setCandidates(base);
+    setWindowStart(0);
+    setPagePrompt(null);
     setRows(base.slice(0, GRID_MAX_ROWS));
     setCandidateCount(base.length);
     setEdits({});
@@ -349,6 +387,36 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
   function switchScope(next) {
     if (next === scope) return;
     resetLocalState(buildCandidates(next), next);
+  }
+
+  /* 0.1.94: Previous / Next 200. Edits are keyed by the row's place on screen,
+   * so moving the window with unsaved edits would put them on other products —
+   * the move waits until they are saved or discarded. */
+  function showWindow(start) {
+    const clamped = Math.max(0, Math.min(start, Math.max(0, candidates.length - 1)));
+    // Fresh copies of these products: a save made on another window of this
+    // table (or anywhere else) has refreshed the store since the modal opened.
+    const state = useAppStore.getState();
+    const latest = new Map();
+    for (const p of state.allProducts ?? []) latest.set(p.id, p);
+    for (const p of state.products ?? []) latest.set(p.id, p);
+    setWindowStart(clamped);
+    setRows(candidates.slice(clamped, clamped + GRID_MAX_ROWS).map((p) => latest.get(p.id) ?? p));
+    setEdits({});
+    setImageState({});
+    setConfirm(null);
+    setClosePrompt(false);
+    setPagePrompt(null);
+    historyRef.current = [];
+  }
+  function requestWindow(start) {
+    if (Object.keys(edits).length > 0) {
+      setConfirm(null);
+      setClosePrompt(false);
+      setPagePrompt({ start });
+      return;
+    }
+    showWindow(start);
   }
 
   /* ── columns ────────────────────────────────────────────────────────── */
@@ -720,6 +788,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
    * summary and the unsaved-close prompt can never stack. */
   function showConfirm(next) {
     setClosePrompt(false);
+    setPagePrompt(null);
     setConfirm(next);
   }
 
@@ -938,13 +1007,22 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
         `Saved ${saved} product${saved === 1 ? '' : 's'}${added ? ` · ${added} image${added === 1 ? '' : 's'} added` : ''}.`,
         'success',
       );
-      useAppStore.getState().refreshProducts?.();
-      useAppStore.getState().refreshAllProducts?.();
+      const refreshed = Promise.all([
+        useAppStore.getState().refreshProducts?.(),
+        useAppStore.getState().refreshAllProducts?.(),
+      ]);
       setEdits({});
       historyRef.current = [];
       setConfirm(null);
       setClosePrompt(false);
-      onDone?.();
+      if (candidates.length > GRID_MAX_ROWS) {
+        // 0.1.94: a paged table stays open after a save so the next 200 are
+        // one click away; the saved rows are re-read from the store.
+        await refreshed.catch(() => {});
+        showWindow(windowStart);
+      } else {
+        onDone?.();
+      }
     } catch (err) {
       addToast(err.message, 'error');
     } finally {
@@ -955,6 +1033,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
   /* ── closing ────────────────────────────────────────────────────────── */
 
   function requestClose() {
+    setPagePrompt(null);
     if (Object.keys(edits).length > 0) {
       // Dismiss any open summary first: one action, one prompt.
       setConfirm(null);
@@ -970,6 +1049,9 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
 
   const dirty = Object.keys(edits).length;
   const truncated = candidateCount - rows.length;
+  const windowEnd = windowStart + rows.length;
+  const hasPrevWindow = windowStart > 0;
+  const hasNextWindow = windowEnd < candidateCount;
   const totalWidth = ROWNUM_WIDTH + visibleColumns.reduce((sum, c) => sum + widthOf(c), 0);
   // Edits are keyed by product + FIELD, so hiding a column never discards them.
   // The toolbar says how many are tucked away so nothing disappears silently.
@@ -1095,7 +1177,7 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
                 onChange={() => switchScope('filter')}
               />
               <span>
-                Current Library filter <span className="muted">({candidateCount} match{scope === 'filter' && truncated ? `, first ${rows.length} shown` : ''})</span>
+                Current Library filter <span className="muted">({scope === 'filter' ? candidateCount : '…'} match{scope === 'filter' && truncated ? `, ${windowStart + 1}–${windowEnd} shown` : ''})</span>
               </span>
             </label>
           </fieldset>
@@ -1151,10 +1233,29 @@ export function BulkTableModal({ open, productIds, filters, onClose, onDone }) {
         </div>
 
         {truncated > 0 ? (
-          <p className="bulk-table__notice">
-            {candidateCount} products match, and the table holds up to {GRID_MAX_ROWS}. The first {rows.length} are shown
-            (the Library is sorted newest first) — narrow the filter to reach the rest.
-          </p>
+          <div className="bulk-table__notice bulk-table__window">
+            <span>
+              Showing {windowStart + 1}–{windowEnd} of {candidateCount}, in the Library&rsquo;s order. The table holds {GRID_MAX_ROWS} at a time.
+            </span>
+            <div className="bulk-table__spacer" />
+            <Button size="sm" onClick={() => requestWindow(windowStart - GRID_MAX_ROWS)} disabled={busy || !hasPrevWindow}>
+              ← Previous {GRID_MAX_ROWS}
+            </Button>
+            <Button size="sm" onClick={() => requestWindow(windowStart + GRID_MAX_ROWS)} disabled={busy || !hasNextWindow}>
+              Next {Math.min(GRID_MAX_ROWS, Math.max(0, candidateCount - windowEnd))} →
+            </Button>
+          </div>
+        ) : null}
+
+        {pagePrompt ? (
+          <div className="bulk-table__confirm is-error" role="status">
+            <span className="bulk-table__confirm-text">
+              You have {dirty} unsaved cell edit{dirty === 1 ? '' : 's'} on these rows. Save all first, or discard them to move on.
+            </span>
+            <div className="bulk-table__spacer" />
+            <Button onClick={() => setPagePrompt(null)}>Keep editing</Button>
+            <Button variant="danger" onClick={() => showWindow(pagePrompt.start)}>Discard and move</Button>
+          </div>
         ) : null}
 
         <div className="bulk-table__scroll">

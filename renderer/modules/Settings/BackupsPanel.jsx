@@ -40,6 +40,21 @@ export function BackupsPanel({ config }) {
   const isClient = config?.mode === 'client';
   const [creating, setCreating] = useState(false);
   const [restoringPath, setRestoringPath] = useState(null);
+  // 0.1.94: weekly automatic backups (main/backupManager.js). The status rides
+  // on backups:list, so a client sees the SERVER's schedule; the switch is
+  // this Mac's config, so it is only offered on the Mac that runs them.
+  const [autoEnabled, setAutoEnabled] = useState(config?.autoBackupEnabled !== false);
+  async function toggleAuto(next) {
+    setAutoEnabled(next);
+    try {
+      await window.api.settings.setOne('autoBackupEnabled', next);
+      addToast(next ? 'Automatic weekly backups are on.' : 'Automatic backups are off. Make one by hand before big changes.', next ? 'success' : 'info');
+      await refresh();
+    } catch (err) {
+      setAutoEnabled(!next);
+      addToast(err.message, 'error');
+    }
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -188,6 +203,47 @@ export function BackupsPanel({ config }) {
       </SettingRow>
 
       <SettingRow
+        label="Automatic backups"
+        hint={isClient
+          ? 'The Mac holding your data makes these while it is running. Change the setting on that Mac.'
+          : `Once a week while the app is open, a backup is made in the folder below. The newest ${list.autoBackup?.keep ?? 4} automatic backups are kept; older automatic ones go to the Trash. Backups you make by hand are never removed.`}
+      >
+        {(() => {
+          const auto = list.autoBackup;
+          const enabled = isClient ? auto?.enabled !== false : autoEnabled;
+          return (
+            <>
+              <div className="setting-control-row">
+                {!isClient ? (
+                  <label className="toggle">
+                    <input type="checkbox" checked={autoEnabled} onChange={(e) => toggleAuto(e.target.checked)} />
+                    <span>{autoEnabled ? 'On' : 'Off'}</span>
+                  </label>
+                ) : null}
+                <span className="backups-auto__status">
+                  {!auto && isClient
+                    ? 'The server Mac did not report its schedule — update it to this version.'
+                    : enabled ? `Weekly · last: ${auto?.lastAt ? timeAgo(auto.lastAt) : 'not yet'}` : 'Off'}
+                  {auto && enabled && auto.running ? ' · backing up now…' : ''}
+                </span>
+              </div>
+              {enabled && auto?.lastError ? (
+                <p className="backups-auto__note backups-auto__note--error" role="alert">
+                  The last automatic backup failed: {auto.lastError}
+                </p>
+              ) : null}
+              {auto?.sameDiskAsData ? (
+                <p className="backups-auto__note" role="note">
+                  These backups are on the same disk as your data — if that disk fails, both are lost.
+                  {isClient ? ' Choose a folder on another drive on the Mac holding your data.' : ' Choose a folder on another drive below for real protection.'}
+                </p>
+              ) : null}
+            </>
+          );
+        })()}
+      </SettingRow>
+
+      <SettingRow
         label="Backups folder"
         hint={isClient
           ? 'Where backups are written. The folder is on the Mac holding your data — a `backups` folder inside its data folder by default.'
@@ -241,6 +297,7 @@ export function BackupsPanel({ config }) {
                 <li key={b.backupPath} className="backups-row">
                   <div className="backups-row__main">
                     <span className="backups-row__when">{formatDateTime(b.createdAt)}</span>
+                    {b.auto ? <span className="backups-row__tag" title="Made by the weekly automatic backup">Automatic</span> : null}
                     <span className="muted backups-row__rel"> · {timeAgo(b.createdAt)}</span>
                     <span className="muted backups-row__size"> · {formatBytes(b.sizeBytes)}</span>
                     <div className="muted backups-row__file">{b.fileName}</div>

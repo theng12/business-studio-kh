@@ -5,6 +5,7 @@ import { useAppStore } from '../../store/index.js';
 import { requestLabelRerun } from './labelRerun.js';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { formatDateTime, timeAgo } from '../../lib/format.js';
+import { confirm } from '../../components/ConfirmModal.jsx';
 
 /**
  * Label History.
@@ -68,6 +69,20 @@ export function LabelJobs() {
     setActiveModule('labelgenerate');
   }
 
+  /** Remove a run from the history — asked first, because it cannot be undone.
+   *  The files the run wrote stay where they are. */
+  async function removeRun(run) {
+    const ok = await confirm({
+      title: 'Remove this run from Label History?',
+      message: `${run.templateName || 'This run'} · ${run.productCount} product${run.productCount === 1 ? '' : 's'} · ${formatDateTime(run.createdAt)}`,
+      detail: 'Files it already made are not deleted. "Run again" will no longer be available for it.',
+      danger: true,
+      confirmLabel: 'Remove run',
+    });
+    if (!ok) return;
+    try { await window.api.labels.deleteRun(run.id); void load(); } catch (e) { addToast(e.message, 'error'); }
+  }
+
   /** The Mac that produced this run's files, or null when unknown / this one. */
   function otherMacFor(run) {
     const origin = run?.settings?.originHost;
@@ -128,7 +143,7 @@ export function LabelJobs() {
                       {run.templateId ? (
                         <Button size="sm" onClick={() => runAgain(run)} title="Open Generate & Print with this run's template, products and layout">Run again</Button>
                       ) : null}
-                      <Button variant="danger" size="sm" onClick={async () => { try { await window.api.labels.deleteRun(run.id); load(); } catch (e) { addToast(e.message, 'error'); } }}>Remove</Button>
+                      <Button variant="danger" size="sm" onClick={() => { void removeRun(run); }}>Remove</Button>
                     </td>
                   </tr>
                 );

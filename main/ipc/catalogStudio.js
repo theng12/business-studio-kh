@@ -7,8 +7,9 @@ const brands = require('../db/brands');
 const categories = require('../db/categories');
 const companies = require('../db/companies');
 const { buildCatalogHtml } = require('../studioRenderer');
+const { outputBaseName, freeOutputPath } = require('../util/outputNames');
 const { toPdf, toPdfBuffer } = require('../renderWindow');
-const { slugify } = require('../util/slug');
+const { slugifyUnicode } = require('../util/slug');
 const { normalizeCatalogConfig, applyCatalogDesign, catalogPdfOptions } = require('../util/catalogModel');
 const events = require('../events');
 
@@ -25,7 +26,17 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
   expose('catalogStudio:update', ({ id, patch } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const row = projects.update(id, patch); emitCatalogChange('catalogStudio', 'update', id); return row; });
   expose('catalogStudio:delete', ({ id } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const ok = projects.remove(id); emitCatalogChange('catalogStudio', 'delete', id); return ok; });
   expose('catalogStudio:duplicate', ({ id } = {}) => { assertEntityInActiveCompany(projects.get(id), 'Catalog project'); const row = projects.duplicate(id); emitCatalogChange('catalogStudio', 'create', row.id); return row; });
-  expose('catalogStudio:preview', ({ id } = {}) => { const project = assertEntityInActiveCompany(projects.get(id), 'Catalog project'); return { html: buildCatalogHtml(context(project), { preview: true }) }; });
+  /* The font CSS travels separately and only when the caller does not have it
+   * yet: `fontsKey` is the set the app already holds. It is ~2 MB of base64
+   * for a Khmer catalog, and it used to be re-sent (and re-parsed in a 2.2 MB
+   * srcdoc) on every debounced refresh. The app loads it into the preview
+   * frame itself (renderer/modules/CatalogStudio/previewFonts.js). */
+  expose('catalogStudio:preview', ({ id, fontsKey } = {}) => {
+    const project = assertEntityInActiveCompany(projects.get(id), 'Catalog project');
+    const fonts = {};
+    const html = buildCatalogHtml(context(project), { preview: true, fontsOut: fonts });
+    return { html, fontsKey: fonts.key || '', ...(fonts.key && fonts.key !== fontsKey ? { fontsCss: fonts.css } : {}) };
+  });
   exposeLocal('catalogStudio:export', async ({ id, outputFolder } = {}) => {
     const project = projects.get(id); if (!project) throw new Error('Catalog project not found');
     assertEntityInActiveCompany(project, 'Catalog project');
@@ -36,7 +47,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     try {
       const html = buildCatalogHtml(context(project));
       events.broadcast('progress:event', { id: opId, kind: 'catalog', done: 1, total: 3, phase: 'rendering', label: project.name });
-      const target = path.join(outputFolder, `${slugify(project.name, 'catalog')}-${Date.now()}.pdf`);
+      // Khmer name kept, readable date, never over an earlier export.
+      const target = freeOutputPath(outputFolder, outputBaseName(project.name, 'catalog'), 'pdf');
       await toPdf(html, target, catalogPdfOptions(project.config));
       events.broadcast('progress:event', { id: opId, kind: 'catalog', done: 3, total: 3, phase: 'complete', label: project.name });
       projects.markExported(id);
@@ -55,7 +67,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     // Match client mode: print the authoritative PDF in Preview, including its
     // native page numbers and headers, rather than a separate HTML print layout.
     const dir = await fs.promises.mkdtemp(path.join(require('node:os').tmpdir(), 'msk-catalog-print-'));
-    const target = path.join(dir, `${slugify(project.name, 'catalog')}.pdf`);
+    const target = path.join(dir, `${slugifyUnicode(project.name, 'catalog')}.pdf`);
     await toPdf(buildCatalogHtml(context(project)), target, catalogPdfOptions(project.config));
     await require('../util/openPath').openPathOrThrow(target, 'catalog PDF');
     return { ok: true, openedPdf: true };
@@ -147,10 +159,11 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     assertEntityInActiveCompany(project, 'Catalog project');
     const html = buildCatalogHtml(context(project));
     const bytes = await toPdfBuffer(html, catalogPdfOptions(project.config));
-    const { slugify } = require('../util/slug');
+    // The client writes it without overwriting (writeUniqueFile), so the
+    // readable minute stamp cannot clobber an earlier export there either.
     return {
       bytes,
-      fileName: `${slugify(project.name, 'catalog')}-${Date.now()}.pdf`,
+      fileName: `${outputBaseName(project.name, 'catalog')}.pdf`,
     };
   });
 

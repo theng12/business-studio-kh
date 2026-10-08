@@ -420,6 +420,23 @@
   .card .sku { font-weight: 600; font-size: 13px; word-break: break-all; }
   .card .name { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .card .imgcount { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  /* v0.1.94: the retail price on every card, read through priceEntryFor. */
+  .card .price { font-size: 12px; font-weight: 600; margin-top: 2px; }
+  /* v0.1.94: "can't reach the server" — non-blocking, under the header. The
+     page underneath keeps whatever it already loaded. */
+  .net-banner {
+    display: flex; align-items: center; gap: 10px;
+    margin: 8px 12px 0; padding: 10px 12px; border-radius: 10px;
+    background: #fef2f2; color: #7f1d1d; border: 1px solid #fecaca;
+    font-size: 13px; line-height: 1.4;
+  }
+  @media (prefers-color-scheme: dark) {
+    .net-banner { background: #2a1416; color: #fecaca; border-color: #5b2124; }
+  }
+  .net-banner[hidden] { display: none; }
+  .net-banner span { flex: 1; }
+  .list-error { padding: 24px 16px; text-align: center; color: var(--muted); font-size: 14px; }
+  .list-error .btn { margin-top: 10px; }
 
   /* v0.1.76: product multi-select for batch actions. The tick sits in the card
      corner so the selection is visible at a glance and the layout does not
@@ -756,7 +773,7 @@
   <p class="hint">The same address your Mac clients use (over Tailscale).</p>
   <label for="tok">Access token</label>
   <input id="tok" type="password" autocapitalize="off" autocorrect="off" placeholder="paste a user token" />
-  <p class="hint">From the server: Settings → Multi-Mac → a user's token. Make a dedicated "iPad" user if you like.</p>
+  <p class="hint">Ask whoever runs the server Mac for a token (Settings → Multi-Mac → Users), or scan the pairing code shown there with this phone’s camera.</p>
   <div class="err" id="connectErr"></div>
   <div class="actions">
     <button class="btn btn--primary" id="connectBtn" style="width:100%">Connect</button>
@@ -827,7 +844,7 @@
       <button class="chip" id="selectModeBtn" type="button" aria-pressed="false">Select</button>
     </div>
     <!-- Row 3: search fills the full width edge-to-edge. -->
-    <input class="search" id="search" type="search" placeholder="Search SKU / name…" autocapitalize="off" autocorrect="off" autocomplete="off" />
+    <input class="search" id="search" type="search" placeholder="Search SKU, name, brand, colour, barcode…" autocapitalize="off" autocorrect="off" autocomplete="off" />
     <!-- Row 4: tiny count, tucked under the search. -->
     <span class="count" id="count"></span>
     <!-- v0.1.76: batch bar. Appears in select mode only, so the list keeps its
@@ -838,6 +855,13 @@
       <button class="btn btn--primary" id="bulkOverlayBtn" type="button" disabled>Overlay…</button>
     </div>
   </header>
+  <!-- v0.1.94: shown while the server Mac does not answer. Never replaces the
+       page and never sends the user back to the token form — only a rejected
+       token (HTTP 401) does that. -->
+  <div class="net-banner" id="netBanner" role="status" aria-live="polite" hidden>
+    <span id="netBannerText">Can’t reach the server Mac. Retrying…</span>
+    <button class="btn" id="netRetry" type="button">Retry</button>
+  </div>
   <div id="list"><div class="loading">Loading…</div></div>
   <div class="pager" id="pager"></div>
 </div>
@@ -1436,6 +1460,8 @@
       body:'Top-down flat-lay of the {name}, perfectly centered on a clean white surface, bright even lighting, a slight soft shadow for grounding. No props, no text.' },
   ];
   var sessionGeneration = 0;
+  var bootCompleted = false;  // v0.1.94: the first company load of this session finished
+  var bootInFlight = null;    // session generation whose boot is running
   var companyGeneration = 0;
   var imageCacheGeneration = 0;
   var productImageGenerations = Object.create(null);
@@ -1471,6 +1497,7 @@
 
   function resetSessionState() {
     sessionGeneration += 1;
+    bootCompleted = false;
     companyGeneration += 1;
     companySwitchChain = Promise.resolve();
     lastConfirmedCompany = null;
@@ -1486,6 +1513,7 @@
     state.companyId = null;
     state.categories = [];
     state.categoriesById = {};
+    state.brandsById = {};
     state.categoryFilter = '';
     state.products = [];
     state.filtered = [];
@@ -1508,30 +1536,118 @@
   }
 
   /* ── transport ─────────────────────────────────────────────── */
+  /* v0.1.94 connectivity pass. Every request now has a deadline — a phone
+     whose server Mac has gone to sleep used to spin forever — and a network
+     failure is reported as what it is: a banner that says the server Mac is
+     not answering and retries on its own, never the token form (only a 401
+     means the token is the problem). Reads give up after 20s; writes and
+     uploads after 2 minutes, because a slow upload on a thin link is normal. */
+  var READ_TIMEOUT_MS = 20000;
+  var WRITE_TIMEOUT_MS = 120000;
+  var ORIGINAL_TIMEOUT_MS = 60000;
+  var NET_DOWN_MESSAGE = 'Can’t reach the server Mac. Check it’s awake and this phone is on Tailscale (or the same Wi-Fi).';
+
+  function timeoutSignal(ms) {
+    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(ms);
+    if (typeof AbortController === 'undefined') return undefined;
+    var c = new AbortController();
+    setTimeout(function () { try { c.abort(); } catch (_) {} }, ms);
+    return c.signal;
+  }
+  /* fetch with a deadline. A network-level failure (no answer, refused,
+     timed out) rejects with `err.network = true` and plain words; HTTP
+     error statuses resolve as usual for the caller to read. */
+  function fetchT(url, options, ms) {
+    var opts = Object.assign({}, options || {});
+    var signal = timeoutSignal(ms || READ_TIMEOUT_MS);
+    if (signal) opts.signal = signal;
+    return fetch(url, opts).catch(function (e) {
+      var err = new Error(NET_DOWN_MESSAGE);
+      err.network = true;
+      err.cause = e;
+      throw err;
+    });
+  }
+  function isReadChannel(channel) {
+    var action = String(channel || '').split(':').slice(1).join(':');
+    return /^(get|list|count|recent)([A-Z]|$)/.test(action)
+      || /^(search|stats|completeness|estimateCost|presence|capabilities)$/.test(action);
+  }
+
   function rpcAt(requestBaseUrl, requestToken, channel, args) {
-    return fetch(requestBaseUrl + '/api/rpc', {
+    return fetchT(requestBaseUrl + '/api/rpc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + requestToken },
       body: JSON.stringify({ channel: channel, args: args === undefined ? null : args }),
-    }).then(function (res) {
+    }, isReadChannel(channel) ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS).then(function (res) {
+      noteOnline();
       if (!res.ok) {
         return res.json().catch(function () { return {}; }).then(function (j) {
-          throw new Error(j.error || (res.status === 401 ? 'Token rejected' : 'HTTP ' + res.status));
+          var err = new Error(j.error || (res.status === 401 ? 'Token rejected' : 'HTTP ' + res.status));
+          err.status = res.status;
+          if (res.status === 401) onTokenRejected(requestBaseUrl, requestToken);
+          throw err;
         });
       }
       return res.json().then(function (b) { return b.result; });
+    }, function (err) {
+      if (err && err.network) noteOffline();
+      throw err;
     });
+  }
+
+  /* v0.1.94: the server's thumbnail tier answers `?w=` for these types only
+     (main/util/thumbCache.js); anything else would come back full size anyway,
+     so it is not asked for. */
+  function thumbable(relpath) {
+    return /\.(jpe?g|png|webp)$/i.test(String(relpath || ''));
+  }
+  /* The blob cache holds object URLs for bytes already fetched. It used to
+     grow without limit — every thumbnail and every full photo of the session.
+     Now it keeps the most recently used entries: at most BLOB_CACHE_MAX_ITEMS,
+     and at most BLOB_CACHE_MAX_BYTES of bytes. A page of thumbnails plus an
+     open gallery is far below either cap, so nothing on screen is evicted. */
+  var BLOB_CACHE_MAX_ITEMS = 240;
+  var BLOB_CACHE_MAX_BYTES = 80 * 1024 * 1024;
+  function blobCacheGet(key) {
+    var hit = blobCache[key];
+    if (!hit) return null;
+    delete blobCache[key]; blobCache[key] = hit; // most recently used last
+    return hit;
+  }
+  function blobCachePut(key, entry) {
+    blobCache[key] = entry;
+    var keys = Object.keys(blobCache);
+    var bytes = 0;
+    keys.forEach(function (k) { bytes += blobCache[k].bytes || 0; });
+    for (var i = 0; i < keys.length - 1 && (keys.length - i > BLOB_CACHE_MAX_ITEMS || bytes > BLOB_CACHE_MAX_BYTES); i++) {
+      var old = blobCache[keys[i]];
+      bytes -= old.bytes || 0;
+      try { URL.revokeObjectURL(old.url); } catch (e) {}
+      delete blobCache[keys[i]];
+    }
   }
 
   // Fetch an asset's bytes with the Bearer header → blob URL. Server route
   // is GET /assets/<rel> where <rel> is the image's stored relative path.
-  function assetUrl(relpath, productId) {
+  // v0.1.94: `opts.w` asks for the server's thumbnail (320 for cards, 640 for
+  // gallery tiles); omit it for the full photo (detail viewer, saving).
+  // `opts.v` is a version stamp so an edited picture gets a fresh fetch.
+  function assetUrl(relpath, productId, opts) {
     if (!relpath) return Promise.resolve(null);
-    if (blobCache[relpath]) return Promise.resolve(blobCache[relpath].url);
+    var w = opts && opts.w && thumbable(relpath) ? opts.w : null;
+    var v = opts && opts.v ? String(opts.v) : '';
+    var key = relpath + (w ? '|w' + w : '') + (v ? '|v' + v : '');
+    var cached = blobCacheGet(key);
+    if (cached) return Promise.resolve(cached.url);
     var request = imageRequestContext(productId);
     var enc = relpath.split('/').map(encodeURIComponent).join('/');
-    return fetch(request.baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + request.token } })
-      .then(function (res) { return res.ok ? res.blob() : null; })
+    var query = [];
+    if (w) query.push('w=' + w);
+    if (v) query.push('v=' + encodeURIComponent(v));
+    return fetchT(request.baseUrl + '/assets/' + enc + (query.length ? '?' + query.join('&') : ''),
+      { headers: { Authorization: 'Bearer ' + request.token } }, w ? READ_TIMEOUT_MS : ORIGINAL_TIMEOUT_MS)
+      .then(function (res) { noteOnline(); return res.ok ? res.blob() : null; })
       .then(function (blob) {
         if (!blob) return null;
         if (!imageRequestCurrent(request)) return null;
@@ -1540,11 +1656,111 @@
           try { URL.revokeObjectURL(url); } catch (e) {}
           return null;
         }
-        blobCache[relpath] = { url: url, productId: productId };
+        blobCachePut(key, { url: url, productId: productId, bytes: blob.size || 0 });
         return url;
       })
-      .catch(function () { return null; });
+      .catch(function (err) {
+        // Not cached: the next render (or the resync after the server comes
+        // back) asks again.
+        if (err && err.network) noteOffline();
+        return null;
+      });
   }
+
+  /* ── v0.1.94: offline banner + automatic retry ─────────────── */
+  var net = { offline: false, timer: null, delay: 2000, probing: false };
+  function showNetBanner(text) {
+    var b = document.getElementById('netBanner');
+    if (!b) return;
+    document.getElementById('netBannerText').textContent = text || 'Can’t reach the server Mac. Retrying…';
+    b.hidden = false;
+  }
+  function hideNetBanner() {
+    var b = document.getElementById('netBanner');
+    if (b) b.hidden = true;
+  }
+  function noteOffline() {
+    if (!net.offline) {
+      net.offline = true;
+      net.delay = 2000;
+      showNetBanner();
+    }
+    scheduleNetProbe();
+  }
+  function noteOnline() {
+    if (!net.offline) return;
+    net.offline = false;
+    if (net.timer) { clearTimeout(net.timer); net.timer = null; }
+    hideNetBanner();
+    // Whatever failed while the server was away is asked for again.
+    resync('back online');
+  }
+  function scheduleNetProbe() {
+    if (net.timer || !net.offline) return;
+    net.timer = setTimeout(function () { net.timer = null; probeServer(); }, net.delay);
+    net.delay = Math.min(net.delay * 2, 30000);
+  }
+  /* /api/ping needs no token; any answer at all means the Mac is reachable. */
+  function probeServer() {
+    if (!baseUrl || net.probing) return Promise.resolve(false);
+    net.probing = true;
+    return fetchT(baseUrl + '/api/ping', {}, 8000)
+      .then(function (res) { return !!res.ok; }, function () { return false; })
+      .then(function (ok) {
+        net.probing = false;
+        if (ok) noteOnline();
+        else { showNetBanner(); scheduleNetProbe(); }
+        return ok;
+      });
+  }
+  document.getElementById('netRetry').addEventListener('click', function () {
+    var btn = this;
+    btn.disabled = true;
+    showNetBanner('Checking…');
+    if (net.timer) { clearTimeout(net.timer); net.timer = null; }
+    net.delay = 2000;
+    probeServer().then(function (ok) {
+      btn.disabled = false;
+      if (!ok) showNetBanner('Still no answer from the server Mac. Retrying…');
+    });
+  });
+
+  /* A token the server no longer accepts (Stop access, regenerated) is the
+     ONE case that goes back to the Connect form. */
+  var tokenRejectedShown = false;
+  function onTokenRejected(requestBaseUrl, requestToken) {
+    if (requestBaseUrl !== baseUrl || requestToken !== token || tokenRejectedShown) return;
+    tokenRejectedShown = true;
+    showConnect('The server no longer accepts this token. Ask whoever runs the server Mac for a new one (or a new pairing code).');
+  }
+
+  /* Re-sync when the page comes back: from the background (Android and iOS
+     freeze a hidden tab, so its data is as old as the last time it was
+     looked at), when the browser reports the network is back, or when the
+     server answers again after the banner. Throttled to once per 5s. */
+  var lastResyncAt = 0;
+  function resync(reason) {
+    if (!baseUrl || !token || tokenRejectedShown) return;
+    var now = Date.now();
+    if (now - lastResyncAt < 5000) return;
+    lastResyncAt = now;
+    if (!bootCompleted) { boot(); return; }
+    refreshNow({ quiet: true, reason: reason });
+  }
+  var hiddenAt = 0;
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+      if (document.visibilityState === 'visible' && hiddenAt && Date.now() - hiddenAt > 15000) {
+        hiddenAt = 0;
+        if (net.offline) probeServer(); else resync('foreground');
+      }
+    });
+  }
+  window.addEventListener('online', function () {
+    if (net.offline) { net.delay = 2000; probeServer(); } else resync('online');
+  });
+  window.addEventListener('offline', function () { noteOffline(); });
 
   function toast(msg) {
     var t = document.getElementById('toast');
@@ -1573,7 +1789,7 @@
     this.disabled = true; this.textContent = 'Connecting…';
     var btn = this;
     // Validate via /api/whoami (token-checked) before saving.
-    fetch(u + '/api/whoami', { headers: { Authorization: 'Bearer ' + t } })
+    fetchT(u + '/api/whoami', { headers: { Authorization: 'Bearer ' + t } })
       .then(function (res) {
         if (res.status === 401) throw new Error('Token rejected by the server.');
         if (!res.ok) throw new Error('Server reachable but returned HTTP ' + res.status + '.');
@@ -1582,6 +1798,7 @@
       .then(function (whoami) {
         if (u !== baseUrl || t !== token) resetSessionState();
         baseUrl = u; token = t;
+        tokenRejectedShown = false;
         localStorage.setItem(LS.url, u); localStorage.setItem(LS.tok, t);
         // Capture role so we can hide buttons that the server would 403 on
         // anyway — server is the authoritative gate (main/util/permissions.js).
@@ -1705,7 +1922,7 @@
           lastConfirmedCompany = companySnapshot(request.id, [], []);
           return loadCompanyData(request).then(function (data) {
             if (!sessionRequestCurrent(request)) return null;
-            return companySnapshot(request.id, data.categories, data.products);
+            return companySnapshot(request.id, data.categories, data.products, data.brands);
           });
         });
     });
@@ -1763,38 +1980,79 @@
 
   /* ── boot: whoami (role) → companies → products ─────────────── */
   function boot() {
+    // One boot per session at a time; a new session (Connect, pairing) may
+    // start its own while an old one is still finishing.
+    if (bootInFlight === sessionGeneration) return;
+    var bootSession = sessionGeneration;
+    bootInFlight = bootSession;
     // On a returning session (page reload while a token's already saved)
     // we never re-ran the Connect handler, so state.role is empty. Fetch
     // whoami once before everything else so role-gating is set up by the
     // time anything renders.
     var ensureRole = state.role
       ? Promise.resolve()
-      : fetch(baseUrl + '/api/whoami', { headers: { Authorization: 'Bearer ' + token } })
-          .then(function (res) { return res.ok ? res.json() : null; })
+      : fetchT(baseUrl + '/api/whoami', { headers: { Authorization: 'Bearer ' + token } })
+          .then(function (res) {
+            noteOnline();
+            if (res.status === 401) {
+              var denied = new Error('Token rejected'); denied.status = 401; throw denied;
+            }
+            return res.ok ? res.json() : null;
+          })
           .then(function (j) { state.role = (j && j.user && j.user.role) || ''; state.caps = j ? capsFromWhoami(j) : null; applyRoleGating(); })
-          .catch(function () { /* non-fatal — UI just shows everything */ });
+          .catch(function (e) {
+            // A rejected token stops here; anything else is non-fatal (the
+            // UI shows everything and the server still enforces).
+            if (e && e.status === 401) throw e;
+            if (e && e.network) noteOffline();
+          });
 
     ensureRole.then(function () {
-    Promise.all([rpc('companies:list'), rpc('companies:getActiveId').catch(function () { return null; })])
-      .then(function (r) {
-        state.companies = r[0] || [];
-        var active = r[1];
-        var initialCompanyId = (state.companies.find(function (c) { return c.id === active; }) || state.companies[0] || {}).id || null;
-        state.companyId = null;
-        updateCompanyButton();   // v0.46.0: paints the initials chip
-        renderCompanySheet();    // v0.46.0: builds the company switcher list
-        updateSortChip();        // v0.49.7: paint the sort chip from persisted prefs
-        return switchCompany(initialCompanyId);
-      })
-      .catch(function (e) { showConnect('Connected, but loading failed: ' + e.message); });
-    });  // ensureRole.then
+      return Promise.all([rpc('companies:list'), rpc('companies:getActiveId').catch(function (e) { if (e && e.network) throw e; return null; })])
+        .then(function (r) {
+          state.companies = r[0] || [];
+          var active = r[1];
+          var initialCompanyId = (state.companies.find(function (c) { return c.id === active; }) || state.companies[0] || {}).id || null;
+          state.companyId = null;
+          updateCompanyButton();   // v0.46.0: paints the initials chip
+          renderCompanySheet();    // v0.46.0: builds the company switcher list
+          updateSortChip();        // v0.49.7: paint the sort chip from persisted prefs
+          return switchCompany(initialCompanyId);
+        });
+    }).then(function () {
+      if (bootSession === sessionGeneration) bootCompleted = true;
+    }).catch(function (e) {
+      if (bootSession !== sessionGeneration) return;
+      // v0.1.94: only a rejected token goes back to the Connect form. A
+      // server that is asleep or unreachable gets the banner and a retry;
+      // the token the user pasted stays where it is.
+      if (e && e.status === 401) {
+        tokenRejectedShown = true;
+        showConnect('The server no longer accepts this token. Ask whoever runs the server Mac for a new one (or a new pairing code).');
+        return;
+      }
+      showListError(e && e.network ? NET_DOWN_MESSAGE : ('Couldn’t load the catalog: ' + ((e && e.message) || 'unknown error')));
+    }).then(function () { if (bootInFlight === bootSession) bootInFlight = null; });
+  }
+
+  /* An error in place of the product grid, with a way to try again. */
+  function showListError(message) {
+    var list = document.getElementById('list');
+    list.innerHTML = '<div class="list-error"><div>' + escapeHtml(message) + '</div>'
+      + '<button class="btn" id="listRetryBtn" type="button">Try again</button></div>';
+    var retry = document.getElementById('listRetryBtn');
+    if (retry) retry.addEventListener('click', function () {
+      list.innerHTML = '<div class="loading">Loading…</div>';
+      lastResyncAt = 0;
+      if (bootCompleted) refreshNow({}); else boot();
+    });
   }
 
   // Writes (importing a photo) target the caller's ACTIVE company on the
   // server, so keep it synced with whatever company you're viewing.
   // Per-user (v0.15.2), so this doesn't disturb other clients.
   document.getElementById('search').addEventListener('input', function () {
-    state.search = this.value.trim().toLowerCase(); state.page = 0; applyFilter(); render();
+    state.search = normalizeSearchText(this.value).trim(); state.page = 0; applyFilter(); render();
   });
 
   /* ── v0.46.0: company chip + sheet ──────────────────────────── */
@@ -2031,14 +2289,17 @@
   document.getElementById('catSheetClose').addEventListener('click', function () { closeSheet('catSheet'); });
   document.getElementById('catSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('catSheet'); });
 
-  function companySnapshot(id, categories, products) {
+  function companySnapshot(id, categories, products, brands) {
     var rows = categories || [];
     var categoriesById = {};
     rows.forEach(function (c) { categoriesById[c.id] = c.name || c.id; });
+    var brandsById = {};
+    (brands || []).forEach(function (b) { if (b && b.id) brandsById[b.id] = b.name || ''; });
     return {
       id: id || null,
       categories: rows,
       categoriesById: categoriesById,
+      brandsById: brandsById,
       categoryFilter: '',
       products: products || [],
       page: 0,
@@ -2049,6 +2310,7 @@
     state.companyId = snapshot.id;
     state.categories = snapshot.categories || [];
     state.categoriesById = snapshot.categoriesById || {};
+    state.brandsById = snapshot.brandsById || {};
     state.categoryFilter = snapshot.categoryFilter || '';
     state.products = snapshot.products || [];
     state.page = snapshot.page || 0;
@@ -2062,13 +2324,62 @@
   // confirmed but no-longer-requested company can still be restored if the
   // newest activation fails.
   function loadCompanyData(request) {
-    if (!request.id) return Promise.resolve({ categories: [], products: [] });
+    if (!request.id) return Promise.resolve({ categories: [], products: [], brands: [] });
     return Promise.all([
       rpcAt(request.baseUrl, request.token, 'categories:list', request.id),
       rpcAt(request.baseUrl, request.token, 'products:list', { companyId: request.id, filters: {} }),
+      // v0.1.94: brand names, so search can match a brand. Optional — an
+      // account that cannot list brands still gets its products.
+      rpcAt(request.baseUrl, request.token, 'brands:list', request.id).catch(function (e) {
+        if (e && e.network) throw e;
+        return [];
+      }),
     ]).then(function (rows) {
-      return { categories: rows[0] || [], products: rows[1] || [] };
+      return { categories: rows[0] || [], products: rows[1] || [], brands: rows[2] || [] };
     });
+  }
+
+  /* search:begin — v0.1.94 phone search. Pure functions (the connectivity
+     tests run this block on its own).
+     - every word must match (AND), each anywhere in SKU, name, brand,
+       colour / finish or barcode;
+     - separators in codes do not matter: "AB 123", "ab123" and "AB-123" all
+       find SKU AB-123;
+     - Khmer (and anything else) is compared in Unicode NFC with the
+       zero-width spaces/joiners (U+200B–U+200D, U+FEFF) removed, because
+       Khmer text is routinely typed with invisible word breaks. */
+  function normalizeSearchText(s) {
+    var t = String(s == null ? '' : s);
+    if (typeof t.normalize === 'function') t = t.normalize('NFC');
+    return t.replace(/[\u200B-\u200D\uFEFF]/g, '').toLowerCase();
+  }
+  function compactSearchText(s) {
+    return normalizeSearchText(s).replace(/[\s\-_.\/\\]+/g, '');
+  }
+  function productSearchFields(p, brandName) {
+    return {
+      hay: normalizeSearchText([p.sku, p.name, brandName, p.colorFinish, p.barcode].filter(Boolean).join(' \n ')),
+      codes: [compactSearchText(p.sku), compactSearchText(p.barcode)],
+    };
+  }
+  function productMatchesSearch(fields, query) {
+    var q = normalizeSearchText(query).trim();
+    if (!q) return true;
+    var words = q.split(/\s+/).filter(Boolean);
+    var allWords = words.every(function (w) { return fields.hay.indexOf(w) !== -1; });
+    if (allWords) return true;
+    var compact = compactSearchText(q);
+    return compact.length >= 2 && fields.codes.some(function (c) { return !!c && c.indexOf(compact) !== -1; });
+  }
+  /* search:end */
+  var searchFieldCache = typeof WeakMap === 'function' ? new WeakMap() : null;
+  function searchFieldsFor(p) {
+    var brandName = (state.brandsById && p.brandId) ? state.brandsById[p.brandId] : '';
+    var hit = searchFieldCache && searchFieldCache.get(p);
+    if (hit && hit.brandName === brandName) return hit.fields;
+    var fields = productSearchFields(p, brandName);
+    if (searchFieldCache) searchFieldCache.set(p, { brandName: brandName, fields: fields });
+    return fields;
   }
 
   function applyFilter() {
@@ -2076,8 +2387,7 @@
     var cat = state.categoryFilter;
     var filtered = state.products.filter(function (p) {
       if (cat && p.categoryId !== cat) return false;
-      if (q && (p.sku || '').toLowerCase().indexOf(q) === -1
-            && (p.name || '').toLowerCase().indexOf(q) === -1) return false;
+      if (q && !productMatchesSearch(searchFieldsFor(p), q)) return false;
       return true;
     });
     // v0.49.7 — sort after filter so the active sort applies INSIDE the
@@ -2120,6 +2430,12 @@
     return b;
   }
 
+  /* v0.1.94: the retail price on the card, through the mirrored price rule
+     (priceEntryFor / formatDevicePrice — test/devicePriceMirror.test.js). */
+  function cardPrice(p) {
+    return formatDevicePrice(priceEntryFor(p, 'retail'));
+  }
+
   function card(p) {
     var el = document.createElement('div');
     var chosen = state.listSelect && state.listSelected.has(p.id);
@@ -2132,6 +2448,7 @@
       '<div class="meta">' +
         '<div class="sku">' + escapeHtml(p.sku || '(no SKU)') + '</div>' +
         (p.name ? '<div class="name">' + escapeHtml(p.name) + '</div>' : '') +
+        (cardPrice(p) ? '<div class="price">' + escapeHtml(cardPrice(p)) + '</div>' : '') +
         (cnt !== '' ? '<div class="imgcount">' + cnt + ' image' + (cnt === 1 ? '' : 's') + '</div>' : '') +
       '</div>';
     el.addEventListener('click', function () {
@@ -2209,14 +2526,22 @@
     document.querySelectorAll('.thumb[data-thumb]').forEach(function (el) { thumbObserver.observe(el); });
   }
 
+  /* v0.1.94: a card asks for the main photo's 320px thumbnail, named by the
+     product list itself (`mainImagePath`) — no per-card image-list call. That
+     was one extra request per card (24 per page, enough to trip the server's
+     rate limit on a fast scroll) and then the FULL photo, ~1.7 MB a card. A
+     server too old to send `mainImagePath` falls back to the old lookup. */
   function lazyThumb(p) {
     if (p.imageCount === 0) return;
     var slot = document.querySelector('.thumb[data-thumb="' + p.id + '"]');
     if (!slot) return;
     var request = imageRequestContext(p.id);
-    getMainImage(p.id).then(function (rel) {
+    var main = Object.prototype.hasOwnProperty.call(p, 'mainImagePath')
+      ? Promise.resolve(p.mainImagePath || null)
+      : getMainImage(p.id);
+    main.then(function (rel) {
       if (!rel || !imageRequestCurrent(request)) return;
-      return assetUrl(rel, p.id).then(function (url) {
+      return assetUrl(rel, p.id, { w: 320, v: p.updatedAt }).then(function (url) {
         if (url && imageRequestCurrent(request) && slot.isConnected) {
           slot.style.backgroundImage = 'url("' + url + '")'; slot.textContent = '';
         }
@@ -2235,7 +2560,14 @@
         imgListCache[productId] = imgs || [];
         return imgListCache[productId];
       })
-      .catch(function () { return imageRequestCurrent(request) ? [] : null; });
+      // v0.1.94: a failed lookup is NOT "this product has no images" — it
+      // used to resolve to [] and the card was remembered as image-less for
+      // the rest of the session. Resolve null (callers treat it as "could not
+      // load") and cache nothing, so the next look asks again.
+      .catch(function (e) {
+        if (imageRequestCurrent(request) && e && !e.network) toast('Could not load the photos: ' + e.message);
+        return null;
+      });
   }
 
   function getMainImage(productId) {
@@ -2243,7 +2575,8 @@
     var request = imageRequestContext(productId);
     return getImageList(productId).then(function (imgs) {
       if (!imageRequestCurrent(request)) return null;
-      var m = imgs && imgs[0];
+      if (!imgs) return null; // could not load — do not remember "no image"
+      var m = imgs[0];
       var rel = m ? ((m.isProcessed && m.processedFilepath) ? m.processedFilepath : m.filepath) : null;
       mainImgCache[productId] = rel;
       return rel;
@@ -2258,6 +2591,7 @@
     fields.innerHTML = '';
     document.getElementById('detail').classList.add('open');
     document.body.style.overflow = 'hidden';
+    pushSheetHistory();
 
     // Resolve category id → human name via the per-company map we loaded at
     // boot.
@@ -2296,7 +2630,15 @@
     gal.innerHTML = '<div class="loading">Loading images…</div>';
     getImageList(productId).then(function (imgs) {
       if (!imageRequestCurrent(request) || (currentDetail && currentDetail.id !== productId)) return;
-      if (!imgs || !imgs.length) { gal.innerHTML = '<div class="empty">No images yet — tap “Add photo”.</div>'; return; }
+      if (!imgs) {
+        // v0.1.94: the list could not be fetched — say so, offer a retry,
+        // and never claim the product has no photos.
+        gal.innerHTML = '<div class="empty">Couldn’t load the photos. <button class="btn" id="galleryRetryBtn" type="button">Try again</button></div>';
+        var again = document.getElementById('galleryRetryBtn');
+        if (again) again.addEventListener('click', function () { renderGallery(productId); });
+        return;
+      }
+      if (!imgs.length) { gal.innerHTML = '<div class="empty">No images yet — tap “Add photo”.</div>'; return; }
       gal.innerHTML = '';
       var total = imgs.length;
       imgs.forEach(function (img, i) {
@@ -2377,7 +2719,9 @@
           if (isSelecting()) toggleSelected(img.filepath);
           else               openImgPreview(imgs, i, productId);
         });
-        assetUrl(rel, productId).then(function (url) {
+        // v0.1.94: a gallery tile is ~half a phone screen wide — the 640px
+        // thumbnail, not the original. Tapping opens the full photo.
+        assetUrl(rel, productId, { w: 640, v: img.contentHash }).then(function (url) {
           if (!url || !imageRequestCurrent(request) || (currentDetail && currentDetail.id !== productId)) return;
           var im = document.createElement('img'); im.src = url; im.alt = '';
           fig.replaceChild(im, fig.firstChild);
@@ -2612,7 +2956,8 @@
     if (can('images.manage')) list.appendChild(menuRow('✂︎  Reframe & crop this image', function () {
       closeSheet('tileMenuSheet');
       getImageList(ctx.productId).then(function (imgs) {
-        if (!imgs || !imgs.length) { toast('No images to reframe'); return; }
+        if (!imgs) { toast('Couldn’t load the photos — try again.'); return; }
+        if (!imgs.length) { toast('No images to reframe'); return; }
         openReframeSheet({ productId: ctx.productId, imgs: imgs, focusedIndex: ctx.index, lockScope: true });
       });
     }));
@@ -2673,7 +3018,7 @@
     var rel = ctx.filepath || '';
     if (!rel) return Promise.reject(new Error('No image to save'));
     var enc = rel.split('/').map(encodeURIComponent).join('/');
-    return fetch(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } })
+    return fetchT(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } }, ORIGINAL_TIMEOUT_MS)
       .then(function (res) {
         if (!res.ok) throw new Error('Server returned ' + res.status);
         return res.blob();
@@ -3145,7 +3490,11 @@
      uses, so a remote edit doesn't push down. This bust-everything reload
      covers it: clear blob/list caches, then re-fetch products, the open
      detail's gallery, and the AI status. Spins the icon while it works. */
-  function refreshNow() {
+  function refreshNow(opts) {
+    var quiet = !!(opts && opts.quiet);
+    // v0.1.94: nothing loaded yet (the first load failed) — a refresh is a
+    // fresh start, not a reload of an empty page.
+    if (!bootCompleted) { boot(); return; }
     var btn = document.getElementById('refreshBtn');
     btn.classList.add('is-spinning');
     var refreshCompanyId = state.companyId;
@@ -3162,7 +3511,13 @@
             applyFilter();
             render();
           })
-          .catch(function () {})
+          // v0.1.94: this used to swallow every error, so Refresh "worked"
+          // while showing old data. A network failure raises the banner
+          // (rpcAt does that); anything else is said out loud.
+          .catch(function (e) {
+            if (e && e.network) return;
+            if (!quiet) toast('Refresh failed: ' + e.message);
+          })
       );
     }
     // Reload the open detail if any (gallery + AI section + product fields).
@@ -3373,7 +3728,8 @@
     if (!currentDetail) return;
     var pid = currentDetail.id;
     getImageList(pid).then(function (imgs) {
-      if (!imgs || !imgs.length) { toast('No images to reframe'); return; }
+      if (!imgs) { toast('Couldn’t load the photos — try again.'); return; }
+        if (!imgs.length) { toast('No images to reframe'); return; }
       // v0.49.9: opens the new Reframe sheet (live preview + controls) instead
       // of the bare scope picker. Header entry defaults to lockScope=false so
       // the user can toggle between Main and All inside the sheet.
@@ -3858,7 +4214,8 @@
     if (!currentDetail) return;
     var pid = currentDetail.id;
     getImageList(pid).then(function (imgs) {
-      if (!imgs || !imgs.length) { toast('No images to enhance'); return; }
+      if (!imgs) { toast('Couldn’t load the photos — try again.'); return; }
+      if (!imgs.length) { toast('No images to enhance'); return; }
       openEnhanceSheet({ productId: pid, imgs: imgs, focusedIndex: 0, lockScope: false });
     });
   });
@@ -4153,7 +4510,7 @@
     rpc('templates:renderPreview', overlayPreviewArgs(o))
       .then(function (res) {
         if (!state.overlay || state.overlay.previewSeq !== seq) return;
-        var url = envelopeToBlobUrl(res && res.bytes, 'image/png');
+        var url = envelopeToBlobUrl(res && res.bytes, (res && res.mime) || 'image/png');
         if (!url) return;
         var imgEl = document.getElementById('overlayPreviewImg');
         if (state.overlay.previewUrl) { try { URL.revokeObjectURL(state.overlay.previewUrl); } catch (_) {} }
@@ -4589,7 +4946,8 @@
     if (!job.filepath) { runZipRender(); return; }
     var enc = job.filepath.split('/').map(encodeURIComponent).join('/');
     toast('Preparing the download…');
-    fetch(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } })
+    // A zip of many full-size photos can take minutes on a thin link.
+    fetchT(baseUrl + '/assets/' + enc, { headers: { Authorization: 'Bearer ' + token } }, 5 * 60 * 1000)
       .then(function (res) {
         if (!res.ok) throw new Error('Server returned ' + res.status);
         return res.blob();
@@ -4609,7 +4967,8 @@
     if (!currentDetail) return;
     var pid = currentDetail.id;
     getImageList(pid).then(function (imgs) {
-      if (!imgs || !imgs.length) { toast('Add a photo first — overlay needs a base image'); return; }
+      if (!imgs) { toast('Couldn’t load the photos — try again.'); return; }
+      if (!imgs.length) { toast('Add a photo first — overlay needs a base image'); return; }
       // The image list comes along so the sheet can offer "Selected (N)" and
       // count positions — the server numbers images the same way this list is
       // ordered (v0.1.77).
@@ -4632,7 +4991,8 @@
     var btn = document.getElementById('spinBtn');
     btn.disabled = true;
     getImageList(productId).then(function (imgs) {
-      if (!imgs || imgs.length < 2) { toast('Add 2+ photos to spin'); return; }
+      if (!imgs) { toast('Couldn’t load the photos — try again.'); return; }
+      if (imgs.length < 2) { toast('Add 2+ photos to spin'); return; }
       var rels = imgs.map(function (im) { return (im.isProcessed && im.processedFilepath) ? im.processedFilepath : im.filepath; });
       return Promise.all(rels.map(function (rel) { return assetUrl(rel, productId); })).then(function (urls) {
         urls = urls.filter(Boolean);
@@ -4803,14 +5163,60 @@
     this.value = ''; // reset so the same photo can be picked again
   });
 
-  function closeDetail() {
+  function closeDetail(fromHistory) {
     document.getElementById('detail').classList.remove('open');
     document.body.style.overflow = '';
     stopAiPolling(); // v0.47.0 — no point polling once the sheet is closed.
     if (isSelecting()) exitSelectMode(); // v0.49.12 — selection belongs to this product\'s view.
+    // v0.1.94: closed by its own button — drop the history entry the sheet
+    // pushed, so Back afterwards leaves the page as expected.
+    if (fromHistory !== true && sheetInHistory) {
+      sheetInHistory = false;
+      try { history.back(); } catch (_) {}
+    }
   }
-  document.getElementById('detailClose').addEventListener('click', closeDetail);
+  document.getElementById('detailClose').addEventListener('click', function () { closeDetail(); });
   document.getElementById('detail').addEventListener('click', function (e) { if (e.target === this) closeDetail(); });
+
+  /* ── v0.1.94: Android Back closes the product sheet ──────────────────
+     Opening a product pushes one history entry; the phone's Back button (or
+     the back gesture) pops it, and we close whatever is on top — a lightbox,
+     a menu sheet, then the product sheet itself — instead of leaving /m and
+     dropping the user back on the browser's start page. */
+  var sheetInHistory = false;
+  function pushSheetHistory() {
+    if (sheetInHistory || typeof history === 'undefined' || !history.pushState) return;
+    try { history.pushState({ mskhSheet: 'detail' }, ''); sheetInHistory = true; } catch (_) {}
+  }
+  function closeTopOverlay() {
+    var preview = document.getElementById('imgPreview');
+    if (preview && preview.classList.contains('open')) { closeImgPreview(); return true; }
+    var spin = document.getElementById('spin');
+    if (spin && spin.classList.contains('open')) { closeSpin(); return true; }
+    var open = document.querySelectorAll('.sheet-overlay.open');
+    var top = open.length ? open[open.length - 1] : null;
+    if (!top) return false;
+    // The sheet's own backdrop handler does its clean-up (each one closes on
+    // a click whose target is the backdrop itself).
+    try { top.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (_) {}
+    if (top.classList.contains('open')) closeSheet(top.id);
+    return true;
+  }
+  window.addEventListener('popstate', function () {
+    if (!sheetInHistory) return;
+    sheetInHistory = false;
+    var detail = document.getElementById('detail');
+    if (closeTopOverlay()) {
+      // Something above the product was closed; the product stays open and
+      // keeps its Back entry.
+      if (detail.classList.contains('open')) pushSheetHistory();
+      return;
+    }
+    if (detail.classList.contains('open')) { closeDetail(true); return; }
+    // The product sheet was already closed some other way (company switch,
+    // disconnect) — this Back press meant "leave", so leave.
+    try { history.back(); } catch (_) {}
+  });
 
   /* ── helpers ───────────────────────────────────────────────── */
 
@@ -4869,6 +5275,35 @@
     if (n < 1024 * 1024) return Math.max(1, Math.round(n / 1024)) + ' KB';
     var mb = n / (1024 * 1024); return (mb >= 10 ? Math.round(mb) : mb.toFixed(1)) + ' MB';
   }
+
+  /* ── v0.1.94: pairing by QR code ─────────────────────────────────────
+     Settings → Multi-Mac → "Pair a phone" shows a QR code for
+     http://<server>:<port>/m#t=<token>. The token rides in the FRAGMENT, which
+     a browser never sends to the server; it is stored here like a pasted one
+     and then removed from the address bar (and from history) at once, so it
+     is not left on screen, in a bookmark or in a shared link. */
+  function readPairingToken() {
+    try {
+      var hash = (typeof location !== 'undefined' && location.hash) || '';
+      var m = /(?:^#|&)t=([^&]+)/.exec(hash);
+      if (!m) return;
+      var t = decodeURIComponent(m[1]).trim();
+      if (typeof history !== 'undefined' && history.replaceState) {
+        history.replaceState(history.state, '', (location.pathname || '/m') + (location.search || ''));
+      }
+      var origin = /^https?:/.test(location.origin || '') ? location.origin : '';
+      if (!t || !origin) return;
+      if (origin !== baseUrl || t !== token) {
+        baseUrl = origin;
+        token = t;
+        state.role = '';
+        state.caps = null;
+        localStorage.setItem(LS.url, origin);
+        localStorage.setItem(LS.tok, t);
+      }
+    } catch (_) { /* a malformed fragment is ignored; the Connect form still works */ }
+  }
+  readPairingToken();
 
   /* ── start ─────────────────────────────────────────────────── */
   if (baseUrl && token) {

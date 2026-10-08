@@ -26,6 +26,8 @@ function hookHarness() {
     || next.some((value, i) => !Object.is(value, previous[i]));
   const React = {
     memo: (component) => component,
+    // 0.1.94: the Library's list views render ConnImg, a forwardRef component.
+    forwardRef: (render) => render,
     useState(initial) {
       const index = cursor++;
       if (!hooks[index]) hooks[index] = { value: typeof initial === 'function' ? initial() : initial };
@@ -166,9 +168,10 @@ function input(output, predicate) {
   return node;
 }
 
-function select(output, predicate) {
-  const node = findAll(output, (node) => node.type?.name === 'Select' && predicate(node.props))[0];
-  assert.ok(node, 'expected select');
+/** The Cost Calculator's product picker (a SearchableSelect since 0.1.94). */
+function productPicker(output) {
+  const node = findAll(output, (node) => node.type?.name === 'SearchableSelect')[0];
+  assert.ok(node, 'expected the product picker');
   return node;
 }
 
@@ -197,21 +200,24 @@ test('CostCalculator prevents an old company cost failure from clearing the curr
     await flush(); await hook.settle(Component);
     products.a.resolve([{ id: 'product-a', sku: 'A-1', name: 'A stale' }]);
     await flush(); await hook.settle(Component);
-    assert.match(textOf(hook.getOutput()), /B current/);
-    assert.doesNotMatch(textOf(hook.getOutput()), /A stale/);
+    // The picker is a SearchableSelect now (0.1.94): its rows are the
+    // `options` prop rather than <option> text.
+    const pickerNames = () => productPicker(hook.getOutput()).props.options.map((p) => p.name).join(' ');
+    assert.match(pickerNames(), /B current/);
+    assert.doesNotMatch(pickerNames(), /A stale/);
 
     setStore(store, { activeCompanyId: 'company-a' });
     await hook.settle(Component);
     products.a2.resolve([{ id: 'product-a', sku: 'A-2', name: 'A selected' }]);
     await flush(); await hook.settle(Component);
-    select(hook.getOutput(), (props) => props.value === '').props.onChange({ target: { value: 'product-a' } });
+    productPicker(hook.getOutput()).props.onChange('product-a');
     await hook.settle(Component);
 
     setStore(store, { activeCompanyId: 'company-b' });
     await hook.settle(Component);
     products.b2.resolve([{ id: 'product-b', sku: 'B-2', name: 'B selected' }]);
     await flush(); await hook.settle(Component);
-    select(hook.getOutput(), (props) => props.value === '').props.onChange({ target: { value: 'product-b' } });
+    productPicker(hook.getOutput()).props.onChange('product-b');
     await hook.settle(Component);
     input(hook.getOutput(), (props) => props.step === '0.0001').props.onChange({ target: { value: '9.50' } });
     await hook.settle(Component);
@@ -238,7 +244,7 @@ test('CostCalculator preserves manual cost when the current pending lookup fails
   try {
     setStore(store, { activeCompanyId: 'company-b' });
     await hook.settle(Component); await flush(); await hook.settle(Component);
-    select(hook.getOutput(), (props) => props.value === '').props.onChange({ target: { value: 'product-b' } });
+    productPicker(hook.getOutput()).props.onChange('product-b');
     await hook.settle(Component);
     input(hook.getOutput(), (props) => props.step === '0.0001').props.onChange({ target: { value: '9.50' } });
     await hook.settle(Component);
@@ -316,7 +322,7 @@ test('PurchaseOrders keeps B supplier choices and rows when A and older searches
     await hook.settle(Component); await delay(210);
     supplierCalls.find((call) => call.companyId === 'company-b').gate.resolve([{ id: 'supplier-b', name: 'B supplier', defaultCurrency: 'USD', defaultIncoterm: 'FOB' }]);
     await flush(); await hook.settle(Component);
-    input(hook.getOutput(), (props) => props.placeholder === 'Search by PO number or supplier name…').props.onChange({ target: { value: 'B' } });
+    input(hook.getOutput(), (props) => props.placeholder === 'Search PO number, supplier, SKU or product…').props.onChange({ target: { value: 'B' } });
     await hook.settle(Component); await delay(210);
     listCalls.find((call) => call.companyId === 'company-b' && call.query.search === '').gate.reject(new Error('obsolete search failed'));
     await flush(); await hook.settle(Component);
@@ -362,7 +368,7 @@ test('CostCalculator refreshes PO history without replacing a manual cost, and r
   try {
     setStore(store, { activeCompanyId: 'company' });
     await hook.settle(Component); await flush(); await hook.settle(Component);
-    select(hook.getOutput(), (props) => props.value === '').props.onChange({ target: { value: 'product' } });
+    productPicker(hook.getOutput()).props.onChange('product');
     await hook.settle(Component); await flush(); await hook.settle(Component);
     assert.equal(input(hook.getOutput(), (props) => props.step === '0.0001').props.value, '10.0000');
     assert.equal(typeof event, 'function', 'selected costs subscribe to PO updates');

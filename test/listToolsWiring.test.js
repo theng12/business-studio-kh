@@ -131,11 +131,16 @@ test('the Library filter column retracts to a rail through the independent persi
   // Both controls call the same toggle.
   const toggles = LIBRARY.match(/onClick=\{toggleFilters\}/g) || [];
   assert.ok(toggles.length >= 2, `expected the toolbar button and the panel chevron to share toggleFilters (found ${toggles.length})`);
-  assert.match(LIBRARY, /aria-pressed=\{!filtersVisible\}/, 'the panel chevron must expose its pressed state');
+  // 0.1.94: what is shown can differ from the saved choice (Filters retract
+  // beside Details on a narrow window), so the controls report `filtersShown`.
+  assert.match(LIBRARY, /aria-pressed=\{!filtersShown\}/, 'the panel chevron must expose its pressed state');
   assert.match(LIBRARY, /Hide filters/, 'the hide tooltip is missing');
   assert.match(LIBRARY, /Show filters/, 'the show tooltip is missing');
   assert.match(LIBRARY, /ProductLibrary\.filtersVisible/, 'independent filter preference missing');
-  assert.match(LIBRARY, /lib-inspector" hidden=\{!panelVisible\}/, 'hiding details must preserve the mounted draft');
+  // 0.1.94: Details shows only while a product is open (showDetails =
+  // panelVisible && editing); hidden, the form stays mounted with its draft.
+  assert.match(LIBRARY, /lib-inspector" hidden=\{!showDetails\}/, 'hiding details must preserve the mounted draft');
+  assert.match(LIBRARY, /const showDetails = panelVisible && editing !== null;/, 'Details must follow an open product');
   assert.match(LIBRARY, /shortcutBlocked\(e\.target, globalThis\.document\)/, 'filter shortcut must leave inputs/dialogs alone');
   // The keyboard shortcut the tooltips advertise.
   assert.match(LIBRARY, /e\.key !== 'b' && e\.key !== 'B'/, 'the ⌘B shortcut is missing');

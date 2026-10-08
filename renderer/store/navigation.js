@@ -83,9 +83,18 @@ export function createNavigationSlice(set, get) {
       set({ activeProductId: id });
     },
 
-    openProductInWorkspace(productId) {
-      return navigate({ activeProductId: productId, activeModule: 'workspace' });
+    /* 0.1.94: `opts.navIds` is the list Image Workspace's ◀ ▶ step through —
+     * the Library's filtered + sorted ids at the moment it opened the product,
+     * frozen. Stepping the live list lost its place: processing bumps
+     * updated_at, so the product jumped to the top, and under an "Unprocessed"
+     * filter it dropped out of the list altogether. Any other entry point
+     * (Dashboard, AI Studio) passes nothing and the Workspace falls back to the
+     * whole company. The Workspace's own ◀ ▶ pass the list they stepped. */
+    openProductInWorkspace(productId, opts = {}) {
+      const navIds = Array.isArray(opts?.navIds) ? opts.navIds : null;
+      return navigate({ activeProductId: productId, activeModule: 'workspace', workspaceNavIds: navIds });
     },
+    workspaceNavIds: null,
 
     // v0.49.48: jump to a specific PO detail (from the Library Cost column).
     openPurchaseOrder(poId) {

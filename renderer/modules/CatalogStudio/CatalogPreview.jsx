@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Select } from '../../components/ui.jsx';
 import { catalogPaper, paginatePreviewDocument } from './previewLayout.js';
+import { applyPreviewFonts } from './previewFonts.js';
 
 function scrollSheet(sheet) {
   if (!sheet) return;
@@ -8,7 +9,7 @@ function scrollSheet(sheet) {
   win.scrollTo({ top: sheet.getBoundingClientRect().top + win.scrollY, left: 0 });
 }
 
-export function CatalogPreview({ preview, onRefresh, config = {}, state = 'idle', error = '', title = 'Catalog preview' }) {
+export function CatalogPreview({ preview, onRefresh, config = {}, state = 'idle', error = '', title = 'Catalog preview', fontsKey = '' }) {
   const frame = useRef(null); const sheets = useRef([]); const firstProduct = useRef(0);
   const loadSeq = useRef(0); const [count, setCount] = useState(0); const [page, setPage] = useState(0);
   const [zoom, setZoom] = useState('page'); const [oversized, setOversized] = useState(false);
@@ -31,6 +32,9 @@ export function CatalogPreview({ preview, onRefresh, config = {}, state = 'idle'
   async function ready() {
     const seq = ++loadSeq.current; const el = frame.current; const doc = el?.contentDocument;
     if (!doc) return;
+    // The fonts arrive once per session, not inside every srcdoc; load them
+    // into this frame before measuring, so page breaks use the print faces.
+    await applyPreviewFonts(doc, fontsKey);
     await doc.fonts?.ready;
     await Promise.all([...doc.images].map((img) => img.decode?.().catch(() => {}) ?? Promise.resolve()));
     if (seq !== loadSeq.current || frame.current?.contentDocument !== doc) return;

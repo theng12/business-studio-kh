@@ -293,13 +293,76 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     return productImages.listByProduct(productId);
   }));
 
-  exposeLocal('images:autoMatchBySku', async ({ companyId, folderPath }) => {
+  exposeLocal('images:autoMatchBySku', async ({ companyId, folderPath, dryRun, files } = {}) => {
     if (!companyId) throw new Error('companyId is required');
     const companies = require('../db/companies');
     if (companyId !== companies.getActiveId()) {
       throw new Error('Cross-company auto-match blocked');
     }
     if (!folderPath) throw new Error('Folder path is required');
+
+    /* 0.1.94: preview, then import (owner's decision). `dryRun` scans and
+     * matches and returns the plan without writing anything; `files` imports
+     * exactly the planned entries, in the renderer's batches (which is what
+     * gives the modal its progress bar and its Cancel between batches). New
+     * photos are appended after the product's existing ones; an entry with
+     * `makeMain` becomes the main image. The no-option call below is the
+     * pre-0.1.94 one-shot import, kept for any older caller. */
+    if (dryRun === true) {
+      const { buildAutoMatchPlan, summarizeUnmatched } = require('../util/autoMatchPlan');
+      const list = products.list(companyId);
+      const skuToProduct = new Map(list.map((p) => [p.sku.toLowerCase(), p]));
+      const allImages = imageManager.scanImagesRecursive(folderPath);
+      const { groups, unmatched } = imageManager.groupAndSortMatches(allImages, folderPath, new Set(skuToProduct.keys()));
+      const plan = buildAutoMatchPlan({
+        groups, skuToProduct, imageCountOf: (p) => p.imageCount, max: imageManager.MAX_IMAGES_PER_PRODUCT, folderPath,
+      });
+      return {
+        dryRun: true,
+        ...plan,
+        ...summarizeUnmatched(unmatched, folderPath),
+        scannedFiles: allImages.length,
+        totalProducts: list.length,
+        matchedSkus: plan.products.length,
+        maxImagesPerProduct: imageManager.MAX_IMAGES_PER_PRODUCT,
+      };
+    }
+    if (Array.isArray(files)) {
+      const { importEntryProblem, relativeTo } = require('../util/autoMatchPlan');
+      if (files.length > 200) throw new Error('Too many files in one batch (max 200)');
+      let imported = 0;
+      let skippedDup = 0;
+      const failures = [];
+      const touched = new Set();
+      for (const entry of files) {
+        const problem = importEntryProblem(folderPath, entry);
+        if (problem) {
+          failures.push({ filepath: String(entry?.sourcePath ?? ''), sku: entry?.sku ?? '', error: problem });
+          continue;
+        }
+        try {
+          assertProductInActiveCompany(entry.productId);
+          const { image, skipped } = await productImages.addFromSource(entry.productId, entry.sourcePath, {
+            originalFilepath: entry.sourcePath,
+          });
+          if (skipped) skippedDup += 1;
+          else { imported += 1; touched.add(entry.productId); }
+          if (entry.makeMain === true && image?.id) {
+            // By row id, inside the product's lock, after the add has left it.
+            await productImages.withProductImageLock(entry.productId, () => productImages.setMainById(entry.productId, image.id));
+            touched.add(entry.productId);
+          }
+        } catch (err) {
+          failures.push({ filepath: relativeTo(folderPath, entry.sourcePath), sku: entry.sku ?? '', error: err.message });
+        }
+      }
+      for (const productId of touched) {
+        products.recomputeProcessStatus(productId);
+        products.touchUpdated(productId);
+      }
+      if (touched.size > 0) emitCatalogChange('images', 'autoMatch', null);
+      return { imported, skippedDup, failures, productsTouched: [...touched] };
+    }
 
     // v0.17.1: live progress so the user sees something other
     // than a frozen modal while the matcher chews through a folder.
