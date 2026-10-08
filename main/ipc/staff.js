@@ -3,28 +3,25 @@
  *
  * All `expose()`d: they act on the shared data, and the phone page needs the
  * driver / attendant tiles. Capabilities (main/util/capabilities.js):
- *   staff:list / staff:get / staff:getPhoto / staff:me   fuel.record or fuel.manage
- *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage
- * HR1 will move the edits under hr.manage.
+ *   staff:list / staff:get / staff:getPhoto   fuel.record, fuel.manage, hr.view or hr.manage
+ *   staff:me                                   the same, or attendance.self / attendance.supervise
+ *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage or hr.manage
+ * HR1: what comes back depends on the caller (main/ipc/hrAccess.js): hr.manage
+ * the full record, hr.view / fuel.manage the directory (no ID / NSSF / bank /
+ * date of birth / address), a recorder the tile. The HR profile fields
+ * themselves are edited through hr:updateProfile (hr.manage).
  */
 
 const employees = require('../db/employees');
 const fuelPhotos = require('../fuelPhotos');
-const { activeCompanyId, inCompany, emitFuelChange, callerCanManage, getCallerUserId } = require('./fuelAccess');
-
-/** What a recorder (pump / driver phone) needs for a tile — no phone number, notes or account link. */
-function tile(e) {
-  return {
-    id: e.id, companyId: e.companyId, staffCode: e.staffCode, nameEn: e.nameEn, nameKm: e.nameKm,
-    hasPhoto: e.hasPhoto, photoSha256: e.photoSha256, position: e.position, isDriver: e.isDriver,
-    isFuelAttendant: e.isFuelAttendant, status: e.status,
-  };
-}
+const { activeCompanyId, inCompany, emitFuelChange, getCallerUserId } = require('./fuelAccess');
+const { tile, forLevel, staffLevel } = require('./hrAccess');
 
 function register({ expose }) {
   expose('staff:list', (filters = {}) => {
     const companyId = activeCompanyId(filters?.companyId);
-    if (callerCanManage()) return employees.list(companyId, filters || {});
+    const level = staffLevel();
+    if (level !== 'tile') return employees.list(companyId, filters || {}).map((e) => forLevel(e, level));
     return employees.list(companyId, { ...(filters || {}), status: 'active', searchPhone: false }).map(tile);
   });
 
@@ -43,35 +40,35 @@ function register({ expose }) {
 
   expose('staff:get', (id) => {
     const e = inCompany(employees.get(id), 'Staff member');
-    return callerCanManage() ? e : tile(e);
+    return forLevel(e);
   });
 
   expose('staff:create', (input = {}) => {
     const companyId = activeCompanyId(input.companyId);
     const created = employees.create({ ...input, companyId });
     emitFuelChange('staff', 'create', created.id, companyId);
-    return created;
+    return forLevel(created);
   });
 
   expose('staff:update', ({ id, patch } = {}) => {
     const e = inCompany(employees.get(id), 'Staff member');
     const next = employees.update(id, patch || {});
     emitFuelChange('staff', 'update', id, e.companyId);
-    return next;
+    return forLevel(next);
   });
 
   expose('staff:markLeft', ({ id, leftOn = null, reason = null } = {}) => {
     const e = inCompany(employees.get(id), 'Staff member');
     const next = employees.markLeft(id, { leftOn, reason });
     emitFuelChange('staff', 'update', id, e.companyId);
-    return next;
+    return forLevel(next);
   });
 
   expose('staff:reactivate', (id) => {
     const e = inCompany(employees.get(id), 'Staff member');
     const next = employees.reactivate(id);
     emitFuelChange('staff', 'update', id, e.companyId);
-    return next;
+    return forLevel(next);
   });
 
   expose('staff:setPhoto', async ({ id, bytes } = {}) => {
@@ -79,7 +76,7 @@ function register({ expose }) {
     const saved = await fuelPhotos.saveStaffPhoto(id, bytes);
     const next = employees.setPhoto(id, saved);
     emitFuelChange('staff', 'update', id, e.companyId);
-    return next;
+    return forLevel(next);
   });
 
   /** The staff photo as bytes (or a 320 px thumbnail). Null when there is none. */

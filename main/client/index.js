@@ -1097,6 +1097,21 @@ const PROXIED_CHANNELS = [
   'fuel:listPendingTransfers','fuel:listMyRecent','fuel:reviewFill','fuel:correctFill','fuel:voidRecord','fuel:voidMyRecord',
   'fuel:listFlags','fuel:reviewFlag','fuel:recomputeFlags','fuel:getOverview',
   'fuel:getMonthlyReport','fuel:getMonthlyWorkbook','fuel:sweepPhotoRetention',
+  // HR1: staff profiles, attendance, leave and the kiosk all live with the data
+  // on the server — straight RPC. hr:saveMonthWorkbook is handleLocal below.
+  'hr:getSettings','hr:updateSettings','hr:listPositions','hr:createPosition','hr:updatePosition',
+  'hr:listSchedules','hr:createSchedule','hr:updateSchedule','hr:assignSchedule','hr:listEmployeeSchedules',
+  'hr:listHolidays','hr:createHoliday','hr:updateHoliday','hr:getProfile','hr:updateProfile','hr:setStatus',
+  'hr:setPin','hr:clearPin','hr:unlockPin','hr:listDocuments','hr:addDocument','hr:readDocument','hr:voidDocument',
+  'hr:runJobs','hr:getMonthWorkbook',
+  'attendance:day','attendance:monthSummary','attendance:listEvents','attendance:getPhoto','attendance:addManual','attendance:void',
+  'attendance:listReview','attendance:review','attendance:listCorrections','attendance:requestCorrection','attendance:decideCorrection',
+  'attendance:listOvertime','attendance:approveOvertime','attendance:revokeOvertime','attendance:listLateness','attendance:confirmLateness',
+  'attendance:clockSelf','attendance:mine','attendance:requestCorrectionSelf','attendance:crew','attendance:markCrew',
+  'leave:listTypes','leave:createType','leave:updateType','leave:balances','leave:ledger','leave:listRequests',
+  'leave:request','leave:decide','leave:cancel','leave:adjust','leave:requestSelf','leave:cancelSelf',
+  'kiosk:tiles','kiosk:tilePhoto','kiosk:signIn','kiosk:signOut','kiosk:clock','kiosk:me','kiosk:requestLeave',
+  'kiosk:requestCorrection','kiosk:verifyManagerPin',
   // Pure math — could run client-side, but proxying keeps the formula
   // logic centralised + lets us patch it server-side without re-shipping
   // the client.
@@ -1588,6 +1603,20 @@ function registerClientFileHandlers() {
     const out = await dialog.showSaveDialog({
       title: 'Save fuel workbook',
       defaultPath: res?.filename || `fuel-${month}.xlsx`,
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
+    });
+    if (out.canceled || !out.filePath) return null;
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return out.filePath;
+  });
+
+  // HR1: same shape for the attendance workbook.
+  handleLocal('hr:saveMonthWorkbook', async ({ month } = {}) => {
+    const res = await rpc('hr:getMonthWorkbook', { month });
+    const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);
+    const out = await dialog.showSaveDialog({
+      title: 'Save attendance workbook',
+      defaultPath: res?.filename || `attendance-${month || 'month'}.xlsx`,
       filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
     });
     if (out.canceled || !out.filePath) return null;
