@@ -132,7 +132,8 @@ export function FuelSettingsPanel() {
                     {fieldErrors[f.key] ? <span className="field__error">{fieldErrors[f.key]}</span> : `Default ${settingToDisplay(f, f.def)} ${f.unit}${isDefault ? ' (in use)' : ''}`}
                   </div>
                 </div>
-                <div className="setting-row__control fuel-inline">
+                <div className="setting-row__control">
+                  <div className="fuel-inline fuel-setting-control">
                   <Input
                     aria-label={f.label}
                     className="fuel-setting-input"
@@ -143,6 +144,7 @@ export function FuelSettingsPanel() {
                     onBlur={() => { if (!fieldErrors[f.key]) flush(); }}
                   />
                   <span className="muted">{f.unit}</span>
+                  </div>
                 </div>
               </div>
             );

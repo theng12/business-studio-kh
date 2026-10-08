@@ -42,6 +42,7 @@ export function FuelOverview() {
   const [reviewing, setReviewing] = useState(null);
   const [rechecking, setRechecking] = useState(false);
   const [phonesOpen, setPhonesOpen] = useState(false);
+  const [reload, setReload] = useState(0);
   const req = useRef(0);
 
   useEffect(() => { setPage(0); }, [view, pageSize, activeCompanyId]);
@@ -60,7 +61,7 @@ export function FuelOverview() {
     }).catch((err) => {
       if (r === req.current) addToast(`Couldn't load the fuel overview: ${err.message}`, 'error');
     }).finally(() => { if (r === req.current) setLoading(false); });
-  }, [activeCompanyId, canManage, view, page, pageSize, tick, addToast]);
+  }, [activeCompanyId, canManage, view, page, pageSize, tick, reload, addToast]);
 
   const sorted = useMemo(() => sortFlags(flags.items), [flags.items]);
   const { currentPage, maxPage, pageStart, pageEnd } = paginate(flags.total, page, pageSize);
@@ -73,7 +74,7 @@ export function FuelOverview() {
       const res = await window.api.fuel.recomputeFlags();
       addToast(res?.opened ? `Checked everything — ${res.opened} new flag${res.opened === 1 ? '' : 's'}.` : 'Checked everything — no new flags.', 'success');
     } catch (err) { addToast(errText(err), 'error'); }
-    finally { setRechecking(false); }
+    finally { setRechecking(false); setReload((n) => n + 1); }
   }
 
   if (!activeCompanyId) {
@@ -243,7 +244,7 @@ export function FlagRow({ flag, lookups, onReview, onOpenFill }) {
       </div>
       <div className="fuel-flag__actions">
         {fillId && onOpenFill ? <Button size="sm" onClick={() => onOpenFill(fillId)}>Open fill-up</Button> : null}
-        {onReview ? <Button size="sm" variant={flag.status === 'open' ? 'primary' : 'default'} onClick={onReview}>{flag.status === 'open' ? 'Answer…' : 'Change…'}</Button> : null}
+        {onReview ? <Button size="sm" onClick={onReview}>{flag.status === 'open' ? 'Answer…' : 'Change…'}</Button> : null}
       </div>
     </li>
   );

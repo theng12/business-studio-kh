@@ -194,7 +194,7 @@ function TankDetail({ location, lookups, tick }) {
         <h2 className="section-title">{location.name}</h2>
         <span className="section-hint">Does what went in and out match the dips?</span>
         <div className="section-head__actions">
-          <Select aria-label="Month" value={month} onChange={(e) => setMonth(e.target.value)}>
+          <Select className="fuel-month-select" aria-label="Month" value={month} onChange={(e) => setMonth(e.target.value)}>
             {months.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
           </Select>
         </div>

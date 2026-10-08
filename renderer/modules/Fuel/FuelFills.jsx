@@ -117,7 +117,7 @@ function FillList({ lookups, onOpen, onAdd }) {
   return (
     <>
       <div className="toolbar fuel-toolbar">
-        <Select aria-label="Month" value={filters.month} onChange={(e) => setF('month')(e.target.value)}>
+        <Select className="fuel-month-select" aria-label="Month" value={filters.month} onChange={(e) => setF('month')(e.target.value)}>
           <option value="">All months</option>
           {months.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
         </Select>

@@ -75,7 +75,7 @@ export function FuelReports() {
         subtitle="Where the fuel went, and how far each vehicle was above its normal."
         actions={(
           <>
-            <Select aria-label="Month" value={month} onChange={(e) => setMonth(e.target.value)}>
+            <Select className="fuel-month-select" aria-label="Month" value={month} onChange={(e) => setMonth(e.target.value)}>
               {months.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
             </Select>
             <Button variant="primary" onClick={exportXlsx} disabled={exporting || !report}>{exporting ? 'Exporting…' : 'Export to Excel…'}</Button>

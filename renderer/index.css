@@ -12209,7 +12209,10 @@ a:hover { text-decoration-thickness: 2px; }
 .fuel-missing { color: var(--c-amber); font-weight: 600; }
 .fuel-excess { font-variant-numeric: tabular-nums; }
 .fuel-excess.is-over { color: var(--c-rose); font-weight: 600; }
-.fuel-setting-input { width: 110px; text-align: right; }
+.fuel-setting-control { flex-wrap: nowrap; justify-content: flex-end; }
+.fuel-setting-control > .muted { flex: none; width: 130px; font-size: var(--fs-sm); }
+.fuel-setting-control > .input.fuel-setting-input { flex: none; width: 110px; text-align: right; }
+.fuel-month-select.input--select { width: auto; min-width: 170px; flex: none; }
 .fuel-plain-list { margin: 0; padding: 0; list-style: none; font-size: var(--fs-md); }
 .fuel-plain-list li { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; border-bottom: 1px solid var(--c-border); }
 .fuel-plain-list li.is-muted { color: var(--c-text-subtle); }
