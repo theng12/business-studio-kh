@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
@@ -14,6 +14,7 @@ import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { shortcutBlocked } from '../../components/ShortcutsModal.jsx';
+import { ProductCombobox } from '../AIStudio/ProductCombobox.jsx';
 
 export function ImageWorkspace() {
   const activeProductId = useAppStore((s) => s.activeProductId);
@@ -51,8 +52,17 @@ export function ImageWorkspace() {
   // one engine.
   // Product list + jump action used by the in-workspace product picker so
   // the user can move between products without bouncing back to Library.
-  const products = useAppStore((s) => s.products);
+  // 0.1.94: the full company list (lookup + the picker) and the frozen order
+  // the Library handed over — see workspaceNavList below.
+  const allProducts = useAppStore((s) => s.allProducts);
+  const workspaceNavIds = useAppStore((s) => s.workspaceNavIds);
+  const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const openProductInWorkspace = useAppStore((s) => s.openProductInWorkspace);
+  const frozenNavRef = useRef(null);
+  const navProducts = useMemo(
+    () => workspaceNavList({ navIds: workspaceNavIds, allProducts, activeProductId, companyId: activeCompanyId, frozen: frozenNavRef }),
+    [workspaceNavIds, allProducts, activeProductId, activeCompanyId],
+  );
 
   const [settings, setSettings] = useState(defaultSettings());
   const [processingLabel, setProcessingLabel] = useState(null);
@@ -879,9 +889,11 @@ export function ImageWorkspace() {
   const toolbar = (
     <div className="toolbar ws-toolbar">
       <ProductNav
-        products={products}
+        products={navProducts}
+        pickerProducts={allProducts}
         activeProductId={activeProductId}
-        onPick={(id) => { if (id) openProductInWorkspace(id); }}
+        // Stepping keeps the frozen list the Library handed over.
+        onPick={(id) => { if (id) openProductInWorkspace(id, { navIds: workspaceNavIds }); }}
         busy={processing}
       />
       <span className="toolbar__spacer" />
@@ -1059,7 +1071,29 @@ export function ImageWorkspace() {
  * Disabled when at the ends of the list. The label shows current index so
  * the user knows where they are ("12 / 344").
  */
-function ProductNav({ products, activeProductId, onPick, busy = false }) {
+/**
+ * The list ◀ ▶ step through. 0.1.94: a FROZEN id list — the Library's filtered
+ * and sorted ids when it opened the Workspace (`workspaceNavIds`), or, when the
+ * Workspace was opened some other way, the whole company's order captured the
+ * first time it is needed. Never the live store order: processing bumps
+ * updated_at, which moved the product to the top of the live list, and an
+ * "Unprocessed" filter dropped it out altogether (index -1, arrows disabled).
+ * Pure apart from the `frozen` cache it is handed; exported for tests.
+ */
+export function workspaceNavList({ navIds, allProducts, activeProductId, companyId, frozen }) {
+  const byId = new Map((allProducts || []).map((p) => [p.id, p]));
+  let ids = Array.isArray(navIds) && navIds.includes(activeProductId) ? navIds : null;
+  if (!ids) {
+    const cached = frozen.current;
+    if (!cached || cached.companyId !== companyId || !cached.ids.length || !cached.ids.includes(activeProductId)) {
+      frozen.current = { companyId, ids: (allProducts || []).map((p) => p.id) };
+    }
+    ids = frozen.current.ids;
+  }
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
+function ProductNav({ products, pickerProducts, activeProductId, onPick, busy = false }) {
   const idx = products.findIndex((p) => p.id === activeProductId);
   const canPrev = idx > 0;
   const canNext = idx >= 0 && idx < products.length - 1;
@@ -1073,25 +1107,22 @@ function ProductNav({ products, activeProductId, onPick, busy = false }) {
         aria-label="Previous product"
         onClick={() => onPick(products[idx - 1]?.id)}
       ><Chevron dir="left" /></button>
-      <select
-        className="ws-prodnav__select segment"
-        value={activeProductId ?? ''}
-        onChange={(e) => onPick(e.target.value || null)}
-        /* v0.1.29: switching product mid-run is blocked. The in-flight process
-         * is already writing to the previous product, and the refresh that
-         * follows it would paint THAT product's images under the new product's
-         * header — then the next Apply would fail with "Image not found on
-         * product". Finishing the current run first is a one-click wait. */
-        disabled={busy}
-        title={busy ? 'Wait for the current run to finish' : 'Jump to product'}
-      >
-        {idx < 0 ? <option value="">— Pick a product —</option> : null}
-        {products.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.sku}{p.name ? ` · ${p.name}` : ''}
-          </option>
-        ))}
-      </select>
+      {/* 0.1.94: a searchable picker instead of a 2,500-option native select,
+          which cost an 89 ms forced layout on every ◀ / ▶ (measured).
+          v0.1.29: switching product mid-run is blocked. The in-flight process
+          is already writing to the previous product, and the refresh that
+          follows it would paint THAT product's images under the new product's
+          header — then the next Apply would fail with "Image not found on
+          product". Finishing the current run first is a one-click wait. */}
+      <fieldset className="ws-prodnav__picker" disabled={busy} title={busy ? 'Wait for the current run to finish' : 'Jump to product'}>
+        <ProductCombobox
+          products={pickerProducts}
+          value={activeProductId}
+          onChange={(id) => { if (id) onPick(id); }}
+          allowClear={false}
+          ariaLabel="Jump to product"
+        />
+      </fieldset>
       <button
         type="button"
         className="segment"

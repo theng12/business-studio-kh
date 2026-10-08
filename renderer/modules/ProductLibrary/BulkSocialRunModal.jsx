@@ -144,7 +144,9 @@ export function BulkSocialRunModal({ open, productIds, onClose, onDone }) {
   const usingSelection = scope === 'selection';
 
   return (
-    <Modal open={open} title="Social Grid · apply template" onClose={onClose} size="md">
+    // Esc / the backdrop must not close the dialog mid-run: the run keeps
+    // going with nothing on screen to say so, and its toast lands later.
+    <Modal open={open} title="Social Grid · apply template" onClose={submitting ? undefined : onClose} closeOnBackdrop={!submitting} busy={submitting} size="md">
       <div className="bulk-overlay-run">
         <p className="bulk-overlay-run__intro">
           Turn products into a ready-to-post grid image. The template supplies the

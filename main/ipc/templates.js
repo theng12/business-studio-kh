@@ -27,7 +27,7 @@ const imageTemplates = require('../db/imageTemplates');
 const imageTemplateRuns = require('../db/imageTemplateRuns');
 const templateRenderer = require('../templateRenderer');
 const { createZip } = require('../util/zip');
-const { slugify } = require('../util/slug');
+const { slugify, slugifyUnicode } = require('../util/slug');
 const { writeUniqueFile } = require('../util/exclusiveFile');
 const { applyTemplateToFiles, validateExternalRequest } = require('../util/externalOverlay');
 const {
@@ -157,8 +157,9 @@ function imageBaseAbs(image) {
  *  `<sku>-p3-<template>.png` when the picture is not the main one, so two
  *  images of one product cannot collide in the archive. */
 function zipEntryName(product, template, position) {
-  const sku = slugify(product.sku || 'product', 'product');
-  const tpl = slugify(template.name || 'overlay', 'overlay');
+  // slugifyUnicode: a Khmer template name used to collapse to "overlay".
+  const sku = slugifyUnicode(product.sku || 'product', 'product');
+  const tpl = slugifyUnicode(template.name || 'overlay', 'overlay');
   const mid = Number.isInteger(position) && position > 1 ? `p${position}-` : '';
   return `${sku}-${mid}${tpl}.png`;
 }
@@ -243,7 +244,7 @@ async function applyOverlayToProductImages({ template, product, scope, destinati
       const updated = await overwriteImageInPlace(product.id, img, bytes);
       outputs.push({ outputFilepath: updated?.filepath ?? img.filepath, image: updated, overwritten: true });
     } else if (destination.kind === 'saveToFolder') {
-      const base = `${slugify(product.sku || 'product', 'product')}-${slugify(template.name || 'overlay', 'overlay')}`;
+      const base = `${slugifyUnicode(product.sku || 'product', 'product')}-${slugifyUnicode(template.name || 'overlay', 'overlay')}`;
       if (destination.collect) {
         /* v0.1.27: hand the bytes BACK instead of writing them.
          *
@@ -365,10 +366,13 @@ function register({ expose, exposeLocal, emitCatalogChange }) {
 
     const ctx = product ? buildTemplateContext(product) : {};
     const result = await templateRenderer.composeDetailed({
-      inputImage, template, context: ctx, maxPx: capPx,
+      // previewJpeg: an opaque preview comes back as JPEG (`mime`), a fraction
+      // of the PNG's size and encode time. Only when capped — never full size.
+      inputImage, template, context: ctx, maxPx: capPx, previewJpeg: capPx != null,
     });
     return {
       bytes: result.bytes,
+      mime: result.mime || 'image/png',
       width: result.width,
       height: result.height,
       fullWidth: result.fullWidth,

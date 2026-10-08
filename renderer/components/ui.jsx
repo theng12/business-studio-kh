@@ -164,8 +164,15 @@ export function Modal({
   wide = false,
   size,
   closeOnBackdrop = true,
+  /* 0.1.94: a dialog whose job is still running. Esc, the backdrop and the X
+   * all stay put while `busy` is true — closing used to hide the dialog while
+   * the work carried on with nothing on screen to say so. The Esc is still
+   * swallowed (stopPropagation) so it cannot reach the page behind. */
+  busy = false,
 }) {
   const dialogRef = useRef(null);
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
 
   useEffect(() => {
     if (!open) return undefined;
@@ -174,6 +181,7 @@ export function Modal({
       // a picker's list) marks it defaultPrevented; that Esc is not ours.
       if (e.key === 'Escape' && !e.defaultPrevented) {
         e.stopPropagation();
+        if (busyRef.current) return;
         onClose?.();
       }
     };
@@ -209,7 +217,7 @@ export function Modal({
   if (!open) return null;
 
   const handleBackdropClick = (e) => {
-    if (!closeOnBackdrop) return;
+    if (!closeOnBackdrop || busy) return;
     if (e.target === e.currentTarget) onClose?.();
   };
 
@@ -244,8 +252,9 @@ export function Modal({
             type="button"
             className="modal__close"
             aria-label="Close (Esc)"
-            title="Close (Esc)"
-            onClick={onClose}
+            title={busy ? 'Wait for this to finish' : 'Close (Esc)'}
+            onClick={busy ? undefined : onClose}
+            disabled={busy}
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
               <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
@@ -319,6 +328,16 @@ export function Pagination({
             ))}
           </Select>
         </label>
+        {/* 0.1.94: First / Last and a page box — fifty pages of a 2,500-product
+            catalogue were fifty clicks of Next. */}
+        <button
+          type="button"
+          className="pagination__btn"
+          disabled={currentPage === 0}
+          onClick={() => onPageChange(0)}
+          aria-label="First page"
+          title="First page"
+        >«</button>
         <button
           type="button"
           className="pagination__btn"
@@ -326,7 +345,9 @@ export function Pagination({
           onClick={() => onPageChange(currentPage - 1)}
         >← Prev</button>
         <span className="pagination__indicator">
-          Page {currentPage + 1} of {maxPage + 1}
+          Page{' '}
+          <PageNumberBox currentPage={currentPage} maxPage={maxPage} onPageChange={onPageChange} />
+          {' '}of {maxPage + 1}
         </span>
         <button
           type="button"
@@ -334,8 +355,51 @@ export function Pagination({
           disabled={currentPage >= maxPage}
           onClick={() => onPageChange(currentPage + 1)}
         >Next →</button>
+        <button
+          type="button"
+          className="pagination__btn"
+          disabled={currentPage >= maxPage}
+          onClick={() => onPageChange(maxPage)}
+          aria-label="Last page"
+          title="Last page"
+        >»</button>
       </div>
     </div>
+  );
+}
+
+/** Clamp a typed 1-based page number to a 0-based index, or null when it is not a number. */
+export function pageIndexFromInput(raw, maxPage) {
+  const n = Math.floor(Number(String(raw ?? '').trim()));
+  if (!Number.isFinite(n) || String(raw ?? '').trim() === '') return null;
+  return Math.min(Math.max(0, n - 1), Math.max(0, maxPage));
+}
+
+/** The page box: type a page and press Enter (or leave the box) to go there. */
+function PageNumberBox({ currentPage, maxPage, onPageChange }) {
+  const [draft, setDraft] = useState(null);
+  const shown = draft ?? String(currentPage + 1);
+  function commit() {
+    const next = pageIndexFromInput(draft, maxPage);
+    setDraft(null);
+    if (next != null && next !== currentPage) onPageChange(next);
+  }
+  return (
+    <input
+      className="input pagination__page-input"
+      type="text"
+      inputMode="numeric"
+      aria-label={`Page number, 1 to ${maxPage + 1}`}
+      value={shown}
+      onFocus={(e) => e.currentTarget.select()}
+      onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ''))}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+        else if (e.key === 'Escape' && draft != null) { e.preventDefault(); setDraft(null); }
+      }}
+      style={{ width: `${Math.max(2, String(maxPage + 1).length) + 2}ch` }}
+    />
   );
 }
 

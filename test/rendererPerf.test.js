@@ -216,8 +216,10 @@ test('an own product edit refetches once, not again for its catalog echo', async
   // Local mode: main sends `catalog:changed` before the update reply lands.
   applyCatalogEvent(useAppStore.getState, { kind: 'product', id: 'p1' });
   await useAppStore.getState().updateProduct('p1', { name: 'x' });
-  assert.equal(calls.list, 1, 'updateProduct must still refresh before it resolves');
-  await delay(320);
+  // 0.1.94: the save resolves without waiting for the list; the refresh runs
+  // in the background, once — the echo's refresh satisfies the save's own.
+  assert.equal(calls.list, 0, 'updateProduct waited for the whole list before resolving');
+  await delay(800);
   assert.equal(calls.list, 1, 'the edit\'s own catalog echo refetched the list a second time');
   assert.equal(calls.dashboard, 0, 'the dashboard was fetched while it is not on screen');
 });

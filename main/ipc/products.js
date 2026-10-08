@@ -43,7 +43,9 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany }) {
   });
   expose('products:remove', (id) => {
     assertEntityInActiveCompany(products.get(id), 'Product');
-    const r = products.remove(id);
+    // `{ deleted, deletedEntryId }`: the recycle-bin entry this delete was
+    // held under, so the toast's Undo restores exactly it.
+    const r = products.removeDetailed(id);
     emitCatalogChange('product', 'remove', id);
     return r;
   });
@@ -168,6 +170,7 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany }) {
     return {
       deleted: result.deleted,
       failed: [...failed, ...result.failed],
+      deletedEntryIds: result.deletedEntryIds || [],
     };
   });
 

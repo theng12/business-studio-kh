@@ -5,6 +5,11 @@ import { Button, EmptyState } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { useCostingCaps } from '../PurchaseOrders/costingCaps.js';
 import { formatDate, timeAgo } from '../../lib/format.js';
+import { openPurchaseOrdersWithStatus } from '../PurchaseOrders/poNav.js';
+import { DEFAULT_FILTERS } from '../../store/productsDefaults.js';
+
+/** Counts read "2,500", not "2500". */
+const fmtCount = (n) => (Number(n) || 0).toLocaleString();
 
 // UI pass, 2026-10: every block on this page is the same card (`.dash-panel`)
 // with the house `.section-title`; times come from lib/format.js.
@@ -66,10 +71,10 @@ export function Dashboard() {
       />
 
       <div className="stat-grid">
-        <StatCard label="Products"  value={s.products} />
-        <StatCard label="Brands"    value={s.brands} />
-        <StatCard label="Images"    value={s.images}  hint={`${s.processed} processed`} />
-        <StatCard label="Processed" value={s.processed} hint={`of ${s.images}`} tone={s.images > 0 && s.processed === s.images ? 'emerald' : null} />
+        <StatCard label="Products"  value={fmtCount(s.products)} />
+        <StatCard label="Brands"    value={fmtCount(s.brands)} />
+        <StatCard label="Images"    value={fmtCount(s.images)}  hint={`${fmtCount(s.processed)} processed`} />
+        <StatCard label="Processed" value={fmtCount(s.processed)} hint={`of ${fmtCount(s.images)}`} tone={s.images > 0 && s.processed === s.images ? 'emerald' : null} />
       </div>
 
       {/* Each queue opens the exact company-wide criterion in the Library. */}
@@ -84,22 +89,22 @@ export function Dashboard() {
                 disabled={completeness.missingImages === 0}
                 onClick={() => { setCompanyNoImagesFilter(); setActiveModule('library'); }}
                 title={completeness.missingImages > 0 ? 'Show the products with no images' : 'Every product has at least one image'}
-              ><strong>{completeness.missingImages}</strong> no image{completeness.missingImages === 1 ? '' : 's'}</button>
+              ><strong>{fmtCount(completeness.missingImages)}</strong> no image{completeness.missingImages === 1 ? '' : 's'}</button>
               <button type="button" className="dash-attention__chip"
                 disabled={completeness.missingBarcode === 0}
                 onClick={() => { setCompanyAttentionFilter('missingBarcode'); setActiveModule('library'); }}
                 title="Show products with no barcode"
-              ><strong>{completeness.missingBarcode}</strong> no barcode</button>
+              ><strong>{fmtCount(completeness.missingBarcode)}</strong> no barcode</button>
               <button type="button" className="dash-attention__chip"
                 disabled={completeness.missingPrice === 0}
                 onClick={() => { setCompanyAttentionFilter('missingPrice'); setActiveModule('library'); }}
                 title="Show products with no price"
-              ><strong>{completeness.missingPrice}</strong> no price</button>
+              ><strong>{fmtCount(completeness.missingPrice)}</strong> no price</button>
               <button type="button" className="dash-attention__chip"
                 disabled={completeness.notExported === 0}
                 onClick={() => { setCompanyAttentionFilter('notExported'); setActiveModule('library'); }}
                 title="Show products that have not been exported"
-              ><strong>{completeness.notExported}</strong> not exported</button>
+              ><strong>{fmtCount(completeness.notExported)}</strong> not exported</button>
             </div>
           </section>
         ) : (
@@ -108,13 +113,13 @@ export function Dashboard() {
               <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.4" />
               <path d="M5 8.2l2 2 4-4.2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            <span>All {completeness.total} products have an image, barcode and price, and have been exported.</span>
+            <span>All {fmtCount(completeness.total)} products have an image, barcode and price, and have been exported.</span>
           </section>
         )
       ) : null}
 
       {canViewCosting ? (
-        <OperationsCard companyId={activeCompanyId} onOpen={() => setActiveModule('purchaseorders')} />
+        <OperationsCard companyId={activeCompanyId} onOpen={openPurchaseOrdersWithStatus} />
       ) : null}
 
       <div className="dash-grid">
@@ -137,8 +142,22 @@ export function Dashboard() {
               {recentBrands.map((b) => {
                 const iconSrc = appImageSrc(b.icon, b.updatedAt);
                 const initials = b.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+                // Opens the Library showing just this brand's products.
+                const openBrand = () => {
+                  useAppStore.setState({ productFilters: { ...DEFAULT_FILTERS, brandIds: [b.id] }, page: 0 });
+                  useAppStore.getState().refreshProducts?.();
+                  setActiveModule('library');
+                };
                 return (
-                  <li key={b.id} className="dash-list__row">
+                  <li
+                    key={b.id}
+                    className="dash-list__row dash-list__row--clickable"
+                    role="button"
+                    tabIndex={0}
+                    title={`Show ${b.name}'s products in the Library`}
+                    onClick={openBrand}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBrand(); } }}
+                  >
                     <div
                       className={`brand-icon-preview brand-icon-preview--row${iconSrc ? ' has-icon' : ''}`}
                       style={iconSrc ? undefined : { background: b.color || '#1c1c1f' }}
@@ -147,7 +166,7 @@ export function Dashboard() {
                     </div>
                     <span className="dash-list__name">{b.name}</span>
                     <span className="dash-list__meta">
-                      {b.productCount} product{b.productCount === 1 ? '' : 's'}
+                      {fmtCount(b.productCount)} product{b.productCount === 1 ? '' : 's'}
                     </span>
                   </li>
                 );
@@ -184,7 +203,7 @@ export function Dashboard() {
                     )}
                     <div className="dash-list__col">
                       <span className="dash-list__sku">{p.sku}</span>
-                      {p.name ? <span className="dash-list__name muted">{p.name}</span> : null}
+                      {p.name ? <span className="dash-list__name dash-list__name--sub">{p.name}</span> : null}
                     </div>
                     <span className="dash-list__meta">{p.imageCount}/50</span>
                     <span className="dash-list__time">{timeAgo(p.updatedAt)}</span>
@@ -273,14 +292,15 @@ function OperationsCard({ companyId, onOpen }) {
     <section className="dash-panel dash-attention dash-ops">
       <h2 className="section-title">Operations</h2>
       <div className="dash-attention__row">
-        <button type="button" className="dash-attention__chip" onClick={onOpen}>
-          <strong>{open.length}</strong> open purchase order{open.length === 1 ? '' : 's'}
+        {/* Each chip opens the PO list filtered to exactly what it counts. */}
+        <button type="button" className="dash-attention__chip" onClick={() => onOpen('open')} title="Show draft, ordered and in-transit purchase orders">
+          <strong>{fmtCount(open.length)}</strong> open purchase order{open.length === 1 ? '' : 's'}
         </button>
-        <button type="button" className="dash-attention__chip" onClick={onOpen}>
-          <strong>{inTransit.length}</strong> in transit
+        <button type="button" className="dash-attention__chip" onClick={() => onOpen('in_transit')} title="Show purchase orders in transit">
+          <strong>{fmtCount(inTransit.length)}</strong> in transit
           {nextEta ? <> · next ETA {formatDate(nextEta)}</> : null}
         </button>
-        <button type="button" className="dash-attention__chip" onClick={onOpen}>
+        <button type="button" className="dash-attention__chip" onClick={() => onOpen('owed')} title="Show ordered purchase orders that are not fully paid">
           <strong>${owedUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong> owed to suppliers
         </button>
       </div>

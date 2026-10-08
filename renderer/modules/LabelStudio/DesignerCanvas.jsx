@@ -6,7 +6,7 @@ import {
 } from './designerGeometry.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { priceEntry } from '../../lib/prices.js';
-import { labelPriceAmount, labelPriceSource } from './labelFields.js';
+import { labelLineHeight, labelPriceAmount, labelPriceSource } from './labelFields.js';
 
 /**
  * Keep a pointer gesture alive even when the finger/stylus leaves the element
@@ -744,10 +744,17 @@ function ElementPreview({ element, pxPerMm, sample }) {
         fontSize: `${Math.max(1, ptToPx(Number(element.fontSize) || 10, pxPerMm))}px`,
         fontWeight: Number(element.fontWeight) || 400,
         fontStyle: element.italic ? 'italic' : 'normal',
-        lineHeight: Number(element.lineHeight) || 1.15,
+        // 1.45 for Khmer, 1.15 otherwise — the same rule the printer uses.
+        lineHeight: labelLineHeight(element, text),
         textAlign: element.align || 'left',
         whiteSpace: element.wrap === false ? 'nowrap' : 'normal',
-        wordBreak: element.wrap === false ? 'normal' : 'break-word',
+        // Same breaking as the print document (main/studioRenderer.js), which
+        // never splits inside a word: `break-word` here wrapped "$100.00" to
+        // "$100.0 / 0" on the canvas when screen rounding made the box a
+        // hair narrower than the text, while print and Exact preview kept it
+        // on one line.
+        wordBreak: 'normal',
+        overflowWrap: 'normal',
       }}
     >
       {text}

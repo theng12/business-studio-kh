@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Badge, Select } from '../../components/ui.jsx';
 import { CompactAttribution } from '../../components/Attribution.jsx';
 import { appImageSrc } from '../../lib/imageUrl.js';
+import { ConnImg } from '../../components/ConnImg.jsx';
 import { PROCESS_STATUS_OPTIONS, findOption } from './libraryConstants.js';
 
 // Card-size presets for Grid view. The value is the `min` track size handed
@@ -270,7 +271,8 @@ const GridCard = memo(function GridCard({
   }
   function handleCheckboxChange(e) {
     e.stopPropagation();
-    if (onToggleSelected) onToggleSelected(p.id);
+    // 0.1.94: Shift-click ticks the range since the last tick.
+    if (onToggleSelected) onToggleSelected(p.id, { shift: !!e.nativeEvent?.shiftKey });
   }
 
   return (
@@ -307,7 +309,9 @@ const GridCard = memo(function GridCard({
         title={thumbSrc ? (hasMulti ? `Preview images (${p.imageCount})` : 'Preview images') : undefined}
       >
         {thumbSrc ? (
-          <img src={thumbSrc} alt="" loading="lazy" decoding="async" />
+          // 0.1.94: ConnImg retries a thumbnail that failed while a client
+          // Mac was offline, once the connection is back.
+          <ConnImg src={thumbSrc} alt="" loading="lazy" decoding="async" />
         ) : (
           // Visually clear placeholder for products without images. Icon
           // comes from the ::before pseudo-element in CSS; the label gives

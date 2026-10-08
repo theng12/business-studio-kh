@@ -348,7 +348,8 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
             assert.ok(timeoutDelays[1] > 0 && timeoutDelays[1] <= 30_000);
           }
           assert.equal(mutations, scenario === 'read' ? 0 : 1, 'no automatic write replay');
-          assert.equal(timeoutDelays[0], 120_000);
+          // 0.1.94: ordinary reads give up after 20s; writes keep 120s.
+          assert.equal(timeoutDelays[0], scenario === 'read' ? 20_000 : 120_000);
         } finally {
           AbortSignal.timeout = nativeTimeout;
           global.fetch = nativeFetch;

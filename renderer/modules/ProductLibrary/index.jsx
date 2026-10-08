@@ -40,8 +40,11 @@ import {
   ColumnsControl,
   COLUMN_DEFS,
   loadVisibleColumns,
+  priceGroupColumnDefs,
   saveVisibleColumns,
 } from './LibraryColumns.jsx';
+import { selectionRange, sortProducts, stableOrder } from './librarySort.js';
+import { entryIdsFrom, undoProductDeletes } from './undoDelete.js';
 import { PROCESS_STATUS_OPTIONS, STATUS_OPTIONS } from './libraryConstants.js';
 // v0.1.72: pure directional hover-intent test for the bulk menu's submenus.
 import { pointsTowardRect } from './menuIntent.mjs';
@@ -130,44 +133,20 @@ function saveFilterGroups(map) {
   try { localStorage.setItem(FILTER_GROUPS_STORAGE_KEY, JSON.stringify(map)); } catch {}
 }
 
-/**
- * Client-side sort for the Library. The DB already returns rows in
- * `updated_at DESC` order; switching to any other column re-sorts in-memory
- * so we don't need a separate IPC roundtrip for every header click.
- *
- * `brandsById` / `categoriesById` let us sort by the *resolved name* of the
- * lookup (so "MACEPRO" sorts under M, not by the brand's UUID). We use
- * a numeric collator (SORT_COLLATOR) so SKUs like "AV-M8101", "AV-M81",
- * "AV-M8200" sort the way a human reads them rather than lexicographically.
- */
-const SORT_GETTERS = {
-  sku:      (p) => p.sku ?? '',
-  name:     (p) => p.name ?? '',
-  brand:    (p, ix) => ix.brand.get(p.brandId)?.name ?? '',
-  category: (p, ix) => ix.category.get(p.categoryId)?.name ?? '',
-  color:    (p) => p.colorFinish ?? '',
-  images:   (p) => p.imageCount ?? 0,
-  updated:  (p) => p.updatedAt ?? 0,
-};
+/* The Library sort (sortProducts), the keep-the-order-stable rule
+ * (stableOrder) and Shift-click ranges (selectionRange) live in
+ * librarySort.js, shared with Edit in table. */
 
-/* One collator for every comparison. `localeCompare` with an options object
- * builds a fresh collator per call — sorting 2,000 SKUs took ~65 ms that way
- * and ~3.5 ms with this one. Same ordering: numeric, case/accent-insensitive. */
-const SORT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-
-function sortProducts(rows, sort, brandsById, categoriesById) {
-  const getter = SORT_GETTERS[sort.key];
-  if (!getter) return rows;
-  const ix = { brand: brandsById, category: categoriesById };
-  const dir = sort.dir === 'desc' ? -1 : 1;
-  // Slice first because Array#sort mutates in place — and our caller passes
-  // the store's products array which must stay immutable for React.
-  return rows.slice().sort((a, b) => {
-    const av = getter(a, ix);
-    const bv = getter(b, ix);
-    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
-    return SORT_COLLATOR.compare(String(av), String(bv)) * dir;
-  });
+/* 0.1.94: Filters stay open beside Details only when the user pinned them
+ * open; below this content width they retract to their rail while a product
+ * is open, so the table is not squeezed to ~390px at 1280×800. */
+const FILTERS_AUTO_COLLAPSE_BELOW = 1100;
+const FILTERS_PINNED_STORAGE_KEY = 'ProductLibrary.filtersPinned';
+function loadFiltersPinned() {
+  try { return localStorage.getItem(FILTERS_PINNED_STORAGE_KEY) === 'on'; } catch { return false; }
+}
+function saveFiltersPinned(on) {
+  try { localStorage.setItem(FILTERS_PINNED_STORAGE_KEY, on ? 'on' : 'off'); } catch {}
 }
 
 export function ProductLibrary() {
@@ -219,9 +198,40 @@ export function ProductLibrary() {
   const [panelVisible, setPanelVisible] = useState(loadPanelVisible);
   const [filtersVisible, setFiltersVisible] = useState(() => loadPanelVisible(FILTER_VISIBLE_STORAGE_KEY));
   const revealPanel = useCallback(() => { setPanelVisible(true); savePanelVisible(true); }, []);
+  /* 0.1.94: the Details column shows only while a product (or a new one) is
+   * open — an empty "No product selected" column took ~400px of a 1280px
+   * window for nothing. `panelVisible` stays the user's preference. */
+  const showDetails = panelVisible && editing !== null;
+  const [filtersPinned, setFiltersPinned] = useState(loadFiltersPinned);
+  const layoutRef = useRef(null);
+  const [layoutWidth, setLayoutWidth] = useState(null);
+  useEffect(() => {
+    const el = layoutRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0]?.contentRect?.width ?? 0);
+      setLayoutWidth((prev) => (prev === w ? prev : w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  // Filters retract to the rail while Details is open on a narrow window,
+  // unless the user pinned them open.
+  const filtersAutoCollapsed = filtersVisible && showDetails && !filtersPinned
+    && layoutWidth != null && layoutWidth < FILTERS_AUTO_COLLAPSE_BELOW;
+  const filtersShown = filtersVisible && !filtersAutoCollapsed;
   function toggleFilters() {
-    setFiltersVisible((prev) => { savePanelVisible(!prev, FILTER_VISIBLE_STORAGE_KEY); return !prev; });
+    if (filtersAutoCollapsed) {
+      // Opening the auto-collapsed rail pins Filters open beside Details.
+      setFiltersPinned(true); saveFiltersPinned(true);
+      return;
+    }
+    const next = !filtersShown;
+    setFiltersVisible(next); savePanelVisible(next, FILTER_VISIBLE_STORAGE_KEY);
+    if (!next && filtersPinned) { setFiltersPinned(false); saveFiltersPinned(false); }
   }
+  const toggleFiltersRef = useRef(toggleFilters);
+  toggleFiltersRef.current = toggleFilters;
   async function togglePanel() {
     if (!await beforePanelChange()) return;
     setPanelVisible((prev) => { savePanelVisible(!prev); return !prev; });
@@ -242,7 +252,7 @@ export function ProductLibrary() {
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.defaultPrevented || shortcutBlocked(e.target, globalThis.document)) return;
       if (e.key !== 'b' && e.key !== 'B') return;
       e.preventDefault();
-      setFiltersVisible((prev) => { savePanelVisible(!prev, FILTER_VISIBLE_STORAGE_KEY); return !prev; });
+      toggleFiltersRef.current();
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -359,7 +369,23 @@ export function ProductLibrary() {
       const res = await window.api.products.bulkRemove(ids);
       const failedCount = res?.failed?.length ?? 0;
       if (failedCount === 0) {
-        useAppStore.getState().addToast(`Deleted ${res.deleted} product${res.deleted === 1 ? '' : 's'} — restore from Settings → Recently deleted if that was a mistake.`, 'success');
+        const entryIds = entryIdsFrom(res);
+        useAppStore.getState().addToast(`Deleted ${res.deleted} product${res.deleted === 1 ? '' : 's'} — restore from Settings → Recently deleted if that was a mistake.`, 'success', entryIds.length === 0 ? undefined : {
+          // 0.1.94: Undo puts back exactly the bin entries this delete made.
+          action: {
+            label: 'Undo',
+            onClick: () => undoProductDeletes({
+              entryIds,
+              addToast: useAppStore.getState().addToast,
+              onRestored: () => {
+                const st = useAppStore.getState();
+                st.refreshProducts();
+                st.refreshAllProducts?.();
+                st.refreshDashboard?.();
+              },
+            }),
+          },
+        });
       } else {
         useAppStore.getState().addToast(
           `Deleted ${res.deleted} of ${ids.length} — ${failedCount} failed.`,
@@ -379,13 +405,24 @@ export function ProductLibrary() {
 
   // Stable identities: both reach memoized TableRow / GridCard, and a fresh
   // function each render re-rendered every visible row on every keystroke.
-  const toggleSelected = useCallback((id) => {
+  /* 0.1.94: Shift-click ticks (or clears) the range from the last ticked
+   * row, in the order on screen across pages (`orderedIdsRef`). */
+  const selectionAnchor = useRef(null);
+  const orderedIdsRef = useRef([]);
+  const toggleSelected = useCallback((id, opts = {}) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const on = !prev.has(id);
+      const ids = opts.shift && selectionAnchor.current
+        ? selectionRange(orderedIdsRef.current, selectionAnchor.current, id)
+        : [id];
+      for (const one of ids) {
+        if (on) next.add(one);
+        else next.delete(one);
+      }
       return next;
     });
+    selectionAnchor.current = id;
   }, []);
   const setManySelected = useCallback((ids, on) => {
     setSelectedIds((prev) => {
@@ -397,7 +434,9 @@ export function ProductLibrary() {
       return next;
     });
   }, []);
-  function clearSelection() { setSelectedIds(new Set()); }
+  function clearSelection() { setSelectedIds(new Set()); setShowSelectedOnly(false); selectionAnchor.current = null; }
+  // 0.1.94: "Show selected only" — the list narrows to the ticked products.
+  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
 
   // Persist the grid-size choice so it survives reloads. localStorage write
   // is cheap (synchronous string set) — fine inside an effect.
@@ -466,19 +505,59 @@ export function ProductLibrary() {
   // round-tripped through some JSON paths can come back as strings — and
   // strict equality `"0" === 0` is false, which is what was breaking the
   // "No images" filter for users with certain DB states.
+  //
+  // 0.1.94: the order is kept STABLE while the same view is on screen (see
+  // stableOrder in librarySort.js) — with "Edited ↓" every autosave used to
+  // move the edited product to the top under the user's cursor. It re-sorts
+  // when the company, a filter, the sort, the page or the page size changes,
+  // and on Refresh (orderEpoch). The default sort itself is unchanged.
+  const [orderEpoch, setOrderEpoch] = useState(0);
+  const orderKey = JSON.stringify([activeCompanyId, filters, sort, page, pageSize, orderEpoch]);
+  const shownOrder = useRef({ key: null, ids: null });
   const filteredAndSorted = useMemo(() => {
     let arr = products;
     if (filters.hasImages === 'with')    arr = arr.filter((p) => Number(p.imageCount ?? 0) > 0);
     if (filters.hasImages === 'without') arr = arr.filter((p) => Number(p.imageCount ?? 0) === 0);
-    return sortProducts(arr, sort, brandsById, categoriesById);
-  }, [products, filters.hasImages, sort, brandsById, categoriesById]);
+    const sorted = sortProducts(arr, sort, brandsById, categoriesById);
+    const previous = shownOrder.current.key === orderKey ? shownOrder.current.ids : null;
+    const out = stableOrder(previous, sorted);
+    shownOrder.current = { key: orderKey, ids: out.map((p) => p.id) };
+    return out;
+  }, [products, filters.hasImages, sort, brandsById, categoriesById, orderKey]);
+  orderedIdsRef.current = shownOrder.current.ids ?? [];
+  const listed = useMemo(
+    () => (showSelectedOnly ? filteredAndSorted.filter((p) => selectedIds.has(p.id)) : filteredAndSorted),
+    [showSelectedOnly, filteredAndSorted, selectedIds],
+  );
 
-  const total = filteredAndSorted.length;
+  const total = listed.length;
   const maxPage = Math.max(0, Math.ceil(total / pageSize) - 1);
   const currentPage = Math.min(page, maxPage);
   const pageStart = currentPage * pageSize;
   const pageEnd = Math.min(pageStart + pageSize, total);
-  const visible = filteredAndSorted.slice(pageStart, pageEnd);
+  const visible = listed.slice(pageStart, pageEnd);
+  const matchingCount = filteredAndSorted.length;
+  const allMatchingSelected = matchingCount > 0 && selectedIds.size >= matchingCount
+    && filteredAndSorted.every((p) => selectedIds.has(p.id));
+  const allVisibleSelected = visible.length > 0 && visible.every((p) => selectedIds.has(p.id));
+  function selectAllMatching() {
+    setManySelected(filteredAndSorted.map((p) => p.id), true);
+  }
+  // A selection the list no longer shows can't be narrowed to.
+  useEffect(() => {
+    if (showSelectedOnly && selectedIds.size === 0) setShowSelectedOnly(false);
+  }, [showSelectedOnly, selectedIds]);
+  // 0.1.94: price-group columns for this company (Columns picker + table).
+  const companies = useAppStore((s) => s.companies);
+  const priceGroups = useMemo(
+    () => (companies || []).find((c) => c.id === activeCompanyId)?.priceGroups ?? [],
+    [companies, activeCompanyId],
+  );
+  const priceGroupCols = useMemo(
+    () => priceGroups.filter((g) => g && g.key).map((g) => ({ key: g.key, label: g.label || g.key })),
+    [priceGroups],
+  );
+  const columnDefs = useMemo(() => [...COLUMN_DEFS, ...priceGroupColumnDefs(priceGroups)], [priceGroups]);
 
   const brandFilterEmpty = !filters.brandIds || filters.brandIds.length === 0;
   const categoryFilterEmpty = !filters.categoryIds || filters.categoryIds.length === 0;
@@ -520,6 +599,24 @@ export function ProductLibrary() {
     }
   }
 
+  /* 0.1.94: a company switch ends this company's selection. The panel kept
+   * editing the OLD company's product and the bulk selection kept its ids, so
+   * a bulk Delete targeted products no longer on screen. The switch itself
+   * already flushed the panel's pending save (registerCompanySwitchFlusher in
+   * ProductForm, awaited by the store before activeCompanyId changes), so
+   * this only forgets. Declared before the pending-product effect below so a
+   * "open this product in that company" jump lands after the reset. */
+  const companyRef = useRef(activeCompanyId);
+  useEffect(() => {
+    if (companyRef.current === activeCompanyId) return;
+    companyRef.current = activeCompanyId;
+    selectionIntent.current += 1;
+    setEditing(null);
+    setSelectedIds(new Set());
+    setShowSelectedOnly(false);
+    selectionAnchor.current = null;
+    setProcessingProduct(null);
+  }, [activeCompanyId]);
   // Stable row handlers so memoized rows don't re-render on every parent
   // state change (filter typing, page change, etc.). Without useCallback the
   // arrow functions get a fresh identity each render, defeating React.memo.
@@ -567,11 +664,19 @@ export function ProductLibrary() {
   // (table row, side panel footer) don't need to change.
   const handleProcess = useCallback((p) => setProcessingProduct(p), []);
 
+  /* 0.1.94: the Workspace's ◀ ▶ step through the list as the Library shows
+   * it now — filtered and sorted — frozen at this moment (navigation.js). */
   const goToWorkspace = useCallback(() => {
     if (!processingProduct) return;
-    openProductInWorkspace(processingProduct.id);
+    openProductInWorkspace(processingProduct.id, { navIds: orderedIdsRef.current.slice() });
     setProcessingProduct(null);
   }, [processingProduct, openProductInWorkspace]);
+  // Double-click a row's thumbnail: straight to Image Workspace (after the
+  // panel's pending save, like any other way of leaving the product).
+  const openInWorkspace = useCallback(async (p) => {
+    if (!p || !await beforePanelChange()) return;
+    openProductInWorkspace(p.id, { navIds: orderedIdsRef.current.slice() });
+  }, [beforePanelChange, openProductInWorkspace]);
 
   const goToAiStudio = useCallback(() => {
     if (!processingProduct) return;
@@ -702,6 +807,15 @@ export function ProductLibrary() {
                 { label: 'Google Shopping feed', hint: 'Google Merchant Center format.', onClick: () => handleExportCsv('google') },
               ]}
             />
+            {/* 0.1.94: reachable without ticking a product first — with
+                nothing ticked it opens on the current Library filter. */}
+            <Button
+              onClick={() => setBulkTableOpen(true)}
+              disabled={noCompanySelected}
+              title={selectedIds.size > 0
+                ? `Edit the ${selectedIds.size} selected product${selectedIds.size === 1 ? '' : 's'} in a spreadsheet-style table`
+                : 'Edit the products in the current Library view in a spreadsheet-style table'}
+            >Edit in table…</Button>
             <Button variant="primary" onClick={startNewProduct}>+ New product</Button>
           </>
         }
@@ -737,6 +851,10 @@ export function ProductLibrary() {
           </>
         ) : null}
         <div className="toolbar__spacer" />
+        {/* 0.1.94: the view switch and the panel/column/refresh buttons wrap
+            as ONE group, so a narrow window never strands Details / Refresh
+            alone on a second row. */}
+        <div className="lib-toolbar__end">
         <div className="segments" role="group" aria-label="View">
           <button
             type="button"
@@ -753,14 +871,18 @@ export function ProductLibrary() {
             aria-pressed={view === 'grid'}
           >Grid</button>
         </div>
-        <button type="button" className={`lib-toolbar-btn lib-filter-toggle${filtersVisible ? ' is-active' : ''}`}
-          onClick={toggleFilters} title={filtersVisible ? 'Hide filters (⌘/Ctrl+B)' : 'Show filters (⌘/Ctrl+B)'}
-          aria-label={filtersVisible ? 'Hide filters' : 'Show filters'} aria-pressed={filtersVisible}>
+        <button type="button" className={`lib-toolbar-btn lib-filter-toggle${filtersShown ? ' is-active' : ''}`}
+          onClick={toggleFilters}
+          title={filtersAutoCollapsed ? 'Show filters beside the details (⌘/Ctrl+B) — keeps them open' : filtersShown ? 'Hide filters (⌘/Ctrl+B)' : 'Show filters (⌘/Ctrl+B)'}
+          aria-label={filtersShown ? 'Hide filters' : 'Show filters'} aria-pressed={filtersShown}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 3.5h11l-4.25 5v4l-2.5 1.25V8.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /></svg>
           <span>Filters</span>
         </button>
         <button type="button" className={`lib-toolbar-btn lib-panel-toggle${panelVisible ? ' is-active' : ''}`}
-          onClick={togglePanel} title={panelVisible ? 'Hide product details' : 'Show product details'}
+          onClick={togglePanel}
+          title={panelVisible
+            ? (showDetails ? 'Hide product details' : 'Hide product details (they open with a product)')
+            : 'Show product details when a product is open'}
           aria-label={panelVisible ? 'Hide product details' : 'Show product details'} aria-pressed={panelVisible}>
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1" stroke="currentColor" strokeWidth="1.4" /><path d="M10 3v10" stroke="currentColor" strokeWidth="1.4" /></svg>
           <span>Details</span>
@@ -770,6 +892,7 @@ export function ProductLibrary() {
           // table view (grid card content is curated). Lives in
           // a small popover; closes on outside click + Esc.
           <ColumnsControl
+            defs={columnDefs}
             visibleCols={visibleCols}
             onToggle={toggleColumn}
             onReset={resetColumns}
@@ -783,20 +906,21 @@ export function ProductLibrary() {
             misses an edge case (like the AI-promote updated_at
             bug fixed in this same release). Refreshes the same
             slices the catalog dispatcher does. */}
-        <RefreshButton />
+        <RefreshButton onRefreshed={() => setOrderEpoch((n) => n + 1)} />
+        </div>
       </div>
 
-      <div className={`lib-layout${panelVisible ? ' lib-layout--has-panel' : ''}${filtersVisible ? '' : ' lib-layout--filters-collapsed'}`}>
-        <aside className={`lib-filters${filtersVisible ? '' : ' is-collapsed'}`} aria-label="Filters">
+      <div ref={layoutRef} className={`lib-layout${showDetails ? ' lib-layout--has-panel' : ''}${filtersShown ? '' : ' lib-layout--filters-collapsed'}`}>
+        <aside className={`lib-filters${filtersShown ? '' : ' is-collapsed'}`} aria-label="Filters">
           <div className="lib-filters__head">
             <button type="button" className="lib-filters__collapse" onClick={toggleFilters}
-              title={filtersVisible ? 'Hide filters (⌘/Ctrl+B)' : 'Show filters (⌘/Ctrl+B)'}
-              aria-label={filtersVisible ? 'Hide filters' : 'Show filters'} aria-pressed={!filtersVisible}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d={filtersVisible ? 'M10 4 6 8l4 4' : 'M6 4l4 4-4 4'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+              title={filtersAutoCollapsed ? 'Show filters beside the details (⌘/Ctrl+B) — keeps them open' : filtersShown ? 'Hide filters (⌘/Ctrl+B)' : 'Show filters (⌘/Ctrl+B)'}
+              aria-label={filtersShown ? 'Hide filters' : 'Show filters'} aria-pressed={!filtersShown}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d={filtersShown ? 'M10 4 6 8l4 4' : 'M6 4l4 4-4 4'} stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>
             </button>
-            {filtersVisible ? <span className="lib-filters__title">Filters</span> : null}
+            {filtersShown ? <span className="lib-filters__title">Filters</span> : null}
           </div>
-          {filtersVisible ? (
+          {filtersShown ? (
             <div className="lib-filters__body">
               {/* v0.1.67: reset moved from the bottom of the column to
                   the top, directly under the search box, so it is
@@ -895,8 +1019,24 @@ export function ProductLibrary() {
             <>
               {selectedIds.size > 0 ? (
                 <div className="lib-bulk-toolbar">
-                  <span className="lib-bulk-toolbar__count">
-                    {selectedIds.size} selected
+                  <span className="lib-bulk-toolbar__lead">
+                    <span className="lib-bulk-toolbar__count">
+                      {selectedIds.size} selected
+                    </span>
+                    {/* 0.1.94: select every product the filter matches (the
+                        list is already in memory), and narrow to the ticked. */}
+                    {!allMatchingSelected && allVisibleSelected && matchingCount > visible.length ? (
+                      <button type="button" className="lib-bulk-toolbar__link" onClick={selectAllMatching}>
+                        Select all {matchingCount.toLocaleString()} matching
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={`lib-bulk-toolbar__chip${showSelectedOnly ? ' is-active' : ''}`}
+                      aria-pressed={showSelectedOnly}
+                      onClick={() => { setShowSelectedOnly((v) => !v); setPage(0); }}
+                      title="List only the ticked products"
+                    >Selected only</button>
                   </span>
                   <div className="lib-bulk-toolbar__spacer" />
                   {/* UI pass, 2026-10: the count lives once, in "N selected";
@@ -922,10 +1062,13 @@ export function ProductLibrary() {
                     disabled={bulkDeleting}
                     sections={[
                       {
-                        label: 'Non-destructive · original kept',
+                        // 0.1.94: "by default" — Apply overlay can overwrite
+                        // the files in place when that destination is picked
+                        // (it asks first, naming the count).
+                        label: 'Non-destructive by default · original kept',
                         items: [
                           { label: 'Remove background',  hint: 'Cutout via @imgly. Adds the result as a new image and promotes it to main; original demotes to #2.', onClick: () => setBulkBgOpen(true) },
-                          { label: 'Apply overlay',      hint: 'Composite an Overlay template onto the main image. Defaults to Append (new image); Replace main is opt-in.', onClick: () => setBulkOverlayOpen(true) },
+                          { label: 'Apply overlay',      hint: 'Composite an Overlay template onto product images. Adds a new image by default; "Overwrite each image in place" replaces the files and asks first.', onClick: () => setBulkOverlayOpen(true) },
                           { label: 'Social post',        hint: 'Render a Social Grid template from these products into one or more post-sized images (saved to a folder, and optionally kept as a Social Grid post).', onClick: () => setBulkSocialOpen(true) },
                         ],
                       },
@@ -1004,6 +1147,8 @@ export function ProductLibrary() {
                   onOpen={handleOpen}
                   onProcess={handleProcess}
                   onPreview={handlePreview}
+                  onOpenWorkspace={openInWorkspace}
+                  priceGroupCols={priceGroupCols}
                   sort={sort}
                   onSort={setProductSort}
                   selectedProductId={selectedProductId}
@@ -1047,9 +1192,9 @@ export function ProductLibrary() {
           )}
         </section>
 
-        <div className="lib-inspector" hidden={!panelVisible}>
+        <div className="lib-inspector" hidden={!showDetails}>
           <ProductForm
-            visible={panelVisible}
+            visible={showDetails}
             product={editingProduct}
             isCreating={isCreatingProduct}
             createKey={createNonce}
@@ -1079,6 +1224,7 @@ export function ProductLibrary() {
         open={bulkTableOpen}
         productIds={Array.from(selectedIds)}
         filters={filters}
+        orderedIds={bulkTableOpen ? orderedIdsRef.current : null}
         onClose={() => setBulkTableOpen(false)}
         onDone={() => { setBulkTableOpen(false); clearSelection(); }}
       />
@@ -1305,7 +1451,7 @@ function HeaderMenu({ label, title, items }) {
  * positive feedback that the click did something rather than
  * flashing on-and-off in < 50ms on a local DB hit.
  */
-function RefreshButton() {
+function RefreshButton({ onRefreshed }) {
   const refreshProducts = useAppStore((s) => s.refreshProducts);
   const refreshAllProducts = useAppStore((s) => s.refreshAllProducts);
   const refreshBrands = useAppStore((s) => s.refreshBrands);
@@ -1324,6 +1470,9 @@ function RefreshButton() {
         refreshDashboard?.(),
       ]);
     } finally {
+      // 0.1.94: a manual refresh also re-sorts the list (the order is kept
+      // stable while you work — see stableOrder).
+      onRefreshed?.();
       // Minimum visible spin so the user sees feedback.
       const elapsed = Date.now() - startedAt;
       if (elapsed < 600) await new Promise((r) => setTimeout(r, 600 - elapsed));

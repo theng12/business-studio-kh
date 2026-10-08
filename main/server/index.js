@@ -110,6 +110,8 @@ function getRegisteredChannels() {
 
 let _server = null;
 let _bindings = null; // { port, addresses: string[] }
+// A client gets two heartbeats (60s) to answer before it is dropped.
+const WS_HEARTBEAT_MS = 30_000;
 let _wss = null;
 const _wsHeartbeats = new Map();
 
@@ -146,12 +148,52 @@ async function readJsonBody(req) {
   });
 }
 
-function sendJson(res, status, body) {
-  res.writeHead(status, {
+/* Connectivity pass (0.1.94): compress big JSON answers. A 300-product
+ * `products:list` is ~370 KB of JSON and ~21 KB gzipped; over a phone's
+ * Tailscale link that is the difference between "instant" and "a few
+ * seconds". Small answers go out as-is (gzip would only add CPU and a
+ * header). Only when the caller says it accepts gzip — Node's fetch (the
+ * client Mac) and every browser do. */
+const GZIP_MIN_BYTES = 8 * 1024;
+
+function acceptsGzip(req) {
+  return /\bgzip\b/i.test(String(req?.headers?.['accept-encoding'] || ''));
+}
+
+// Above this the payload is almost all base64 image bytes (a rendered
+// preview, an uploaded file echoed back), which gzip barely shrinks.
+const GZIP_MAX_BYTES = 32 * 1024 * 1024;
+
+function writePlain(res, status, headers, buf) {
+  res.writeHead(status, { ...headers, 'Content-Length': buf.length });
+  res.end(buf);
+}
+
+/** Write a response body, gzipped off the event loop when that pays. */
+function sendBody(req, res, status, headers, payload) {
+  const buf = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), 'utf8');
+  if (buf.length < GZIP_MIN_BYTES || buf.length > GZIP_MAX_BYTES || !acceptsGzip(req)) {
+    writePlain(res, status, headers, buf);
+    return;
+  }
+  require('node:zlib').gzip(buf, { level: 6 }, (err, zipped) => {
+    if (res.headersSent || res.destroyed) return;
+    if (err) { writePlain(res, status, headers, buf); return; }
+    res.writeHead(status, {
+      ...headers,
+      'Content-Encoding': 'gzip',
+      'Vary': headers.Vary ? `${headers.Vary}, Accept-Encoding` : 'Accept-Encoding',
+      'Content-Length': zipped.length,
+    });
+    res.end(zipped);
+  });
+}
+
+function sendJson(res, status, body, req = null) {
+  sendBody(req, res, status, {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store',
-  });
-  res.end(JSON.stringify(body));
+  }, JSON.stringify(body));
 }
 
 function authenticate(req) {
@@ -299,6 +341,65 @@ async function serveAsset(req, res, urlPath, dataDir) {
   });
 }
 
+/** This Mac's name as other Macs see it: the Bonjour name without `.local`. */
+function serverDisplayName() {
+  try {
+    const raw = String(require('node:os').hostname() || '').trim();
+    return raw.replace(/\.local$/i, '') || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/* ─── Keep the server Mac awake while it serves ─────────────────────
+ * Connectivity pass (0.1.94). A Mac that idles to sleep takes the whole
+ * shop offline: the client Macs go red and the phone viewer stops loading.
+ * While the HTTP server is listening we hold Electron's
+ * 'prevent-app-suspension' blocker (the system may still turn the display
+ * off; it just does not sleep). Settings → Multi-Mac → "Keep this Mac awake
+ * while serving" turns it off; the setting is re-read every few seconds, so
+ * the switch takes effect without a restart. Released when the server stops. */
+const KEEP_AWAKE_RECHECK_MS = 5_000;
+let _keepAwakeId = null;
+let _keepAwakeTimer = null;
+
+function keepAwakeWanted() {
+  try { return require('../config').loadConfig().serverKeepAwake !== false; }
+  catch (_) { return true; }
+}
+
+function applyKeepAwake(listening) {
+  let powerSaveBlocker = null;
+  try { ({ powerSaveBlocker } = require('electron')); } catch (_) { /* not in Electron */ }
+  if (!powerSaveBlocker || typeof powerSaveBlocker.start !== 'function') return;
+  const want = listening && keepAwakeWanted();
+  const holding = _keepAwakeId != null && powerSaveBlocker.isStarted(_keepAwakeId);
+  if (want && !holding) {
+    _keepAwakeId = powerSaveBlocker.start('prevent-app-suspension');
+    process.stdout.write('[server] keeping this Mac awake while serving\n');
+  } else if (!want && holding) {
+    powerSaveBlocker.stop(_keepAwakeId);
+    _keepAwakeId = null;
+    process.stdout.write('[server] no longer keeping this Mac awake\n');
+  }
+}
+
+function startKeepAwake() {
+  applyKeepAwake(true);
+  if (_keepAwakeTimer) return;
+  _keepAwakeTimer = setInterval(() => applyKeepAwake(!!_server), KEEP_AWAKE_RECHECK_MS);
+  _keepAwakeTimer.unref?.();
+}
+
+function stopKeepAwake() {
+  if (_keepAwakeTimer) { clearInterval(_keepAwakeTimer); _keepAwakeTimer = null; }
+  applyKeepAwake(false);
+}
+
+function getKeepAwakeStatus() {
+  return { wanted: keepAwakeWanted(), holding: _keepAwakeId != null };
+}
+
 function isPathWithinRoot(root, candidate) {
   const rel = path.relative(root, candidate);
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
@@ -336,7 +437,10 @@ async function handleRequest(req, res, dataDir) {
     // version correctly in both dev and production. Inline-required
     // to match the lazy-require style used elsewhere in this file.
     const appVersion = require('electron').app.getVersion();
-    sendJson(res, 200, { ok: true, app: 'media-studio-kh', version: appVersion });
+    // Connectivity pass: the server Mac's name, so a client's chip can say
+    // which Mac it is connected to. The same name Bonjour already announces
+    // on the network (`<name>.local`), so this reveals nothing new.
+    sendJson(res, 200, { ok: true, app: 'media-studio-kh', version: appVersion, name: serverDisplayName() });
     return;
   }
 
@@ -378,7 +482,7 @@ async function handleRequest(req, res, dataDir) {
       // symptom of the v0.26.52 packaging bug. Never let it be silent.
       logSoftFailure('server', 'read app version for /api/ping', err);
     }
-    res.writeHead(200, {
+    sendBody(req, res, 200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-store, max-age=0, must-revalidate',
       'Pragma': 'no-cache',
@@ -386,8 +490,7 @@ async function handleRequest(req, res, dataDir) {
       // Surfaces the running version in DevTools / `curl -I` so future
       // "is my iPad stale?" questions can be answered in 5 seconds.
       'X-App-Version': version,
-    });
-    res.end(html);
+    }, html);
     return;
   }
 
@@ -410,7 +513,7 @@ async function handleRequest(req, res, dataDir) {
     sendJson(res, 200, {
       user: { id: user.id, name: user.name, role: user.role, caps: capsForRole(user.role) },
       registeredChannels: getRegisteredChannels(),
-    });
+    }, req);
     return;
   }
 
@@ -464,8 +567,9 @@ async function handleRequest(req, res, dataDir) {
     // viewer trying to hit `products:update` gets "Forbidden" rather than a
     // misleading "Bad request" if the payload also happens to be wrong.
     // Local IPC is bypassed entirely — this only fires for /api/rpc.
-    const { isAllowed } = require('../util/permissions');
-    if (!isAllowed(user.role, channel)) {
+    const { isAllowed, impliedChannels } = require('../util/permissions');
+    if (!isAllowed(user.role, channel)
+      || (impliedChannels?.(channel, body.args) ?? []).some((c) => !isAllowed(user.role, c))) {
       // v0.1.89: a plain sentence — this text is shown as-is in a toast on
       // the other Mac and on the phone. The role and the channel name are
       // in the server's own log instead.
@@ -479,7 +583,7 @@ async function handleRequest(req, res, dataDir) {
         user.id,
         () => handler(deserializeFromClient(body.args)),
       );
-      sendJson(res, 200, { result: serializeResultForWire(result) });
+      sendJson(res, 200, { result: serializeResultForWire(result) }, req);
     } catch (err) {
       // Surface the error message but not the stack trace by default.
       sendJson(res, 500, { error: err?.message || String(err) });
@@ -504,7 +608,7 @@ async function handleRequest(req, res, dataDir) {
  * { port, addresses } binding info, or rejects if the port is taken.
  * Listens on 0.0.0.0 so Tailscale / LAN clients can reach it.
  */
-function bootServer({ port, dataDir }) {
+function bootServer({ port, dataDir, wsHeartbeatMs = WS_HEARTBEAT_MS }) {
   if (_server) return Promise.resolve(_bindings);
   return new Promise((resolve, reject) => {
     const srv = http.createServer((req, res) => {
@@ -591,13 +695,33 @@ function bootServer({ port, dataDir }) {
           // Heartbeat ping every 30s so dead connections (laptop lid
           // closed, network drop) are detected and cleaned up
           // instead of lingering in _wsClients forever.
+          //
+          // Connectivity pass (0.1.94): sending a ping alone detected
+          // nothing — a half-open socket accepts writes into the kernel
+          // buffer without complaint. Standard isAlive/pong check now: a
+          // client that has not answered (pong, its own ping, or any
+          // message) since the previous tick is terminated, which also
+          // drops it from presence.
+          ws.isAlive = true;
+          const markAlive = () => { ws.isAlive = true; };
+          ws.on('pong', markAlive);
+          ws.on('ping', markAlive);
+          ws.on('message', markAlive);
           const interval = setInterval(() => {
             if (ws.readyState !== 1) {
               clearInterval(interval);
               return;
             }
+            if (ws.isAlive === false) {
+              process.stdout.write(`[server] ws unresponsive, dropping: ${user.name}\n`);
+              clearInterval(interval);
+              try { ws.terminate(); } catch (_) {}
+              events.removeWsClient(ws);
+              return;
+            }
+            ws.isAlive = false;
             try { ws.ping(); } catch (_) {}
-          }, 30_000);
+          }, wsHeartbeatMs);
           _wsHeartbeats.set(ws, interval);
           ws.on('close', () => {
             clearInterval(_wsHeartbeats.get(ws));
@@ -614,6 +738,7 @@ function bootServer({ port, dataDir }) {
       _server = srv;
       _bindings = { port, addresses: collectLocalAddresses() };
       process.stdout.write(`[server] listening on port ${port}\n`);
+      try { startKeepAwake(); } catch (err) { logSoftFailure('server', 'keep this Mac awake', err); }
       resolve(_bindings);
     });
   });
@@ -621,6 +746,7 @@ function bootServer({ port, dataDir }) {
 
 function stopServer() {
   if (!_server) return Promise.resolve();
+  try { stopKeepAwake(); } catch (err) { logSoftFailure('server', 'release keep-awake', err); }
   const events = require('../events');
   events.closeAllWsClients({ terminate: true });
   for (const interval of _wsHeartbeats.values()) clearInterval(interval);
@@ -640,7 +766,9 @@ function stopServer() {
 }
 
 function getStatus() {
-  return _bindings ? { running: true, ..._bindings } : { running: false };
+  return _bindings
+    ? { running: true, ..._bindings, keepAwake: getKeepAwakeStatus().holding }
+    : { running: false };
 }
 
 /**

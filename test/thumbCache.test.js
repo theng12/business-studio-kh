@@ -103,7 +103,8 @@ test('Library list views ask for thumbnails, lazily; full-size viewers do not', 
   const grid = await fsp.readFile(path.join(ROOT, 'renderer/modules/ProductLibrary/LibraryGrid.jsx'), 'utf8');
   assert.match(table, /appImageSrc\(p\.mainImagePath, p\.updatedAt, \{ w: 96 \}\)\} alt="" loading="lazy" decoding="async"/);
   assert.match(grid, /appImageSrc\(activePath, p\.updatedAt, \{ w: \d+ \}\)/);
-  assert.match(grid, /<img src=\{thumbSrc\} alt="" loading="lazy" decoding="async" \/>/);
+  // 0.1.94: ConnImg is the <img> that retries after a client-mode reconnect.
+  assert.match(grid, /<(?:img|ConnImg) src=\{thumbSrc\} alt="" loading="lazy" decoding="async" \/>/);
   const lightbox = await fsp.readFile(path.join(ROOT, 'renderer/components/Lightbox.jsx'), 'utf8');
   assert.doesNotMatch(lightbox, /\{\s*w:\s*\d+\s*\}/, 'the Lightbox must keep showing the original');
 });

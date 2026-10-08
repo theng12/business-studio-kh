@@ -9,9 +9,10 @@ const productsDb = require('../db/products');
 const brandsDb = require('../db/brands');
 const companies = require('../db/companies');
 const { labelsDocument, barcodeUri } = require('../studioRenderer');
+const { outputBaseName } = require('../util/outputNames');
 const renderer = require('../renderWindow');
 const events = require('../events');
-const { slugify } = require('../util/slug');
+const { slugify, slugifyUnicode } = require('../util/slug');
 const imageManager = require('../imageManager');
 const { writeUniqueFile } = require('../util/exclusiveFile');
 
@@ -199,8 +200,10 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     try {
       if (format === 'pdf') {
         const html = await labelsDocument({ template, products, brands, layout });
-        const target = path.join(outputFolder, `${slugify(template.name, 'labels')}-${Date.now()}.pdf`);
-        await renderer.toPdf(html, target, { orientation: layout.orientation });
+        // Khmer template names survive; readable date; never over an earlier file.
+        // The name is claimed atomically at write time (unique), so two runs in
+        // the same minute get `-2` instead of overwriting each other.
+        const target = await renderer.toPdf(html, path.join(outputFolder, `${outputBaseName(template.name, 'labels')}.pdf`), { orientation: layout.orientation, unique: true });
         made.push(target);
         events.broadcast('progress:event', { id: opId, kind: 'labels', done: products.length, total: products.length, phase: 'finishing', label: template.name });
       } else {
@@ -217,7 +220,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
           const product = products[i];
           return {
             html: await labelsDocument({ template, products: [product], brands, layout: { mode: 'single' } }),
-            outputPath: path.join(outputFolder, `${slugify(product.sku || product.name, 'label')}-${slugify(template.name, 'label')}.${ext}`),
+            outputPath: path.join(outputFolder, `${slugifyUnicode(product.sku || product.name, 'label')}-${slugifyUnicode(template.name, 'label')}.${ext}`),
           };
         }, { format, width: Math.ceil(template.widthMm * scale), height: Math.ceil(template.heightMm * scale), quality: 92, dpi, zoomFactor: dpi / 96, unique: true }, (i, target) => {
           made.push(target);

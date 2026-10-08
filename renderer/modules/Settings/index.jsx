@@ -397,7 +397,7 @@ export function Settings() {
             </div>
           ) : (
           <div className="setting-control-row">
-            <Input value={config.dataDir} readOnly onChange={() => {}} />
+            <Input value={config.dataDir} readOnly onChange={() => {}} title={config.dataDir} aria-label="Data folder path" />
             {config.dataDirIsCloud ? (
               <span className="data-folder-tag data-folder-tag--cloud" title="This folder is inside iCloud Drive">
                 <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">

@@ -24,7 +24,8 @@ const STATES = [
     color: '#10b981',
     body:
       'Your latest ping to the server succeeded. Reads and writes are flowing. '
-      + 'Live updates from other users come in over the WebSocket as they happen.',
+      + 'Live updates from other users come in as they happen. This Mac checks '
+      + 'the server every 12 seconds and notices within about half a minute if it goes away.',
   },
   {
     key: 'connecting',
@@ -48,8 +49,8 @@ const STATES = [
     body:
       'The server is reachable but the last /api/ping returned a 5xx error. '
       + 'The connection itself is fine — something inside the server software '
-      + 'briefly returned an error response. Usually clears itself in the next '
-      + '30 seconds. If you see this state persist for minutes at a time, ask '
+      + 'briefly returned an error response. Usually clears itself within '
+      + 'a few seconds. If you see this state persist for minutes at a time, ask '
       + 'the server admin to check the crash.log on the server Mac '
       + '(Settings → About → Open logs folder) for what went wrong.',
   },
@@ -66,7 +67,8 @@ const STATES = [
     label: 'Disconnected',
     color: '#ef4444',
     body:
-      'The last ping or RPC call failed. Likely causes (in order of frequency): '
+      'The server Mac stopped answering. This Mac keeps retrying every few seconds and '
+      + 'reconnects on its own; edits won\'t save until it does. Likely causes (in order of frequency): '
       + '(1) the server Mac is off / sleeping / not running the app, '
       + '(2) the Wi-Fi network between you and the server changed, '
       + '(3) the server URL changed (it includes the server\'s IP, which can '
@@ -101,16 +103,18 @@ export function ConnectionLegendModal({ open, onClose }) {
     setTesting(true);
     setTestResult(null);
     try {
-      // Re-fetch the connection state — main side polls /api/ping
-      // on a timer; we just refresh our snapshot of it. There's no
-      // explicit "ping now" IPC, but reading state pulls the most
-      // recent push value the main process broadcast.
-      const fresh = await window.api?.client?.connectionState?.();
+      // 0.1.94: a real check. This used to re-read the cached state from the
+      // last background ping — "Test connection now" tested nothing. Now main
+      // pings the server this moment, reconnects live updates if they are
+      // down, and returns what that ping found.
+      const fresh = await window.api?.client?.reconnectNow?.('test');
       if (fresh) {
         useAppStore.setState({ clientConnection: fresh });
         setTestResult(fresh.status === 'connected'
-          ? 'Server reachable.'
-          : `Still ${fresh.status}: ${fresh.lastError || 'no further detail'}.`);
+          ? `The server Mac answered just now${fresh.serverName ? ` (${fresh.serverName})` : ''}.`
+          : fresh.status === 'degraded'
+            ? `The server Mac answered, but with an error: ${fresh.lastError || 'no further detail'}`
+            : `No answer from the server Mac. ${fresh.lastError || ''}`.trim());
       } else {
         setTestResult('Connection state unavailable.');
       }
@@ -147,6 +151,12 @@ export function ConnectionLegendModal({ open, onClose }) {
                 </button>
               </div>
               <dl className="conn-legend__detail">
+                {clientConnection?.serverName ? (
+                  <>
+                    <dt>Server Mac</dt>
+                    <dd>{clientConnection.serverName}</dd>
+                  </>
+                ) : null}
                 {clientConnection?.serverVersion ? (
                   <>
                     <dt>Server version</dt>

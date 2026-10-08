@@ -289,7 +289,9 @@ function loadBrowserHarness({
       pendingReorders.shift().resolve(response(true));
     },
     asset(path) {
-      const found = pendingAssets.find((entry) => entry.url.endsWith('/assets/' + path) && !entry.done);
+      // 0.1.94: gallery tiles ask for the server's thumbnail (`?w=640`), so
+      // match on the path and ignore the query.
+      const found = pendingAssets.find((entry) => entry.url.split('?')[0].endsWith('/assets/' + path) && !entry.done);
       assert.ok(found, `pending asset ${path}`);
       found.done = true;
       found.request.resolve(response(null));

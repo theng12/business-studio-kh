@@ -78,7 +78,8 @@ const products = [
 
 test('a catalog PREVIEW references photos by app-image URL, with the cache stamp', () => {
   const html = renderer.buildCatalogHtml({ project, products }, { preview: true });
-  const expected = `app-image://local/${encodeURIComponent(PHOTO_REL)}?v=1700000000000`;
+  // `w=640`: the preview asks for the cached thumbnail, not the original (§9).
+  const expected = `app-image://local/${encodeURIComponent(PHOTO_REL)}?v=1700000000000&w=640`;
   assert.ok(html.includes(`src="${expected}"`), 'the photo is an app-image URL');
   assert.ok(!html.includes('data:image/'), 'no photo is inlined as base64');
   assert.ok(html.includes('No image'), 'a missing file still shows the placeholder');

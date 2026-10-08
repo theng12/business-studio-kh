@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { exportSubfolder } = require('../util/mediaPaths');
 const { getDb } = require('./index');
 const { clampIndexPad, sanitizeIndexPrefix } = require('../util/exportIndex');
+const { normalizeProfileImageScope, serializeProfileImageScope } = require('../util/exportScope');
 
 function rowToProfile(row) {
   if (!row) return null;
@@ -23,6 +24,9 @@ function rowToProfile(row) {
     // keep exporting the same names they did before this column existed.
     indexPad: row.index_pad,
     indexPrefix: row.index_prefix,
+    // v0.1.94: which of each product's images this profile exports. NULL in
+    // legacy rows reads as { mode: 'all' } — what every run did before.
+    imageScope: normalizeProfileImageScope(row.image_scope),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -55,12 +59,12 @@ function create(input) {
       `INSERT INTO export_profiles (
          id, company_id, name, marketplace, width, height, format, quality,
          background_color, color_profile, naming_pattern, output_subfolder,
-         index_pad, index_prefix,
+         index_pad, index_prefix, image_scope,
          created_at, updated_at
        ) VALUES (
          @id, @companyId, @name, @marketplace, @width, @height, @format, @quality,
          @backgroundColor, @colorProfile, @namingPattern, @outputSubfolder,
-         @indexPad, @indexPrefix,
+         @indexPad, @indexPrefix, @imageScope,
          @createdAt, @updatedAt
        )`,
     )
@@ -79,6 +83,7 @@ function create(input) {
       outputSubfolder: outputSubfolder || null,
       indexPad:        clampIndexPad(input.indexPad),
       indexPrefix:     sanitizeIndexPrefix(input.indexPrefix),
+      imageScope:      serializeProfileImageScope(input.imageScope),
       createdAt:       ts,
       updatedAt:       ts,
     });
@@ -98,6 +103,7 @@ const UPDATABLE = {
   outputSubfolder: { col: 'output_subfolder', transform: (v) => exportSubfolder(v) || null },
   indexPad:        { col: 'index_pad',    transform: clampIndexPad },
   indexPrefix:     { col: 'index_prefix', transform: sanitizeIndexPrefix },
+  imageScope:      { col: 'image_scope',  transform: serializeProfileImageScope },
 };
 
 function update(id, patch) {

@@ -198,13 +198,41 @@ function PagerIcon({ dir }) {
   );
 }
 
+/* The folder Social Grid images were last exported to, per company, on this
+ * Mac. Wrapped: storage can be missing (tests, a locked-down profile). */
+function exportFolderKey(companyId) { return `SocialGrid.exportFolder.${companyId || 'none'}`; }
+export function loadExportFolder(companyId) {
+  try { return globalThis.localStorage?.getItem(exportFolderKey(companyId)) || ''; } catch { return ''; }
+}
+function saveExportFolder(companyId, folder) {
+  try { globalThis.localStorage?.setItem(exportFolderKey(companyId), folder || ''); } catch { /* storage unavailable */ }
+}
+
+/** Whether a progress event belongs to THIS screen's export run. Every
+ *  export broadcasts on the same bus, so a second export (another window,
+ *  another Mac on the server) used to move this bar too (audit 2026-10). */
+export function isOwnSocialProgress(ev, runId) {
+  return !!ev && ev.kind === 'socialGrid' && !ev.complete && !!runId && ev.id === runId;
+}
+
+/** Progress for the export overlay from the server's real per-image events:
+ *  5% before the first image, then evenly up to 95%, 100% when it returns. */
+export function socialExportProgress(ev) {
+  const total = Number(ev?.total) || 0;
+  const done = Math.max(0, Number(ev?.done) || 0);
+  if (!total) return { progress: 5, detail: '' };
+  return { progress: 5 + Math.min(1, done / total) * 90, detail: `Image ${Math.min(done + 1, total)} of ${total}` };
+}
+
 export function PresetEditor({ presetId, onBack }) {
   const companyId = useAppStore((s) => s.activeCompanyId);
   const companySwitching = useAppStore((s) => s.companySwitching);
   const addToast = useAppStore((s) => s.addToast);
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
-  const products = useAppStore((s) => s.products);
+  // The whole company — `products` is the Library's filtered view, and a
+  // hand-picked post must be able to find any product.
+  const products = useAppStore((s) => s.allProducts) ?? [];
   // v0.1.55: this company's named price groups — "which price" can pick one.
   // `?? []` because the component tests stub the store with only what a case
   // needs; a missing list must read as "no groups", not crash.
@@ -221,7 +249,25 @@ export function PresetEditor({ presetId, onBack }) {
   const [saveState, setSaveState] = useState('saved');
   const [savedAt, setSavedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const exportRunId = useRef('');   // this run's progress id (isOwnSocialProgress)
   const [progress, setProgress] = useState(0);
+  const [progressDetail, setProgressDetail] = useState('');
+  const [exportFolder, setExportFolder] = useState(() => loadExportFolder(companyId));
+  useEffect(() => { setExportFolder(loadExportFolder(companyId)); }, [companyId]);
+  // Real progress: the export sends one event per image it writes (kind
+  // 'socialGrid'). It used to be a timer that crept to 88% whatever happened.
+  // A client Mac gets no per-image events (the server renders the whole set
+  // in one call), so the bar simply waits at the start until the files land.
+  useEffect(() => {
+    if (!exporting || !window.api?.events?.onProgress) return undefined;
+    const off = window.api.events.onProgress((ev) => {
+      if (!isOwnSocialProgress(ev, exportRunId.current)) return;
+      const next = socialExportProgress(ev);
+      setProgress(next.progress);
+      if (next.detail) setProgressDetail(next.detail);
+    });
+    return () => { if (typeof off === 'function') off(); };
+  }, [exporting]);
   // v0.1.62: save the look as a reusable template.
   const [templating, setTemplating] = useState(false);
   const [templateName, setTemplateName] = useState('');
@@ -465,19 +511,34 @@ export function PresetEditor({ presetId, onBack }) {
     }
   }
 
-  async function exportImages() {
+  async function pickExportFolder() {
     let folder;
-    try { folder = await window.api.files.pickFolder(); } catch (e) { addToast(e.message, 'error'); return; }
-    if (!folder) return;
+    try { folder = await window.api.files.pickFolder(); } catch (e) { addToast(e.message, 'error'); return null; }
+    if (!folder) return null;
+    setExportFolder(folder);
+    saveExportFolder(companyId, folder);
+    return folder;
+  }
+
+  async function exportImages() {
+    // The last folder is remembered per company; "Change folder…" picks another.
+    let folder = exportFolder;
+    if (!folder) {
+      try { folder = await window.api.files.pickFolder(); } catch (e) { addToast(e.message, 'error'); return; }
+      if (!folder) return;
+      setExportFolder(folder);
+      saveExportFolder(companyId, folder);
+    }
+    exportRunId.current = `social-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setExporting(true);
-    setProgress(10);
-    const pulse = setInterval(() => setProgress((x) => Math.min(88, x + 6)), 220);
+    setProgress(5);
+    setProgressDetail('');
     try {
       if (dirty.current) await flushPending();
       const generation = editorGeneration.current;
       const committed = latest.current || preset;
       const baselineRevision = acknowledgedRevision.current;
-      const res = await window.api.socialGrid.exportImages(committed.config, folder, committed.id);
+      const res = await window.api.socialGrid.exportImages(committed.config, folder, committed.id, exportRunId.current);
       setProgress(100);
       const n = res.pageCount ?? res.outputPaths?.length ?? 0;
       addToast(`Saved ${n} image${n === 1 ? '' : 's'} to ${folder}`, 'success');
@@ -499,9 +560,14 @@ export function PresetEditor({ presetId, onBack }) {
         saveQueue.current?.setRevision(row.updatedAt);
       }
     } catch (e) {
+      // A remembered folder that cannot be written any more (an unplugged
+      // drive, a deleted folder) is forgotten, so the next Export asks again.
+      if (/\b(ENOENT|EACCES|EPERM|EROFS)\b/.test(String(e?.message || ''))) {
+        setExportFolder('');
+        saveExportFolder(companyId, '');
+      }
       addToast(parseConflictError(e) ? 'This post changed elsewhere. Use Save to review it before exporting.' : e.message, 'error');
     } finally {
-      clearInterval(pulse);
       setExporting(false);
     }
   }
@@ -523,11 +589,20 @@ export function PresetEditor({ presetId, onBack }) {
             >
               Save as template
             </Button>
+            {exportFolder ? (
+              <Button
+                onClick={() => { void pickExportFolder(); }}
+                disabled={exporting}
+                title={`Images are saved to ${exportFolder}. Pick another folder.`}
+              >
+                Change folder…
+              </Button>
+            ) : null}
             <Button
               variant="primary"
               onClick={exportImages}
               disabled={exporting || preview?.summary?.total === 0}
-              title={preview?.summary?.total === 0 ? 'No products match these filters yet' : undefined}
+              title={preview?.summary?.total === 0 ? 'No products match these filters yet' : exportFolder ? `Save to ${exportFolder}` : 'Choose a folder, then save the images there'}
             >
               {exporting ? 'Exporting…' : 'Export images'}
             </Button>
@@ -562,8 +637,8 @@ export function PresetEditor({ presetId, onBack }) {
         open={exporting}
         title="Building your images"
         progress={progress}
-        phase={Math.min(3, Math.floor(progress / 28))}
-        detail={preset.name}
+        phase={progress <= 5 ? 0 : progress >= 95 ? 3 : 2}
+        detail={progressDetail ? `${preset.name} · ${progressDetail}` : preset.name}
       />
 
       <Modal

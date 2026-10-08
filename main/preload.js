@@ -1,6 +1,17 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload);
+/* Connectivity pass (0.1.94), AGENTS.md §18: Electron wraps every error a
+ * main-process handler throws as "Error invoking remote method 'x': Error: …",
+ * and that prefix used to reach the toast verbatim. Strip it once, here, so
+ * every caller gets the handler's own sentence. The error object (and any
+ * `code` main managed to carry) is kept; only its message is trimmed. */
+const IPC_ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:[A-Za-z]*Error: )?/;
+const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload).catch((err) => {
+  if (err && typeof err.message === 'string' && IPC_ERROR_PREFIX.test(err.message)) {
+    try { err.message = err.message.replace(IPC_ERROR_PREFIX, ''); } catch (_) { /* frozen — leave it */ }
+  }
+  throw err;
+});
 
 contextBridge.exposeInMainWorld('api', {
   app: {
@@ -85,6 +96,10 @@ contextBridge.exposeInMainWorld('api', {
     diagnoseServer:    (url, token) => invoke('client:diagnoseServer', { url, token }),
     /** v0.14.3: live connection-state polling + push from main. */
     connectionState:   ()            => invoke('client:connectionState'),
+    /** 0.1.94: ping the server now and reconnect live updates if they are
+     *  down. Resolves to the connection state that ping produced. Client
+     *  mode only (the channel is not registered elsewhere). */
+    reconnectNow:      (reason)      => invoke('client:reconnectNow', reason ? { reason } : null),
     onConnectionState: (cb) => {
       const fn = (_e, data) => cb(data);
       ipcRenderer.on('client:connectionState', fn);
@@ -181,6 +196,9 @@ contextBridge.exposeInMainWorld('api', {
     /** Returns a data: URL with a 160×160 cover thumbnail for the given
      *  absolute path. Used by AI Studio Bulk source picker (v0.11.0). */
     readImageThumb:(absPath)                   => invoke('files:readImageThumb', absPath),
+    /** "Show in Finder": a folder opens, a file opens its folder with the
+     *  file selected. Local-only — the path is on THIS Mac. */
+    revealPath:    (absPath)                   => invoke('files:revealPath', absPath),
   },
   samples: {
     generateProductSheet: () => invoke('samples:generateProductSheet'),
@@ -213,11 +231,12 @@ contextBridge.exposeInMainWorld('api', {
     // both the legacy bare product id and { productId, scope, positions }.
     listByProduct:     (arg)                                => invoke('images:listByProduct', arg),
     importForProduct:  (productId, sourcePath)              => invoke('images:importForProduct', { productId, sourcePath }),
-    autoMatchBySku:    (companyId, folderPath)              => invoke('images:autoMatchBySku', { companyId, folderPath }),
-    importFromBytes:   (productId, bytes, ext)              => invoke('images:importFromBytes', { productId, bytes, ext }),
+    // 0.1.94: opts = { dryRun: true } (preview) or { files: [...] } (import a batch).
+    autoMatchBySku:    (companyId, folderPath, opts)        => invoke('images:autoMatchBySku', { ...(opts || {}), companyId, folderPath }),
+    importFromBytes:   (productId, bytes, ext, opts = {})   => invoke('images:importFromBytes', { productId, bytes, ext, ...(opts.makeMain === true ? { makeMain: true } : {}) }),
     setMainImage:      (productId, filepath)                => invoke('images:setMainImage', { productId, filepath }),
     reorderImages:     (productId, newOrder)                => invoke('images:reorderImages', { productId, newOrder }),
-    removeFromProduct: (productId, imageId, expectedContentHash) => invoke('images:removeFromProduct', { productId, imageId, expectedContentHash }),
+    removeFromProduct: (productId, imageId, expectedContentHash, opts = {}) => invoke('images:removeFromProduct', { productId, imageId, expectedContentHash, ...(opts.withEntry === true ? { withEntry: true } : {}) }),
     // v0.26.14: destructive flip of the source file (rewrites
     // bytes on disk + updates content_hash so the cache-bust kicks
     // in). axis: 'h' = mirror left/right, 'v' = mirror top/bottom.
@@ -365,14 +384,15 @@ contextBridge.exposeInMainWorld('api', {
     filenamePreview: (profileId, productId, imageIndex) =>
       invoke('exports:filenamePreview', { profileId, productId, imageIndex }),
     // `runId` is chosen by the caller so Cancel can target exactly this run.
-    run: (profileId, productIds, outputRoot, onExisting, saveToLibrary, runId) =>
-      invoke('exports:run', { profileId, productIds, outputRoot, onExisting, saveToLibrary, runId }),
+    // `imageScope` (optional): { mode: 'all' | 'main' | 'first', count? }.
+    run: (profileId, productIds, outputRoot, onExisting, saveToLibrary, runId, imageScope) =>
+      invoke('exports:run', { profileId, productIds, outputRoot, onExisting, saveToLibrary, runId, imageScope }),
     // v0.26.24: dry-run collision check. Returns
     // { totalExpected, collisionCount, sampleCollisions: [{name, sku}] }
     // The renderer calls this BEFORE run so it can pop a modal
     // asking the user how to handle the collisions.
-    checkCollisions: (profileId, productIds, outputRoot) =>
-      invoke('exports:checkCollisions', { profileId, productIds, outputRoot }),
+    checkCollisions: (profileId, productIds, outputRoot, imageScope) =>
+      invoke('exports:checkCollisions', { profileId, productIds, outputRoot, imageScope }),
     listRuns: (limit) => invoke('exports:listRuns', limit),
     // v0.1.89: stop a running export after the image in progress. `runId`
     // is the id the caller passed to `run`.
@@ -471,7 +491,9 @@ contextBridge.exposeInMainWorld('api', {
     update: (id, patch) => invoke('catalogStudio:update', { id, patch }),
     remove: (id) => invoke('catalogStudio:delete', { id }),
     duplicate: (id) => invoke('catalogStudio:duplicate', { id }),
-    preview: (id) => invoke('catalogStudio:preview', { id }),
+    // `fontsKey`: the font set the screen already holds, so the ~2 MB font
+    // CSS is only sent when it changes.
+    preview: (id, fontsKey) => invoke('catalogStudio:preview', fontsKey ? { id, fontsKey } : { id }),
     // v0.1.63: the catalog template builder — layout-only templates, reusable
     // across projects, plus a preview for a config that has not been saved yet.
     listTemplates: (companyId) => invoke('catalogStudio:listTemplates', { companyId }),
@@ -504,7 +526,7 @@ contextBridge.exposeInMainWorld('api', {
     duplicateTemplate: (id) => invoke('socialGrid:duplicateTemplate', { id }),
     plan: (config) => invoke('socialGrid:plan', { config }),
     preview: (config, pageIndex) => invoke('socialGrid:preview', { config, pageIndex }),
-    exportImages: (config, outputFolder, presetId) => invoke('socialGrid:export', { config, outputFolder, presetId }),
+    exportImages: (config, outputFolder, presetId, runId) => invoke('socialGrid:export', { config, outputFolder, presetId, runId }),
   },
   /* v0.1.71: named bulk-table column sets, company-scoped in the database so
    * they follow the user across Macs. The last-used selection is localStorage,

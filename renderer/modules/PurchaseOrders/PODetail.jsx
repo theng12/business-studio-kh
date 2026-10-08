@@ -28,6 +28,10 @@ import { SearchableSelect } from '../../components/SearchableSelect.jsx';
 import { STATUS_TONE, STATUS_LABEL } from './index.jsx';
 import { useCostingCaps } from './costingCaps.js';
 import { formatDate } from '../../lib/format.js';
+import { fxLabel, formatFx, fxPlaceholder, quotesPerUsd } from './fxRate.js';
+import { partialStatusChangeText } from './statusSteps.js';
+import { FxRateInput } from './FxRateInput.jsx';
+import { suggestNextPoNumber } from './poNumber.js';
 
 /** Received and closed POs count toward product landed cost (main/db/purchaseOrders.js). */
 const isCostSource = (status) => status === 'received' || status === 'closed';
@@ -94,7 +98,7 @@ function PAYMENT_TT_STATUS_LABEL(s) {
   return (PAYMENT_STATUSES.find((x) => x.value === s) || {}).label || s;
 }
 
-export function PODetail({ poId, onBack }) {
+export function PODetail({ poId, onBack, onOpenPo }) {
   const addToast = useAppStore((s) => s.addToast);
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const companySwitching = useAppStore((s) => s.companySwitching);
@@ -111,6 +115,9 @@ export function PODetail({ poId, onBack }) {
   const refreshAllProducts = useAppStore((s) => s.refreshAllProducts);
   const products = Array.isArray(allProducts) ? allProducts : [];
   const [addingLine, setAddingLine] = useState(false);
+  // Bumped by "Save & add next" so the Add-line form remounts empty.
+  const [addLineKey, setAddLineKey] = useState(0);
+  const [duplicating, setDuplicating] = useState(false);
   const [addingComponent, setAddingComponent] = useState(false);
   const [editingLine, setEditingLine] = useState(null);
   const [editingComponent, setEditingComponent] = useState(null);
@@ -328,7 +335,7 @@ export function PODetail({ poId, onBack }) {
     const sure = await confirm({
       title: `Change the currency to ${next}?`,
       message: toUsd
-        ? `Every line and cost line will be read as USD and re-converted at rate 1. The current rate (1 ${prev} = ${Number(before.exchangeRateToUsd) || 0} USD) is discarded.`
+        ? `Every line and cost line will be read as USD and re-converted at rate 1. The current rate (${formatFx(prev, before.exchangeRateToUsd)}) is discarded.`
         : `Every line and cost line will be read as ${next} and re-converted to USD at the rate you enter below.`,
       detail: isCostSource(before.status)
         ? 'This PO is received, so the landed cost of every product on it updates too.'
@@ -339,7 +346,10 @@ export function PODetail({ poId, onBack }) {
     if (!sure || generation !== generationRef.current || !currentContext()) return;
     const exchangeRateToUsd = toUsd ? 1 : Number(rateBox.value);
     if (!toUsd && (String(rateBox.value).trim() === '' || !Number.isFinite(exchangeRateToUsd) || exchangeRateToUsd <= 0)) {
-      addToast(`Currency not changed — enter how many US dollars one ${next} is worth (a number above 0).`, 'error'); return;
+      // Worded the way the rate box asks (fxLabel): "1 USD = ? KHR" or "1 CNY = ? USD".
+      addToast(quotesPerUsd(next)
+        ? `Currency not changed — enter how many ${next} one US dollar buys (a number above 0).`
+        : `Currency not changed — enter how many US dollars one ${next} is worth (a number above 0).`, 'error'); return;
     }
     if (detailRef.current.header.updatedAt !== before.updatedAt) {
       addToast('This purchase order changed while the currency confirmation was open. Review its current currency and try again.', 'error'); return;
@@ -352,6 +362,25 @@ export function PODetail({ poId, onBack }) {
     if (!header || !await saveNow() || !currentContext()) return;
     const before = detailRef.current.header;
     if (newStatus === before.status) return;
+    // Closing a PO that was never received records NO landed cost (a cost
+    // source needs a received date — main/db/purchaseOrders.js). That used to
+    // happen silently; now it is a decision, defaulting to receiving first.
+    if (newStatus === 'closed' && !isCostSource(before.status)) {
+      const choice = { value: 'receive' };
+      const sure = await confirm({
+        title: 'Close a purchase order that was never received?',
+        message: `This PO is “${STATUS_LABEL(before.status)}”. Only a received PO counts toward its products’ landed cost — closing it straight from here records no cost for any product on it.`,
+        extra: <CloseChoice box={choice} />,
+        confirmLabel: 'Close PO',
+      });
+      if (!sure || generation !== generationRef.current || !currentContext()) return;
+      if (choice.value === 'receive') {
+        await runStatusChange(['received', 'closed'], before, generation, 'Marked received, then closed');
+        return;
+      }
+      await runStatusChange(['closed'], before, generation, 'Closed without receiving — no landed cost recorded');
+      return;
+    }
     let warnBody = null;
     if (newStatus === 'received' && !isCostSource(before.status)) {
       warnBody = 'Every line’s landed cost will count toward each product’s cost history, dated today (you can change the received date afterwards). Moving the PO back to an earlier status takes it out again.';
@@ -360,20 +389,43 @@ export function PODetail({ poId, onBack }) {
     }
     if (warnBody && !await confirm({ title: `Change status to "${STATUS_LABEL(newStatus)}"?`, message: warnBody, confirmLabel: 'Change status' })) return;
     if (generation !== generationRef.current || !currentContext()) return;
+    await runStatusChange([newStatus], before, generation, `Status set to ${STATUS_LABEL(newStatus)}`);
+  }
+
+  /** Apply one or more status steps in order, each against the revision the
+   *  previous step returned, then reload the detail once. */
+  async function runStatusChange(steps, before, generation, successText) {
+    let done = 0;
     try {
-      await window.api.purchaseOrders.setStatus(poId, newStatus, before.updatedAt);
+      let revision = before.updatedAt;
+      for (const step of steps) {
+        const row = await window.api.purchaseOrders.setStatus(poId, step, revision);
+        revision = row?.updatedAt;
+        done += 1;
+        if (generation !== generationRef.current || !currentContext()) return;
+      }
       const fresh = await window.api.purchaseOrders.getDetail(poId);
       if (generation !== generationRef.current || !currentContext()) return;
-      applySnapshot(fresh); addToast(`Status set to ${STATUS_LABEL(newStatus)}`, 'success');
+      applySnapshot(fresh); addToast(successText, 'success');
     } catch (err) {
       if (generation !== generationRef.current || !currentContext()) return;
+      if (done > 0 && done < steps.length) {
+        // An earlier step landed and a later one did not (received, then the
+        // close failed): say exactly where the PO stands, then show it.
+        addToast(partialStatusChangeText(steps, done, err, STATUS_LABEL), 'error');
+        const fresh = await window.api.purchaseOrders.getDetail(poId).catch(() => null);
+        if (fresh && generation === generationRef.current && currentContext()) applySnapshot(fresh);
+        return;
+      }
       if (parseConflictError(err)) {
         // A status transition has side effects: refresh its current state and
         // require the warning again rather than overwriting a stale confirmation.
         const fresh = await window.api.purchaseOrders.getDetail(poId).catch(() => null);
         if (generation !== generationRef.current || !currentContext()) return;
         applySnapshot(fresh); addToast('This purchase order changed elsewhere. Review its status and try again.', 'error');
-      } else addToast(`Failed to change status: ${err.message}`, 'error');
+      } else {
+        addToast(`Failed to change status: ${err.message}`, 'error');
+      }
     }
   }
 
@@ -408,7 +460,7 @@ export function PODetail({ poId, onBack }) {
     } catch (error) { if (isCurrent()) addToast(error.message, 'error'); }
   }
 
-  async function addLine(input) {
+  async function addLine(input, { next = false } = {}) {
     const generation = generationRef.current;
     const isCurrent = () => generation === generationRef.current && currentContext();
     try {
@@ -417,7 +469,8 @@ export function PODetail({ poId, onBack }) {
       const snap = await window.api.purchaseOrders.addLine(poId, input);
       if (!isCurrent()) return;
       applySnapshot(snap);
-      setAddingLine(false);
+      if (next) setAddLineKey((k) => k + 1);
+      else setAddingLine(false);
       addToast('Line added', 'success');
     } catch (err) {
       if (!isCurrent()) return;
@@ -535,6 +588,69 @@ export function PODetail({ poId, onBack }) {
     }
   }
 
+  /**
+   * A new draft with this PO's supplier, currency, rate, terms, lines and
+   * cost lines — no payments, no dates, no status history. Built from the
+   * existing create/addLine/addComponent channels; if one of them fails the
+   * draft that was made so far is opened and the toast says what is missing.
+   */
+  async function duplicateAsDraft() {
+    if (!detail || !header || duplicating) return;
+    const generation = generationRef.current;
+    setDuplicating(true);
+    let created = null;
+    let copiedLines = 0;
+    let copiedCosts = 0;
+    let source = null;
+    try {
+      if (!await saveNow() || generation !== generationRef.current || !currentContext()) return;
+      // Copy what was just SAVED: `header`/`detail` were captured before the
+      // save and miss any edit made in the last 500 ms (changeStatus reads the
+      // ref after its save for the same reason).
+      source = detailRef.current;
+      if (!source?.header) return;
+      const saved = source.header;
+      const existing = await window.api.purchaseOrders.list(saved.companyId, { status: 'all' }).catch(() => []);
+      created = await window.api.purchaseOrders.create({
+        companyId: saved.companyId,
+        supplierId: saved.supplierId,
+        poNumber: suggestNextPoNumber((Array.isArray(existing) ? existing : []).map((po) => po.poNumber)) || null,
+        currency: saved.currency,
+        exchangeRateToUsd: saved.exchangeRateToUsd,
+        exchangeRateDate: Date.now(),
+        incoterm: saved.incoterm,
+        containerType: saved.containerType,
+        notes: saved.notes || null,
+        status: 'draft',
+      });
+      for (const l of source.lines || []) {
+        await window.api.purchaseOrders.addLine(created.id, {
+          productId: l.productId, supplierSku: l.supplierSku, qty: l.qty,
+          unitPriceSupplierCurrency: l.unitPriceSupplierCurrency,
+          cartonQty: l.cartonQty, cartonWCm: l.cartonWCm, cartonHCm: l.cartonHCm, cartonDCm: l.cartonDCm,
+          weightPerUnitKg: l.weightPerUnitKg, notes: l.notes,
+        });
+        copiedLines += 1;
+      }
+      for (const c of source.components || []) {
+        await window.api.purchaseOrders.addComponent(created.id, {
+          kind: c.kind, label: c.label, allocationBasis: c.allocationBasis, notes: c.notes,
+          // Typed positive; the DB re-signs a discount (landedCost.signedComponentAmount).
+          amountSupplierCurrency: Math.abs(Number(c.amountSupplierCurrency) || 0),
+        });
+        copiedCosts += 1;
+      }
+      addToast(`Draft ${created.poNumber || ''} created from ${source.header.poNumber || 'this PO'}`.replace(/\s+/g, ' '), 'success');
+    } catch (err) {
+      addToast(created
+        ? `Draft created, but copying stopped after ${copiedLines} of ${source?.lines?.length ?? 0} lines and ${copiedCosts} of ${source?.components?.length ?? 0} costs: ${err.message}`
+        : `Could not duplicate: ${err.message}`, 'error');
+    } finally {
+      setDuplicating(false);
+    }
+    if (created && generation === generationRef.current) onOpenPo?.(created.id);
+  }
+
   // F2: the PO's lines as a CSV, built from the detail already on screen (no
   // extra IPC), downloaded the same way the Library's catalog CSV is.
   function exportCsv() {
@@ -593,7 +709,7 @@ export function PODetail({ poId, onBack }) {
     <div className="page page--po-detail">
       <PageHeader
         title={`PO ${header.poNumber || '(no number)'}`}
-        subtitle={`${header.supplierName || 'Unknown supplier'} • ${header.incoterm} • ${header.currency} → USD @ ${Number(header.exchangeRateToUsd).toFixed(4)}`}
+        subtitle={`${header.supplierName || 'Unknown supplier'} • ${header.incoterm} • ${formatFx(header.currency, header.exchangeRateToUsd)}`}
         backTo={{ label: 'Purchase orders', onClick: leaveEditor }}
         actions={
           <>
@@ -609,6 +725,15 @@ export function PODetail({ poId, onBack }) {
               >
                 {STATUS_OPTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
               </Select>
+            ) : null}
+            {canManage ? (
+              <Button
+                onClick={duplicateAsDraft}
+                disabled={duplicating || companySwitching}
+                title="Start a new draft with this PO's supplier, currency, rate, lines and cost lines"
+              >
+                {duplicating ? 'Duplicating…' : 'Duplicate as draft'}
+              </Button>
             ) : null}
             <Button
               onClick={exportCsv}
@@ -643,14 +768,27 @@ export function PODetail({ poId, onBack }) {
             </Select>
           </label>
           <label className="field">
-            <span className="field__label">FX rate (1 {header.currency} = ? USD)</span>
-            <Input
-              type="number"
-              step="0.0001"
-              min="0"
-              value={draft.exchangeRateToUsd ?? ''}
-              onChange={(e) => changeHeader({ exchangeRateToUsd: e.target.value, exchangeRateDate: Date.now() })}
-            />
+            <span className="field__label">{header.currency === 'USD' ? 'Exchange rate' : fxLabel(header.currency)}</span>
+            {quotesPerUsd(header.currency) ? (
+              // Riel, dong…: typed as "1 USD = 4,100", stored as 1/4100.
+              <FxRateInput
+                currency={header.currency}
+                value={draft.exchangeRateToUsd ?? ''}
+                onChange={(rate) => changeHeader({ exchangeRateToUsd: rate, exchangeRateDate: Date.now() })}
+              />
+            ) : (
+              // The raw text stays in the draft so an invalid entry is kept to
+              // correct (headerInput refuses it before any IPC).
+              <Input
+                type="number"
+                step="0.0001"
+                min="0"
+                placeholder={fxPlaceholder(header.currency)}
+                value={draft.exchangeRateToUsd ?? ''}
+                disabled={header.currency === 'USD'}
+                onChange={(e) => changeHeader({ exchangeRateToUsd: e.target.value, exchangeRateDate: Date.now() })}
+              />
+            )}
             <span className="field__hint">
               {header.currency !== 'USD' && Number(header.exchangeRateToUsd) === 1
                 ? `Check this rate — 1 means one ${header.currency} is worth one US dollar.`
@@ -735,43 +873,52 @@ export function PODetail({ poId, onBack }) {
             action={canManage ? <Button variant="primary" onClick={() => setAddingLine(true)}>Add line</Button> : null}
           />
         )}
-        {detail.lines.length > 0 && (
-          <div className="data-table-wrap">
-            <table className="data-table">
+        {detail.lines.length > 0 && (() => {
+          // At 1280 px eleven columns crushed Khmer product names to 3–5
+          // lines and clipped the row buttons. Columns that say nothing on
+          // this PO are dropped: a USD PO has one unit price, and cartons /
+          // CBM only exist once a line has carton data (CSS also hides them
+          // when the table area is under 1100 px wide — .po-lines-wrap).
+          const isUsd = String(header.currency).toUpperCase() === 'USD';
+          const hasCartons = detail.lines.some((l) => l.cartonQty || l.calc?.volumeCbm);
+          return (
+          <div className="data-table-wrap po-lines-wrap">
+            <table className="data-table po-lines-table">
               <thead>
                 <tr>
-                  <th>SKU</th>
-                  <th>Product</th>
+                  <th className="po-lines__sku">SKU</th>
+                  <th className="po-lines__name">Product</th>
                   <th className="is-num">Qty</th>
                   <th className="is-num">Unit ({header.currency})</th>
-                  <th className="is-num">Unit (USD)</th>
-                  <th className="is-num">Cartons</th>
-                  <th className="is-num">CBM</th>
+                  {isUsd ? null : <th className="is-num">Unit (USD)</th>}
+                  {hasCartons ? <th className="is-num po-lines__carton">Cartons</th> : null}
+                  {hasCartons ? <th className="is-num po-lines__carton">CBM</th> : null}
                   <th className="is-num">+ Alloc / unit</th>
                   <th className="is-num">Landed / unit</th>
                   <th className="is-num">Line total USD</th>
-                  {canManage ? <th className="is-actions" aria-label="Actions" /> : null}
+                  {canManage ? <th className="is-actions po-lines__actions" aria-label="Actions" /> : null}
                 </tr>
               </thead>
               <tbody>
                 {detail.lines.map((line) => {
                   const c = line.calc || {};
+                  const label = line.productSku || line.productName || 'this line';
                   return (
                     <tr key={line.id}>
-                      <td><strong>{line.productSku || '—'}</strong></td>
-                      <td>{line.productName || '—'}</td>
+                      <td className="po-lines__sku"><strong>{line.productSku || '—'}</strong></td>
+                      <td className="po-lines__name">{line.productName || '—'}</td>
                       <td className="is-num">{line.qty}</td>
                       <td className="is-num">{fmtNum(line.unitPriceSupplierCurrency, 4)}</td>
-                      <td className="is-num">{fmtUsd(line.unitPriceUsdAtPo, 4)}</td>
-                      <td className="is-num">{line.cartonQty ? Math.ceil(line.qty / line.cartonQty) : '—'}</td>
-                      <td className="is-num">{c.volumeCbm ? c.volumeCbm.toFixed(3) : '—'}</td>
+                      {isUsd ? null : <td className="is-num">{fmtUsd(line.unitPriceUsdAtPo, 4)}</td>}
+                      {hasCartons ? <td className="is-num po-lines__carton">{line.cartonQty ? Math.ceil(line.qty / line.cartonQty) : '—'}</td> : null}
+                      {hasCartons ? <td className="is-num po-lines__carton">{c.volumeCbm ? c.volumeCbm.toFixed(3) : '—'}</td> : null}
                       <td className="is-num">{fmtUsd(c.allocatedCostUsdPerUnit, 4)}</td>
                       <td className="is-num"><strong>{fmtUsd(c.landedUnitCostUsd, 4)}</strong></td>
                       <td className="is-num">{fmtUsd((c.landedUnitCostUsd || 0) * (Number(line.qty) || 0))}</td>
                       {canManage ? (
-                        <td className="is-actions">
-                          <Button size="sm" onClick={() => setEditingLine({ ...line, expectedUpdatedAt: header.updatedAt })}>Edit</Button>
-                          <Button variant="danger" size="sm" onClick={() => removeLine(line)}>Remove</Button>
+                        <td className="is-actions po-lines__actions">
+                          <Button size="sm" variant="ghost" onClick={() => setEditingLine({ ...line, expectedUpdatedAt: header.updatedAt })} aria-label={`Edit ${label}`}>Edit</Button>
+                          <Button size="sm" variant="ghost" className="po-lines__remove" onClick={() => removeLine(line)} aria-label={`Remove ${label}`}>Remove</Button>
                         </td>
                       ) : null}
                     </tr>
@@ -780,7 +927,8 @@ export function PODetail({ poId, onBack }) {
               </tbody>
             </table>
           </div>
-        )}
+          );
+        })()}
       </section>
 
       {/* Cost components. */}
@@ -811,7 +959,7 @@ export function PODetail({ poId, onBack }) {
                   <th>Kind</th>
                   <th>Label</th>
                   <th className="is-num">Amount ({header.currency})</th>
-                  <th className="is-num">Amount (USD)</th>
+                  {header.currency === 'USD' ? null : <th className="is-num">Amount (USD)</th>}
                   <th>Allocation</th>
                   {canManage ? <th className="is-actions" aria-label="Actions" /> : null}
                 </tr>
@@ -822,7 +970,7 @@ export function PODetail({ poId, onBack }) {
                     <td>{c.kind}</td>
                     <td>{c.label || '—'}</td>
                     <td className="is-num">{fmtNum(signedAmount(c, c.amountSupplierCurrency), 2)}</td>
-                    <td className="is-num">{fmtUsd(signedAmount(c, c.amountUsd))}</td>
+                    {header.currency === 'USD' ? null : <td className="is-num">{fmtUsd(signedAmount(c, c.amountUsd))}</td>}
                     <td>{ALLOCATION_BASES.find((a) => a.value === c.allocationBasis)?.label || c.allocationBasis}</td>
                     {canManage ? (
                       <td className="is-actions">
@@ -898,7 +1046,7 @@ export function PODetail({ poId, onBack }) {
                   <th>Status</th>
                   <th>Date</th>
                   <th className="is-num">Amount ({header.currency})</th>
-                  <th className="is-num">FX → USD</th>
+                  <th className="is-num">Exchange rate</th>
                   <th className="is-num">Amount (USD)</th>
                   <th className="is-num">TT fee (USD)</th>
                   <th>Reference</th>
@@ -916,7 +1064,7 @@ export function PODetail({ poId, onBack }) {
                     </td>
                     <td>{formatDate(p.paidAt)}</td>
                     <td className="is-num">{fmtNum(p.amountSupplierCurrency, 2)}</td>
-                    <td className="is-num">{Number(p.fxRateToUsd || 0).toFixed(4)}</td>
+                    <td className="is-num po-pay__fx">{header.currency === 'USD' ? '—' : formatFx(header.currency, p.fxRateToUsd)}</td>
                     <td className="is-num">{fmtUsd(p.amountUsd)}</td>
                     <td className="is-num">
                       {fmtUsd(p.ttFeeUsd)}
@@ -963,9 +1111,12 @@ export function PODetail({ poId, onBack }) {
 
       {addingLine && (
         <LineModal
+          key={`add-${addLineKey}`}
           mode="create"
+          poId={poId}
           currency={header.currency}
           products={products}
+          existingLines={detail.lines}
           onCancel={() => setAddingLine(false)}
           onSave={addLine}
         />
@@ -974,8 +1125,10 @@ export function PODetail({ poId, onBack }) {
         <LineModal
           key={`${editingLine.id}-${editingLine.expectedUpdatedAt}`}
           mode="edit"
+          poId={poId}
           currency={header.currency}
           line={editingLine}
+          existingLines={detail.lines}
           products={products}
           onCancel={() => setEditingLine(null)}
           onSave={(patch) => updateLine(editingLine.id, patch)}
@@ -985,6 +1138,7 @@ export function PODetail({ poId, onBack }) {
         <ComponentModal
           mode="create"
           currency={header.currency}
+          rateToUsd={header.exchangeRateToUsd}
           incoterm={header.incoterm}
           onCancel={() => setAddingComponent(false)}
           onSave={addComponent}
@@ -995,6 +1149,7 @@ export function PODetail({ poId, onBack }) {
           key={`${editingComponent.id}-${editingComponent.expectedUpdatedAt}`}
           mode="edit"
           currency={header.currency}
+          rateToUsd={header.exchangeRateToUsd}
           incoterm={header.incoterm}
           component={editingComponent}
           onCancel={() => setEditingComponent(null)}
@@ -1031,20 +1186,38 @@ export function PODetail({ poId, onBack }) {
 function CurrencyRateInput({ currency, box }) {
   const [value, setValue] = useState('');
   return (
-    <Field label={`Exchange rate (1 ${currency} = ? USD)`} hint="Required. Every line and cost is converted to USD at this rate.">
+    <Field label={fxLabel(currency)} hint="Required. Every line and cost is converted to USD at this rate.">
       {({ id }) => (
-        <Input
+        <FxRateInput
           id={id}
-          type="number"
-          min="0"
-          step="0.0001"
+          currency={currency}
           autoFocus
           value={value}
-          placeholder="e.g. 0.14"
-          onChange={(e) => { setValue(e.target.value); box.value = e.target.value; }}
+          onChange={(rate) => { setValue(rate); box.value = rate === '' ? '' : String(rate); }}
         />
       )}
     </Field>
+  );
+}
+
+/** The choice inside the "close a never-received PO" confirm. `box.value` is
+ *  read once the dialog closes, like CurrencyRateInput's. */
+function CloseChoice({ box }) {
+  const [value, setValue] = useState(box.value);
+  const pick = (v) => { setValue(v); box.value = v; };
+  return (
+    <div className="po-close-choice" role="radiogroup" aria-label="How to close">
+      <label className="po-close-choice__opt">
+        <input type="radio" name="po-close" checked={value === 'receive'} onChange={() => pick('receive')} />
+        <span><strong>Mark received today, then close</strong><br />
+          <span className="muted">Its landed cost counts for every product on it. You can change the received date afterwards.</span></span>
+      </label>
+      <label className="po-close-choice__opt">
+        <input type="radio" name="po-close" checked={value === 'close'} onChange={() => pick('close')} />
+        <span><strong>Close without receiving</strong><br />
+          <span className="muted">For a cancelled order: no landed cost is recorded for its products.</span></span>
+      </label>
+    </div>
   );
 }
 
@@ -1062,7 +1235,7 @@ function SummaryStat({ label, value, tone, emphasis }) {
 const productLabel = (p) => `${p?.sku || ''}${p?.name ? ` — ${p.name}` : ''}`;
 const productValue = (p) => p?.id ?? '';
 
-function LineModal({ mode, currency, line, products, onCancel, onSave }) {
+function LineModal({ mode, poId, currency, line, products, existingLines = [], onCancel, onSave }) {
   const initial = line || {};
   const [productId, setProductId]   = useState(initial.productId || '');
   const [supplierSku, setSupplierSku] = useState(initial.supplierSku || '');
@@ -1074,6 +1247,31 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
   const [cartonD, setCartonD]       = useState(initial.cartonDCm ?? '');
   const [weightKg, setWeightKg]     = useState(initial.weightPerUnitKg ?? '');
   const [notes, setNotes]           = useState(initial.notes || '');
+
+  // The product's last price on an earlier PO in this currency — offered (and
+  // filled in while the box is empty) so a repeat order is not retyped.
+  const [lastPrice, setLastPrice] = useState(null);
+  const priceAuto = useRef(null);
+  useEffect(() => {
+    if (mode !== 'create' || !productId || !window.api?.purchaseOrders?.listForProduct) { setLastPrice(null); return undefined; }
+    let cancelled = false;
+    Promise.resolve(window.api.purchaseOrders.listForProduct(productId))
+      .then((rows) => {
+        if (cancelled) return;
+        const hit = (Array.isArray(rows) ? rows : []).find((r) => r.id !== poId
+          && String(r.currency).toUpperCase() === String(currency).toUpperCase()
+          && Number(r.lineUnitPriceSupplier) > 0);
+        setLastPrice(hit ? { amount: Number(hit.lineUnitPriceSupplier), poNumber: hit.poNumber } : null);
+        setUnitPrice((cur) => {
+          const wasAuto = priceAuto.current != null && String(cur) === String(priceAuto.current);
+          if (cur !== '' && !wasAuto) return cur; // the user's own number
+          priceAuto.current = hit ? Number(hit.lineUnitPriceSupplier) : null;
+          return hit ? Number(hit.lineUnitPriceSupplier) : '';
+        });
+      })
+      .catch(() => { if (!cancelled) setLastPrice(null); });
+    return () => { cancelled = true; };
+  }, [mode, productId, poId, currency]);
 
   // When the user picks a product in create mode, prefill its carton + weight
   // defaults. `autoFilled` remembers what was put there from a product, so a
@@ -1105,7 +1303,34 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productId]);
 
-  function submit() {
+  // A product already on this PO is allowed (two prices, two shipments) but
+  // is usually a slip — say so before it is saved.
+  const duplicateOf = mode === 'create' && productId
+    ? existingLines.find((l) => l.productId === productId) || null
+    : null;
+  const priceMissing = String(unitPrice).trim() === '';
+
+  // One save at a time: a double Enter (or Enter then a click) used to add
+  // the same line twice. Held from the zero-price confirm through onSave.
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(next = false) {
+    if (!canSubmit || savingRef.current) return;
+    savingRef.current = true; setSaving(true);
+    try { await submitOnce(next); }
+    finally { savingRef.current = false; setSaving(false); }
+  }
+
+  async function submitOnce(next) {
+    // A blank price used to save as 0 and put $0 into landed cost. Blank is
+    // refused (the button says why); an explicit 0 — a free sample — asks.
+    if (Number(unitPrice) === 0 && !await confirm({
+      title: 'Save this line with a unit price of 0?',
+      message: `It will add nothing to the goods value and count as ${currency} 0 in this product’s landed cost.`,
+      detail: 'Use 0 only for free samples or replacement goods.',
+      confirmLabel: 'Save at 0',
+    })) return;
     const payload = {
       productId,
       supplierSku: supplierSku || null,
@@ -1122,10 +1347,14 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
       // Edit doesn't change productId — only the editable fields.
       delete payload.productId;
     }
-    onSave(payload);
+    await onSave(payload, { next });
   }
 
-  const canSubmit = (mode === 'edit' || productId) && qty !== '' && Number(qty) > 0;
+  const canSubmit = (mode === 'edit' || productId) && qty !== '' && Number(qty) > 0
+    && !priceMissing && Number(unitPrice) >= 0;
+  const blockedReason = !(mode === 'edit' || productId) ? 'Choose a product first'
+    : !(qty !== '' && Number(qty) > 0) ? 'Enter a quantity above 0'
+      : priceMissing ? `Enter the unit price in ${currency} (0 for a free sample)` : undefined;
 
   return (
     <Modal
@@ -1135,12 +1364,18 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
       size="lg"
       footer={
         <>
-          <Button onClick={onCancel}>Cancel</Button>
-          <Button variant="primary" onClick={submit} disabled={!canSubmit}>Save</Button>
+          <Button type="button" onClick={onCancel}>Cancel</Button>
+          {mode === 'create' ? (
+            <Button type="button" onClick={() => submit(true)} disabled={!canSubmit || saving} title={blockedReason || 'Save this line and start the next one'}>
+              Save &amp; add next
+            </Button>
+          ) : null}
+          <Button type="submit" form="po-line-form" variant="primary" disabled={!canSubmit || saving} title={blockedReason}>{saving ? 'Saving…' : 'Save'}</Button>
         </>
       }
     >
-      <div className="form-grid">
+      {/* A form so Enter in any box saves the line. */}
+      <form id="po-line-form" className="form-grid" onSubmit={(e) => { e.preventDefault(); submit(false); }}>
         {mode === 'create' && (
           // A div, not a <label>: a label would re-click the combobox's
           // button when a row is picked and open it straight back up.
@@ -1158,6 +1393,11 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
             {products.length === 0 && (
               <span className="field__hint">This PO’s company has no products. Create products in the Product Library, then add them here.</span>
             )}
+            {duplicateOf ? (
+              <span className="field__hint po-line-dup" role="status">
+                Already on this PO ({duplicateOf.qty} at {fmtNum(duplicateOf.unitPriceSupplierCurrency, 2)} {currency}). Saving adds a second line — edit the existing one to change its quantity instead.
+              </span>
+            ) : null}
           </div>
         )}
         <label className="field">
@@ -1169,8 +1409,13 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
           <Input type="number" min="0" step="1" value={qty} onChange={(e) => setQty(e.target.value)} />
         </label>
         <label className="field">
-          <span className="field__label">Unit price ({currency})</span>
-          <Input type="number" min="0" step="0.0001" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} />
+          <span className="field__label">Unit price ({currency}) *</span>
+          <Input type="number" min="0" step="any" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} />
+          {lastPrice ? (
+            <span className="field__hint">
+              Last price: {fmtNum(lastPrice.amount, 2)} {currency}{lastPrice.poNumber ? ` on ${lastPrice.poNumber}` : ''}.
+            </span>
+          ) : null}
         </label>
         <label className="field">
           <span className="field__label">Units per carton</span>
@@ -1197,7 +1442,9 @@ function LineModal({ mode, currency, line, products, onCancel, onSave }) {
           <span className="field__label">Notes</span>
           <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
         </label>
-  </div>
+        {/* Enter in a text box submits through this hidden button. */}
+        <button type="submit" hidden aria-hidden="true" tabIndex={-1} />
+      </form>
     </Modal>
   );
 }
@@ -1213,7 +1460,7 @@ const INCOTERM_INCLUDES = {
   CIF: ['freight', 'insurance'],
 };
 
-function ComponentModal({ mode, currency, incoterm, component, onCancel, onSave }) {
+function ComponentModal({ mode, currency, rateToUsd, incoterm, component, onCancel, onSave }) {
   const initial = component || {};
   const [kind, setKind]               = useState(initial.kind || 'freight');
   const [label, setLabel]             = useState(initial.label || '');
@@ -1223,6 +1470,23 @@ function ComponentModal({ mode, currency, incoterm, component, onCancel, onSave 
   );
   const [allocationBasis, setBasis]   = useState(initial.allocationBasis || 'by_value');
   const [notes, setNotes]             = useState(initial.notes || '');
+  // Freight and clearance are often invoiced in USD on a CNY/THB PO. The DB
+  // keeps every cost in the PO currency (so a rate change re-converts it with
+  // everything else), so a USD amount is converted at the PO's rate on save.
+  const rate = Number(rateToUsd) || 0;
+  const poIsUsd = String(currency).toUpperCase() === 'USD';
+  const [entryCurrency, setEntryCurrency] = useState(poIsUsd ? 'USD' : currency);
+  const enteringUsd = !poIsUsd && entryCurrency === 'USD';
+  function switchEntry(next) {
+    if (next === entryCurrency) return;
+    // Carry the figure across so toggling does not lose what was typed.
+    const n = Number(amount);
+    if (amount !== '' && Number.isFinite(n) && rate > 0) {
+      setAmount(String(Number((next === 'USD' ? n * rate : n / rate).toFixed(4))));
+    }
+    setEntryCurrency(next);
+  }
+  const amountInPoCurrency = enteringUsd ? (rate > 0 ? (Number(amount) || 0) / rate : 0) : (Number(amount) || 0);
 
   // Live Incoterm double-count notice for the currently-selected kind.
   const incotermNorm = String(incoterm || '').toUpperCase().replace('CNF', 'CFR');
@@ -1230,15 +1494,16 @@ function ComponentModal({ mode, currency, incoterm, component, onCancel, onSave 
   const kindConflicts = includedKinds.includes(String(kind).toLowerCase());
 
   function submit() {
+    if (!canSubmit) return;
     onSave({
       kind,
       label: label.trim() || null,
-      amountSupplierCurrency: Number(amount) || 0,
+      amountSupplierCurrency: amountInPoCurrency,
       allocationBasis,
       notes,
     });
   }
-  const canSubmit = kind && amount !== '' && Number(amount) >= 0;
+  const canSubmit = kind && amount !== '' && Number(amount) >= 0 && (!enteringUsd || rate > 0);
   const isDiscount = kind === 'discount';
   return (
     <Modal
@@ -1261,12 +1526,36 @@ function ComponentModal({ mode, currency, incoterm, component, onCancel, onSave 
           </Select>
         </label>
         <label className="field">
-          <span className="field__label">{isDiscount ? `Discount (${currency}) *` : `Amount (${currency}) *`}</span>
-          <Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <span className="field__label">{isDiscount ? `Discount (${entryCurrency}) *` : `Amount (${entryCurrency}) *`}</span>
+          <Input type="number" min="0" step="any" value={amount} onChange={(e) => setAmount(e.target.value)} />
           {isDiscount ? (
             <span className="field__hint">Enter the amount off as a positive number — it is subtracted from landed cost.</span>
           ) : null}
+          {enteringUsd && amount !== '' && rate > 0 ? (
+            <span className="field__hint">
+              Saved as {fmtNum(amountInPoCurrency, 2)} {currency} at this PO’s rate ({formatFx(currency, rate)}). If the rate changes later, this cost moves with it.
+            </span>
+          ) : null}
         </label>
+        {poIsUsd ? null : (
+          <div className="field">
+            <span className="field__label">Entered in</span>
+            <div className="segments po-entry-currency" role="radiogroup" aria-label="Currency of this amount">
+              {[currency, 'USD'].map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  role="radio"
+                  aria-checked={entryCurrency === c}
+                  className={`segment${entryCurrency === c ? ' is-active' : ''}`}
+                  onClick={() => switchEntry(c)}
+                  disabled={c === 'USD' && !(rate > 0)}
+                  title={c === 'USD' && !(rate > 0) ? 'Set this PO’s exchange rate first' : undefined}
+                >{c}</button>
+              ))}
+            </div>
+          </div>
+        )}
         {kindConflicts && (
           <div className="field field--full po-incoterm-note">
             Heads up — this PO is <strong>{incotermNorm}</strong>, which normally already
@@ -1372,12 +1661,12 @@ function PaymentModal({ mode, currency, defaultFxRate, payment, outstanding, onC
           <Input type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </label>
         <label className="field">
-          <span className="field__label">FX rate (1 {currency} = ? USD)</span>
-          <Input
-            type="number" min="0" step="0.0001"
+          <span className="field__label">{isUsd ? 'Exchange rate' : fxLabel(currency)}</span>
+          <FxRateInput
+            currency={currency}
             value={fxRate}
             disabled={isUsd}
-            onChange={(e) => setFxRate(e.target.value)}
+            onChange={setFxRate}
           />
           <span className="field__hint">
             {isUsd ? 'USD PO — no conversion.' : `= ${fmtUsd(usdPreview)} USD for this payment.`}

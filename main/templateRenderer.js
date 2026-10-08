@@ -45,6 +45,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const sharp = require('sharp');
+require('./util/sharpLimits');   // process-wide libvips cache cap (perf audit 2026-10)
 const bwipjs = require('bwip-js');
 const { getDataDir } = require('./db');
 const { slugify } = require('./util/slug');
@@ -307,6 +308,12 @@ async function measureTextInk(content, attrs, fontSize) {
  *   designPixelScale). A 96 px font is drawn at 96 × px, so it keeps the same
  *   share of the picture on any photo and at any preview size.
  */
+const KHMER_RE = /[\u1780-\u17FF\u19E0-\u19FF]/;
+/** One text line's height in em: 1.45 for any Khmer, 1.15 otherwise. */
+function overlayLineEm(text) {
+  return KHMER_RE.test(String(text ?? '')) ? 1.45 : 1.15;
+}
+
 async function renderTextElement(el, ctx, imgW, imgH, px = 1) {
   const content = fillTokens(el.content ?? '', ctx);
   if (!content) return null;
@@ -332,8 +339,14 @@ async function renderTextElement(el, ctx, imgW, imgH, px = 1) {
   const inkLeft = ink ? ink.left : 0;
   const explicitW  = el.width ? Math.round(el.width * imgW) : null;
   const w = Math.max(1, explicitW ?? (inkW + padding * 2));
-  const lineHeight = Math.round(fontSize * 1.15);
+  // 1.45 em when the text has Khmer (stacked subscripts and below-vowels were
+  // clipped by the 1.15 em box), 1.15 em otherwise. The extra height is split
+  // above and below, so the baseline moves down by half of it. Mirrored in
+  // renderer/modules/OverlayStudio/elementDefaults.js (`overlayLineEm`).
+  const lineEm = overlayLineEm(content);
+  const lineHeight = Math.round(fontSize * lineEm);
   const h = lineHeight + padding * 2;
+  const extraTop = Math.round((lineHeight - Math.round(fontSize * 1.15)) / 2);
 
   // Place the INK (not the pen origin) in the box: flush left at the padding,
   // centred, or flush right at the padding. Whole-pixel origin so the glyphs
@@ -343,7 +356,7 @@ async function renderTextElement(el, ctx, imgW, imgH, px = 1) {
     : align === 'right' ? w - padding - inkW
       : padding;
   const originX = Math.round(inkStart - inkLeft);
-  const textY = padding + Math.round(fontSize * 0.85);   // baseline approx
+  const textY = padding + extraTop + Math.round(fontSize * 0.85);   // baseline approx
 
   // Text wider than an explicit box still shows in full: the buffer grows past
   // the box and `offsetX` tells compose() where the box starts inside it. (The
@@ -672,9 +685,13 @@ async function buildBase({ inputImage, template, full, photoW, photoH, hasAlpha,
       process.stderr.write(`[overlay] inset failed, using the plain photo: ${err.message}\n`);
       const fb = outputCanvasSize({ canvasWidth: template.canvasWidth || 2000, canvasHeight: template.canvasHeight || 2000 }, photoW, photoH);
       const fs2 = outW / fb.width;
-      return buildBase({
+      const fallback = await buildBase({
         inputImage, template, full: fb, photoW, photoH, hasAlpha, s: fs2, outW, outH: Math.max(1, Math.round(fb.height * fs2)),
       });
+      // Marked so the preview cache does not keep it: the reframe error may
+      // be transient, and a cached fallback would hide the inset until the
+      // photo file itself changed.
+      return { ...fallback, fallback: true };
     }
   }
   if (full.mode === 'letterbox') {
@@ -699,6 +716,67 @@ async function buildBase({ inputImage, template, full, photoW, photoH, hasAlpha,
     .raw()
     .toBuffer({ resolveWithObject: true });
   return { input: data, raw: { width: info.width, height: info.height, channels: info.channels } };
+}
+
+/* Perf audit 2026-10: every debounced editor preview decoded and resized the
+ * full-size photo again (~400 ms each). A preview base depends only on the
+ * photo file and the preview geometry, so the last few are kept in memory.
+ * Previews only (s < 1): an export always reads the file.
+ *
+ * Bounded by BYTES, not by count: a base is raw RGBA, so a 1600 px preview is
+ * ~10 MB and eight of them were ~80 MB resident. The cache holds at most
+ * PREVIEW_BASE_CACHE_BYTES (least recently used out first) and never keeps a
+ * single base bigger than that.
+ *
+ * Keyed like the thumbnail cache (main/util/thumbCache.js): path + size +
+ * mtimeMs + ino + ctimeMs. Size + mtime alone could not tell a renumber apart
+ * — `-003.jpg` replaced by a different photo of the same size and mtime would
+ * have served the old preview; a rename onto the slot changes the inode and
+ * the ctime. */
+const PREVIEW_BASE_CACHE_BYTES = 32 * 1024 * 1024;
+const previewBaseCache = new Map();   // key → { base, bytes }
+let previewBaseCacheBytes = 0;
+async function previewBaseKey(inputImage, args) {
+  if (typeof inputImage !== 'string') return null;
+  // Async: this runs on the main process for every debounced preview.
+  let st;
+  try { st = await fs.promises.stat(inputImage); } catch { return null; }
+  const { template, full, s, outW, outH } = args;
+  return JSON.stringify([inputImage, st.size, st.mtimeMs, st.ino, st.ctimeMs, full.mode, full.width, full.height, s, outW, outH,
+    template?.canvasWidth, template?.canvasHeight, full.mode === 'inset' ? template?.inset : null]);
+}
+function baseBytes(base) {
+  return Buffer.isBuffer(base?.input) ? base.input.length : 0;
+}
+function rememberPreviewBase(key, base) {
+  if (!key || !base || base.fallback) return;   // never cache a fallback render
+  const bytes = baseBytes(base);
+  if (bytes > PREVIEW_BASE_CACHE_BYTES) return;
+  const prev = previewBaseCache.get(key);
+  if (prev) { previewBaseCacheBytes -= prev.bytes; previewBaseCache.delete(key); }
+  previewBaseCache.set(key, { base, bytes });
+  previewBaseCacheBytes += bytes;
+  while (previewBaseCacheBytes > PREVIEW_BASE_CACHE_BYTES && previewBaseCache.size > 0) {
+    const oldestKey = previewBaseCache.keys().next().value;
+    previewBaseCacheBytes -= previewBaseCache.get(oldestKey).bytes;
+    previewBaseCache.delete(oldestKey);
+  }
+}
+async function cachedPreviewBase(args) {
+  const key = args.s < 1 ? await previewBaseKey(args.inputImage, args) : null;
+  if (!key) return buildBase(args);
+  const hit = previewBaseCache.get(key);
+  if (hit) {
+    previewBaseCache.delete(key); previewBaseCache.set(key, hit);   // most recent last
+    return hit.base;
+  }
+  const base = await buildBase(args);
+  rememberPreviewBase(key, base);
+  return base;
+}
+/** Test hook: what the preview cache holds right now. */
+function previewBaseCacheStats() {
+  return { entries: previewBaseCache.size, bytes: previewBaseCacheBytes, maxBytes: PREVIEW_BASE_CACHE_BYTES };
 }
 
 /** Open a base from buildBase with sharp. */
@@ -817,6 +895,9 @@ async function composeDetailed({
   strictImageAssets = false,
   maxPx = null,
   canvas = 'template',
+  // Preview only: an opaque result may come back as JPEG (`mime` says which)
+  // — a 0.6–2.3 MB PNG per debounced edit was most of the preview's time.
+  previewJpeg = false,
 }) {
   if (!template || !Array.isArray(template.elements)) {
     throw new Error('Template missing or has no elements');
@@ -848,7 +929,7 @@ async function composeDetailed({
   const outW = s === 1 ? full.width : Math.max(1, Math.round(full.width * s));
   const outH = s === 1 ? full.height : Math.max(1, Math.round(full.height * s));
 
-  const base = await buildBase({ inputImage, template, full, photoW, photoH, hasAlpha, s, outW, outH });
+  const base = await cachedPreviewBase({ inputImage, template, full, photoW, photoH, hasAlpha, s, outW, outH });
   // Read the base's real size rather than trusting the arithmetic (reframe
   // rounds on its own).
   const baseMeta = base.raw ?? await openBase(base).metadata();
@@ -889,16 +970,20 @@ async function composeDetailed({
     if (layer) composites.push(layer);
   }
 
-  const bytes = composites.length === 0
+  // A JPEG preview only when nothing in it can be transparent: a real photo
+  // without alpha (the blank canvas is white, an inset fills its margin).
+  const asJpeg = previewJpeg && s < 1 && !hasAlpha;
+  const pipeline = composites.length === 0 ? openBase(base) : openBase(base).composite(composites);
+  const bytes = asJpeg
+    ? await pipeline.flatten({ background: WHITE }).jpeg({ quality: 88 }).toBuffer()
     // Nothing rendered — return the (possibly reframed) base unchanged,
     // still as PNG so the caller has a uniform output format.
-    ? await openBase(base).png().toBuffer()
-    : await openBase(base)
-      .composite(composites)
-      .png({ compressionLevel: 7 })
-      .toBuffer();
+    : composites.length === 0
+      ? await pipeline.png().toBuffer()
+      : await pipeline.png({ compressionLevel: 7 }).toBuffer();
   return {
     bytes,
+    mime: asJpeg ? 'image/jpeg' : 'image/png',
     width: imgW,
     height: imgH,
     fullWidth: full.width,
@@ -944,4 +1029,6 @@ module.exports = {
   defaultResolveAsset, compose, composeDetailed, fillTokens, outputPathFor, outputCanvasSize, designPixelScale,
   // Exported for tests: the editor's elementBox mirrors this, and a parity
   // test is the only thing that keeps the two from drifting apart.
-  resolveBox };
+  resolveBox, overlayLineEm,
+  // Exported for tests: the preview base cache's byte bound and its key.
+  previewBaseCacheStats, _previewBaseCache: { key: previewBaseKey, remember: rememberPreviewBase, get: (k) => previewBaseCache.get(k)?.base ?? null } };

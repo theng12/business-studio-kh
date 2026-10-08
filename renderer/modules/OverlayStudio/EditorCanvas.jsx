@@ -7,6 +7,13 @@ import {
 } from './overlayFit.js';
 import { previewMaxPx, createLatestGuard } from './overlayCanvas.js';
 
+/** True while a modal dialog is open (the shared Modal / confirm() mark
+ *  themselves `role="dialog" aria-modal="true"`). Designer shortcuts stand
+ *  down then, so Backspace in a confirm cannot delete what is behind it. */
+function dialogOpen() {
+  try { return !!globalThis.document?.querySelector?.('[role="dialog"][aria-modal="true"]'); } catch { return false; }
+}
+
 /**
  * Text ink width in px, measured with a canvas 2D context — the editor's
  * counterpart of the server's measureTextInk (main/templateRenderer.js), so the
@@ -223,7 +230,8 @@ export function EditorCanvas({
         // bytes is a Buffer (standalone) or a Buffer reconstructed
         // from the {__bin, b64} wire envelope (client mode). Both
         // are Uint8Array-compatible — Blob accepts either.
-        const blob = new Blob([bytes], { type: 'image/png' });
+        // JPEG for an opaque preview, PNG when it can be transparent.
+        const blob = new Blob([bytes], { type: result?.mime === 'image/jpeg' ? 'image/jpeg' : 'image/png' });
         const url = URL.createObjectURL(blob);
         // Revoke the previous URL AFTER the new one is set so React
         // never paints with a revoked src.
@@ -319,6 +327,9 @@ export function EditorCanvas({
       const tag = (e.target?.tagName || '').toUpperCase();
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.target?.isContentEditable) return;
+      // An open dialog (delete confirm, conflict prompt, Apply…) owns the
+      // keyboard — arrows there must not move the element behind it.
+      if (e.defaultPrevented || dialogOpen()) return;
       const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
       const d = arrows[e.key];
       if (!d) return;

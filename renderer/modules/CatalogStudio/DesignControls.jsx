@@ -30,7 +30,7 @@ export function DesignControls({ config, onChange, priceGroups = [], coverTitle 
       setOpenSections((sections) => sections[name] === open ? sections : { ...sections, [name]: open });
     } };
   }
-  const products = useAppStore((s) => s.products);
+  const products = useAppStore((s) => s.allProducts ?? s.products);
   const extras = useMemo(() => extraFieldRows(priceGroups, products ?? []), [priceGroups, products]);
   const baseRows = catalogFieldRows(configFields);
   const fields = [...baseRows, ...extras.filter((x) => !baseRows.some((f) => f.key === x.key))];

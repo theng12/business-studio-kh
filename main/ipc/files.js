@@ -15,6 +15,7 @@
 
 const fs = require('node:fs');
 const { dialog } = require('electron');
+const { revealPath } = require('../util/openPath');
 const fileHandler = require('../fileHandler');
 const companies = require('../db/companies');
 const productsDb = require('../db/products');
@@ -59,6 +60,21 @@ function register({ exposeLocal }) {
       .jpeg({ quality: 72 })
       .toBuffer();
     return `data:image/jpeg;base64,${buf.toString('base64')}`;
+  });
+
+  /**
+   * Show a file or folder this Mac just wrote — "Show in Finder" after an
+   * export, "Open folder" after a label run. A folder opens in Finder; a file
+   * opens its folder with the file selected. Local-only: the path is on the
+   * Mac that ran the job (client mode has its own copy in main/client/index.js).
+   * The validator already requires an absolute path that exists; the check is
+   * repeated here because the folder can vanish between the two.
+   */
+  exposeLocal('files:revealPath', async (absPath) => {
+    if (!isAbsolutePath(absPath)) throw new Error('An absolute path is required');
+    // Plain folders open; files and packages (.app, .pkg …) are revealed,
+    // never opened — opening a package launches it (util/openPath.js).
+    return revealPath(absPath);
   });
 
   exposeLocal('files:pickImageFile', async ({ multiple = false } = {}) => {

@@ -56,7 +56,7 @@ for (const [operation, invoke, api] of [
 test('selection survives slot renumbering and remove sends the confirmed identity', async () => {
   const confirm = deferred(); const removed = [];
   const e = await editor({ confirm: () => confirm.promise, images: { setMainImage: async () => [{ ...photos('A')[1], filepath: 'A/1.jpg' }, { ...photos('A')[0], filepath: 'A/2.jpg' }], removeFromProduct: async (...a) => { removed.push(a); return []; } } });
-  try { e.tiles()[1].props.onToggleSelected(); e.render(); const removing = e.tiles()[0].props.onRemove(); await e.tiles()[1].props.onSetMain(); e.render(); e.render(); assert.equal(e.tiles()[0].props.selected, true); assert.equal(e.tiles()[1].props.selected, false); confirm.resolve(true); await removing; assert.deepEqual(removed[0], ['A', 'A-1', 'A-1-hash']); } finally { e.hook.cleanup(); }
+  try { e.tiles()[1].props.onToggleSelected(); e.render(); const removing = e.tiles()[0].props.onRemove(); await e.tiles()[1].props.onSetMain(); e.render(); e.render(); assert.equal(e.tiles()[0].props.selected, true); assert.equal(e.tiles()[1].props.selected, false); confirm.resolve(true); await removing; assert.deepEqual(removed[0], ['A', 'A-1', 'A-1-hash', { withEntry: true }]); } finally { e.hook.cleanup(); }
 });
 test('queue serializes advancing tokens and navigation flush includes edits typed during a save', async () => {
   const first = deferred(); const second = deferred(); const writes = [];

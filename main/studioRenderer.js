@@ -6,6 +6,17 @@ const { priceEntry, formatPriceEntry } = require('./util/prices');
 const { formatAmount } = require('./util/currencies');
 const { normalizeCatalogConfig, catalogPageMarginsMm } = require('./util/catalogModel');
 
+/* Default line height for a label text box — 1.45 when the text has any Khmer
+ * (stacked subscripts and below-vowels ran into the next line at 1.15), 1.15
+ * otherwise. Mirrored in renderer/modules/LabelStudio/labelFields.js so the
+ * designer canvas draws exactly what prints. */
+const KHMER_RE = /[\u1780-\u17FF\u19E0-\u19FF]/;
+function labelLineHeight(el, text) {
+  const explicit = Number(el?.lineHeight);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return KHMER_RE.test(String(text ?? '')) ? 1.45 : 1.15;
+}
+
 /* v0.1.25: resolved lazily rather than at module load.
  *
  * `require('./db')` pulls in better-sqlite3, which is compiled for Electron's
@@ -72,6 +83,15 @@ function fontFaceCss(family, abs, weight) {
   return css;
 }
 
+/* A short name for a font CSS string — which faces it carries. The CSS for a
+ * given set of faces is built from the per-face cache above, so equal sets
+ * give equal strings; the key is length + the family/weight list. */
+function fontSetKey(css) {
+  const text = String(css);
+  const names = [...text.matchAll(/font-family:"([^"]+)"[^}]*font-weight:(\d+)/g)].map((m) => `${m[1]}:${m[2]}`);
+  return `${names.join('|')}#${text.length}`;
+}
+
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -98,14 +118,56 @@ function assetDataUri(rel) {
  *
  * The shared read guard checks roots, symlinks and image signatures before
  * handing a reference to the protocol. A missing valid file stays empty. */
-function previewImageSrc(rel, version) {
+/* `w` (optional) asks the protocol for a cached thumbnail instead of the
+ * original (AGENTS.md §9): a catalog page shows a photo a few hundred pixels
+ * wide, and a 50-product preview was pulling 50 full-size originals. 640 is
+ * the largest tier in main/util/thumbCache.js. Print and export never call
+ * this — they embed the original. */
+/* Perf audit 2026-10 (2,500 products / 8,951 images): the guard check below
+ * is a realpath walk plus open/fstat/read/close per photo, ~280 ms of blocked
+ * main process for a 584-image preview — on EVERY debounced refresh. The
+ * preview only needs the URL, so a photo that passed the full check is
+ * remembered with its file identity (size, mtime, inode); the next preview
+ * does one lstat and re-runs the full check only when the file changed, was
+ * replaced by a symlink, or went missing. The protocol still runs its own
+ * guard when it serves the file. */
+const previewArtCache = new Map();
+const PREVIEW_ART_CACHE_MAX = 6000;
+function previewArtworkOk(rel) {
+  const dataDir = getDataDir();
+  const key = `${dataDir}\0${rel}`;
+  const hit = previewArtCache.get(key);
+  if (hit) {
+    try {
+      const st = fs.lstatSync(hit.abs);
+      if (!st.isSymbolicLink() && st.size === hit.size && st.mtimeMs === hit.mtimeMs && st.ino === hit.ino) return true;
+    } catch (_) { /* gone or unreadable: full check below */ }
+    previewArtCache.delete(key);
+  }
+  const image = readArtwork(dataDir, rel, { headerOnly: true });
+  if (!image) return false;
+  try {
+    const st = fs.lstatSync(image.abs);
+    if (!st.isSymbolicLink()) {
+      if (previewArtCache.size >= PREVIEW_ART_CACHE_MAX) previewArtCache.delete(previewArtCache.keys().next().value);
+      previewArtCache.set(key, { abs: image.abs, size: st.size, mtimeMs: st.mtimeMs, ino: st.ino });
+    }
+  } catch (_) { /* not cached — checked again next time */ }
+  return true;
+}
+
+function previewImageSrc(rel, version, w = null) {
   if (rel == null || rel === '') return '';
-  const image = readArtwork(getDataDir(), rel, { headerOnly: true });
-  if (!image) return '';
+  // Explicit-root references are inlined below, so they are read every time.
+  const inlined = /^(assets|processed|ai-gallery)[/\\]/.test(rel);
+  if (inlined ? !readArtwork(getDataDir(), rel, { headerOnly: true }) : !previewArtworkOk(rel)) return '';
   // Explicit-root references keep their established embedded preview behavior.
-  if (/^(assets|processed|ai-gallery)[/\\]/.test(rel)) return assetDataUri(rel);
+  if (inlined) return assetDataUri(rel);
   const url = `app-image://local/${encodeURIComponent(rel.replace(/\\/g, '/'))}`;
-  return version == null || version === '' ? url : `${url}?v=${encodeURIComponent(String(version))}`;
+  const params = [];
+  if (version != null && version !== '') params.push(`v=${encodeURIComponent(String(version))}`);
+  if (w) params.push(`w=${Number(w)}`);
+  return params.length ? `${url}?${params.join('&')}` : url;
 }
 
 /* The price source a field key names, or null when it is not a price:
@@ -197,7 +259,7 @@ async function renderLabel(template, product, brand = null, preview = false) {
     if (el.type === 'date' && !value) value = new Date().toLocaleDateString('en-CA');
     if (el.type === 'country' && !value) value = product.countryOfOrigin || '';
     value = `${el.prefix || ''}${value ?? ''}${el.suffix || ''}`;
-    parts.push(`<div style="${style};display:flex;align-items:${el.verticalAlign === 'top' ? 'flex-start' : el.verticalAlign === 'bottom' ? 'flex-end' : 'center'};justify-content:${el.align === 'center' ? 'center' : el.align === 'right' ? 'flex-end' : 'flex-start'};font-size:${Number(el.fontSize) || 10}pt;font-weight:${Number(el.fontWeight) || 400};font-style:${el.italic ? 'italic' : 'normal'};text-align:${el.align || 'left'};line-height:${Number(el.lineHeight) || 1.15};color:${esc(el.color || '#111827')};overflow:hidden;white-space:${el.wrap === false ? 'nowrap' : 'normal'}">${esc(value)}</div>`);
+    parts.push(`<div style="${style};display:flex;align-items:${el.verticalAlign === 'top' ? 'flex-start' : el.verticalAlign === 'bottom' ? 'flex-end' : 'center'};justify-content:${el.align === 'center' ? 'center' : el.align === 'right' ? 'flex-end' : 'flex-start'};font-size:${Number(el.fontSize) || 10}pt;font-weight:${Number(el.fontWeight) || 400};font-style:${el.italic ? 'italic' : 'normal'};text-align:${el.align || 'left'};line-height:${labelLineHeight(el, value)};color:${esc(el.color || '#111827')};overflow:hidden;white-space:${el.wrap === false ? 'nowrap' : 'normal'}">${esc(value)}</div>`);
   }
   return `<section class="label" style="width:${template.widthMm}mm;height:${template.heightMm}mm;background:${esc(template.backgroundColor || '#fff')}">${parts.join('')}</section>`;
 }
@@ -265,7 +327,12 @@ const EMPTY_CATALOG_HTML = '<div class="empty"><strong>No products have been add
  * preview has always drawn its text with the Mac's own fonts. Building and
  * cloning tens of MB of font CSS that is then refused bought nothing. The
  * PDF export renders in an offscreen window with no such CSP and keeps both. */
-function buildCatalogHtml({ project, products, brands = [], categories = [], company = null }, { preview = false } = {}) {
+/* `fontsOut` (preview only, optional): the font CSS is NOT put in the HTML;
+ * it is handed back as `fontsOut.css` with a short `fontsOut.key` naming the
+ * set of faces, so the caller can send it once and the app can reuse it. The
+ * catalog editor's refresh used to ship ~2 MB of base64 fonts inside every
+ * 2.2 MB srcdoc (perf audit 2026-10). Without `fontsOut` nothing changes. */
+function buildCatalogHtml({ project, products, brands = [], categories = [], company = null }, { preview = false, fontsOut = null } = {}) {
   const rawConfig = project.config || {};
   const c = normalizeCatalogConfig(rawConfig);
   const brandMap = new Map(brands.map((b) => [b.id, b]));
@@ -284,10 +351,15 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
   // Script detection reads only what this document renders: the selected
   // products, not the whole catalog handed in (a template preview passes every
   // product and renders nine).
-  const fonts = embeddedFontCss(JSON.stringify({ project, products: selected, brands, categories, company }), { preview });
+  let fonts = embeddedFontCss(JSON.stringify({ project, products: selected, brands, categories, company }), { preview });
+  if (preview && fontsOut && typeof fontsOut === 'object') {
+    fontsOut.css = fonts;
+    fontsOut.key = fonts ? fontSetKey(fonts) : '';
+    fonts = '';
+  }
   const fields = c.fields;
   const card = (p) => {
-    const image = !c.showImages ? '' : preview ? previewImageSrc(p.mainImagePath, p.updatedAt) : assetDataUri(p.mainImagePath);
+    const image = !c.showImages ? '' : preview ? previewImageSrc(p.mainImagePath, p.updatedAt, 640) : assetDataUri(p.mainImagePath);
     const rows = fields.filter((f) => f.visible !== false).map((f) => {
       const value = catalogValue(p, f.key, c);
       return value === '' || value == null ? '' : `<div class="field ${f.bold ? 'bold' : ''}" style="text-align:${f.align}">${f.showLabel === false ? '' : `<span>${esc(f.label || f.key)}</span>`}<span class="field-value">${esc(value)}</span></div>`;
@@ -333,4 +405,4 @@ function buildCatalogHtml({ project, products, brands = [], categories = [], com
  * including the Khmer/Thai/JP/SC fallbacks — and the offscreen render window
  * cannot reach `assets/fonts` on its own, so the font CSS has to be inlined.
  * Re-exporting beats copying: one place decides which scripts get embedded. */
-module.exports = { labelsDocument, buildCatalogHtml, barcodeUri, assetDataUri, embeddedFontCss, esc, labelPriceAmount, productValue };
+module.exports = { labelsDocument, buildCatalogHtml, barcodeUri, assetDataUri, embeddedFontCss, esc, labelPriceAmount, productValue, labelLineHeight };
