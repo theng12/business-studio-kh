@@ -3,9 +3,9 @@
  * `test/opsAuditPure.test.js` can run them under plain `npm test`.
  *
  * Landed cost is always USD. A stored price in another currency is compared
- * only through a rate the viewer typed ("1 USD = 4,100 KHR"): there is no
- * house exchange rate in the app, so without one the margin says why it is
- * missing instead of printing a wrong percentage.
+ * only through a rate: riel through the house rate (Settings → General,
+ * 0.1.95), anything else through a rate the viewer typed. Without one the
+ * margin says why it is missing instead of printing a wrong percentage.
  */
 
 /** Positive rate for `currency` from the `{ KHR: '4100' }` map, else null. */

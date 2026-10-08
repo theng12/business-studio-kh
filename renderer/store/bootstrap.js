@@ -3,6 +3,7 @@
 // startup event cannot fall into a blind spot.
 
 import { applyTheme } from '../lib/theme.js';
+import { houseRateFrom } from '../lib/exchangeRate.js';
 import { applyCatalogEvent } from './catalogEvents.js';
 
 let _aiUnsubs = [];
@@ -226,6 +227,7 @@ export function createBootstrapSlice(set, get) {
         dataDirIsCloud: !!settings?.dataDirIsCloud,
         appMode: settings?.mode ?? 'standalone',
         clientServerUrl: settings?.clientServerUrl ?? '',
+        houseKhrPerUsd: houseRateFrom(settings),
         ...(settings?.aiDefaultModel ? { aiSelectedModelKey: settings.aiDefaultModel } : {}),
       });
       get().applyActiveCompanyContext(activeId);

@@ -4,6 +4,7 @@ import { useAppStore } from '../store/index.js';
 // v0.1.22: shared with Settings — see renderer/lib/capabilities.js.
 import { hasCap, hasAnyCap } from '../lib/capabilities.js';
 import { WhatsNewModal } from './WhatsNewModal.jsx';
+import { hasUnseenWhatsNew, loadLastSeenVersion, saveLastSeenVersion } from '../lib/whatsNewSeen.js';
 import { PresenceModal } from './PresenceModal.jsx';
 import { ConnectionLegendModal } from './ConnectionLegendModal.jsx';
 import { timeAgo } from '../lib/format.js';
@@ -181,6 +182,13 @@ export function Sidebar({ onSearch }) {
   const presence = useAppStore((s) => s.presence);
   const isModuleAvailable = useAppStore((s) => s.isModuleAvailable);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  // 0.1.95: a dot on What's new after an update, until it is opened.
+  const [whatsNewSeen, setWhatsNewSeen] = useState(() => loadLastSeenVersion());
+  const whatsNewUnseen = hasUnseenWhatsNew(version, whatsNewSeen);
+  function openWhatsNew() {
+    setWhatsNewOpen(true);
+    if (version) { saveLastSeenVersion(version); setWhatsNewSeen(version); }
+  }
   // v0.22.11: clickable presence + connection chip → modals.
   const [presenceOpen, setPresenceOpen] = useState(false);
   const [connLegendOpen, setConnLegendOpen] = useState(false);
@@ -352,10 +360,13 @@ export function Sidebar({ onSearch }) {
           <button
             type="button"
             className="sidebar__footer-btn"
-            onClick={() => setWhatsNewOpen(true)}
+            onClick={openWhatsNew}
+            aria-label={whatsNewUnseen ? `What's new — new in version ${version}` : undefined}
+            title={whatsNewUnseen ? `New in version ${version}` : undefined}
           >
             <IconSparkles className="sidebar__footer-btn-icon" />
             <span>What's new</span>
+            {whatsNewUnseen ? <i className="sidebar__new-dot" aria-hidden="true" /> : null}
           </button>
           <button
             type="button"

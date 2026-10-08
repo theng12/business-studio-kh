@@ -3,6 +3,7 @@
 // (attributionUsers, presence, clientConnection, progressOps).
 
 import { applyTheme } from '../lib/theme.js';
+import { DEFAULT_KHR_PER_USD, houseRateFrom, validRate } from '../lib/exchangeRate.js';
 
 export function createAppSlice(set, _get) {
   return {
@@ -53,6 +54,19 @@ export function createAppSlice(set, _get) {
     // The appConfig object stays so other config mirrors can be added
     // here later without re-introducing the field.
     appConfig: {},
+    // 0.1.95: the house exchange rate, riel per US dollar (config.json
+    // `exchangeRateKhrPerUsd`; renderer/lib/exchangeRate.js).
+    houseKhrPerUsd: DEFAULT_KHR_PER_USD,
+
+    /** Validate, persist to config.json, then mirror. Throws on a bad value
+     *  or a refused write so the caller can toast the real message. */
+    async setHouseExchangeRate(value) {
+      const rate = validRate(value);
+      if (rate == null) throw new Error('Exchange rate must be a number above 0 (riel per US dollar, e.g. 4100)');
+      const next = await window.api.settings.setOne('exchangeRateKhrPerUsd', rate);
+      set({ houseKhrPerUsd: houseRateFrom(next ?? { exchangeRateKhrPerUsd: rate }) });
+      return rate;
+    },
 
     /* ─── Theme ─── */
 
@@ -81,6 +95,7 @@ export function createAppSlice(set, _get) {
         // at a server" apart from "client mode, server unreachable". The first
         // is a setup step, the second is a fault, and they need different words.
         clientServerUrl: cfg?.clientServerUrl ?? '',
+        houseKhrPerUsd: houseRateFrom(cfg),
       });
     },
   };

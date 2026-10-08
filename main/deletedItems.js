@@ -193,6 +193,46 @@ function holdImage({ imageRow, fileRelpath, companyId, userId }) {
 }
 
 /**
+ * Fuel F1: hold an evidence photo that passed its retention window (owner
+ * decision 2026-10-08: 24 months, then Recently deleted -> Trash). The file
+ * moves into the bin; the `fuel_photos` row stays (marked retired by the
+ * caller), so restoring is a move back plus clearing `retired_at`.
+ */
+function holdFuelPhoto({ photoRow, companyId, label }) {
+  const id = crypto.randomUUID();
+  const from = dataAbs(photoRow.rel_path);
+  let moved = false;
+  if (fs.existsSync(from)) {
+    moveInto(from, path.join(heldDir(id), 'file', path.basename(photoRow.rel_path)));
+    moved = true;
+  }
+  return insertItem({
+    id,
+    kind: 'fuel-photo',
+    companyId: companyId ?? null,
+    productId: null,
+    label: label || path.basename(photoRow.rel_path),
+    detail: 'fuel photo',
+    payload: { photoId: photoRow.id, relPath: photoRow.rel_path, sha256: photoRow.sha256, moved },
+    userId: null,
+  });
+}
+
+function restoreFuelPhoto(item) {
+  const payload = JSON.parse(item.payload_json || '{}');
+  const from = path.join(heldDir(item.id), 'file', path.basename(payload.relPath || ''));
+  if (!payload.moved || !payload.relPath || !fs.existsSync(from)) throw new Error(MISSING_HOLD_MESSAGE);
+  const to = dataAbs(payload.relPath);
+  if (fs.existsSync(to)) throw new Error('A file is already back at that photo\'s place.');
+  moveInto(from, to);
+  const db = getDb();
+  db.prepare('UPDATE fuel_photos SET retired_at = NULL, retired_reason = NULL, recycle_item_id = NULL WHERE id = ?').run(payload.photoId);
+  db.prepare('DELETE FROM deleted_items WHERE id = ?').run(item.id);
+  pruneEmptyDirs(heldDir(item.id));
+  return { kind: 'fuel-photo', label: item.label, productId: null, photoId: payload.photoId };
+}
+
+/**
  * Undo a holdImage whose delete did not go through: the photo goes back to
  * the path it came from (its row is still there, pointing at it) and the bin
  * entry is dropped. If that path has been taken meanwhile the photo stays held
@@ -278,6 +318,10 @@ function pruneEmptyDirs(dir) {
 function holdIsMissing(item) {
   let payload;
   try { payload = JSON.parse(item.payload_json || '{}'); } catch (_) { return false; }
+  if (item.kind === 'fuel-photo') {
+    if (!payload.moved || !payload.relPath) return false;
+    return !fs.existsSync(path.join(heldDir(item.id), 'file', path.basename(payload.relPath)));
+  }
   if (item.kind === 'image') {
     if (!payload.moved || !payload.fileRelpath) return false;
     return !fs.existsSync(path.join(heldDir(item.id), 'file', path.basename(payload.fileRelpath)));
@@ -520,6 +564,7 @@ function restoreImage(item) {
 function restore(id) {
   const item = get(id);
   if (!item) throw new Error('That deleted item is no longer in the list');
+  if (item.kind === 'fuel-photo') return restoreFuelPhoto(item);
   return item.kind === 'image' ? restoreImage(item) : restoreProduct(item);
 }
 
@@ -606,6 +651,7 @@ module.exports = {
   DAY_MS,
   holdProduct,
   holdImage,
+  holdFuelPhoto,
   releaseImageHold,
   dropOrphanedHolds,
   list,

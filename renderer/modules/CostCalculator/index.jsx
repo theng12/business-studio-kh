@@ -16,7 +16,7 @@
  * are kept in component state and reset on module unmount.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Input } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -28,6 +28,7 @@ import { priceEntry, formatPriceEntry } from '../../lib/prices.js';
 import { formatPrice } from '../../lib/currencies.js';
 import { marginAgainst, retailInCurrency } from './costMath.js';
 import { useCostingCaps } from '../PurchaseOrders/costingCaps.js';
+import { formatRate, migrateLocalKhrRate } from '../../lib/exchangeRate.js';
 
 // Stable getters for SearchableSelect (its filter memo depends on them). The
 // label carries SKU and name, so typing either finds the product — and the
@@ -35,9 +36,11 @@ import { useCostingCaps } from '../PurchaseOrders/costingCaps.js';
 const productLabel = (p) => `${p?.sku || ''}${p?.name ? ` — ${p.name}` : ''}`;
 const productValue = (p) => p?.id ?? '';
 
-// "1 USD = 4,100 KHR" rates typed here to compare riel (or baht…) prices with
-// the USD landed cost. The app keeps no house rate, so it is the viewer's own
-// scratch figure, remembered on this Mac only.
+// Rates to compare a non-USD price with the USD landed cost. 0.1.95: riel
+// uses the HOUSE rate (Settings → General, `houseKhrPerUsd` in the store), so
+// this map only keeps the viewer's own scratch rates for other currencies
+// (baht…), remembered on this Mac. A KHR rate stored here by an older version
+// is moved into the house rate once (migrateLocalKhrRate) and dropped.
 const RATES_KEY = 'costcalc.ratesPerUsd';
 function loadRates() {
   try { const v = JSON.parse(window.localStorage.getItem(RATES_KEY) || '{}'); return v && typeof v === 'object' ? v : {}; }
@@ -57,7 +60,25 @@ export function CostCalculator() {
 
   const [products, setProducts] = useState([]);
   const [productId, setProductId] = useState('');
-  const [ratesPerUsd, setRatesPerUsd] = useState(loadRates);
+  const [localRates, setLocalRates] = useState(() => { const { KHR: _khr, ...rest } = loadRates(); return rest; });
+  const houseKhrPerUsd = useAppStore((s) => s.houseKhrPerUsd);
+  const setHouseExchangeRate = useAppStore((s) => s.setHouseExchangeRate);
+  const setActiveModule = useAppStore((s) => s.setActiveModule);
+  const ratesPerUsd = useMemo(() => ({ ...localRates, KHR: houseKhrPerUsd }), [localRates, houseKhrPerUsd]);
+  // Once: move an old per-Mac KHR rate into the house rate.
+  useEffect(() => {
+    const stored = loadRates();
+    if (!Object.prototype.hasOwnProperty.call(stored, 'KHR')) return;
+    const { write, rest } = migrateLocalKhrRate(stored, useAppStore.getState().houseKhrPerUsd);
+    saveRates(rest);
+    if (write != null && typeof setHouseExchangeRate === 'function') {
+      setHouseExchangeRate(write)
+        .then(() => addToast(`Your riel rate moved to Settings → General: 1 USD = ${formatRate(write)} KHR`, 'info'))
+        .catch((err) => addToast(err.message, 'error'));
+    }
+  // Mount only — a migration, not a sync.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [savingRetail, setSavingRetail] = useState(false);
   const [costState, setCostState] = useState('idle');
   const [costError, setCostError] = useState('');
@@ -165,7 +186,7 @@ export function CostCalculator() {
       .map((e) => e.currency))]
     : [];
   function setRate(currency, text) {
-    setRatesPerUsd((prev) => {
+    setLocalRates((prev) => {
       const next = { ...prev, [currency]: text };
       saveRates(next);
       return next;
@@ -286,7 +307,16 @@ export function CostCalculator() {
               })}
             </div>
           )}
-          {foreignCurrencies.map((c) => (
+          {foreignCurrencies.map((c) => (c === 'KHR' ? (
+            <div className="field costcalc__rate" key={c}>
+              <span className="field__label">Exchange rate for KHR prices</span>
+              <div className="setting-control-row">
+                <span>1 USD = {formatRate(houseKhrPerUsd)} KHR</span>
+                <Button size="sm" onClick={() => { void setActiveModule('settings'); }}>Change in Settings…</Button>
+              </div>
+              <span className="field__hint">The rate from Settings → General, saved on this Mac; the Library’s price sort uses it too.</span>
+            </div>
+          ) : (
             <label className="field costcalc__rate" key={c}>
               <span className="field__label">Exchange rate for {c} prices (1 USD = ? {c})</span>
               <Input
@@ -294,12 +324,11 @@ export function CostCalculator() {
                 min="0"
                 step="any"
                 value={ratesPerUsd[c] ?? ''}
-                placeholder={c === 'KHR' ? 'e.g. 4100' : ''}
                 onChange={(e) => setRate(c, e.target.value)}
               />
               <span className="field__hint">Landed cost is in USD, so a {c} price needs a rate to show its margin. Kept on this Mac only.</span>
             </label>
-          ))}
+          )))}
           {productId && costState === 'loading' && <p className="section-hint costcalc__note" role="status">Loading received-PO cost history…</p>}
           {productId && costState === 'error' && <div className="costcalc__note" role="alert"><p>{costError}</p><Button onClick={() => setCostRefresh((value) => value + 1)}>Retry</Button></div>}
           {productId && costState === 'empty' && (
@@ -371,7 +400,7 @@ export function CostCalculator() {
                 const cur = priceEntry(selectedProduct, 'retail').currency;
                 const target = Number(retailUsd) > 0 ? retailInCurrency(Number(retailUsd), cur, ratesPerUsd) : null;
                 return target && target.currency !== 'USD'
-                  ? <span className="section-hint">Saved as {formatPrice(target.amount, target.currency)} at your rate.</span>
+                  ? <span className="section-hint">Saved as {formatPrice(target.amount, target.currency)} at {target.currency === 'KHR' ? 'the Settings rate' : 'your rate'}.</span>
                   : null;
               })()}
             </div>

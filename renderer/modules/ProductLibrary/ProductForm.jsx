@@ -6,6 +6,7 @@ import { confirmWithBackup } from '../../components/BackupReminder.jsx';
 import { Attribution } from '../../components/Attribution.jsx';
 import { HistoryModal } from '../../components/HistoryModal.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
+import { useSaveShortcut } from '../../components/useSaveShortcut.js';
 import { appImageSrc } from '../../lib/imageUrl.js';
 import { CURRENCIES } from '../../lib/currencies.js';
 import { SearchableSelect } from '../../components/SearchableSelect.jsx';
@@ -1239,6 +1240,9 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [isEmpty, visible]);
+
+  // 0.1.95: ⌘S saves an open, existing product (the same as its Save button).
+  useSaveShortcut(() => { if (!saving) void handleSave(); }, visible && !isEmpty && !isCreate);
 
   if (isEmpty) {
     return (

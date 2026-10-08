@@ -15,6 +15,7 @@ import { BackupsPanel } from './BackupsPanel.jsx';
 import { DeletedItemsPanel } from './DeletedItemsPanel.jsx';
 import { PriceGroupsPanel } from './PriceGroupsPanel.jsx';
 import { RolesPanel } from './RolesPanel.jsx';
+import { ExchangeRateControl } from './ExchangeRateControl.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
 
 // v0.22.13: Settings is now tabbed. SETTINGS_TABS is the source of
@@ -347,6 +348,13 @@ export function Settings() {
           hint="Light, Dark, or follow your operating system."
         >
           <ThemeSegment />
+        </SettingRow>
+
+        <SettingRow
+          label="Exchange rate"
+          hint="Riel per US dollar, saved on this Mac. Used by the Cost Calculator and price sorting on this Mac; prices still show in their own currency."
+        >
+          <ExchangeRateControl />
         </SettingRow>
 
         <SettingRow

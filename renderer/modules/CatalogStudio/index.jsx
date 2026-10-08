@@ -482,6 +482,12 @@ export function CatalogTemplates() {
   const addToast = useAppStore((s) => s.addToast);
   const openCatalogProject = useAppStore((s) => s.openCatalogProject);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
+  // 0.1.95: Library "Use in ▾ → Catalog → New catalog": the next project made
+  // here starts with these products. Read from the store, so it shows whether
+  // this screen mounts for it or is already open.
+  const pendingCatalogProducts = useAppStore((s) => s.pendingCatalogProducts);
+  const clearPendingCatalogProducts = useAppStore((s) => s.clearPendingCatalogProducts);
+  const handoffIds = pendingCatalogProducts && pendingCatalogProducts.companyId === companyId ? pendingCatalogProducts.ids : null;
   const [previewTemplate, setPreviewTemplate] = useState(null);
   const [createTemplate, setCreateTemplate] = useState(null);
   const [name, setName] = useState('');
@@ -546,16 +552,18 @@ export function CatalogTemplates() {
     try {
       const title = name.trim() || createTemplate.name;
       const builtIn = !!createTemplate.builtIn;
+      const config = builtIn
+        ? projectConfig(createTemplate, title)
+        // A saved template already carries a complete design; only the cover
+        // title is the project's own.
+        : { ...createTemplate.config, cover: { ...(createTemplate.config.cover || {}), title, subtitle: '' } };
       const project = await window.api.catalogStudio.create({
         companyId,
         name: title,
         description: createTemplate.description,
-        config: builtIn
-          ? projectConfig(createTemplate, title)
-          // A saved template already carries a complete design; only the cover
-          // title is the project's own.
-          : { ...createTemplate.config, cover: { ...(createTemplate.config.cover || {}), title, subtitle: '' } },
+        config: handoffIds?.length ? { ...config, selectionMode: 'explicit', productIds: [...handoffIds] } : config,
       });
+      if (handoffIds) clearPendingCatalogProducts?.();
       setCreateTemplate(null);
       setName('');
       openCatalogProject(project.id);
@@ -597,6 +605,14 @@ export function CatalogTemplates() {
         </>
       )}
     />
+
+    {handoffIds?.length ? (
+      <div className="toolbar catalog-handoff" role="status">
+        <span>Choose a template for the {handoffIds.length} product{handoffIds.length === 1 ? '' : 's'} sent from the Library. The new catalog starts with them.</span>
+        <div className="toolbar__spacer" />
+        <Button variant="ghost" size="sm" onClick={() => clearPendingCatalogProducts?.()}>Don’t add them</Button>
+      </div>
+    ) : null}
 
     {/* ── my templates ─────────────────────────────────────────────── */}
     <section className="catalog-section">
@@ -683,7 +699,7 @@ export function CatalogTemplates() {
       open={!!createTemplate}
       onClose={() => setCreateTemplate(null)}
       title="Create catalog project"
-      footer={<><Button onClick={() => setCreateTemplate(null)}>Cancel</Button><Button variant="primary" disabled={creating} onClick={create}>{creating ? 'Creating…' : 'Create and add products'}</Button></>}
+      footer={<><Button onClick={() => setCreateTemplate(null)}>Cancel</Button><Button variant="primary" disabled={creating} onClick={create}>{creating ? 'Creating…' : handoffIds?.length ? `Create with ${handoffIds.length} product${handoffIds.length === 1 ? '' : 's'}` : 'Create and add products'}</Button></>}
     >
       <Field label="Project name" hint={`Using ${createTemplate?.builtIn ? 'the' : 'your'} ${createTemplate?.name} template. You can change every layout setting later.`}>
         {({ id }) => <Input id={id} autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent?.isComposing && !creating) { e.preventDefault(); void create(); } }} placeholder="e.g. 2026 Wholesale Collection" />}

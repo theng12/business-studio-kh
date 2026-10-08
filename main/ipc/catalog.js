@@ -45,6 +45,8 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, SAFE
     return r;
   });
   expose('companies:remove', (id) => {
+    // Fuel F1 / §3: a company with staff or fuel history is never deleted.
+    require('../db/fuelHistory').assertCompanyRemovable(id);
     const r = companies.remove(id);
     emitCatalogChange('company', 'remove', id);
     return r;
