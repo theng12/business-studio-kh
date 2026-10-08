@@ -840,11 +840,26 @@ function createTransfer(input = {}) {
  * confirm the receipt — the two ends must be two people. `photoRows` are
  * inserted in the same transaction as the receipt.
  */
+/**
+ * A receipt for a transfer that already has one. The SAME caller sending the
+ * same litres again (a phone resending after a lost answer) gets the saved
+ * receipt back as a duplicate; anyone else, or other litres, is told plainly —
+ * "already saved" would hide that two people disagree about what arrived.
+ */
+function repeatedReceipt(t, input) {
+  const sameCaller = (t.receivedRecordedByUserId ?? null) === (getCallerUserId() ?? null);
+  const litres = num(input.litresReceived);
+  if (sameCaller && litres != null && Math.abs(litres - t.litresReceived) < 1e-9) return { transfer: t, duplicate: true };
+  const err = badRequest('Someone else already recorded this delivery as received');
+  err.code = 'ALREADY_RECEIVED';
+  throw err;
+}
+
 function receiveTransfer(id, input = {}, { forbidSelf = false, photoRows = [] } = {}) {
   const t = getTransfer(id);
   if (!t) throw badRequest('Transfer not found');
   if (t.voided) throw badRequest('That transfer is void');
-  if (t.received) return { transfer: t, duplicate: true };
+  if (t.received) return repeatedReceipt(t, input);
   if (forbidSelf) {
     const uid = getCallerUserId();
     const meNow = callerEmployee(t.companyId);
@@ -870,7 +885,7 @@ function receiveTransfer(id, input = {}, { forbidSelf = false, photoRows = [] } 
     `).run(litres, at, receiver, str(input.note, 1000), getCallerUserId(), id).changes;
     if (changes) for (const p of photoRows) insertPhotoRow({ ...p, companyId: t.companyId, ownerKind: 'transfer', ownerId: id });
   })();
-  if (changes === 0) return { transfer: getTransfer(id), duplicate: true };
+  if (changes === 0) return repeatedReceipt(getTransfer(id), input);
   const next = getTransfer(id);
   audit('fuel_transfer', id, 'receive', { after: { litresReceived: litres, receivedAt: at, receivedByEmployeeId: next.receivedByEmployeeId } });
   return { transfer: next, duplicate: false };
@@ -949,6 +964,22 @@ function clampLimit(v, def = 50) {
   return n == null ? def : Math.max(1, Math.min(500, n));
 }
 
+/**
+ * The asset's fill before this one (by time, current revisions, not void) —
+ * and the last one before it that has a meter reading, with any meter reset
+ * in between — so the reviewer sees the previous reading beside the typed one.
+ */
+function previousFills(fill) {
+  if (!fill?.assetId) return { previousFill: null, previousMeterFill: null };
+  const db = getDb();
+  const base = `SELECT * FROM fuel_fills WHERE asset_id = @assetId AND root_id <> @rootId AND voided_at IS NULL AND superseded_at IS NULL
+    AND (at < @at OR (at = @at AND created_at < @createdAt))`;
+  const params = { assetId: fill.assetId, rootId: fill.rootId, at: fill.at, createdAt: fill.createdAt };
+  const previousFill = rowToFill(db.prepare(`${base} ORDER BY at DESC, created_at DESC LIMIT 1`).get(params));
+  const previousMeterFill = rowToFill(db.prepare(`${base} AND meter_reading IS NOT NULL ORDER BY at DESC, created_at DESC LIMIT 1`).get(params));
+  return { previousFill, previousMeterFill };
+}
+
 function listFills(companyId, f = {}) {
   if (!companyId) return { items: [], total: 0 };
   const where = ['company_id = @companyId'];
@@ -962,9 +993,14 @@ function listFills(companyId, f = {}) {
   }
   if (f.kind && FILL_KINDS.includes(f.kind)) { where.push('kind = @kind'); p.kind = f.kind; }
   if (f.reviewStatus && REVIEW_STATUSES.includes(f.reviewStatus)) { where.push('review_status = @reviewStatus'); p.reviewStatus = f.reviewStatus; }
+  // 'waiting' = not yet checked (new or needs review): the Mac's review queue.
+  if (f.reviewStatus === 'waiting') where.push("review_status IN ('new', 'needs_review')");
   const sql = `FROM fuel_fills WHERE ${where.join(' AND ')}`;
   const total = getDb().prepare(`SELECT COUNT(*) AS n ${sql}`).get(p).n;
-  const rows = getDb().prepare(`SELECT * ${sql} ORDER BY at DESC, created_at DESC LIMIT @limit OFFSET @offset`)
+  // Newest first by default; the review queue asks for the oldest first so
+  // nothing waits forever behind a busy week (`total` is always the true count).
+  const order = f.order === 'oldest' ? 'at ASC, created_at ASC' : 'at DESC, created_at DESC';
+  const rows = getDb().prepare(`SELECT * ${sql} ORDER BY ${order} LIMIT @limit OFFSET @offset`)
     .all({ ...p, limit: clampLimit(f.limit), offset: Math.max(0, int(f.offset) ?? 0) }).map(rowToFill);
   const photos = listPhotos('fill', [...new Set(rows.map((r) => r.rootId))]);
   const flagCounts = new Map();
@@ -1112,6 +1148,7 @@ function lastPumpEventBefore(locationId, before) {
 }
 
 module.exports = {
+  previousFills,
   FILL_KINDS, SOURCES, REVIEW_STATUSES, PHOTO_KINDS, MAX_LITRES,
   rowToFill, getFill, getActiveFill, listRevisions, prepareFill, insertFill, createFill, correctFill, reviewFill,
   getDip, prepareDip, insertDip, createDip,

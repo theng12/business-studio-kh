@@ -126,3 +126,22 @@ test('GET /f serves the page without a token; the API still needs one', async (t
   assert.equal((await get(port, '/api/whoami')).status, 401);
   assert.equal((await get(port, '/fuel')).status, 401);
 });
+
+test('review fixes: opens in the browser (not a standalone web app), neutral check line, double-tap guard', () => {
+  // A standalone iOS web app has its own empty storage: signed out, queued records invisible.
+  assert.doesNotMatch(html, /<meta name="apple-mobile-web-app-capable"/);
+  assert.match(html, /touch-action: manipulation/);
+  assert.match(app, /MOUNT_GUARD_MS = 350/);
+  assert.match(app, /e\.isTrusted && Date\.now\(\) - mountedAt < MOUNT_GUARD_MS/);
+  // The recorder never sees what a check found — only that the office will look.
+  const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(code, /fl\.explanation|\.measured|\.expected/);
+  assert.match(code, /tr\('office_check'\)/);
+  // A Save never waits forever.
+  assert.match(app, /SAVE_WAIT_MS = 30000/);
+  // Charts are fetched with the lists, so a dip works if the connection drops later.
+  assert.match(app, /rpc\('fuel:getChart', l\.id\)/);
+  const setup = fs.readFileSync(path.join(ROOT, 'renderer/modules/Fuel/FuelPhoneSetup.jsx'), 'utf8');
+  assert.match(setup, /Open as Web App/);
+  assert.doesNotMatch(setup, /Keep it on the home screen/);
+});

@@ -10,7 +10,7 @@ import { Badge, Button, EmptyState, Select } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { useFuelCaps, useFuelTick } from './fuelHooks.js';
-import { ManageOnlyNote } from './FuelShared.jsx';
+import { LoadError, ManageOnlyNote } from './FuelShared.jsx';
 import { errText, fmtLitres, fmtMoney, fmtNumber, fmtRiel, fmtWhen, monthLabel, ppMonthKey, rankDrivers, recentMonths, ruleTitle } from './fuelModel.js';
 
 const VIEWS = [
@@ -43,16 +43,20 @@ export function FuelReports() {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
+  const [loadError, setLoadError] = useState('');
+  const [retry, setRetry] = useState(0);
+  // L4: a company switch (or a month change) never shows the previous report.
+  useEffect(() => { setReport(null); setLoadError(''); }, [activeCompanyId, month]);
   useEffect(() => {
     if (!activeCompanyId || !canManage) { setLoading(false); return undefined; }
     let alive = true;
     setLoading(true);
     window.api.fuel.getMonthlyReport(month)
-      .then((r) => { if (alive) setReport(r); })
-      .catch((err) => { if (alive) addToast(`Couldn't build the report: ${errText(err)}`, 'error'); })
+      .then((r) => { if (alive) { setReport(r); setLoadError(''); } })
+      .catch((err) => { if (alive) { setReport(null); setLoadError(errText(err)); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [activeCompanyId, canManage, month, tick, addToast]);
+  }, [activeCompanyId, canManage, month, tick, retry]);
 
   async function exportXlsx() {
     setExporting(true);
@@ -98,6 +102,7 @@ export function FuelReports() {
         <span className="toolbar__count">{monthLabel(month)}</span>
       </div>
 
+      {loadError ? <LoadError message={loadError} onRetry={() => setRetry((n) => n + 1)} /> : null}
       {loading && !report ? <p className="muted">Building the report…</p> : !report ? null : (
         view === 'assets' ? (
           report.assets.length ? (

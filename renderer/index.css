@@ -12312,3 +12312,5 @@ a:hover { text-decoration-thickness: 2px; }
 .fuel-phone-setup__steps ol[lang="km"] { font-family: system-ui, -apple-system, "Khmer Sangam MN", "Khmer MN", "Noto Sans Khmer", sans-serif; line-height: 1.9; }
 .fuel-phone-setup__steps .fuel-phone-setup__hint { grid-column: 1 / -1; }
 .fuel-phone-setup__actions { display: flex; justify-content: flex-end; }
+.fuel-load-error { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); border: 1px solid var(--c-rose); border-radius: var(--radius-md); color: var(--c-rose); font-size: var(--fs-md); margin-bottom: var(--s-3); }
+.fuel-when-now { margin: var(--s-2) 0 0; font-size: var(--fs-md); }

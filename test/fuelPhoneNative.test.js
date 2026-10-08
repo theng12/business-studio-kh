@@ -127,6 +127,12 @@ test('the phone page\'s records are accepted by the real server, once each', { s
   const dip = await send(item('fuel:recordDip', { locationId: tank.id, dipCm: 100 }, ['stick']));
   assert.equal(dip.dip.litres, 2046);
 
+  // A tank with no chart yet: the stick is read in cm AND litres — both are kept,
+  // so the office can build the chart from them.
+  const bare = fuel.createLocation({ companyId: company.id, name: 'New tank', kind: 'tank', capacityL: 3000 });
+  const bareDip = await send(item('fuel:recordDip', { locationId: bare.id, dipCm: 80, litres: 1200 }, ['stick']));
+  assert.deepEqual([bareDip.dip.dipCm, bareDip.dip.litres, bareDip.dip.litresSource], [80, 1200, 'typed']);
+
   // Delivery arrived with a dip before and after, sent as the outbox sends them.
   const before = item('fuel:recordDip', { locationId: tank.id, dipCm: 150 }, ['stick']);
   const after = item('fuel:recordDip', { locationId: tank.id, dipCm: 110 }, ['stick']);
@@ -150,6 +156,13 @@ test('the phone page\'s records are accepted by the real server, once each', { s
   assert.equal(r1.transfer.litresReceived, 195);
   const r2 = await send(receipt, farmPhone.token);
   assert.equal(r2.duplicate, true);
+  // Another phone's queued receipt for the same delivery is NOT "already saved".
+  const farm2 = users.create({ name: 'Farm phone 2', role: role.key });
+  const other = item('fuel:receiveTransfer', { id: sent.transfer.id, litresReceived: 190 }, [], { userId: farm2.id });
+  await assert.rejects(send(other, farm2.token), /Someone else already recorded this delivery as received/);
+  // The same phone with different litres is refused too.
+  const changed = item('fuel:receiveTransfer', { id: sent.transfer.id, litresReceived: 199 }, [], { userId: farmPhone.id });
+  await assert.rejects(send(changed, farmPhone.token), /Someone else already recorded/);
 
   // I bought fuel: riel, a station typed by name.
   const cash = await send(item('fuel:recordFill', { kind: 'cash_station', assetId: truck.id, fullTank: false, amountPaidMinor: 120000, currency: 'KHR', stationName: 'Tela Kampong Speu', litresShownOnPump: 29.5, meterReading: 12600 }, ['pump_display', 'meter']));

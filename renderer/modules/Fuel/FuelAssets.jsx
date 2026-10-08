@@ -5,7 +5,7 @@
  * "going backwards").
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Badge, Button, EmptyState, Field, Input, Modal, Pagination, Select, Textarea, cx, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -39,6 +39,7 @@ export function FuelAssets() {
   useEffect(() => { if (intent?.add && canManage) setEditing('new'); }, [intent, canManage]);
   useEffect(() => { setPage(0); }, [status, q, typeId, pageSize, activeCompanyId]);
 
+  useEffect(() => { setRows([]); setTypeId(''); setEditing(null); }, [activeCompanyId]); // L4
   useEffect(() => {
     if (!activeCompanyId) return undefined;
     let alive = true;
@@ -46,7 +47,7 @@ export function FuelAssets() {
     const t = setTimeout(() => {
       window.api.fuel.listAssets({ status, q: q.trim() || undefined })
         .then((list) => { if (alive) setRows(list || []); })
-        .catch((err) => { if (alive) addToast(`Couldn't load vehicles: ${err.message}`, 'error'); })
+        .catch((err) => { if (alive) { setRows([]); addToast(`Couldn't load vehicles: ${errText(err)}`, 'error'); } })
         .finally(() => { if (alive) setLoading(false); });
     }, 150);
     return () => { alive = false; clearTimeout(t); };
@@ -134,6 +135,7 @@ export function FuelAssets() {
         open={editing !== null}
         asset={editing === 'new' ? null : editing}
         lookups={lookups}
+        onSaved={setEditing}
         onClose={() => setEditing(null)}
       />
       <PhotoViewer
@@ -164,7 +166,7 @@ function assetForm(a, types) {
   };
 }
 
-function AssetEditorModal({ open, asset, lookups, onClose }) {
+function AssetEditorModal({ open, asset, lookups, onSaved, onClose }) {
   const addToast = useAppStore((s) => s.addToast);
   const [form, setForm] = useState(() => assetForm(null, []));
   const [errors, setErrors] = useState({});
@@ -172,9 +174,14 @@ function AssetEditorModal({ open, asset, lookups, onClose }) {
   const [photo, setPhoto] = useState(null); // { file, url }
   const [typeOpen, setTypeOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  // L2: the record that was just saved while its photo failed. The dialog
+  // switches to editing it (so Save cannot create a second one) and keeps
+  // the typed fields and the picked photo, so Save simply retries the photo.
+  const keepDraftFor = useRef(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { keepDraftFor.current = null; return; }
+    if (asset?.id && asset.id === keepDraftFor.current) return;
     setForm(assetForm(asset, lookups.types));
     setErrors({});
     setBusy(false);
@@ -220,7 +227,17 @@ function AssetEditorModal({ open, asset, lookups, onClose }) {
         saved = await window.api.fuel.createAsset(input);
         if (!form.active) saved = await window.api.fuel.updateAsset(saved.id, { status: 'retired' });
       }
-      if (photo?.file) await window.api.fuel.setAssetPhoto(saved.id, await photo.file.arrayBuffer());
+      if (photo?.file) {
+        try {
+          await window.api.fuel.setAssetPhoto(saved.id, await photo.file.arrayBuffer());
+        } catch (photoErr) {
+          keepDraftFor.current = saved.id;
+          onSaved?.(saved);
+          addToast(`Saved ${saved.name}, but the photo did not upload: ${errText(photoErr)} Press Save to try the photo again.`, 'error');
+          setBusy(false);
+          return;
+        }
+      }
       addToast(asset ? `Saved ${saved.name}.` : `Added ${saved.name}.`, 'success');
       onClose();
     } catch (err) {

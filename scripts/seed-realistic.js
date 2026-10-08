@@ -1,7 +1,14 @@
 /**
  * Realistic throwaway dataset for Business Studio KH.
  *
- *   cd <repo>; ELECTRON_RUN_AS_NODE=1 npx electron scripts/seed-realistic.js --out <dir> [--products N] [--images-scale 1]
+ *   cd <repo>; ELECTRON_RUN_AS_NODE=1 npx electron scripts/seed-realistic.js --out <dir> [--products N] [--images-scale 1] [--fuel]
+ *
+ * --fuel adds a Fuel + Staff dataset to KT Ceramic (see seedFuel below): ~25 staff, two tanks, 16
+ * vehicles and machines, published KHR prices and ~6 months of fills, dips, deliveries and farm
+ * transfers with small photos, entered through the real IPC handlers (Mac paper slips) and the real
+ * /api/rpc server with phone accounts (pump, driver and farm phones) — so every flag is computed
+ * exactly as in the app. Known theft patterns are planted; ./fuel-truth.json lists them.
+ * `--fuel --products 0` builds only the fuel dataset (≈1 minute).
  *
  * Why: the UI crawl's test companies are nearly empty, so layout and speed problems that only show
  * with a real catalogue (≈2,500 products, ≈9,000 photos, Khmer names) slip through — 0.1.89 shipped a
@@ -26,6 +33,9 @@ const path = require('node:path');
 
 const REPO = path.resolve(__dirname, '..');
 const SEED = 20261008;
+// The fuel dataset runs on a simulated clock (Date.now is replaced while it seeds);
+// timings and log lines always use the real one.
+const realNow = Date.now;
 const outIdx = process.argv.indexOf('--out');
 if (outIdx < 0 || !process.argv[outIdx + 1]) { console.error('usage: … seed-realistic.js --out <empty dir outside the repo>'); process.exit(2); }
 const ROOT = path.resolve(process.argv[outIdx + 1]);
@@ -40,6 +50,8 @@ const argVal = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? N
 const N_PRODUCTS = argVal('--products', 2500);
 const IMG_SCALE = argVal('--images-scale', 1);
 const CONCURRENCY = argVal('--concurrency', 4);
+const FUEL = argv.includes('--fuel');
+const FUEL_DAYS = argVal('--fuel-days', 183);
 
 // ---- safety: never write outside this folder, never touch the owner's data ----
 function assertSafe(p) {
@@ -71,8 +83,8 @@ function wpick(pairs) { // [[value, weight], ...]
 const chance = (p) => rnd() < p;
 const pad = (n, w) => String(n).padStart(w, '0');
 
-function log(msg) { process.stdout.write(`[seed ${((Date.now() - T0) / 1000).toFixed(1)}s] ${msg}\n`); }
-const T0 = Date.now();
+function log(msg) { process.stdout.write(`[seed ${((realNow() - T0) / 1000).toFixed(1)}s] ${msg}\n`); }
+const T0 = realNow();
 
 // ---- reset (only inside ROOT) ----
 for (const p of [DATA, USERDATA, TMP]) { assertSafe(p); fs.rmSync(p, { recursive: true, force: true }); }
@@ -310,7 +322,7 @@ async function makeSourceImage(spec, outFile) {
 // MAIN
 // ------------------------------------------------------------------------------------
 const report = { seed: SEED, timings: {}, counts: {}, failures: [] };
-const mark = (name, t0) => { report.timings[name] = +(((Date.now() - t0) / 1000).toFixed(1)); log(`${name}: ${report.timings[name]}s`); };
+const mark = (name, t0) => { report.timings[name] = +(((realNow() - t0) / 1000).toFixed(1)); log(`${name}: ${report.timings[name]}s`); };
 
 async function main() {
   makeGrain();
@@ -484,7 +496,7 @@ async function main() {
     'closed', 'closed', 'closed', 'closed', 'closed'];
   const DAY = 86400000;
   const poRows = [];
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < (ktProducts.length ? 25 : 0); i++) {
     const sup = supRows[i % 5]; // skip the archived local wholesaler
     const status = STATUS_PLAN[i];
     const cur = sup.defaultCurrency;
@@ -602,6 +614,13 @@ async function main() {
   fs.writeFileSync(path.join(ROOT, 'users.json'), JSON.stringify(userRows.map((u) => ({ name: u.name, role: u.role, token: u.token })), null, 2));
   report.counts.users = userRows.length;
 
+  // ---------------- fuel + staff (opt-in) ----------------
+  if (FUEL) {
+    t = realNow();
+    report.counts.fuel = await seedFuel({ kt, report });
+    mark('fuel', t);
+  }
+
   // ---------------- final tallies ----------------
   const q = (sql, ...a) => db.prepare(sql).get(...a);
   report.counts.db = {
@@ -622,11 +641,842 @@ async function main() {
   };
   dbIndex.closeDb();
   fs.rmSync(TMP, { recursive: true, force: true });
-  report.timings.totalSeconds = +(((Date.now() - T0) / 1000).toFixed(1));
+  report.timings.totalSeconds = +(((realNow() - T0) / 1000).toFixed(1));
   report.dataBytes = Number(require('node:child_process').execSync(`du -sk "${DATA}"`).toString().split('\t')[0]) * 1024;
   fs.writeFileSync(path.join(ROOT, 'seed-report.json'), JSON.stringify(report, null, 2));
   log('DONE ' + JSON.stringify(report.counts.db));
   log(`failures: ${report.failures.length}`);
+}
+
+// ====================================================================================
+// FUEL + STAFF (opt-in: --fuel)
+// ====================================================================================
+//
+// A small Cambodian business with a warehouse in Phnom Penh and a farm: ~25 staff,
+// a 2,000 L diesel tank with a flow meter at the warehouse (horizontal cylinder,
+// dipped every morning), a 500 L farm store with a sight gauge (no chart — litres
+// typed), 16 vehicles and machines, and FUEL_DAYS days of daily life ending today.
+//
+// The PHYSICS are simulated first (true tank levels, true litres burned, true
+// odometers); the RECORDS are what people would type into the app, with honest
+// noise (a dip stick read to ±1 cm, a gauge read to ±5 L, partial fills, a station
+// still charging yesterday's price, a street dollar rate, paper slips with no
+// photos, a farm phone that was offline). Planted on top, with ground truth in
+// fuel-truth.json:
+//   P1 pump attendant Touch Vuthy short-fills ~5% on his shifts (meter says 1.05 × what the vehicle got)
+//   P2 rider Nhem Ratha (Motorbike 1) pays 10,000 KHR of fuel and records 15,000 KHR, twice a week
+//   P3 one short delivery (≈6% short) into the warehouse tank
+//   P4 Pickup 3's odometer stops moving for three weeks (cable unplugged), then resumes
+//   P5 the warehouse tank is not dipped for six days (attendant on leave)
+//   P6 one farm transfer arrives one 20 L can short
+//
+// Every record goes through the app's own entry points: the Mac's handlers
+// (ipcMain path — paper slips, set-up, prices, reviews) and the RPC server over
+// HTTP with phone accounts that hold only `fuel.record` (pump, driver and farm
+// phones) — so times, permissions, validation and flags are exactly the app's.
+// The clock is simulated (Date.now is replaced while seeding) so every record is
+// saved "live" at its own time; a full rule pass runs on the real clock at the end.
+
+async function seedFuel({ kt, report: seedReport }) {
+  const http = require('node:http');
+  const PP = 7 * 3600000;
+  const DAYMS = 86400000;
+  const fr = mulberry32((SEED ^ 0x5eedf0e1) >>> 0);
+  const fri = (a, b) => a + Math.floor(fr() * (b - a + 1));
+  const fpick = (arr) => arr[Math.floor(fr() * arr.length)];
+  const fchance = (p) => fr() < p;
+  const gauss = () => { let u = 0; while (u === 0) u = fr(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * fr()); };
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const r1 = (n) => Math.round(n * 10) / 10;
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const ppDate = (ms) => new Date(ms + PP).toISOString().slice(0, 10);
+  const ppDow = (ms) => new Date(ms + PP).getUTCDay();
+  const ppMidnight = (ms) => Math.floor((ms + PP) / DAYMS) * DAYMS - PP;
+
+  // ---------- the simulated clock ----------
+  let SIM = null;
+  Date.now = () => (SIM == null ? realNow() : SIM);
+  const NOW_REAL = realNow();
+  const LAST_DAY = ppMidnight(NOW_REAL);
+  const DAY0 = LAST_DAY - (FUEL_DAYS - 1) * DAYMS;
+  const STOP_AT = NOW_REAL - 10 * 60000; // never simulate past (real now − 10 min)
+  const at = (d, hh, mm = 0) => DAY0 + d * DAYMS + (hh * 60 + mm) * 60000;
+
+  // ---------- the app's handlers: local (Mac) and RPC (phones) ----------
+  const ipcHandlers = new Map();
+  const electronPath = require.resolve('electron', { paths: [REPO] });
+  const prevElectron = require.cache[electronPath];
+  require.cache[electronPath] = {
+    id: electronPath, filename: electronPath, loaded: true,
+    exports: {
+      app: { getVersion: () => JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).version, getPath: () => USERDATA, isPackaged: false },
+      ipcMain: { handle: (ch, fn) => ipcHandlers.set(ch, fn), on() {}, removeHandler() {} },
+      BrowserWindow: { getAllWindows: () => [] },
+    },
+  };
+  const helpers = require(path.join(REPO, 'main/ipc/helpers'));
+  require(path.join(REPO, 'main/ipc/staff')).register(helpers);
+  require(path.join(REPO, 'main/ipc/fuel')).register(helpers);
+  const server = require(path.join(REPO, 'main/server'));
+  const flagsDb = require(path.join(REPO, 'main/db/fuelFlags'));
+  const db = dbIndex.getDb();
+
+  const lat = {}; // channel → [ms]
+  const timed = async (channel, fn) => {
+    const t0 = performance.now();
+    try { return await fn(); } finally { (lat[channel] = lat[channel] || []).push(performance.now() - t0); }
+  };
+  const local = (channel, args) => timed(channel, async () => {
+    const fn = ipcHandlers.get(channel);
+    if (!fn) throw new Error(`no local handler ${channel}`);
+    return fn({}, args);
+  });
+
+  const port = await new Promise((resolve) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+  await server.bootServer({ port, dataDir: DATA, wsHeartbeatMs: 60000 });
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  const enc = (v) => {
+    if (Buffer.isBuffer(v)) return { __bin: true, b64: v.toString('base64') };
+    if (Array.isArray(v)) return v.map(enc);
+    if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v)) o[k] = enc(v[k]); return o; }
+    return v;
+  };
+  const rpc = (token, channel, args) => timed(`rpc ${channel}`, () => new Promise((resolve, reject) => {
+    const body = JSON.stringify({ channel, args: enc(args) });
+    const req = http.request({ host: '127.0.0.1', port, path: '/api/rpc', method: 'POST', agent,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        let j = null;
+        try { j = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (_) { /* below */ }
+        if (res.statusCode !== 200) reject(new Error(`${channel} → ${res.statusCode}: ${j?.error || 'no body'}`));
+        else resolve(j.result);
+      });
+    });
+    req.on('error', reject);
+    req.end(body);
+  }));
+
+  // ---------- tiny photos with the value written on them ----------
+  const esc = (s) => String(s).replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
+  const PHOTO_BG = { meter: '#1f2937', fill: '#14532d', pump_display: '#111827', receipt: '#f5f5f4', stick: '#78350f', invoice: '#fafaf9',
+    containers: '#1e3a8a', received: '#365314', pump_meter_before: '#0f172a', pump_meter_after: '#0f172a', asset: '#e2e8f0', staff: '#e7e5e4', truck: '#7c2d12' };
+  let photoBytes = 0;
+  let photoCount = 0;
+  async function photo(kind, lines) {
+    const bg = PHOTO_BG[kind] || '#334155';
+    const dark = !['receipt', 'invoice', 'asset', 'staff'].includes(kind);
+    const fg = dark ? (kind === 'pump_display' ? '#4ade80' : '#f8fafc') : '#111827';
+    const txt = lines.map((l, i) => `<text x="14" y="${46 + i * 34}" font-family="Menlo, Courier, monospace" font-size="${i === 0 ? 26 : 20}" fill="${fg}">${esc(l)}</text>`).join('');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200"><rect width="320" height="200" fill="${bg}"/>`
+      + `<rect x="6" y="6" width="308" height="188" fill="none" stroke="${fg}" stroke-opacity="0.35"/>${txt}`
+      + `<text x="14" y="188" font-family="Helvetica" font-size="11" fill="${fg}" opacity="0.6">${esc(kind)} · ${fri(1000, 9999)}</text></svg>`;
+    const buf = await sharp(Buffer.from(svg)).jpeg({ quality: 72 }).toBuffer();
+    photoBytes += buf.length;
+    photoCount += 1;
+    return buf;
+  }
+
+  // ---------- event queue on the simulated clock ----------
+  const queue = [];
+  let seq = 0;
+  const schedule = (t, fn, label = '') => {
+    const ev = { t, s: seq++, fn, label };
+    let lo = 0; let hi = queue.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; const q = queue[m]; if (q.t < t || (q.t === t && q.s < ev.s)) lo = m + 1; else hi = m; }
+    queue.splice(lo, 0, ev);
+  };
+  const failures = [];
+  const truth = {
+    generatedAt: new Date(NOW_REAL).toISOString(), days: FUEL_DAYS, from: ppDate(DAY0), to: ppDate(LAST_DAY),
+    planted: {}, honest: { stationLag: [], usdStreetRate: [], paperSlip: [], partial: [], topUp: [], missingPhoto: [], queued: [], fixedAmount: [] },
+    fills: {}, dips: [], deliveries: [], transfers: [], staff: {}, assets: {}, locations: {},
+  };
+
+  // ---------- set-up on the Mac (local window = manager) ----------
+  SIM = at(0, 6, 0) - 2 * DAYMS; // set-up two days before the first record
+  const companyId = kt.id;
+
+  // Phone accounts: each phone holds ONLY fuel.record.
+  const phoneRole = roles.create({ name: 'Fuel phone', description: 'Pump, driver and farm phones (fuel.record only)', permissions: ['fuel.record'] });
+  const managerRole = roles.create({ name: 'Fuel manager', description: 'Reviews fuel and prices', permissions: ['fuel.manage', 'fuel.record'] });
+  const phoneUsers = {};
+  for (const name of ['Pump phone – Sokha', 'Pump phone – Vuthy', 'Farm phone', 'Phone – Dara', 'Phone – Sophal', 'Phone – Sovann', 'Phone – Sambath', 'Phone – Ratha']) {
+    phoneUsers[name] = users.create({ name, role: phoneRole.key });
+  }
+  const officeUser = users.create({ name: 'Sokunthea (fuel manager)', role: managerRole.key });
+
+  const STAFF = [
+    // code, English, Khmer, position, flags
+    ['S001', 'Sok Dara', 'សុខ ដារ៉ា', 'Driver', { driver: 1, phone: 'Phone – Dara' }],
+    ['S002', 'Keo Sophal', 'កែវ សុផល', 'Driver', { driver: 1, phone: 'Phone – Sophal' }],
+    ['S003', 'Lim Chanthou', 'លឹម ចាន់ធូ', 'Driver', { driver: 1 }],
+    ['S004', 'Sun Piseth', 'ស៊ុន ពិសិដ្ឋ', 'Driver', { driver: 1, leftDay: Math.round(FUEL_DAYS * 0.45) }],
+    ['S005', 'Heng Sovann', 'ហេង សុវណ្ណ', 'Driver (provinces)', { driver: 1, phone: 'Phone – Sovann' }],
+    ['S006', 'Mao Sambath', 'ម៉ៅ សម្បត្តិ', 'Truck driver', { driver: 1, phone: 'Phone – Sambath' }],
+    ['S007', 'Nhem Ratha', 'ញឹម រដ្ឋា', 'Delivery rider', { driver: 1, phone: 'Phone – Ratha' }],
+    ['S008', 'Chhim Sreypov', 'ឈឹម ស្រីពៅ', 'Delivery rider', { driver: 1 }],
+    ['S009', 'Pich Rithy', 'ពេជ្រ រិទ្ធី', 'Driver', { driver: 1, hireDay: Math.round(FUEL_DAYS * 0.45) + 1 }],
+    ['S010', 'Vann Sokha', 'វ៉ាន់ សុខា', 'Pump attendant', { attendant: 1, phone: 'Pump phone – Sokha' }],
+    ['S011', 'Touch Vuthy', 'ទូច វុទ្ធី', 'Pump attendant', { attendant: 1, phone: 'Pump phone – Vuthy' }],
+    ['S012', 'Chan Thida', 'ចាន់ ធីដា', 'Warehouse keeper', {}],
+    ['S013', 'Ouk Samnang', 'អ៊ុក សំណាង', 'Farm manager', { phone: 'Farm phone' }],
+    ['S014', 'Sam Bora', 'សំ បូរ៉ា', 'Tractor operator', {}],
+    ['S015', 'Yin Kosal', 'យិន កុសល', 'Tractor operator', {}],
+    ['S016', 'Phan Sreymom', 'ផាន ស្រីមុំ', 'Farm hand', {}],
+    ['S017', 'Nov Rotha', 'នៅ រ័ត្នា', 'Farm hand', {}],
+    ['S018', 'Kim Sreyneang', 'គីម ស្រីនាង', 'Sales', {}],
+    ['S019', 'Ly Visal', 'លី វិសាល', 'Sales', {}],
+    ['S020', 'Seng Malis', 'សេង ម៉ាលិស', 'Cashier', {}],
+    ['S021', 'Tep Sokunthea', 'ទេព សុគន្ធា', 'Office manager', {}],
+    ['S022', 'Ros Vibol', 'រស់ វិបុល', 'Mechanic', {}],
+    ['S023', 'Chea Bunthoeun', 'ជា ប៊ុនធឿន', 'Skid-steer operator', {}],
+    ['S024', 'Meas Channary', 'មាស ចន្នារី', 'Accountant', {}],
+    ['S025', 'Hun Phalla', 'ហ៊ុន ផល្លា', 'Security guard', {}],
+    ['S026', 'Prak Sophea', 'ប្រាក់ សុភា', 'Warehouse worker', {}],
+  ];
+  const emp = {}; // code → employee
+  async function createStaff(row) {
+    const [code, en, km, position, f] = row;
+    const e = await local('staff:create', {
+      staffCode: code, nameEn: en, nameKm: km, position, isDriver: !!f.driver, isFuelAttendant: !!f.attendant,
+      phone: `0${fpick(['12', '15', '16', '17', '77', '78', '89', '92', '96', '97'])} ${fri(100, 999)} ${fri(100, 999)}`,
+      userId: f.phone ? phoneUsers[f.phone].id : (code === 'S021' ? officeUser.id : undefined),
+      notes: f.driver ? `Licence class ${fpick(['B', 'C', 'A1'])}` : null,
+    });
+    if (fchance(0.6)) await local('staff:setPhoto', { id: e.id, bytes: await photo('staff', [en, km ? code : '', position]) });
+    emp[code] = e;
+    truth.staff[code] = { id: e.id, name: en, position };
+    return e;
+  }
+  for (const row of STAFF) if (!row[4].hireDay) await createStaff(row);
+
+  // Asset types (8 built-ins are seeded per company) + one of the owner's own.
+  const types = await local('fuel:listAssetTypes', {});
+  const typeId = (key) => types.find((x) => x.builtinKey === key).id;
+  const walking = await local('fuel:createAssetType', { name: 'Walking tractor', nameKm: 'គោយន្ត', meterUnit: 'none', defaultFuel: 'diesel' });
+
+  // Vehicles and machines. trueRate = what the machine really burns (the owner's
+  // figure is a little off for some, as in life); learned = learned baseline.
+  const ASSETS = [
+    { key: 'P1', type: 'truck', name: 'Pickup 1 – Toyota Hilux Revo', plate: 'PP 3A-2741', cap: 80, base: 10.5, meter: 118420, driver: 'S001', home: 'Warehouse', profile: 'city', learned: true },
+    { key: 'P2', type: 'truck', name: 'Pickup 2 – Toyota Hilux Vigo', plate: 'PP 2BA-5512', cap: 75, base: 11.0, meter: 186305, driver: 'S002', home: 'Warehouse', profile: 'city', learned: true },
+    { key: 'P3', type: 'truck', name: 'Pickup 3 – Isuzu D-Max', plate: 'PP 3C-0918', cap: 76, base: 10.0, meter: 64210, driver: 'S003', home: 'Warehouse', profile: 'city', trips: 12 },
+    { key: 'P4', type: 'truck', name: 'Pickup 4 – Ford Ranger', plate: 'PP 2AV-4470', cap: 80, base: 11.5, meter: 97733, driver: 'S004', home: 'Warehouse', profile: 'city', trips: 14 },
+    { key: 'P5', type: 'truck', name: 'Pickup 5 – Mitsubishi Triton', plate: 'PP 2C-3306', cap: 75, base: 10.0, meter: 152880, driver: 'S005', home: 'Warehouse', profile: 'provinces' },
+    { key: 'TK', type: 'truck', name: 'Truck – Isuzu NPR 6-wheel', plate: 'PP 3E-7790', cap: 100, base: 17.0, meter: 231560, driver: 'S006', home: 'Warehouse', profile: 'truck', learned: true, rateFactor: 1.07 },
+    { key: 'M1', type: 'motorbike', name: 'Motorbike 1 – Honda Dream 125', plate: 'PP 1AB-2231', cap: 4.6, base: 1.9, meter: 21340, driver: 'S007', home: 'Warehouse', profile: 'moto' },
+    { key: 'M2', type: 'motorbike', name: 'Motorbike 2 – Honda Wave 110', plate: 'PP 1AQ-7802', cap: 4.0, base: 1.7, meter: 33872, driver: 'S008', home: 'Warehouse', profile: 'moto' },
+    { key: 'M3', type: 'motorbike', name: 'Motorbike 3 – Suzuki Smash', plate: 'PP 1BH-0435', cap: 4.0, base: 1.8, meter: 8815, driver: 'S018', home: 'Shop', profile: 'moto' },
+    { key: 'M4', type: 'motorbike', name: 'Motorbike 4 – Honda Scoopy', plate: 'PP 1CK-6618', cap: 4.2, base: 2.0, meter: 12904, driver: 'S019', home: 'Shop', profile: 'moto' },
+    { key: 'TR1', type: 'tractor', name: 'Tractor 1 – Kubota M7040', plate: 'KBT-M7040-31877', cap: 70, base: 5.0, meter: 2412.6, driver: 'S014', home: 'Farm', profile: 'tractor', learned: true },
+    { key: 'TR2', type: 'tractor', name: 'Tractor 2 – Kubota L4508', plate: 'KBT-L4508-11204', cap: 42, base: 3.2, meter: 1288.3, driver: 'S015', home: 'Farm', profile: 'tractor2' },
+    { key: 'SK', type: 'skid_steer', name: 'Skid-steer – Bobcat S450', plate: 'BOB-S450-A3NT11', cap: 50, base: 3.5, meter: 2150.4, driver: 'S023', home: 'Warehouse', profile: 'skid' },
+    { key: 'WP', type: 'water_pump', name: 'Water pump – Yanmar 4" diesel', plate: 'YAN-L100-0457', cap: 12, base: 0.9, meter: 641.2, driver: 'S016', home: 'Farm', profile: 'pump' },
+    { key: 'GEN', type: 'generator', name: 'Generator – Denyo 25 kVA', plate: 'DCA-25-3391', cap: 60, base: 4.0, meter: 3871.0, driver: 'S012', home: 'Warehouse', profile: 'gen' },
+    { key: 'WT', type: null, name: 'Walking tractor – Kubota RT140', plate: 'RT140-88213', cap: 11, base: 2.8, meter: null, driver: 'S017', home: 'Farm', profile: 'walking', rateFactor: 1.4 }, // L per USE day; idle Sundays → ≈2.8 L/calendar day
+  ];
+  const A = {}; // key → { def, asset, sim state }
+  for (const def of ASSETS) {
+    const asset = await local('fuel:createAsset', {
+      typeId: def.type ? typeId(def.type) : walking.id, name: def.name, plateOrSerial: def.plate,
+      tankCapacityL: def.cap, baselineRate: def.base, baselineSource: def.learned ? 'learned' : 'manual',
+      assignedEmployeeId: emp[def.driver].id, homeLocation: def.home,
+    });
+    await local('fuel:setAssetPhoto', { id: asset.id, bytes: await photo('asset', [def.name.split(' – ')[0], def.name.split(' – ')[1] || '', def.plate || ''].filter(Boolean)) });
+    const unit = asset.meterUnit;
+    A[def.key] = {
+      def, asset, unit, cap: def.cap,
+      trueRate: def.base * (def.rateFactor || (0.96 + 0.08 * fr())),
+      level: def.cap * (0.45 + 0.4 * fr()),
+      meter: def.meter, shown: def.meter, frozen: false,
+      driver: def.driver, plannedKm: 0, lastFillAt: null,
+    };
+    truth.assets[def.key] = { id: asset.id, name: def.name, ownerBaseline: def.base, trueRate: r2(A[def.key].trueRate), learned: !!def.learned, unit };
+  }
+
+  // Tanks. Warehouse: horizontal cylinder Ø119 cm × 180 cm (≈2,002 L), maker's chart every 5 cm.
+  const warehouse = await local('fuel:createLocation', { name: 'Warehouse diesel 2000 L', kind: 'tank', fuelType: 'diesel', capacityL: 2000, hasFlowMeter: true, notes: 'Horizontal tank behind the tile store. Stick in cm.' });
+  const farm = await local('fuel:createLocation', { name: 'Farm store 500 L', kind: 'farm_store', fuelType: 'diesel', capacityL: 500, hasFlowMeter: false, notes: 'Poly tank with a sight gauge marked every 10 L.' });
+  const R = 59.5;
+  const LEN = 180;
+  const volAt = (h) => { const x = clamp(h, 0, 2 * R); return (LEN * (R * R * Math.acos((R - x) / R) - (R - x) * Math.sqrt(2 * R * x - x * x))) / 1000; };
+  const heightOf = (v) => { let lo = 0; let hi = 2 * R; for (let i = 0; i < 50; i += 1) { const m = (lo + hi) / 2; if (volAt(m) < v) lo = m; else hi = m; } return (lo + hi) / 2; };
+  const chart = [];
+  for (let h = 0; h <= 115; h += 5) chart.push({ dipCm: h, litres: Math.round(volAt(h)) });
+  chart.push({ dipCm: 119, litres: Math.round(volAt(119)) });
+  await local('fuel:setChart', { locationId: warehouse.id, points: chart });
+  truth.locations = { warehouse: { id: warehouse.id, name: warehouse.name, chart }, farm: { id: farm.id, name: farm.name } };
+  const W = { litres: 1450, pumpTrue: 48211.4, meterBias: 1.004 }; // pump meter reads 0.4 % high
+  const pumpShown = () => r1(48211.4 + (W.pumpTrue - 48211.4) * W.meterBias);
+  const F = { litres: 260 };
+
+  // Stations — the ones drivers use; new ones are typed on the phone.
+  const STATIONS = [
+    ['Tela Chbar Ampov', 'Phnom Penh', 0], ['PTT Steung Meanchey', 'Phnom Penh', 50], ['Caltex Russian Blvd', 'Phnom Penh', 0],
+    ['TotalEnergies Chroy Changvar', 'Phnom Penh', 0], ['Sokimex Takhmao', 'Kandal', 100], ['Tela Kampong Cham', 'Kampong Cham', 50],
+    ['PTT Skun', 'Kampong Cham', 0], ['Caltex Kampong Speu', 'Kampong Speu', 100], ['Sokimex Kampot', 'Kampot', 50],
+  ];
+  const station = {};
+  for (const [name, area, discount] of STATIONS) station[name] = { ...(await local('fuel:createStation', { name, area })), discount };
+  const CITY_ST = STATIONS.slice(0, 5).map((s) => s[0]);
+  const PROV_ST = STATIONS.slice(5).map((s) => s[0]);
+
+  // Published (Ministry of Commerce ceiling) prices — every 10 days, riel per litre.
+  const prices = { diesel: [], gasoline: [] }; // [{ from: dayIdx, price }]
+  let pd = 4150;
+  let pg = 4450;
+  for (let d = -5; d < FUEL_DAYS; d += 1) {
+    const dom = Number(ppDate(DAY0 + d * DAYMS).slice(8, 10));
+    if (d === -5 || dom === 1 || dom === 11 || dom === 21) {
+      if (d !== -5) {
+        pd = clamp(pd + fpick([-150, -100, -50, -50, 0, 0, 50, 50, 100, 150]), 3850, 4550);
+        pg = clamp(pg + fpick([-150, -100, -50, -50, 0, 0, 50, 50, 100, 150]), 4150, 4850);
+      }
+      prices.diesel.push({ from: d, price: pd });
+      prices.gasoline.push({ from: d, price: pg });
+    }
+  }
+  const priceOn = (ft, d) => { const l = prices[ft]; let p = l[0]; for (const x of l) if (x.from <= d) p = x; return p; };
+  // The period before, when a new one starts on day d (stations may lag a day behind it).
+  const prevPrice = (ft, d) => { const l = prices[ft]; const i = l.findIndex((x) => x.from === d); return i > 0 ? l[i - 1] : null; };
+  // The opening period, entered at set-up.
+  for (const ft of ['diesel', 'gasoline']) {
+    await local('fuel:setPrice', { fuelType: ft, priceMinorPerL: prices[ft][0].price, currency: 'KHR', effectiveFrom: ppDate(DAY0 - 5 * DAYMS), sourceNote: 'Ministry of Commerce ceiling price' });
+  }
+  truth.prices = prices;
+
+  // ---------- who does what, when ----------
+  const P = {
+    attendantShortFill: 'S011',
+    cashThief: 'S007',
+    shortDeliveryDay: Math.round(FUEL_DAYS * 0.52),   // a Monday at or after this day
+    odoFreeze: { asset: 'P3', from: Math.round(FUEL_DAYS * 0.48), to: Math.round(FUEL_DAYS * 0.60) },
+    dipGap: { from: Math.round(FUEL_DAYS * 0.68), days: 6 },
+    transferLossDay: Math.round(FUEL_DAYS * 0.76),
+  };
+  const leftDay = STAFF.find((r) => r[0] === 'S004')[4].leftDay;
+  const hireDay = STAFF.find((r) => r[0] === 'S009')[4].hireDay;
+  const isKny = (d) => { const md = ppDate(DAY0 + d * DAYMS).slice(5); return md >= '04-14' && md <= '04-16'; };
+  const dowOf = (d) => ppDow(DAY0 + d * DAYMS + 12 * 3600000);
+  const inGap = (d) => d >= P.dipGap.from && d < P.dipGap.from + P.dipGap.days;
+  const attendantOn = (d) => {
+    if (inGap(d)) return 'S011';                 // Sokha on leave, Vuthy covers
+    if (d % 37 === 5) return 'S010';             // Vuthy's day off now and then
+    return [0, 1, 3, 5].includes(dowOf(d)) ? 'S010' : 'S011';
+  };
+  const tokenOf = (code) => {
+    const name = STAFF.find((r) => r[0] === code)?.[4].phone;
+    return name ? phoneUsers[name].token : null;
+  };
+  const month = (d) => Number(ppDate(DAY0 + d * DAYMS).slice(5, 7));
+  const clientRef = (prefix) => `${prefix}:${(seq + 1).toString(36)}-${fri(100000, 999999)}`;
+
+  // ---------- record helpers (each = one real entry) ----------
+  const stats = { fills: 0, fillsPhone: 0, fillsMac: 0, dips: 0, deliveries: 0, transfers: 0, received: 0, reviews: 0, prices: 2, staffChanges: 0 };
+  async function saveFill({ code, token, args, photos, truthInfo, queuedMs = 0, macAt = null }) {
+    let res;
+    try {
+      if (token) {
+        res = await rpc(token, 'fuel:recordFill', { ...args, companyId, clientRef: clientRef(code), ...(queuedMs ? { queuedForMs: queuedMs } : {}), photos });
+        stats.fillsPhone += 1;
+      } else {
+        res = await local('fuel:recordFill', { ...args, at: macAt, source: 'mac', photos });
+        stats.fillsMac += 1;
+      }
+    } catch (err) {
+      failures.push({ what: 'fill', at: ppDate(Date.now()), error: err.message, args: { ...args, photos: undefined } });
+      return null;
+    }
+    stats.fills += 1;
+    truth.fills[res.fill.rootId] = { ...truthInfo, at: res.fill.at, assetKey: truthInfo.assetKey };
+    return res.fill;
+  }
+
+  async function dipWarehouse(code, label = 'daily') {
+    const hTrue = heightOf(W.litres);
+    const err = clamp(gauss() * 0.45, -1, 1);
+    const cm = Math.max(0, Math.round((hTrue + err) * 2) / 2);
+    const token = tokenOf(code);
+    const res = await rpc(token, 'fuel:recordDip', {
+      companyId, locationId: warehouse.id, dipCm: cm, witnessEmployeeId: fchance(0.8) ? emp.S012.id : undefined,
+      clientRef: clientRef('dip'), photos: [{ kind: 'stick', bytes: await photo('stick', [`${cm} cm`, 'Warehouse tank']) }],
+    }).catch((e) => { failures.push({ what: 'dip', at: ppDate(Date.now()), error: e.message }); return null; });
+    if (!res) return null;
+    stats.dips += 1;
+    truth.dips.push({ id: res.dip.id, location: 'warehouse', at: res.dip.takenAt, trueLitres: r2(W.litres), trueCm: r2(hTrue), readCm: cm, litres: res.dip.litres, label });
+    return res.dip;
+  }
+
+  // ---------- one warehouse fill (pump attendant phone, flow meter) ----------
+  async function warehouseFill(a, d, { full = true, why: whyIn = 'routine' } = {}) {
+    let why = whyIn;
+    const code = attendantOn(d);
+    if (a.level > a.cap * 0.45) why = 'top-up';
+    const want = full ? a.cap - a.level - a.cap * 0.025 * fr() : Math.max(5, (a.cap - a.level) * (0.4 + 0.3 * fr()));
+    const toVehicle = clamp(want, 1, Math.max(1, W.litres - 150));
+    const shortFill = code === P.attendantShortFill;
+    const dispensed = shortFill ? toVehicle * 1.05 : toVehicle;
+    const before = pumpShown();
+    W.pumpTrue += dispensed;
+    W.litres -= dispensed;
+    const after = pumpShown();
+    a.level += toVehicle;
+    const reading = a.unit === 'km' ? Math.floor(a.shown) : (a.unit === 'hours' ? r1(a.shown) : undefined);
+    const missing = fchance(0.02);
+    const photos = [];
+    if (a.unit !== 'none' && !missing) photos.push({ kind: 'meter', bytes: await photo('meter', [`${reading} ${a.unit}`, a.def.plate]) });
+    photos.push({ kind: 'pump_meter_before', bytes: await photo('pump_meter_before', [`${before.toFixed(1)} L`]) });
+    photos.push({ kind: 'pump_meter_after', bytes: await photo('pump_meter_after', [`${after.toFixed(1)} L`]) });
+    photos.push({ kind: 'fill', bytes: await photo('fill', [a.def.name.split(' – ')[0], `${r1(toVehicle)} L`]) });
+    const fill = await saveFill({
+      code: 'pump', token: tokenOf(code), photos,
+      args: { kind: 'warehouse_tank', locationId: warehouse.id, assetId: a.asset.id, driverEmployeeId: emp[a.driver].id,
+        meterReading: reading, pumpMeterBefore: before, pumpMeterAfter: after, fullTank: full },
+      truthInfo: { assetKey: a.def.key, kind: 'warehouse_tank', attendant: code, driver: a.driver, trueToVehicle: r2(toVehicle), dispensedTrue: r2(dispensed),
+        stolenL: shortFill ? r2(dispensed - toVehicle) : 0, full, why },
+    });
+    if (fill) {
+      if (shortFill) (truth.planted.P1_shortFill = truth.planted.P1_shortFill || []).push({ rootId: fill.rootId, stolenL: r2(dispensed - toVehicle), asset: a.def.key });
+      if (!full) truth.honest.partial.push(fill.rootId);
+      if (why === 'top-up') truth.honest.topUp.push(fill.rootId);
+      if (missing) truth.honest.missingPhoto.push(fill.rootId);
+    }
+    a.lastFillAt = Date.now();
+    return fill;
+  }
+
+  // ---------- one farm-store fill (farm phone, litres typed, sometimes offline) ----------
+  async function farmFill(a, d, { full = true } = {}) {
+    const want = full ? a.cap - a.level - a.cap * 0.02 * fr() : (a.cap - a.level) * 0.6;
+    const toVehicle = clamp(want, 0.5, Math.max(0.5, F.litres - 5));
+    if (F.litres < 10) return null;
+    const isFull = full && toVehicle >= want - 0.01;
+    F.litres -= toVehicle;
+    a.level += toVehicle;
+    const typed = Math.max(0.5, Math.round(toVehicle + gauss() * 0.8));
+    const reading = a.unit === 'hours' ? r1(a.shown) : undefined;
+    const photos = [];
+    if (a.unit !== 'none') photos.push({ kind: 'meter', bytes: await photo('meter', [`${reading} h`, a.def.plate]) });
+    photos.push({ kind: 'fill', bytes: await photo('fill', [a.def.name.split(' – ')[0], `${typed} L`]) });
+    const t0 = Date.now();
+    const queued = fchance(0.3) ? fri(20, 150) * 60000 : 0;
+    const info = { assetKey: a.def.key, kind: 'farm_store', attendant: 'S013', driver: a.driver, trueToVehicle: r2(toVehicle), typedLitres: typed, full: isFull };
+    const send = async () => {
+      const fill = await saveFill({ code: 'farm', token: tokenOf('S013'), photos, queuedMs: queued, truthInfo: info,
+        args: { kind: 'farm_store', locationId: farm.id, assetId: a.asset.id, driverEmployeeId: emp[a.driver].id, attendantEmployeeId: emp.S013.id,
+          meterReading: reading, litres: typed, fullTank: isFull } });
+      if (fill && queued) truth.honest.queued.push({ kind: 'fill', id: fill.rootId, queuedMin: queued / 60000 });
+      if (fill && !isFull) truth.honest.partial.push(fill.rootId);
+    };
+    if (queued) schedule(t0 + queued, send, 'farm fill (queued)'); else await send();
+    a.lastFillAt = t0;
+    return true;
+  }
+
+  // ---------- one cash fill at a public station ----------
+  function stationPrice(name, ft, d, t) {
+    const cur = priceOn(ft, d).price;
+    let price = cur - station[name].discount;
+    // First day of a new price period: some stations still charge the old price until noon.
+    const prev = prevPrice(ft, d);
+    let lag = false;
+    if (prev && prev.price !== cur && (t - (DAY0 + d * DAYMS)) < 12 * 3600000 && fchance(0.5)) { price = prev.price - station[name].discount; lag = true; }
+    return { price, lag, published: cur };
+  }
+  async function cashFill(a, d, { mode = 'full', theft = false, stationName = null, usd = false } = {}) {
+    const t = Date.now();
+    const ft = a.asset.fuelType;
+    const st = stationName || (a.def.profile === 'moto' ? fpick(CITY_ST) : fpick(PROV_ST));
+    const { price, lag } = stationPrice(st, ft, d, t);
+    let litres;
+    let paid;
+    let currency = 'KHR';
+    if (theft) {
+      litres = r2(10000 / price); paid = 15000;            // 10,000 riel of fuel, 15,000 written down
+    } else if (mode === 'fixed') {
+      const amt = fpick([10000, 10000, 15000, 20000]);
+      if (amt / price > a.cap - a.level) return cashFill(a, d, { mode: 'full', stationName: st });
+      litres = r2(amt / price); paid = amt;
+    } else if (usd) {
+      const dollars = Math.min(fpick([20, 30, 40]), Math.floor(((a.cap - a.level) * price) / 4000));
+      if (dollars < 10) return cashFill(a, d, { mode: 'full', stationName: st });
+      litres = r2((dollars * 4000) / price); paid = dollars * 100; currency = 'USD'; // the pump converts at the street 4,000
+    } else {
+      litres = r2(a.cap - a.level - a.cap * 0.025 * fr());
+      paid = Math.round((litres * price) / 100) * 100;
+    }
+    if (litres <= 0.2) return null;
+    a.level += litres;
+    const full = mode === 'full' && !theft && !usd;
+    const reading = a.unit === 'km' ? Math.floor(a.shown) : undefined;
+    const code = a.driver;
+    const token = tokenOf(code);
+    const paidText = currency === 'USD' ? `$${(paid / 100).toFixed(2)}` : `${(theft ? 10000 : paid).toLocaleString('en-US')} KHR`;
+    const info = { assetKey: a.def.key, kind: 'cash_station', driver: code, station: st, trueLitres: litres, truePaidMinor: theft ? 10000 : paid, recordedPaidMinor: paid,
+      currency, stationPrice: price, lag, theft, mode: theft ? 'theft' : (usd ? 'usd' : mode), full };
+    const args = { kind: 'cash_station', assetId: a.asset.id, stationId: station[st].id, driverEmployeeId: emp[code].id, amountPaidMinor: paid, currency,
+      fullTank: full, meterReading: reading };
+    let fill;
+    if (token) {
+      const photos = [{ kind: 'pump_display', bytes: await photo('pump_display', [paidText, `${litres.toFixed(2)} L`, `${price} KHR/L`]) }];
+      if (fchance(0.98)) photos.push({ kind: 'meter', bytes: await photo('meter', [`${reading} km`, a.def.plate]) });
+      else truth.honest.missingPhoto.push('pending');
+      fill = await saveFill({ code: 'drv', token, photos, truthInfo: info, args: { ...args, litresShownOnPump: litres } });
+      if (fill && truth.honest.missingPhoto[truth.honest.missingPhoto.length - 1] === 'pending') truth.honest.missingPhoto[truth.honest.missingPhoto.length - 1] = fill.rootId;
+    } else {
+      // No smartphone: a paper slip + the receipt, typed in on the Mac next morning.
+      const slipAt = t;
+      const onSlipLitres = fchance(0.8);
+      const onSlipMeter = fchance(0.85);
+      const receipt = await photo('receipt', [st.slice(0, 20), paidText, onSlipLitres ? `${litres.toFixed(2)} L` : '', `${ppDate(slipAt)}`].filter(Boolean));
+      const entry = at(d + 1, 8, 40) + fri(0, 50) * 60000;
+      schedule(entry, async () => {
+        const f = await saveFill({ code: 'mac', token: null, macAt: slipAt, photos: [{ kind: 'receipt', bytes: receipt }], truthInfo: { ...info, paperSlip: true },
+          args: { ...args, meterReading: onSlipMeter ? reading : undefined, litresShownOnPump: onSlipLitres ? litres : undefined, note: 'Paper slip' } });
+        if (f) {
+          truth.honest.paperSlip.push(f.rootId);
+          if (theft) (truth.planted.P2_cashOverclaim = truth.planted.P2_cashOverclaim || []).push(f.rootId);
+          if (lag) truth.honest.stationLag.push(f.rootId);
+          if (usd) truth.honest.usdStreetRate.push(f.rootId);
+          if (mode === 'fixed') truth.honest.fixedAmount.push(f.rootId);
+        }
+      }, 'paper slip');
+    }
+    if (fill) {
+      if (theft) (truth.planted.P2_cashOverclaim = truth.planted.P2_cashOverclaim || []).push(fill.rootId);
+      if (lag) truth.honest.stationLag.push(fill.rootId);
+      if (usd) truth.honest.usdStreetRate.push(fill.rootId);
+      if (mode === 'fixed') truth.honest.fixedAmount.push(fill.rootId);
+    }
+    a.lastFillAt = t;
+    return true;
+  }
+
+  // ---------- driving and running ----------
+  function burn(a, amount /* km or hours or "use days" */) {
+    if (amount <= 0) return;
+    const mult = clamp(1 + gauss() * 0.06, 0.85, 1.2);
+    const litres = a.unit === 'km' ? (amount * a.trueRate * mult) / 100 : amount * a.trueRate * mult;
+    a.level = Math.max(0.05, a.level - litres);
+    if (a.level <= 0.05) stats.ranDry = (stats.ranDry || 0) + 1;
+    if (a.unit !== 'none') {
+      a.meter += amount;
+      if (!a.frozen) a.shown += amount;
+    }
+  }
+  function kmPlan(a, d) {
+    const dow = dowOf(d);
+    const p = a.def.profile;
+    if (isKny(d)) return 0;
+    const work = dow !== 0 || fchance(0.12);
+    if (!work) return 0;
+    if (p === 'city') {
+      if (a.def.trips && d % a.def.trips === (a.def.key === 'P3' ? 3 : 8)) return { km: fri(250, 340), trip: true };
+      return { km: clamp(Math.round(95 + gauss() * 30), 25, 200), trip: false };
+    }
+    if (p === 'provinces') return [2, 4, 6].includes(dow) ? { km: fri(340, 480), trip: true } : { km: fri(60, 110), trip: false };
+    if (p === 'truck') return dow === 3 ? { km: fri(300, 420), trip: true } : { km: fri(60, 140), trip: false };
+    if (p === 'moto') return { km: dow === 0 ? fri(10, 30) : fri(25, 60), trip: false };
+    return 0;
+  }
+  function hoursPlan(a, d) {
+    const dow = dowOf(d);
+    const m = month(d);
+    if (isKny(d)) return 0;
+    const p = a.def.profile;
+    if (p === 'tractor' || p === 'tractor2') {
+      if (dow === 0) return 0;
+      const [pDay, lo, hi] = m <= 5 ? [0.6, 3, 6] : m <= 7 ? [0.8, 5, 8] : m <= 9 ? [0.4, 2, 5] : [0.5, 3, 6];
+      if (!fchance(pDay)) return 0;
+      const h = lo + (hi - lo) * fr();
+      return r1(p === 'tractor2' ? h * 0.8 : h);
+    }
+    if (p === 'pump') {
+      if (m <= 5) return r1(5 + 4 * fr());
+      return fchance(0.5) ? 0 : r1(1 + 3 * fr());
+    }
+    if (p === 'skid') return dow !== 0 && fchance(0.5) ? r1(1 + 3 * fr()) : 0;
+    if (p === 'gen') return (m <= 6 ? fchance(0.55) : fchance(0.2)) ? r1(m <= 6 ? 1 + 4 * fr() : 0.5 + 2.5 * fr()) : 0;
+    if (p === 'walking') return dow !== 0 && fchance(5 / 6) ? 1 : 0; // a "use day"
+    return 0;
+  }
+
+  // ---------- the days ----------
+  let shortDeliveryDone = false;
+  let lossDone = false;
+  const pumpSlot = { t: 0 };
+  const nextPumpSlot = (d, hh, mm) => { pumpSlot.t = Math.max(pumpSlot.t, at(d, hh, mm)) + fri(3, 6) * 60000; return pumpSlot.t; };
+  const ORDER = Object.keys(A);
+
+  for (let d = 0; d < FUEL_DAYS; d += 1) {
+    const dow = dowOf(d);
+    pumpSlot.t = 0;
+
+    // Staff changes: Piseth leaves; Rithy joins and takes over Pickup 4.
+    if (d === leftDay) {
+      schedule(at(d, 17, 30), async () => {
+        await local('staff:markLeft', { id: emp.S004.id, leftOn: ppDate(Date.now()), reason: 'Moved to another company' });
+        stats.staffChanges += 1;
+      }, 'staff left');
+    }
+    if (d === hireDay) {
+      schedule(at(d, 6, 45), async () => {
+        await createStaff(STAFF.find((r) => r[0] === 'S009'));
+        await local('fuel:updateAsset', { id: A.P4.asset.id, patch: { assignedEmployeeId: emp.S009.id } });
+        A.P4.driver = 'S009';
+        stats.staffChanges += 1;
+      }, 'staff hired');
+    }
+
+    // Prices: the manager types the new ceiling price on the day (now and then a day late).
+    for (const ft of ['diesel', 'gasoline']) {
+      const p = priceOn(ft, d);
+      if (p.from === d) {
+        const late = fchance(0.12) ? 1 : 0;
+        schedule(at(d + late, 8, 5), async () => {
+          await local('fuel:setPrice', { fuelType: ft, priceMinorPerL: p.price, currency: 'KHR', effectiveFrom: ppDate(DAY0 + d * DAYMS), sourceNote: 'Ministry of Commerce ceiling price' });
+          stats.prices += 1;
+        }, 'price');
+      }
+    }
+
+    // 07:00 warehouse dip by the attendant on duty (not during the planted gap; ~5% of days forgotten).
+    if (!inGap(d) && !(dow !== 1 && fchance(0.05))) schedule(at(d, 7, 0), () => dipWarehouse(attendantOn(d)), 'dip');
+
+    // Morning plans + warehouse fills for road vehicles.
+    for (const key of ORDER) {
+      const a = A[key];
+      if (a.unit === 'km') {
+        if (key === 'P4' && d > leftDay && d < hireDay) { a.plannedKm = 0; continue; }
+        const plan = kmPlan(a, d);
+        a.plannedKm = plan ? plan.km : 0;
+        a.trip = plan ? plan.trip : false;
+        if (!a.plannedKm) continue;
+        if (key === P.odoFreeze.asset) {
+          if (d === P.odoFreeze.from) a.frozen = true;
+          if (d === P.odoFreeze.to) a.frozen = false;
+        }
+        if (a.def.profile === 'moto') continue; // motorbikes run on gasoline: cash only
+        const need = (a.plannedKm * a.trueRate) / 100;
+        const t = nextPumpSlot(d, 7, 8);
+        if (a.trip) {
+          // A provincial trip leaves as it is unless nearly empty, and buys fuel on the road.
+          if (a.level < a.cap * 0.35) schedule(t, () => warehouseFill(a, d, { full: true }), `fill ${key}`);
+        } else if (a.level < a.cap * 0.4 || a.level < Math.min(need, a.cap * 0.8) + a.cap * 0.15) {
+          schedule(t, () => warehouseFill(a, d, { full: fchance(0.9) }), `fill ${key}`);
+        }
+      }
+    }
+    // Skid-steer and generator at the warehouse.
+    for (const key of ['SK', 'GEN']) {
+      const a = A[key];
+      a.plannedH = hoursPlan(a, d);
+      if (a.level < Math.max(a.cap * 0.4, a.plannedH * a.trueRate * 1.1 + a.cap * 0.1)) schedule(nextPumpSlot(d, 7, 35), () => warehouseFill(a, d, { full: true }), `fill ${key}`);
+    }
+
+    // Driving: first half at 12:00, second at 17:30; trips may need a cash fill at 12:30.
+    for (const key of ORDER) {
+      const a = A[key];
+      if (a.unit !== 'km') continue;
+      schedule(at(d, 12, 0), () => burn(a, Math.round(a.plannedKm / 2)), `drive ${key}`);
+      schedule(at(d, 17, 30), () => burn(a, a.plannedKm - Math.round(a.plannedKm / 2)), `drive ${key}`);
+      if (a.def.profile !== 'moto' && a.trip) {
+        schedule(at(d, 12, 30 + fri(0, 25)), async () => {
+          if (a.level < a.cap * 0.5) await cashFill(a, d, { mode: 'full', usd: fchance(0.15) });
+        }, `cash ${key}`);
+      }
+      if (a.def.profile === 'moto') {
+        for (const [hh, mm] of [[10, fri(0, 50)], [15, fri(0, 50)]]) {
+          schedule(at(d, hh, mm), async () => {
+            if (!a.plannedKm) return;
+            const thief = a.driver === P.cashThief;
+            if (thief && hh === 15 && [2, 5].includes(dow) && a.level < a.cap * 0.5) {
+              await cashFill(a, d, { theft: true, stationName: fchance(0.7) ? 'Tela Chbar Ampov' : 'PTT Steung Meanchey' });
+            } else if (a.level < a.cap * 0.35) {
+              await cashFill(a, d, { mode: fchance(0.4) ? 'fixed' : 'full' });
+            }
+          }, `moto ${key}`);
+        }
+      }
+    }
+    // Warehouse machines run.
+    for (const key of ['SK', 'GEN']) {
+      const a = A[key];
+      schedule(at(d, 12, 0), () => burn(a, r1((a.plannedH || 0) / 2)), `run ${key}`);
+      schedule(at(d, 17, 0), () => burn(a, r1((a.plannedH || 0) - r1((a.plannedH || 0) / 2))), `run ${key}`);
+      schedule(at(d, 16, 40), async () => { if (a.level < a.cap * 0.3) await warehouseFill(a, d, { full: true }); }, `evening fill ${key}`);
+    }
+
+    // Farm: morning fills from the farm store, then work.
+    for (const key of ['TR1', 'TR2', 'WP', 'WT']) {
+      const a = A[key];
+      const h = hoursPlan(a, d);
+      const minute = { TR1: 20, TR2: 32, WP: 10, WT: 45 }[key];
+      const threshold = key === 'WP' ? 0.5 : 0.4;
+      schedule(at(d, 6, minute), async () => {
+        const need = h * a.trueRate * 1.15;
+        if (h > 0 && (a.level < a.cap * threshold || a.level < need + a.cap * 0.1)) await farmFill(a, d, { full: fchance(0.93) });
+      }, `farm fill ${key}`);
+      schedule(at(d, 11, 30), () => burn(a, key === 'WT' ? h * 0.5 : r1(h / 2)), `farm run ${key}`);
+      schedule(at(d, 17, 0), () => burn(a, key === 'WT' ? h * 0.5 : r1(h - r1(h / 2))), `farm run ${key}`);
+    }
+
+    // Monday delivery: dip before, unload, dip after, record — all on the pump phone.
+    const deliveryDay = dow === 1 || (dow === 4 && W.litres < 500);
+    if (deliveryDay && !isKny(d)) {
+      schedule(at(d, 9, 25), async () => {
+        const code = attendantOn(d);
+        const order = Math.floor((1900 - W.litres) / 100) * 100;
+        if (order < 500) return; // the supplier's minimum is 500 L — no delivery this week
+        // During the planted dip gap the covering attendant skips the (optional) delivery dips too.
+        const before = inGap(d) ? null : await dipWarehouse(code, 'before delivery');
+        SIM += 35 * 60000;
+        const short = !shortDeliveryDone && d >= P.shortDeliveryDay && dow === 1;
+        const arrived = short ? order * 0.94 : order * (1 + gauss() * 0.002);
+        W.litres += arrived;
+        const after = inGap(d) ? null : await dipWarehouse(code, 'after delivery');
+        SIM += 3 * 60000;
+        const price = priceOn('diesel', d).price - 300;
+        const res = await rpc(tokenOf(code), 'fuel:recordDelivery', {
+          companyId, locationId: warehouse.id, litresInvoiced: order, dipBeforeId: before?.id, dipAfterId: after?.id,
+          clientRef: clientRef('dlv'),
+          photos: [{ kind: 'invoice', bytes: await photo('invoice', [fpick(['Tela Wholesale', 'Sokimex Depot']), `INV ${fri(10000, 99999)}`, `${order} L diesel`]) }],
+        }).catch((e) => { failures.push({ what: 'delivery', error: e.message }); return null; });
+        if (!res) return;
+        // The office adds the supplier, invoice number and price from the invoice.
+        stats.deliveries += 1;
+        truth.deliveries.push({ id: res.delivery.id, invoiced: order, arrivedTrue: r2(arrived), short, price, at: res.delivery.deliveredAt });
+        if (short) { shortDeliveryDone = true; truth.planted.P3_shortDelivery = { deliveryId: res.delivery.id, invoiced: order, arrived: r2(arrived) }; }
+      }, 'delivery');
+    }
+
+    // Transfers to the farm on Tuesday and Friday (and any weekday the farm runs low).
+    const xferDay = (dow === 2 || dow === 5) || (dow !== 0 && F.litres < 120);
+    if (xferDay && !isKny(d)) {
+      schedule(at(d, 13, 30), async () => {
+        if (F.litres >= 330 && !(dow === 2 || dow === 5)) return;
+        if (F.litres >= 330) return;
+        const cans = clamp(Math.floor((470 - F.litres) / 20), 3, 8);
+        const code = attendantOn(d);
+        const canL = Array.from({ length: cans }, () => 20 + gauss() * 0.25);
+        const trueSent = canL.reduce((s, x) => s + x, 0);
+        const before = pumpShown();
+        W.pumpTrue += trueSent;
+        W.litres -= trueSent;
+        const after = pumpShown();
+        const res = await rpc(tokenOf(code), 'fuel:recordTransfer', {
+          companyId, fromLocationId: warehouse.id, toLocationId: farm.id, pumpMeterBefore: before, pumpMeterAfter: after, containers: cans,
+          note: `Carried by ${fpick(['Mao Sambath (truck)', 'Sok Dara (Pickup 1)'])}`, clientRef: clientRef('xfer'),
+          photos: [{ kind: 'containers', bytes: await photo('containers', [`${cans} cans × 20 L`]) }],
+        }).catch((e) => { failures.push({ what: 'transfer', error: e.message }); return null; });
+        if (!res) return;
+        stats.transfers += 1;
+        const loss = !lossDone && d >= P.transferLossDay && cans >= 5;
+        const arrivedCans = loss ? cans - 1 : cans;
+        const arrivedTrue = loss ? trueSent - canL[0] : trueSent - 0.3 * fr();
+        const id = res.transfer.id;
+        truth.transfers.push({ id, cans, sentMeter: res.transfer.litresSent, sentTrue: r2(trueSent), arrivedTrue: r2(arrivedTrue), loss });
+        if (loss) { lossDone = true; truth.planted.P6_transferLoss = { transferId: id, cans, arrivedCans, carriedBy: 'see note' }; }
+        const arrive = Date.now() + fri(110, 160) * 60000;
+        const queued = fchance(0.3) ? fri(20, 120) * 60000 : 0;
+        schedule(arrive, () => { F.litres += arrivedTrue; }, 'arrive');
+        schedule(arrive + queued, async () => {
+          const r = await rpc(tokenOf('S013'), 'fuel:receiveTransfer', {
+            id, litresReceived: arrivedCans * 20, ...(queued ? { queuedForMs: queued } : {}),
+            photos: [{ kind: 'received', bytes: await photo('received', [`${arrivedCans} cans received`]) }],
+          }).catch((e) => { failures.push({ what: 'receive', error: e.message }); return null; });
+          if (r) stats.received += 1;
+        }, 'receive');
+      }, 'transfer');
+    }
+
+    // Weekly farm-store check: the gauge, typed in litres (no chart), on the farm phone.
+    if (dow === 1) {
+      schedule(at(d, 17, 40), async () => {
+        const typed = Math.max(0, Math.round((F.litres + gauss() * 2) / 5) * 5);
+        const res = await rpc(tokenOf('S013'), 'fuel:recordDip', {
+          companyId, locationId: farm.id, litres: typed, clientRef: clientRef('fdip'),
+          photos: [{ kind: 'stick', bytes: await photo('stick', [`gauge ${typed} L`, 'Farm store']) }],
+        }).catch((e) => { failures.push({ what: 'farm dip', error: e.message }); return null; });
+        if (res) { stats.dips += 1; truth.dips.push({ id: res.dip.id, location: 'farm', at: res.dip.takenAt, trueLitres: r2(F.litres), litres: typed }); }
+      }, 'farm dip');
+    }
+
+    // Monday morning the office reviews last week's fills on the Mac.
+    if (dow === 1 && d > 7) {
+      schedule(at(d, 10, 30), async () => {
+        const list = await local('fuel:listFills', { reviewStatus: 'new', to: Date.now() - 2 * DAYMS, limit: 500 });
+        for (const f of list.items) {
+          const tr = truth.fills[f.rootId] || {};
+          const review = { id: f.id, status: fchance(0.94) ? 'checked' : 'needs_review' };
+          // Reading the pump-display photo on some cash fills (rule C5).
+          if (f.kind === 'cash_station' && f.photos.some((p) => p.kind === 'pump_display') && fchance(0.3)) {
+            review.reviewedAmountMinor = tr.truePaidMinor ?? f.amountPaidMinor;
+            review.reviewedLitres = f.litresShownOnPump;
+          }
+          if (fchance(0.85)) { await local('fuel:reviewFill', review); stats.reviews += 1; }
+        }
+      }, 'review');
+    }
+
+    // Run the day.
+    const dayEnd = at(d + 1, 0, 0);
+    while (queue.length && queue[0].t < dayEnd) {
+      const ev = queue.shift();
+      if (ev.t > STOP_AT) { queue.length = 0; break; }
+      SIM = Math.max(SIM, ev.t);
+      try { await ev.fn(); } catch (err) { failures.push({ what: ev.label, at: ppDate(SIM), error: err.message }); }
+    }
+    if (SIM > STOP_AT) break;
+    if (d % 30 === 29) log(`fuel: day ${d + 1}/${FUEL_DAYS} (${ppDate(DAY0 + d * DAYMS)}) — ${stats.fills} fills, ${stats.dips} dips`);
+  }
+  // Anything left (paper slips for today) is entered only if it is not in the future.
+  while (queue.length && queue[0].t <= STOP_AT) { const ev = queue.shift(); SIM = Math.max(SIM, ev.t); try { await ev.fn(); } catch (err) { failures.push({ what: ev.label, error: err.message }); } }
+
+  truth.planted.P4_odoFreeze = { asset: P.odoFreeze.asset, assetId: A[P.odoFreeze.asset].asset.id, from: ppDate(DAY0 + P.odoFreeze.from * DAYMS), to: ppDate(DAY0 + P.odoFreeze.to * DAYMS), fromAt: DAY0 + P.odoFreeze.from * DAYMS, toAt: DAY0 + P.odoFreeze.to * DAYMS, driver: 'S003' };
+  truth.planted.P5_dipGap = { locationId: warehouse.id, from: ppDate(DAY0 + P.dipGap.from * DAYMS), days: P.dipGap.days, fromAt: DAY0 + P.dipGap.from * DAYMS, toAt: DAY0 + (P.dipGap.from + P.dipGap.days) * DAYMS };
+  truth.planted.P1_attendant = { code: P.attendantShortFill, employeeId: emp[P.attendantShortFill].id, fills: (truth.planted.P1_shortFill || []).length,
+    stolenL: r2((truth.planted.P1_shortFill || []).reduce((s, x) => s + x.stolenL, 0)) };
+  truth.planted.P2_driver = { code: P.cashThief, employeeId: emp[P.cashThief].id, asset: 'M1', fills: (truth.planted.P2_cashOverclaim || []).length,
+    pocketedRiel: 5000 * (truth.planted.P2_cashOverclaim || []).length };
+  for (const code of Object.keys(emp)) truth.staff[code].id = emp[code].id;
+
+  // ---------- back to the real clock: the full pass the app runs 30 s after start ----------
+  SIM = null;
+  Date.now = realNow;
+  const tFull = performance.now();
+  const full = await flagsDb.recomputeAllAsync({ companyId });
+  const fullPassMs = performance.now() - tFull;
+
+  await server.stopServer();
+  agent.destroy();
+  if (prevElectron) require.cache[electronPath] = prevElectron; else delete require.cache[electronPath];
+
+  const q1 = (sql, ...a) => db.prepare(sql).get(...a);
+  const flagCounts = db.prepare(`SELECT rule_key, severity, COUNT(*) n, SUM(resolved_at IS NULL) open FROM fuel_flags WHERE company_id = ? GROUP BY rule_key, severity ORDER BY rule_key`).all(companyId);
+  const pct = (arr, p) => { if (!arr || !arr.length) return null; const s = arr.slice().sort((x, y) => x - y); return r1(s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))]); };
+  const latency = {};
+  for (const [ch, arr] of Object.entries(lat)) latency[ch] = { n: arr.length, p50: pct(arr, 50), p95: pct(arr, 95), max: r1(Math.max(...arr)) };
+  const summary = {
+    from: truth.from, to: truth.to, days: FUEL_DAYS, ...stats, photos: photoCount, photoKB: Math.round(photoBytes / 1024),
+    staff: q1('SELECT COUNT(*) n FROM employees WHERE company_id = ?', companyId).n,
+    assets: q1('SELECT COUNT(*) n FROM fuel_assets WHERE company_id = ?', companyId).n,
+    fillsDb: q1('SELECT COUNT(*) n FROM fuel_fills WHERE company_id = ? AND superseded_at IS NULL', companyId).n,
+    dipsDb: q1('SELECT COUNT(*) n FROM fuel_dips WHERE company_id = ?', companyId).n,
+    photosDb: q1('SELECT COUNT(*) n FROM fuel_photos WHERE company_id = ?', companyId).n,
+    flags: flagCounts, fullPassMs: Math.round(fullPassMs), fullPass: full, latencyMs: latency,
+    failures: failures.length, phoneAccounts: Object.fromEntries(Object.entries(phoneUsers).map(([n, u]) => [n, u.token])), managerToken: officeUser.token,
+  };
+  truth.summary = summary;
+  truth.failures = failures.slice(0, 50);
+  fs.writeFileSync(path.join(ROOT, 'fuel-truth.json'), JSON.stringify(truth, null, 2));
+  if (failures.length) log(`fuel: ${failures.length} record(s) refused — first: ${JSON.stringify(failures[0])}`);
+  log(`fuel: ${stats.fills} fills, ${stats.dips} dips, ${stats.deliveries} deliveries, ${stats.transfers} transfers; full pass ${Math.round(fullPassMs)} ms`);
+  seedReport.fuelTruth = 'fuel-truth.json';
+  const { phoneAccounts: _p, managerToken: _m, ...forReport } = summary;
+  return forReport;
 }
 
 main().catch((e) => { console.error('SEED FAILED', e); process.exit(1); });

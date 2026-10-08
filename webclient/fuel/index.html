@@ -3,7 +3,9 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="apple-mobile-web-app-capable" content="yes" />
+<!-- No apple-mobile-web-app-capable: a home-screen icon must open in Safari, which
+     holds the token and the unsent records. A standalone web app has its own,
+     empty storage — signed out, with the queued records out of sight. -->
 <meta name="apple-mobile-web-app-title" content="Fuel" />
 <meta name="theme-color" content="#111114" />
 <meta name="referrer" content="no-referrer" />
@@ -29,6 +31,7 @@
   }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+button, label, input, select { touch-action: manipulation; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 17px; line-height: 1.6; }
 body { min-height: 100vh; padding-bottom: env(safe-area-inset-bottom); }
 button { font: inherit; color: inherit; }

@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { hasCap } from '../../lib/capabilities.js';
-import { indexById, toUint8 } from './fuelModel.js';
+import { createPhotoCache, indexById, toUint8 } from './fuelModel.js';
 
 const ALL_CAPS = ['*'];
 
@@ -49,7 +49,8 @@ export function useFuelTick(kinds) {
   return tick;
 }
 
-const LOOKUP_KINDS = ['asset', 'assetType', 'location', 'station', 'staff'];
+const LOOKUP_KINDS = ['asset', 'assetType', 'location', 'station', 'staff', 'settings'];
+const EMPTY_LOOKUPS = Object.freeze({ assets: [], types: [], locations: [], stations: [], staff: [], settings: null, loaded: false });
 
 /**
  * Everything a fuel screen needs to turn ids into names. Staff come back as
@@ -58,12 +59,15 @@ const LOOKUP_KINDS = ['asset', 'assetType', 'location', 'station', 'staff'];
 export function useFuelLookups({ includeRetired = false } = {}) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const tick = useFuelTick(LOOKUP_KINDS);
-  const [state, setState] = useState({ assets: [], types: [], locations: [], stations: [], staff: [], settings: null, loaded: false });
+  const [state, setState] = useState(EMPTY_LOOKUPS);
   const req = useRef(0);
+  const companyRef = useRef(activeCompanyId);
   const [manual, setManual] = useState(0);
   useEffect(() => {
-    if (!activeCompanyId || !window.api?.fuel) return;
+    // L4: another company's names must never show while this one loads.
+    if (companyRef.current !== activeCompanyId) { companyRef.current = activeCompanyId; setState(EMPTY_LOOKUPS); }
     const r = ++req.current;
+    if (!activeCompanyId || !window.api?.fuel) return;
     const f = window.api.fuel;
     Promise.all([
       f.listAssets({ status: includeRetired ? 'all' : 'active' }),
@@ -97,32 +101,22 @@ export function useFuelLookups({ includeRetired = false } = {}) {
 
 // One blob URL per photo (and size), shared by every thumbnail on screen. A
 // photo's bytes never change (a new photo is a new id), so the cache needs no
-// invalidation; it is capped so a long session does not hold every image.
-const CACHE_MAX = 400;
-const cache = new Map(); // key → Promise<{ url, intact } | null>
+// invalidation. It is a least-recently-used cache capped by BYTES (L9): a
+// review session opens hundreds of 1600 px originals, and a count cap alone
+// let those pile up. Lists ask for 320 px thumbnails; only the large viewer
+// asks for the original.
 
-function remember(key, promise) {
-  cache.set(key, promise);
-  while (cache.size > CACHE_MAX) {
-    const [oldKey, old] = cache.entries().next().value;
-    cache.delete(oldKey);
-    old.then((v) => { if (v?.url) URL.revokeObjectURL(v.url); }).catch(() => {});
-  }
-  return promise;
-}
+const cache = createPhotoCache({ release: (v) => { if (v.url) URL.revokeObjectURL(v.url); } });
 
 function toBlobResult(res) {
   const bytes = toUint8(res?.bytes);
   if (!bytes) return null;
   const url = URL.createObjectURL(new Blob([bytes], { type: res.mime || 'image/jpeg' }));
-  return { url, intact: res.intact !== false };
+  return { url, intact: res.intact !== false, size: bytes.byteLength };
 }
 
 function loadPhoto(key, fetcher) {
-  if (cache.has(key)) return cache.get(key);
-  const p = fetcher().then(toBlobResult);
-  p.catch(() => cache.delete(key));
-  return remember(key, p);
+  return cache.load(key, () => fetcher().then(toBlobResult));
 }
 
 function usePhoto(key, fetcher) {

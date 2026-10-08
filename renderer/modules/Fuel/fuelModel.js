@@ -324,9 +324,10 @@ export function sortFlags(flags) {
 /* ─── fills: review queue ─────────────────────────────────────────────── */
 
 /**
- * Fills waiting for a reviewer, most urgent first: a red flag, then "needs
- * review", then more open flags, then oldest first (so nothing waits forever).
- * Duplicates (the same fill in two answers) are dropped.
+ * Fills waiting for a reviewer, OLDEST first (L6) — the order the queue is
+ * worked through, so nothing waits forever behind newer fills. Checked, void
+ * and superseded fills and duplicates (the same fill in two answers) are
+ * dropped. A red flag is shown on the fill, not used to jump the queue.
  */
 export function buildReviewQueue(items) {
   const seen = new Set();
@@ -336,11 +337,7 @@ export function buildReviewQueue(items) {
     seen.add(f.id);
     out.push(f);
   }
-  return out.sort((a, b) =>
-    (Number(!!b.hasRedFlag) - Number(!!a.hasRedFlag))
-    || (Number(b.reviewStatus === 'needs_review') - Number(a.reviewStatus === 'needs_review'))
-    || ((b.openFlags || 0) - (a.openFlags || 0))
-    || ((a.at || 0) - (b.at || 0)));
+  return out.sort((a, b) => ((a.at || 0) - (b.at || 0)) || ((a.createdAt || 0) - (b.createdAt || 0)));
 }
 
 /** Where the litres figure came from, in words. */
@@ -353,6 +350,22 @@ export function litresSourceLabel(src) {
     case 'typed': return 'typed';
     default: return src || '';
   }
+}
+
+/**
+ * The typed meter reading against the vehicle's previous one (from
+ * `fuel:getFill`'s previousMeterFill / resetsSince): how far it went, or that
+ * it went backwards. A meter reset in between counts both stretches.
+ * Returns null when either reading is missing.
+ */
+export function meterSincePrevious(fill, previousMeterFill, resetsSince = []) {
+  if (!isNum(fill?.meterReading) || !isNum(previousMeterFill?.meterReading)) return null;
+  const resets = (Array.isArray(resetsSince) ? resetsSince : []).filter((r) => !r.voided && isNum(r.oldReading) && isNum(r.newReading));
+  const last = resets.length ? resets.reduce((a, b) => (b.at > a.at ? b : a)) : null;
+  const distance = last
+    ? (last.oldReading - previousMeterFill.meterReading) + (fill.meterReading - last.newReading)
+    : fill.meterReading - previousMeterFill.meterReading;
+  return { distance, backwards: distance < 0, reset: !!last };
 }
 
 /* ─── fills: the paper-slip form ──────────────────────────────────────── */
@@ -395,9 +408,13 @@ export function validateFillForm(form, ctx = {}) {
   } else if (!form.locationId) {
     errors.locationId = form.kind === 'farm_store' ? 'Pick the farm store' : 'Pick the tank';
   }
-  const at = parsePpInput(form.at);
-  if (at == null) errors.at = 'Enter the date and time on the slip';
-  else if (at > now + 60_000) errors.at = 'The time cannot be in the future';
+  // `ctx.timeIsNow`: the user may not give a time (no fuel.manage) — the
+  // server records the moment it is saved, so none is checked or sent.
+  const at = ctx.timeIsNow ? null : parsePpInput(form.at);
+  if (!ctx.timeIsNow) {
+    if (at == null) errors.at = 'Enter the date and time on the slip';
+    else if (at > now + 60_000) errors.at = 'The time cannot be in the future';
+  }
 
   const litres = positiveField(errors, form, 'litres', 'Litres');
   const cans = positiveField(errors, form, 'cansCount', 'Number of cans');
@@ -437,10 +454,10 @@ export function validateFillForm(form, ctx = {}) {
   const payload = {
     kind: form.kind,
     assetId: form.assetId,
-    at,
     source: 'mac',
     fullTank: !!form.fullTank,
   };
+  if (at != null) payload.at = at;
   if (cash) {
     if (form.stationId) payload.stationId = form.stationId;
     else payload.stationName = String(form.stationName).trim();
@@ -739,4 +756,55 @@ export function errText(err) {
   const msg = String(err?.message ?? err ?? 'Something failed');
   if (msg.startsWith('CONFLICT|')) return 'Someone else changed this while it was open. Close it and open it again to see their change.';
   return msg;
+}
+
+/* ─── photo cache (L9) ────────────────────────────────────────────────── */
+
+export const PHOTO_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const PHOTO_CACHE_MAX_ENTRIES = 600;
+
+/**
+ * Least-recently-used cache of loaded photos, capped by bytes (and entries).
+ * `load(key, fetcher)` shares one load per key; the fetcher resolves to
+ * `{ url, size, … }` or null. Evicted values go to `release` (the hook revokes
+ * the blob URL). A photo still loading, and the one just loaded, are never
+ * evicted — a component waiting on it would get a dead URL.
+ */
+export function createPhotoCache({ maxBytes = PHOTO_CACHE_MAX_BYTES, maxEntries = PHOTO_CACHE_MAX_ENTRIES, release = () => {} } = {}) {
+  const entries = new Map(); // key → { promise, size, done }
+  let bytes = 0;
+  function evict(keep) {
+    for (const [key, e] of [...entries]) {
+      if (bytes <= maxBytes && entries.size <= maxEntries) break;
+      if (key === keep || !e.done) continue;
+      entries.delete(key);
+      bytes -= e.size;
+      e.promise.then((v) => { if (v) release(v); }).catch(() => {});
+    }
+  }
+  function get(key) {
+    const e = entries.get(key);
+    if (!e) return null;
+    entries.delete(key); // the most recently used goes last
+    entries.set(key, e);
+    return e.promise;
+  }
+  function load(key, fetcher) {
+    const hit = get(key);
+    if (hit) return hit;
+    const e = { promise: null, size: 0, done: false };
+    e.promise = Promise.resolve().then(fetcher).then((v) => {
+      e.done = true;
+      if (entries.get(key) === e) {
+        e.size = (v && v.size) || 0;
+        bytes += e.size;
+        evict(key);
+      }
+      return v;
+    });
+    e.promise.catch(() => { if (entries.get(key) === e) entries.delete(key); });
+    entries.set(key, e);
+    return e.promise;
+  }
+  return { get, load, has: (key) => entries.has(key), get bytes() { return bytes; }, get size() { return entries.size; } };
 }

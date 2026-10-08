@@ -17,12 +17,12 @@ import { Badge, Button, EmptyState, Field, Input, Modal, Pagination, Select, Tex
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { useFuelCaps, useFuelIntent, useFuelLookups, useFuelTick } from './fuelHooks.js';
-import { AssetSelect, FuelPhotoLarge, FuelPhotoThumb, PhotoStrip, PhotoViewer, ReasonModal, SeverityBadge, StaffSelect } from './FuelShared.jsx';
+import { AssetSelect, FuelPhotoLarge, FuelPhotoThumb, LoadError, PhotoStrip, PhotoViewer, ReasonModal, SeverityBadge, StaffSelect } from './FuelShared.jsx';
 import { AddFillModal, CorrectFillModal } from './FillForms.jsx';
 import { FlagReviewModal } from './FuelOverview.jsx';
 import {
   FILL_KINDS, FLAG_STATUS_LABEL, REVIEW_STATUSES, assetLabel, buildReviewQueue, errText, fillKindLabel, flagHeadline,
-  fmtLitres, fmtMoney, fmtNumber, fmtWhen, litresSourceLabel, meterWord, monthRange, parseNumber, ppMonthKey,
+  fmtLitres, fmtMoney, fmtNumber, fmtWhen, litresSourceLabel, meterSincePrevious, meterWord, monthRange, parseNumber, ppMonthKey,
   recentMonths, reviewStatusOf, staffName, toMinor,
 } from './fuelModel.js';
 
@@ -68,7 +68,7 @@ export function FuelFills() {
           ? <FillList lookups={lookups} onOpen={setOpenFillId} onAdd={() => setAdding(true)} />
           : <MyFills lookups={lookups} onAdd={() => setAdding(true)} />}
 
-      <AddFillModal open={adding} onClose={() => setAdding(false)} lookups={lookups} />
+      <AddFillModal open={adding} onClose={() => setAdding(false)} lookups={lookups} canManage={canManage} />
       <Modal open={!!openFillId} onClose={() => setOpenFillId(null)} title="Fill-up" size="xxl">
         {openFillId ? <FillPanel fillId={openFillId} lookups={lookups} onAfterReview={() => setOpenFillId(null)} /> : null}
       </Modal>
@@ -80,7 +80,6 @@ export function FuelFills() {
 
 function FillList({ lookups, onOpen, onAdd }) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
-  const addToast = useAppStore((s) => s.addToast);
   const tick = useFuelTick(FILL_EVENTS);
   const months = useMemo(() => recentMonths(24), []);
   const [filters, setFilters] = useState({ month: ppMonthKey(), assetId: '', driverEmployeeId: '', kind: '', reviewStatus: '', includeVoided: false });
@@ -91,9 +90,20 @@ function FillList({ lookups, onOpen, onAdd }) {
   const [viewer, setViewer] = useState(null);
   const req = useRef(0);
 
+  const [loadError, setLoadError] = useState('');
+  const [retry, setRetry] = useState(0);
   useEffect(() => { setPage(0); }, [filters, pageSize, activeCompanyId]);
+  // L4: a company switch drops the old rows and the old company's vehicle/driver filters.
+  const companyRef = useRef(activeCompanyId);
+  useEffect(() => {
+    if (companyRef.current === activeCompanyId) return;
+    companyRef.current = activeCompanyId;
+    setData({ items: [], total: 0 });
+    setFilters((f) => ({ ...f, assetId: '', driverEmployeeId: '' }));
+  }, [activeCompanyId]);
   useEffect(() => {
     const r = ++req.current;
+    if (!activeCompanyId) return;
     setLoading(true);
     const range = filters.month ? monthRange(filters.month) : null;
     window.api.fuel.listFills({
@@ -104,10 +114,10 @@ function FillList({ lookups, onOpen, onAdd }) {
       reviewStatus: filters.reviewStatus || undefined,
       includeVoided: filters.includeVoided || undefined,
       limit: pageSize, offset: page * pageSize,
-    }).then((res) => { if (r === req.current) setData(res || { items: [], total: 0 }); })
-      .catch((err) => { if (r === req.current) addToast(`Couldn't load fill-ups: ${errText(err)}`, 'error'); })
+    }).then((res) => { if (r === req.current) { setData(res || { items: [], total: 0 }); setLoadError(''); } })
+      .catch((err) => { if (r === req.current) { setData({ items: [], total: 0 }); setLoadError(errText(err)); } })
       .finally(() => { if (r === req.current) setLoading(false); });
-  }, [filters, page, pageSize, tick, activeCompanyId, addToast]);
+  }, [filters, page, pageSize, tick, retry, activeCompanyId]);
 
   const { currentPage, maxPage, pageStart, pageEnd } = paginate(data.total, page, pageSize);
   useEffect(() => { if (page > maxPage) setPage(maxPage); }, [page, maxPage]);
@@ -139,7 +149,7 @@ function FillList({ lookups, onOpen, onAdd }) {
         <span className="toolbar__count">{data.total} fill-up{data.total === 1 ? '' : 's'}</span>
       </div>
 
-      {loading && !data.items.length ? <p className="muted">Loading…</p> : data.items.length === 0 ? (
+      {loadError ? <LoadError message={loadError} onRetry={() => setRetry((n) => n + 1)} /> : loading && !data.items.length ? <p className="muted">Loading…</p> : data.items.length === 0 ? (
         <EmptyState
           title={filtered ? 'No fill-ups match' : 'No fill-ups this month'}
           body={filtered ? 'Change a filter to see more.' : 'Fill-ups from the phones appear here as they are saved. Paper slips can be added by hand.'}
@@ -201,9 +211,17 @@ function MyFills({ lookups, onAdd }) {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [voiding, setVoiding] = useState(null);
+  const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   useEffect(() => {
-    window.api.fuel.listMyRecent({ days: 60 }).then((r) => setFills(r?.fills || [])).catch((err) => addToast(errText(err), 'error'));
-  }, [tick, addToast]);
+    // L4: reload for the active company; a late answer for another one is dropped.
+    let alive = true;
+    setFills([]);
+    if (!activeCompanyId) return undefined;
+    window.api.fuel.listMyRecent({ days: 60 })
+      .then((r) => { if (alive) setFills(r?.fills || []); })
+      .catch((err) => { if (alive) addToast(errText(err), 'error'); });
+    return () => { alive = false; };
+  }, [activeCompanyId, tick, addToast]);
   const { currentPage, maxPage, pageStart, pageEnd } = paginate(fills.length, page, pageSize);
   if (!fills.length) {
     return <EmptyState title="No fill-ups from you yet" body="Fill-ups you add from paper slips (or the phone) in the last 60 days are listed here." action={<Button variant="primary" onClick={onAdd}>+ Add fill-up</Button>} />;
@@ -258,21 +276,23 @@ function ReviewMode({ lookups, onExit }) {
   const [queue, setQueue] = useState(null);
   const [currentId, setCurrentId] = useState(null);
   const [done, setDone] = useState(0);
+  const [total, setTotal] = useState(0);
   const req = useRef(0);
 
   useEffect(() => {
     const r = ++req.current;
-    Promise.all([
-      window.api.fuel.listFills({ reviewStatus: 'new', limit: 500 }),
-      window.api.fuel.listFills({ reviewStatus: 'needs_review', limit: 500 }),
-    ]).then(([a, b]) => {
+    // L6: the OLDEST waiting fills first, and the server's true count — not
+    // the newest 500 of each status, which left old ones waiting unseen.
+    window.api.fuel.listFills({ reviewStatus: 'waiting', order: 'oldest', limit: 500 }).then((res) => {
       if (r !== req.current) return;
-      const q = buildReviewQueue([...(a?.items || []), ...(b?.items || [])]);
+      const q = buildReviewQueue(res?.items || []);
       setQueue(q);
+      setTotal(Math.max(res?.total || 0, q.length));
       // Keep the fill on screen when the queue refreshes under it (a phone upload).
       setCurrentId((cur) => (cur && q.some((f) => f.id === cur) ? cur : q[0]?.id ?? null));
     }).catch((err) => { if (r === req.current) addToast(`Couldn't load the review queue: ${errText(err)}`, 'error'); });
   }, [tick, activeCompanyId, addToast]);
+  useEffect(() => { setQueue(null); setDone(0); setTotal(0); }, [activeCompanyId]); // L4
 
   const index = queue ? queue.findIndex((f) => f.id === currentId) : -1;
   const go = useCallback((delta) => {
@@ -283,6 +303,7 @@ function ReviewMode({ lookups, onExit }) {
 
   function afterReview(reviewedId) {
     setDone((n) => n + 1);
+    setTotal((n) => Math.max(0, n - 1));
     if (!queue) return;
     const rest = queue.filter((f) => f.id !== reviewedId);
     const next = rest[Math.min(Math.max(index, 0), rest.length - 1)] || null;
@@ -303,7 +324,10 @@ function ReviewMode({ lookups, onExit }) {
   return (
     <div className="fuel-review">
       <div className="toolbar">
-        <span className="toolbar__count">{index + 1} of {queue.length} waiting{done ? ` · ${done} reviewed` : ''}</span>
+        <span className="toolbar__count">
+          {index + 1} of {total} waiting, oldest first{done ? ` · ${done} reviewed` : ''}
+          {total > queue.length ? ` · the oldest ${queue.length} are loaded; the rest follow` : ''}
+        </span>
         <div className="toolbar__spacer" />
         <Button onClick={() => go(-1)} disabled={index <= 0}>← Previous</Button>
         <Button onClick={() => go(1)} disabled={index >= queue.length - 1}>Skip →</Button>
@@ -350,6 +374,7 @@ export function FillPanel({ fillId, lookups, onAfterReview }) {
   const cash = fill.kind === 'cash_station';
   const openFlags = (fill.flags || []).filter((f) => !f.resolved);
   const cur = fill.currency || 'KHR';
+  const since = meterSincePrevious(fill, fill.previousMeterFill, fill.resetsSince);
   const impliedPerL = cash && fill.amountPaidMinor && fill.litresShownOnPump ? fill.amountPaidMinor / fill.litresShownOnPump : null;
 
   async function review(status) {
@@ -403,6 +428,25 @@ export function FillPanel({ fillId, lookups, onAfterReview }) {
           {fill.cansCount ? <><dt>Cans</dt><dd>{fill.cansCount} × {fmtLitres(fill.canSizeL, 0)}</dd></> : null}
           {fill.pumpMeterBefore != null ? <><dt>Pump meter</dt><dd>{fmtNumber(fill.pumpMeterBefore, 2)} → {fmtNumber(fill.pumpMeterAfter, 2)}</dd></> : null}
           {asset?.meterUnit !== 'none' ? <><dt>{meterWord(asset?.meterUnit)}</dt><dd>{fill.meterReading != null ? fmtNumber(fill.meterReading, 1) : <span className="fuel-missing">not entered</span>}</dd></> : null}
+          {asset?.meterUnit !== 'none' && fill.previousMeterFill ? (
+            <>
+              <dt>Previous reading</dt>
+              <dd>
+                {fmtNumber(fill.previousMeterFill.meterReading, 1)} <span className="muted">· {fmtWhen(fill.previousMeterFill.at)}</span>
+                {since ? (since.backwards
+                  ? <div className="fuel-missing">Lower than the previous reading{since.reset ? ' (after the meter reset)' : ''}</div>
+                  : <div className="muted">+{fmtNumber(since.distance, 1)} {asset?.meterUnit === 'hours' ? 'h' : 'km'} since{since.reset ? ', counting the meter reset' : ''}</div>) : null}
+              </dd>
+            </>
+          ) : null}
+          {fill.previousFill ? (
+            <>
+              <dt>Previous fill</dt>
+              <dd>
+                {fmtWhen(fill.previousFill.at)} <span className="muted">· {fmtLitres(fill.previousFill.litres)} · {fromLabel(fill.previousFill, lookups)}{fill.previousFill.fullTank ? ' · full' : ''}</span>
+              </dd>
+            </>
+          ) : null}
           <dt>Full tank</dt><dd>{fill.fullTank ? 'Yes' : 'No'}</dd>
           {cash ? (
             <>

@@ -498,7 +498,7 @@ a phone account makes that person the default driver (cash fills) / attendant (t
 | `fuel:recordDelivery` | `{ locationId, litresInvoiced, supplier?, invoiceNo?, priceMinorPerL?, amountMinor?, currency?, dipBeforeId?, dipAfterId?, receivedByEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ delivery, duplicate }` | R |
 | `fuel:setDeliveryDips` | `{ id, dipBeforeId?, dipAfterId? }` — a field not passed keeps its link; `null` clears it | `Delivery` | **M** (the phone passes `dipBeforeId`/`dipAfterId` when it records the delivery) |
 | `fuel:recordTransfer` | `{ fromLocationId, toLocationId?, litresSent?, pumpMeterBefore?, pumpMeterAfter?, containers?, containerNote?, sentByEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ transfer, duplicate }` | R |
-| `fuel:receiveTransfer` | `{ id, litresReceived, receivedByEmployeeId?, note?, at?, source?, queuedForMs?, photos? }` | `{ transfer, duplicate }` (a repeat returns it unchanged). For R, the account that recorded the send, or the sender, cannot confirm the receipt | R |
+| `fuel:receiveTransfer` | `{ id, litresReceived, receivedByEmployeeId?, note?, at?, source?, queuedForMs?, photos? }` | `{ transfer, duplicate }` (the same account repeating the same litres gets it back unchanged; another account, or other litres, is refused: "Someone else already recorded this delivery as received"). For R, the account that recorded the send, or the sender, cannot confirm the receipt | R |
 | `fuel:addPhoto` | `{ ownerKind: 'fill'\|'dip'\|'delivery'\|'transfer', ownerId, kind, bytes }` | photo meta (own records only for R; at most 12 per record) | R |
 | `fuel:getPhoto` | `{ photoId, thumb?: bool }` (thumb = 320 px) | `{ bytes, mime, sha256, intact, kind, uploadedAt }` | R |
 | `fuel:listMyRecent` | `{ days?: 1–60 }` (default 7) | `{ fills, dips, deliveries, transfers }` the caller entered | R |
@@ -512,8 +512,8 @@ shown on the pump; else amount ÷ published price (`derived_from_price`).
 ### Review, lists, flags, reports
 | Channel | Args | Returns | Cap |
 |---|---|---|---|
-| `fuel:listFills` | `{ from?, to?, assetId?, driverEmployeeId?, attendantEmployeeId?, locationId?, stationId?, kind?, reviewStatus?, includeVoided?, includeSuperseded?, limit? (≤500), offset? }` | `{ items: Fill & { photos, openFlags, hasRedFlag }[], total }` | M |
-| `fuel:getFill` | `id` (any revision or the root) | `Fill & { photos, revisions, flags }` | M |
+| `fuel:listFills` | `{ from?, to?, assetId?, driverEmployeeId?, attendantEmployeeId?, locationId?, stationId?, kind?, reviewStatus? (`new`, `checked`, `needs_review`, or `waiting` = new or needs review), order? (`newest` default, `oldest` — the review queue), includeVoided?, includeSuperseded?, limit? (≤500), offset? }` | `{ items: Fill & { photos, openFlags, hasRedFlag }[], total }` (`total` counts every match, not just the page) | M |
+| `fuel:getFill` | `id` (any revision or the root) | `Fill & { photos, revisions, flags, previousFill, previousMeterFill, resetsSince }` — the vehicle's fill before this one, the last earlier fill with a meter reading, and meter resets between that one and this | M |
 | `fuel:listDips` / `fuel:listDeliveries` / `fuel:listTransfers` | `{ locationId?, from?, to?, includeVoided?, limit?, offset? }` | `{ items (with photos), total }` | M |
 | `fuel:reviewFill` | `{ id, status: 'checked'\|'needs_review', note?, reviewedAmountMinor?, reviewedLitres? }` (what the pump photo shows → rule C5) | `{ fill, flags }` | M |
 | `fuel:correctFill` | `{ id, patch, reason }` | `{ fill, flags }` — a new revision; the old one is kept as superseded | M |

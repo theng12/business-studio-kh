@@ -11,7 +11,7 @@ import { Badge, Button, EmptyState, Field, Modal, Pagination, Textarea, paginate
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { useFuelCaps, useFuelLookups, useFuelTick } from './fuelHooks.js';
-import { ManageOnlyNote, SeverityBadge } from './FuelShared.jsx';
+import { LoadError, ManageOnlyNote, SeverityBadge } from './FuelShared.jsx';
 import { FuelPhoneSetupSlot } from './PhoneSetupSlot.jsx';
 import {
   FLAG_ACTIONS, FLAG_STATUS_LABEL, dipAge, flagHeadline, flagReviewError, fmtDay, fmtLitres, fmtNumber, fmtRiel,
@@ -43,13 +43,16 @@ export function FuelOverview() {
   const [rechecking, setRechecking] = useState(false);
   const [phonesOpen, setPhonesOpen] = useState(false);
   const [reload, setReload] = useState(0);
+  const [loadError, setLoadError] = useState('');
   const req = useRef(0);
 
   useEffect(() => { setPage(0); }, [view, pageSize, activeCompanyId]);
+  // L4: never show the previous company's numbers while this one loads.
+  useEffect(() => { setOverview(null); setFlags({ items: [], total: 0 }); setLoadError(''); }, [activeCompanyId]);
 
   useEffect(() => {
-    if (!activeCompanyId || !canManage) { setLoading(false); return; }
     const r = ++req.current;
+    if (!activeCompanyId || !canManage) { setLoading(false); return; }
     setLoading(true);
     Promise.all([
       window.api.fuel.getOverview(),
@@ -58,8 +61,12 @@ export function FuelOverview() {
       if (r !== req.current) return;
       setOverview(ov);
       setFlags(fl || { items: [], total: 0 });
+      setLoadError('');
     }).catch((err) => {
-      if (r === req.current) addToast(`Couldn't load the fuel overview: ${err.message}`, 'error');
+      if (r !== req.current) return;
+      setOverview(null);
+      setFlags({ items: [], total: 0 });
+      setLoadError(errText(err));
     }).finally(() => { if (r === req.current) setLoading(false); });
   }, [activeCompanyId, canManage, view, page, pageSize, tick, reload, addToast]);
 
@@ -138,7 +145,9 @@ export function FuelOverview() {
             </div>
           </div>
         </div>
-        {loading && !sorted.length ? (
+        {loadError ? (
+          <LoadError message={loadError} onRetry={() => setReload((n) => n + 1)} />
+        ) : loading && !sorted.length ? (
           <p className="muted">Loading…</p>
         ) : sorted.length === 0 ? (
           <EmptyState

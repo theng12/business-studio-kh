@@ -197,12 +197,12 @@ export function FuelPhoneSetup({ onDone } = {}) {
         <ol lang="km">
           <li>ភ្ជាប់ទូរស័ព្ទទៅ Tailscale (ឬ Wi-Fi ដូចគ្នានឹង Mac)។</li>
           <li>បើកកាមេរ៉ាទូរស័ព្ទ ហើយស្កេនកូដ QR។</li>
-          <li>ទំព័រប្រេងបើកដោយចូលគណនីរួចហើយ។ ដាក់វានៅលើអេក្រង់ដើម៖ iPhone «ចែករំលែក → បន្ថែមទៅអេក្រង់ដើម», Android «⋮ → បន្ថែមទៅអេក្រង់ដើម»។</li>
+          <li>ទំព័រប្រេងបើកក្នុង Safari (iPhone) ឬ Chrome (Android) ដោយចូលគណនីរួចហើយ។ ត្រូវបើកវាក្នុងកម្មវិធីរុករកនោះជានិច្ច៖ រក្សាទុកជាចំណាំ (bookmark)។ បើបន្ថែមទៅអេក្រង់ដើមលើ iPhone ត្រូវបិទ «បើកជាកម្មវិធីគេហទំព័រ» (Open as Web App) — បើមិនដូច្នោះ វានឹងចាកចេញពីគណនី ហើយកំណត់ត្រាដែលមិនទាន់ផ្ញើនឹងមើលមិនឃើញ។</li>
         </ol>
         <ol lang="en">
           <li>Put the phone on Tailscale (or the same Wi-Fi as the Mac).</li>
           <li>Open the phone&rsquo;s camera and scan the QR code.</li>
-          <li>The fuel page opens already signed in. Keep it on the home screen: iPhone “Share → Add to Home Screen”, Android “⋮ → Add to Home screen”.</li>
+          <li>The fuel page opens in Safari (iPhone) or Chrome (Android), already signed in. Always open it in that same browser — keep it as a bookmark. On an iPhone, an Add to Home Screen icon must have “Open as Web App” switched off; a web app is signed out and cannot see records waiting to send.</li>
         </ol>
         <p className="fuel-phone-setup__hint">
           A phone without a connection keeps what it records and sends it when it is back, while the page stays open.
