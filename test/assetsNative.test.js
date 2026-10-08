@@ -194,7 +194,7 @@ test('activation, purchase: Dr Vehicles / Cr purchases clearing; $225 a month fr
   const ev = assets.listEvents(company.id, { assetId: truck.id });
   assert.deepEqual(ev.map((e) => e.kind), ['acquire']);
   assert.equal(ev[0].journalEntryId, entry.id);
-  assert.deepEqual(ledger.assetLedgerTotals(truck.id), { costMinor: 2_400_000, accumDepMinor: 0, impairmentMinor: 0 });
+  assert.deepEqual(ledger.assetLedgerTotals(truck.id), { costMinor: 2_400_000, accumDepMinor: 0, impairmentMinor: 0, revaluationSurplusMinor: 0 });
   // Bought before the register start → it is an opening asset, not a purchase.
   const old = assets.create({ companyId: company.id, categoryId: cat(config, company.id, 'truck').id, name: 'Old', purchaseDate: '2025-06-01', costMinor: 100_000, usefulLifeMonths: 60 });
   assert.throws(() => assets.activate(old.id), /Already owned/);
@@ -222,10 +222,9 @@ test('§4.2 worked example through the tables: known-cost opening on 1 Jan 2027'
   assert.ok(s.rows.every((r) => r.amountMinor === 22_500));
   // The start date is now fixed.
   assert.throws(() => config.updateSettings(company.id, { registerStartDate: '2026-01-01' }), /can no longer change/);
-  assert.deepEqual(ledger.assetLedgerTotals(t.id), { costMinor: 3_000_000, accumDepMinor: 1_777_500, impairmentMinor: 0 });
+  assert.deepEqual(ledger.assetLedgerTotals(t.id), { costMinor: 3_000_000, accumDepMinor: 1_777_500, impairmentMinor: 0, revaluationSurplusMinor: 0 });
   // An "old" asset that came into use after the start is refused as an opening.
-  const late = assets.create({ companyId: company.id, categoryId: cat(config, company.id, 'truck').id, name: 'Late', acquisitionKind: 'opening', purchaseDate: '2027-02-01', costMinor: 100, usefulLifeMonths: 10 });
-  assert.throws(() => assets.activate(late.id), /new purchase/);
+  assert.throws(() => assets.create({ companyId: company.id, categoryId: cat(config, company.id, 'truck').id, name: 'Late', acquisitionKind: 'opening', purchaseDate: '2027-02-01', costMinor: 100, usefulLifeMonths: 10 }), /cannot be in the future/);
 });
 
 test('deemed opening (iMac $600, 24 months left), land, and a purchase paid in riel', { skip: skipReason }, () => {
@@ -380,7 +379,7 @@ test('reversing an acquisition sends the asset back to draft; it activates again
   const again = assets.activate(a.id);
   assert.notEqual(again.entry.id, first.entry.id);
   assert.equal(again.entry.totalMinor, 4_200_000);
-  assert.deepEqual(ledger.assetLedgerTotals(a.id), { costMinor: 4_200_000, accumDepMinor: 0, impairmentMinor: 0 });
+  assert.deepEqual(ledger.assetLedgerTotals(a.id), { costMinor: 4_200_000, accumDepMinor: 0, impairmentMinor: 0, revaluationSurplusMinor: 0 });
 });
 
 test('the Fuel link: one-time drafts for existing vehicles, identity mirrored both ways', { skip: skipReason }, () => {
@@ -599,6 +598,7 @@ test('/api/rpc: assets.view reads, assets.manage writes, assets.count sees photo
   require('../main/ipc/branches').register(helpers);
   require('../main/ipc/ledger').register(helpers);
   require('../main/ipc/fuel').register(helpers);
+  require('../main/ipc/audit').register(helpers);
   const server = require('../main/server');
   const port = await freePort();
   await server.bootServer({ port, dataDir: db.getDataDir(), wsHeartbeatMs: 60000 });
@@ -677,7 +677,7 @@ test('/api/rpc: assets.view reads, assets.manage writes, assets.count sees photo
 
   // Admin only: locking a month; making Fuel vehicles needs fuel.manage too.
   await forbidden(manager.token, 'ledger:lockPeriod', { period: '2026-03' });
-  assert.deepEqual(await ok(admin.token, 'ledger:lockPeriod', { period: '2026-03' }), { period: '2026-03', status: 'locked' });
+  assert.deepEqual(await ok(admin.token, 'ledger:lockPeriod', { period: '2026-03' }), { period: '2026-03', status: 'locked', closedThrough: '2026-03' });
   const fuelTry = await call(manager.token, 'assets:createFuelAsset', { id: created.id, typeId: types.truck.id });
   assert.match(fuelTry.body.error, /Manage fuel/);
   assert.ok((await ok(admin.token, 'assets:createFuelAsset', { id: created.id, typeId: types.truck.id })).fuelAsset.id);
@@ -686,4 +686,25 @@ test('/api/rpc: assets.view reads, assets.manage writes, assets.count sees photo
   assert.match(upd.body.error, /only an admin/);
   assert.equal((await ok(admin.token, 'assets:updateCategory', { id: truckCat.id, patch: { taxClass: '4' } })).taxClass, '4');
   assert.equal(config.getCategory(truckCat.id).taxClass, '4');
+
+  // A2: the viewer previews and reads; posting is the manager's; filing a tax year is the admin's.
+  assert.equal((await ok(viewer.token, 'assets:previewDepreciation', { period: '2026-03' })).period, '2026-03');
+  assert.ok((await ok(viewer.token, 'assets:listRuns', {})).months.length);
+  assert.ok((await ok(viewer.token, 'assets:getTaxYear', { year: 2026 })).pools['3']);
+  assert.ok((await ok(viewer.token, 'assets:getReport', { kind: 'register' })).rows.length);
+  assert.ok((await ok(viewer.token, 'assets:getWorkbook', { year: 2026 })).bytes);
+  await forbidden(viewer.token, 'assets:runDepreciation', { period: '2026-04' });
+  await forbidden(manager.token, 'assets:markTaxYearFiled', { year: 2026 });
+  const posted = await ok(manager.token, 'assets:runDepreciation', { period: (await ok(manager.token, 'assets:listRuns', {})).nextDuePeriod });
+  assert.ok(posted.run);
+
+  // History (review M6): a History reader without assets.view never sees asset or ledger rows.
+  const historyOnly = role('History reader', ['history.view']);
+  const historyAndAssets = role('History + assets', ['history.view', 'assets.view']);
+  const auditTypes = async (token) => (await ok(token, 'audit:listRecent', { limit: 500 })).map((r) => r.entityType);
+  const blind = await auditTypes(historyOnly.token);
+  for (const t of ['fixed_asset', 'journal_entry', 'asset_event', 'depreciation_run']) assert.ok(!blind.includes(t), t);
+  assert.equal(await ok(historyOnly.token, 'audit:countForEntity', { entityType: 'fixed_asset', entityId: created.id }), 0);
+  const sees = await auditTypes(historyAndAssets.token);
+  assert.ok(sees.includes('fixed_asset') && sees.includes('journal_entry'));
 });

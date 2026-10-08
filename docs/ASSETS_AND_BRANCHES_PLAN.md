@@ -1,6 +1,6 @@
 # Fixed Assets & Branches: design plan (2026-10-08)
 
-**Status: approved direction 2026-10-08 with the answers in §13a. A0 + A1 backend built 2026-10-08 (no screens yet) — the channel list is §14 "Assets API" at the end.** This was written for the owner (Theng) after his decisions of 2026-10-08:
+**Status: approved direction 2026-10-08 with the answers in §13a. A0 + A1 + A2 backend built 2026-10-08, review fixes included (no screens yet) — the channel list is §14 "Assets API" at the end.** This was written for the owner (Theng) after his decisions of 2026-10-08:
 - Branches are locations inside one company.
 - Depreciation is kept two ways: book (straight-line) and tax (Cambodian classes).
 - Old assets come in at an opening value on a start date.
@@ -104,7 +104,7 @@ A closed branch keeps its history. It cannot receive new assets or staff, and ca
 | `fx_rates` | rate_date, khr_per_usd (REAL), source `house\|official`, source_note (e.g. "GDT daily rate"), photo/file optional, created_by, voided_at/void_reason. UNIQUE(company_id, rate_date, source) |
 
 - **The rate on a date** is the latest non-void rate on or before that date for that source.
-- **Book entries** use `house`. The first time an entry needs a rate and none exists, it is seeded from the Mac's current `exchangeRateKhrPerUsd`, with `source_note: 'from Settings'`.
+- **Book entries** use `house` (per company). The first time an entry needs a rate and none exists, it is seeded from the server Mac's current `exchangeRateKhrPerUsd`, dated the register start date, with `source_note: 'from Settings'` (§5.2).
 - **Tax view** uses `official`. If it is missing, the tax view shows an amber "official rate missing for <dates>" and falls back to `house`, labelled as such.
 - Every journal entry stores the rate it used (§5.2), so a later change of rate never moves a posted figure.
 
@@ -338,11 +338,14 @@ Class 1 / 1b / intangible — per asset:
 
 1. **It always balances.** Sum of debits = sum of credits in USD cents, or the post throws. The riel figures are computed per line (`round(usd_cents × rate / 100)`), and any rounding difference goes to the largest line, so riel balances too. A nightly integrity pass (§7) re-checks every entry and logs any that fail.
 2. **Posted means permanent.** `CREATE TRIGGER IF NOT EXISTS` makes SQLite refuse any `UPDATE` or `DELETE` on `journal_lines`, and on `journal_entries` except setting `reversed_by_entry_id`. This is additive, and protects against a future bug as well as a future agent.
-3. **Locked months are refused.** An entry dated in a locked month is posted on the **first day of the first open month** instead, with the memo "Late entry for 14 Mar 2027 (March is locked)". The original date stays on the source event.
+3. **Locked months are refused.** An entry dated in a locked month is posted on the **first day of the first open month** instead, with the memo "Late entry for 14 Mar 2027 (March 2027 is locked)". The original date stays on the source event (and on the entry as `intended_date`).
+   - **A lock means "closed through" (decided at review, 2026-10-08).** Locking a month closes the books for it **and every month before it**, whether or not those months have a row of their own. `post()` redirects any date at or before the latest locked month to the 1st of the month after it. Only a month that has **ended** can be locked; locking an earlier month than the latest lock is a no-op. **Only the latest locked month can be unlocked** (admin), which moves "closed through" back to the previous month that was itself locked.
 4. **Idempotent.** `idempotency_key` (for example `dep:2027-03`, `evt:<eventId>`, `rev:<entryId>`) is UNIQUE, so a retried run or a double click never posts twice.
 5. **Reversal, not delete.** `ledger.reverse(entryId, reason)` posts the mirror entry in the current open month and links the two.
 
-**Locking months:** `ledger:lockPeriod` / `ledger:unlockPeriod` are **admin only** for now. Finance gets proper closing later. Depreciation runs never lock a month by themselves.
+**Locking months:** `ledger:lockPeriod` / `ledger:unlockPeriod` are **admin only** for now. Finance gets proper closing later. Depreciation runs never lock a month by themselves. A month that is closed without a depreciation run is caught up in the first open month's run (§5.5).
+
+**The riel rate (as built).** The house rate is **per company**, in `fx_rates` — not per Mac. When a company has none yet, the first one is seeded from the Settings rate of the Mac that holds the data (the **server** Mac; a client Mac never posts), dated the **register start date** (not an old purchase date), and noted "from Settings". Dates before the earliest house rate use the earliest one, labelled.
 
 ### 5.3 Seeded chart (per company, on first use; the accountant may renumber)
 
@@ -695,7 +698,7 @@ All are listed for the accountant in open question 3.
 - No files were modified in this session.
 ---
 
-## 14. Assets API (A0 + A1 backend, built 2026-10-08)
+## 14. Assets API (A0 + A1 + A2 backend, built 2026-10-08)
 
 For the Mac screens (and, from A3, the `/a` phone page). Every channel below is `expose()`d (works
 locally, from a client Mac and over `/api/rpc` with a token) unless marked **local**. All act on the
@@ -712,6 +715,14 @@ only (`ADMIN_ONLY`). Local calls on the server Mac's own window are not gated. `
 `files:parseWorkbook` are now `products.edit` **or** `assets.manage` (§2 gap 5). Rules for A3 are already
 routed: `stocktake:(list|get|scan|tick|addUnknown|claimTag|listMyScans|lookupTag)` → count or manage, the
 rest of `stocktake:*` → manage.
+
+**History** (review M6): audit rows of type `fixed_asset`, `asset_event`, `asset_category`,
+`asset_settings`, `journal_entry`, `gl_account`, `fx_rate`, `ledger_period`, `depreciation_run`,
+`tax_year` (and `stocktake`) are shown only to callers with `assets.view` or `assets.manage` — in the
+feed, its count, its text search and the per-entity history — and History's "Clear" keeps them (the
+answer reports `kept`). Branch rows stay visible. Asset audit rows are written with sensitivity
+`finance`, stored when the database has HR1's `audit_log.sensitivity` column (checked at run time, so
+either merge order works).
 
 **Conventions.** Dates `'YYYY-MM-DD'` (Phnom Penh), periods `'YYYY-MM'`. Money is whole minor units:
 `costMinor` in the asset's `costCurrency` (`USD` cents or `KHR` riel); every book figure
@@ -780,6 +791,45 @@ updatedAt }`.
 | `assets:listEvents` | `{ assetId?, batchId?, kind?, includeVoided? (true), limit?, offset? }` | `Event[] = { id, assetId, tagCode, assetName, batchId, eventDate, effectivePeriod, kind, from/toBranchId, from/toEmployeeId, from/toStatus, amountMinor, currency, fxKhrPerUsd, amountUsdMinor, newLifeMonths, newSalvageMinor, extendsLifeMonths, vendor, supplierId, reason, detail, documentFileIds, journalEntryId, reversesEventId, reversedByEventId, recordedByUserId, createdAt, voided, voidReason }` | V |
 | `assets:getSchedule` | `{ id, basis: 'book' \| 'tax' }` | book: `{ treatment, startPeriod, lifeMonths, basisMinor, salvageMinor, openingAccumMinor, endAccumMinor, endNbvMinor, fullyDepreciatedAt, changes, rows: [{ period, amountMinor, accumMinor, nbvMinor, segment, postedMinor }] }` or `{ rows: [], note }`; tax: `{ taxClass, method, pooled, rateBp, label, costKhrMinor, fxSource, confirmWithAccountant, rows: [{ year, depreciationKhr, accumKhr, wdvKhr }] }` (pooled classes: `rows: []` + note) | V |
 
+### A2: depreciation runs
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:previewDepreciation` | `{ period }` | `{ period, canPost, reason, nextDuePeriod, rows: [{ assetId, tagCode, name, categoryId, categoryName, branchId, monthMinor, catchUpMinor, dueMinor, computedMinor, postedBeforeMinor }], totalMinor, monthMinor, catchUpMinor, byCategory, byBranch }` — writes nothing | V |
+| `assets:runDepreciation` | `{ period }` (the next month due, ended) | `{ run, entry, totalMinor, monthMinor, catchUpMinor, byCategory, byBranch }` | M |
+| `assets:listRuns` | — | `{ nextDuePeriod, lastEndedPeriod, months: [{ period, status ('posted'\|'due'\|'locked'\|'open'), locked, isNext, run, history }] }` | V |
+| `assets:reverseRun` | `{ period, reason }` (the latest run, month open) | `{ run, entry }` | M |
+| `assets:checkIntegrity` | — | `{ ok, checked, unbalanced, assets, accounts, totals: { registerNbvMinor, glNetMinor, matches } }` | V |
+
+### A2: disposals and value changes
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:previewDisposal` | `{ id, date?, kind? ('sale'\|'scrap'\|'donation'), proceedsMinor?, currency?, fxKhrPerUsd? }` | `{ lastPeriod, proceedsUsdMinor, nbvMinor, gainMinor, depreciationDueMinor, posts, lines }` — writes nothing | M |
+| `assets:dispose` | same + `buyer?`, `reason?` | `{ asset, event, entry }` | M |
+| `assets:partialDispose` | `{ id, qty, date?, kind?, proceedsMinor?, currency?, buyer?, reason? }` | `{ asset, event (detail: costShareMinor, accumShareMinor, nbvShareMinor, gainMinor), entry }` | M |
+| `assets:markLost` | `{ id, reason, date?, stocktakeResultId? }` | `{ asset, event, entry }` | M |
+| `assets:markFound` | `{ id, date?, reason? }` | `{ asset, event, entry }` | M |
+| `assets:impair` | `{ id, amountMinor (US cents), reason, date? }` | `{ asset, event, entry }` | M |
+| `assets:revalue` | `{ id, newValueMinor (US cents), reason, date? }` — land and buildings only | `{ asset, event (detail: surplusMinor, lossMinor, method 'elimination'), entry }` | M |
+
+`assets:reverseEvent` also undoes the asset's **latest** disposal, partial disposal, impairment or
+revaluation (mirror entry today; a sale's asset back in use, a partial sale's quantity back). A
+write-off is undone with `assets:markFound`.
+
+### A2: tax year (never posted)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:getTaxYear` | `{ year }` | `{ year, firstYear, pools: { 2\|3\|4: { openingWdvKhr, openingSource ('entered'\|'estimate'\|'computed'\|'filed'), openingLabel, confirmedByAccountant, estimateKhr, additionsKhr, proceedsKhr, baseKhr, rateBp, depreciationKhr, gainKhr, lossKhr, closingWdvKhr } }, perAsset: [{ tagCode, taxClass, costKhr, depreciationKhr, wdvKhr, proceedsKhr, gainLossKhr }], bookVsTax: [{ taxClass, bookUsdMinor, bookKhr, taxKhr, differenceKhr }], totals, notes, filed, filedSnapshot, changedSinceFiling }` | V |
+| `assets:setPoolOpening` | `{ year (the first year), taxClass ('2'\|'3'\|'4'), openingWdvKhrMinor, sourceNote?, confirmedByAccountant?, isEstimate? }` | the stored opening | M |
+| `assets:markTaxYearFiled` | `{ year }` | the year with its snapshot | A |
+| `assets:unfileTaxYear` | `{ year, reason }` | the year | A |
+
+### A2: reports
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:getReport` | `{ kind ('register'\|'movements'\|'depreciation'\|'book_vs_tax'\|'tax_pools'\|'additions_disposals'\|'by_branch'\|'attention'), asOf?, from?, to?, year?, branchId? ('none'), categoryId? }` | `{ kind, rows, totals, … }` | V |
+| `assets:getWorkbook` | `{ year?, asOf? }` | `{ filename, bytes }` (7 sheets) | V |
+| `assets:saveWorkbook` | same | saved path or `null` (Save dialog) | V, **local** |
+
 ### Fuel link (§3.4)
 | Channel | Args | Returns | Cap |
 |---|---|---|---|
@@ -839,8 +889,8 @@ branch / custodian / status become events with the reason "Import".
 | `ledger:entriesForAsset` | `assetId` | `Entry[]` (oldest first) | V |
 | `ledger:listPeriods` | — | `[{ period, status ('open'\|'locked'), entryCount, totalMinor, lockedAt, lockedByUserId, lockNote }]` | V |
 | `ledger:checkIntegrity` | — | `{ checked, unbalanced: [...] }` (USD and riel) | V |
-| `ledger:lockPeriod` | `{ period, note? }` | `{ period, status: 'locked' }` | A |
-| `ledger:unlockPeriod` | `{ period, note? }` | `{ period, status: 'open' }` | A |
+| `ledger:lockPeriod` | `{ period, note? }` (a month that has ended) | `{ period, status: 'locked', closedThrough }` — closes the books through that month | A |
+| `ledger:unlockPeriod` | `{ period, note? }` (the latest locked month only) | `{ period, status: 'open', closedThrough }` | A |
 
 ### Posting rules as built (§5.2, §5.4)
 
@@ -852,9 +902,16 @@ branch / custodian / status become events with the reason "Import".
 - **Idempotent** on `(company, idempotency_key)` — the plan said globally unique; per company is the
   correct scope (keys like `dep:2027-03` repeat across companies). Activation keys are
   `asset:<id>:activate:<n>` (n grows after a reversal), capex `evt:<eventId>`, reversals `rev:<entryId>`.
-- **Locked month** → posted on the 1st of the first open month after it, `intended_date` kept, memo
-  "Late entry for 14 Mar 2026 (March 2026 is locked)". **Reversal** → mirror lines (same riel, same rate)
-  dated today (or the first open month), linked both ways once; a reversal cannot itself be reversed.
+- **Locks are "closed through"** (§5.2 rule 3): any date at or before the latest locked month is posted on
+  the 1st of the month after it, `intended_date` kept, memo "Late entry for 14 Mar 2026 (March 2026 is
+  locked)". Only ended months can be locked; only the latest locked month can be unlocked.
+  **Reversal** → mirror lines (same riel, same rate) linked both ways once; a reversal cannot itself be
+  reversed. Its date: an **acquisition / opening** is reversed on its **original entry date** (review H1 —
+  a corrected re-activation on the same date never counts the cost twice at any month-end); a found
+  write-off on the day it was found; a run on its own month's last day; anything else today. A closed
+  month redirects each of them like any entry.
+- **The house rate** is per company in `fx_rates`; the first one is seeded from the server Mac's Settings
+  rate, dated the register start (review L4).
 - **SQLite triggers**: no UPDATE/DELETE on `journal_lines`, no DELETE on `journal_entries`, the only
   UPDATE is setting `reversed_by_entry_id` once, and no line can be added after posting (`line_count`).
 - Activation posts nothing for `tracked_only`. Purchase / gift / self-built: Dr category cost (role
@@ -869,5 +926,72 @@ branch / custodian / status become events with the reason "Import".
   ($300). Tax cost is the riel at the **official** rate on the purchase date (house when missing,
   labelled in `taxFxSource`), or the riel actually paid.
 
-Depreciation runs, disposals, lost/found, impairment, revaluation, tax years, stock-takes, tags and
-reports are A2/A3 and not built yet.
+- **Event dates** (review M7 / L1 / L2): never in the future; never before the asset was acquired (its
+  purchase date, or the register start for an opening asset); a move or status change never before the
+  latest live one of its kind; an improvement, life or salvage change, impairment, revaluation or partial
+  disposal must fall **after the last month posted** ("Depreciation is already posted through March
+  2026 — date this change in April 2026 or later"). Purchase and in-service dates cannot be in the future.
+- **In-service date on an active asset** (review H2): once, only for a purchase / gift / self-built asset
+  that has none and no depreciation start, never before its purchase date or the register start.
+  Openings never.
+- **Activation leaves out zero lines** (review M1: a fully used-up old asset with no salvage has no
+  equity line). **Defaulted figures** (salvage from the category %, the riel rate of a riel cost) are
+  remembered (`salvage_defaulted`, `cost_fx_defaulted`) and cleared again when the activation is reversed
+  (review M4). Reversing an activation after depreciation was posted posts one adjustment that takes it
+  back (`accum_dep` / `dep_catch_up`, today); the next run catches up from the start.
+- An **improvement to an asset with no life left** must add months (review M2).
+- The Fuel link creates its drafts whatever the category's state (an archived category never breaks
+  Fuel; review M3).
+
+### A2: depreciation, disposals, tax and reports (built 2026-10-08)
+
+**The monthly run** (`main/db/assetDepreciation.js`, §5.5). For each active, capitalised, in-service
+asset: due = depreciation charged by its schedule through the month − depreciation already posted
+(`accum_dep` lines, the opening and its reversal excluded). The month's own amount goes on
+`dep_expense`, anything more on `dep_catch_up` (memo "catch-up January 2026–February 2026"), a negative
+due back on `dep_catch_up` the other way. One entry per company and month dated its last day, key
+`dep:<period>` (then `#2`, `#3` after reversals) and a `depreciation_runs` row. **Runs are sequential**:
+only the next month due can be posted — after the latest run, after the register start's month, and
+after the month the books are closed through (closed months without a run are caught up in the first
+open month). A month that has not ended cannot be posted (preview it). Only the latest run can be
+reversed, while its month is open. Each line carries the branch the asset was in on the month's last day.
+`assetScheduler.js` posts every due month up to last month, 60 s after start and every 12 h, yields
+between months, never runs on a client Mac, and logs the integrity check.
+
+**Integrity** (`assets:checkIntegrity`): every entry balances in USD and riel; every asset's snapshot =
+its ledger; every fixed-asset account's GL balance = its asset-tagged lines; the register's NBV = the GL's
+net fixed-asset balance.
+
+**Disposals and value changes** (`main/db/assetDisposals.js`, §5.4): sale / scrap / donation (gain or
+loss after posting the depreciation still due to the disposal, or taking back what was posted beyond it);
+partial disposal of a group asset (qty ÷ quantity of cost, accumulated depreciation and impairment; the
+rest runs on from the next month); write-off as lost (Dr Loss) and found (the write-off reversed on the
+day found); impairment (Dr 6510 / Cr 1590, the schedule re-runs on the lower value); revaluation of land
+and buildings only, **elimination method** (IAS 16.35(b): accumulated depreciation and impairment are
+eliminated against cost, which then moves to the new value; up → Cr 3300 surplus; down → against this
+asset's surplus first, then Dr 6510). A linked Fuel vehicle is retired in Fuel when disposed of or lost
+(and made active again when found or the sale is reversed). New line roles: `accum_disposal`,
+`accum_reval` (kept apart from `accum_dep`).
+
+**Tax year** (`main/db/assetTax.js`, never posted): Classes 2–4 as pools in riel, Class 1 / 1b /
+intangible per asset (full year in, none out), land gain/loss on sale. The first year (the register
+start's) opens with the pools entered (`assets:setPoolOpening`) or, when none are, an estimate from the
+purchase history of the assets already owned (deemed values go in as they are), labelled **"estimate —
+confirm with an accountant"**. Later years open with the year before's closing (or its filed snapshot).
+Marking a year filed (admin) needs every non-empty estimated opening ticked "confirmed by accountant";
+it freezes a snapshot and the view then lists "changed since filing" per class. Book versus tax per
+class (USD and riel, as posted) is in the same view.
+
+**Reports** (`main/db/assetReports.js`, from the posted ledger): register as at a date (with "not yet
+posted"), movements roll-forward, depreciation by month × category × branch, book vs tax, tax pools,
+additions & disposals with gain / loss, by branch, attention (fully depreciated in use; warranty,
+insurance, road tax due). Workbook (`main/util/assetWorkbook.js`): Register, Movements, Book schedule,
+Tax pools, Book vs tax, Additions & disposals, Notes.
+
+**Realistic data**: `ELECTRON_RUN_AS_NODE=1 npx electron scripts/seed-realistic.js --out <dir> --products 0
+--assets [--fuel] [--assets-start 2025-01-01]` builds ≈300 assets over 5 branches with ≈21 months of
+events and runs, two period closes and a purchase entered late into a closed month, keeps its own
+independent model, and writes `assets-truth.json` with the check of the app's register (per asset and per
+category), depreciation charged, disposal gain/loss, late-entry catch-up and integrity against it.
+
+Stock-takes, tags and the `/a` phone page are A3 and not built yet.

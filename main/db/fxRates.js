@@ -68,8 +68,11 @@ function settingsRate() {
 
 /**
  * The house rate for a book entry dated `date`: { khrPerUsd, rateDate, fallback }.
- * No house rate at all yet → one is seeded on `date` from Settings. A date
- * before the earliest house rate → the earliest one, flagged `fallback: 'earliest'`.
+ * The house rate is per COMPANY (here, in fx_rates), not per Mac. When the
+ * company has none yet, one is seeded from the Settings rate of the Mac that
+ * runs the data (the server Mac) — dated the register start date, never an old
+ * purchase date — and noted "from Settings". A date before the earliest house
+ * rate gets the earliest one, flagged `fallback: 'earliest'`.
  */
 function houseRateFor(companyId, date, { seed = true } = {}) {
   const exact = rateOn(companyId, date, 'house');
@@ -79,8 +82,10 @@ function houseRateFor(companyId, date, { seed = true } = {}) {
   if (earliest) return { khrPerUsd: earliest.khr_per_usd, rateDate: earliest.rate_date, source: 'house', fallback: 'earliest', rateId: earliest.id };
   // A preview must not write: it reads the Settings rate the real post would seed.
   if (!seed) return { khrPerUsd: settingsRate(), rateDate: date, source: 'house', fallback: 'settings', rateId: null };
-  const seeded = setRate({ companyId, rateDate: date, khrPerUsd: settingsRate(), source: 'house', sourceNote: 'from Settings' });
-  return { khrPerUsd: seeded.khrPerUsd, rateDate: seeded.rateDate, source: 'house', fallback: 'seeded', rateId: seeded.id };
+  let seedDate = date;
+  try { seedDate = require('./assetConfig').getSettings(companyId).registerStartDate || date; } catch (_) { /* no settings yet */ }
+  const seeded = setRate({ companyId, rateDate: seedDate, khrPerUsd: settingsRate(), source: 'house', sourceNote: 'from Settings' });
+  return { khrPerUsd: seeded.khrPerUsd, rateDate: seeded.rateDate, source: 'house', fallback: seedDate <= date ? 'seeded' : 'earliest', rateId: seeded.id };
 }
 
 /** The rate the tax view uses on a date: official, else house (labelled). */

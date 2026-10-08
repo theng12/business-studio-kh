@@ -64,6 +64,11 @@ function checkBytes(v) {
 }
 
 const EVENT_BASE = (a) => first(req(a, 'id', 'id'), dates(a, ['date']));
+const DISPOSAL = (a) => first(
+  a.kind == null || ['sale', 'scrap', 'donation'].includes(a.kind) ? true : 'kind must be sale, scrap or donation',
+  nums(a, ['proceedsMinor', 'fxKhrPerUsd']), a.currency == null || ['USD', 'KHR'].includes(a.currency) ? true : 'currency must be USD or KHR',
+);
+const YEAR = (a) => (Number.isInteger(a.year) && a.year >= 2000 && a.year <= 2200 ? true : 'year must look like 2026');
 
 const LIST = optObj((a) => first(
   strings(a, ['q', 'branchId', 'categoryId', 'status', 'recordState', 'custodianEmployeeId', 'attention'], 200),
@@ -132,6 +137,38 @@ const ASSET_VALIDATORS = {
   'assets:reverseEvent': obj((a) => first(req(a, 'id'), reason(a))),
   'assets:listEvents': optObj((a) => first(ids(a, ['assetId', 'batchId']), strings(a, ['kind'], 40), nums(a, ['limit', 'offset']), bools(a, ['includeVoided']))),
   'assets:getSchedule': obj((a) => first(req(a, 'id'), a.basis == null || a.basis === 'book' || a.basis === 'tax' ? true : 'basis must be book or tax')),
+
+  /* A2: depreciation runs */
+  'assets:previewDepreciation': obj((a) => (optPeriod(a.period) && a.period != null ? true : 'period must look like 2026-03')),
+  'assets:runDepreciation': obj((a) => (optPeriod(a.period) && a.period != null ? true : 'period must look like 2026-03')),
+  'assets:listRuns': () => true,
+  'assets:reverseRun': obj((a) => first(optPeriod(a.period) && a.period != null ? true : 'period must look like 2026-03', reason(a))),
+  'assets:checkIntegrity': () => true,
+
+  /* A2: disposals and value changes */
+  'assets:previewDisposal': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL(a))),
+  'assets:dispose': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL(a), strings(a, ['reason', 'buyer'], 1000))),
+  'assets:partialDispose': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL(a), optNumLike(a.qty) && a.qty != null ? true : 'qty is required', strings(a, ['reason', 'buyer'], 1000))),
+  'assets:markLost': obj((a) => first(req(a, 'id'), dates(a, ['date']), reason(a), strings(a, ['stocktakeResultId'], 200))),
+  'assets:markFound': obj((a) => first(req(a, 'id'), dates(a, ['date']), strings(a, ['reason'], 1000))),
+  'assets:impair': obj((a) => first(req(a, 'id'), dates(a, ['date']), reason(a), optNumLike(a.amountMinor) && a.amountMinor != null ? true : 'amountMinor is required')),
+  'assets:revalue': obj((a) => first(req(a, 'id'), dates(a, ['date']), reason(a), optNumLike(a.newValueMinor) && a.newValueMinor != null ? true : 'newValueMinor is required')),
+
+  /* A2: tax year */
+  'assets:getTaxYear': obj((a) => YEAR(a)),
+  'assets:setPoolOpening': obj((a) => first(YEAR(a), ['2', '3', '4'].includes(String(a.taxClass)) ? true : 'taxClass must be 2, 3 or 4',
+    optNumLike(a.openingWdvKhrMinor) && a.openingWdvKhrMinor != null ? true : 'openingWdvKhrMinor is required',
+    strings(a, ['sourceNote'], 500), bools(a, ['confirmedByAccountant', 'isEstimate']))),
+  'assets:markTaxYearFiled': obj((a) => YEAR(a)),
+  'assets:unfileTaxYear': obj((a) => first(YEAR(a), reason(a))),
+
+  /* A2: reports */
+  'assets:getReport': obj((a) => first(
+    ['register', 'movements', 'depreciation', 'book_vs_tax', 'tax_pools', 'additions_disposals', 'by_branch', 'attention'].includes(a.kind) ? true : 'kind must be a report name',
+    dates(a, ['from', 'to', 'asOf']), strings(a, ['branchId', 'categoryId'], 200), a.year == null || Number.isInteger(a.year) ? true : 'year must be a whole number',
+  )),
+  'assets:getWorkbook': optObj((a) => first(dates(a, ['asOf']), a.year == null || Number.isInteger(a.year) ? true : 'year must be a whole number')),
+  'assets:saveWorkbook': optObj((a) => first(dates(a, ['asOf']), a.year == null || Number.isInteger(a.year) ? true : 'year must be a whole number')),
 
   /* Fuel link */
   'assets:linkFuelAsset': obj((a) => first(req(a, 'id'), req(a, 'fuelAssetId'))),

@@ -7,8 +7,8 @@
  *   assets.view    the register, asset pages, schedules, events (read-only, with values)
  *   assets.manage  everything that writes, plus the import
  *   assets.count   `assets:getFile` only, narrowed to photos (A3 adds the count channels)
- * The one local-only channel is `assets:saveImportSample` (a Save dialog on
- * the Mac you sit at).
+ * The local-only channels are `assets:saveImportSample` and
+ * `assets:saveWorkbook` (a Save dialog on the Mac you sit at).
  *
  * The full channel list lives at the end of docs/ASSETS_AND_BRANCHES_PLAN.md
  * ("Assets API").
@@ -21,6 +21,10 @@ const identity = require('../db/assetIdentity');
 const assetImport = require('../db/assetImport');
 const ledger = require('../db/ledger');
 const assetFiles = require('../assetFiles');
+const dep = require('../db/assetDepreciation');
+const disposals = require('../db/assetDisposals');
+const assetTax = require('../db/assetTax');
+const reports = require('../db/assetReports');
 const { has, callerCanView, callerIsAdmin, assetCompany, inCompany, emitAssetChange } = require('./assetAccess');
 
 const INTERNAL_CREATE_KEYS = ['origin', 'fuelAssetId', 'needsCost', 'companyId'];
@@ -210,6 +214,69 @@ function register({ expose, exposeLocal }) {
   expose('assets:getSchedule', ({ id, basis = 'book' } = {}) => {
     assetIn(id);
     return fixedAssets.getSchedule(id, basis);
+  });
+
+  /* ─── A2: monthly depreciation (computed − posted), §5.5 ─── */
+  expose('assets:previewDepreciation', ({ period } = {}) => dep.previewDepreciation(assetCompany(), period));
+  expose('assets:runDepreciation', ({ period } = {}) => {
+    const companyId = assetCompany();
+    const res = dep.runDepreciation(companyId, period, { kind: 'manual' });
+    emitAssetChange('run', 'post', period, companyId);
+    return res;
+  });
+  expose('assets:listRuns', () => dep.listRuns(assetCompany()));
+  expose('assets:reverseRun', ({ period, reason } = {}) => {
+    const companyId = assetCompany();
+    const res = dep.reverseRun(companyId, period, reason);
+    emitAssetChange('run', 'reverse', period, companyId);
+    return res;
+  });
+  expose('assets:checkIntegrity', () => dep.checkIntegrity(assetCompany()));
+
+  /* ─── A2: disposals, write-offs, impairment, revaluation ─── */
+  expose('assets:previewDisposal', (args = {}) => {
+    assetIn(args.id);
+    return disposals.previewDisposal(args);
+  });
+  expose('assets:dispose', onAsset(disposals.dispose, 'dispose'));
+  expose('assets:partialDispose', onAsset(disposals.partialDispose, 'partial_dispose'));
+  expose('assets:markLost', onAsset(disposals.markLost, 'lost'));
+  expose('assets:markFound', onAsset(disposals.markFound, 'found'));
+  expose('assets:impair', onAsset(disposals.impair, 'impair'));
+  expose('assets:revalue', onAsset(disposals.revalue, 'revalue'));
+
+  /* ─── A2: the tax year (never posted), §4.3 ─── */
+  expose('assets:getTaxYear', ({ year } = {}) => assetTax.getTaxYear(assetCompany(), year));
+  expose('assets:setPoolOpening', (args = {}) => {
+    const companyId = assetCompany();
+    const res = assetTax.setPoolOpening(companyId, args);
+    emitAssetChange('tax', 'update', String(args.year), companyId);
+    return res;
+  });
+  expose('assets:markTaxYearFiled', ({ year } = {}) => {
+    const companyId = assetCompany();
+    const res = assetTax.markTaxYearFiled(companyId, year);
+    emitAssetChange('tax', 'file', String(year), companyId);
+    return res;
+  });
+  expose('assets:unfileTaxYear', ({ year, reason } = {}) => {
+    const companyId = assetCompany();
+    const res = assetTax.unfileTaxYear(companyId, year, reason);
+    emitAssetChange('tax', 'unfile', String(year), companyId);
+    return res;
+  });
+
+  /* ─── A2: reports and the workbook ─── */
+  expose('assets:getReport', (args = {}) => reports.getReport(assetCompany(), args || {}));
+  expose('assets:getWorkbook', (args = {}) => reports.getWorkbook(assetCompany(), args || {}));
+  /** Save the workbook through a dialog on THIS Mac (client mode has its own copy). */
+  exposeLocal('assets:saveWorkbook', async (args = {}) => {
+    const { dialog } = require('electron');
+    const { filename, bytes } = reports.getWorkbook(assetCompany(), args || {});
+    const res = await dialog.showSaveDialog({ title: 'Save fixed-asset workbook', defaultPath: filename, filters: [{ name: 'Workbook', extensions: ['xlsx'] }] });
+    if (res.canceled || !res.filePath) return null;
+    require('node:fs').writeFileSync(res.filePath, bytes);
+    return res.filePath;
   });
 
   /* ─── the Fuel link ─── */

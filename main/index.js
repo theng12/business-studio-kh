@@ -573,6 +573,14 @@ app.whenReady().then(() => {
   registerRendererProtocol(path.join(__dirname, '..', '..', 'dist-renderer'));
   registerIpc({ getMainWindow: () => mainWindow });
 
+  /* Fixed Assets A2: post the depreciation months due and check the books,
+   * 60 s after start and every 12 hours. Standalone / server only. */
+  try {
+    require('./assetScheduler').startAssetScheduler({ log: logEvent });
+  } catch (err) {
+    logEvent('assets:scheduler-failed', err.message);
+  }
+
   /* 0.1.94: weekly automatic backups while the app is open, newest 4 kept
    * (owner's decision). Standalone / server only — this is the boot path
    * that owns the data; client mode returned above. Best-effort. */

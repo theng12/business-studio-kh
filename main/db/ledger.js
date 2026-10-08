@@ -30,7 +30,10 @@ const { addMonths, assertPeriod } = require('../util/bookDepreciation');
 const ACCOUNT_TYPES = ['asset', 'contra_asset', 'liability', 'equity', 'income', 'expense'];
 const SOURCE_KINDS = ['asset_acquire', 'asset_open', 'asset_depreciation', 'asset_dispose', 'asset_lost', 'asset_found',
   'asset_revalue', 'asset_impair', 'asset_capex', 'reversal'];
-const LINE_ROLES = ['cost', 'accum_dep', 'dep_expense', 'dep_catch_up', 'gain', 'loss', 'clearing', 'equity', 'impairment', 'revaluation'];
+// accum_disposal / accum_reval (A2): accumulated depreciation taken off on a
+// disposal or eliminated on a revaluation — kept apart from accum_dep so
+// "depreciation charged to date" stays a plain SUM of accum_dep.
+const LINE_ROLES = ['cost', 'accum_dep', 'accum_disposal', 'accum_reval', 'dep_expense', 'dep_catch_up', 'gain', 'loss', 'clearing', 'equity', 'impairment', 'revaluation'];
 
 /** §5.3 — the seeded chart. The accountant may renumber or rename; the app posts by system_key. */
 const SEED_ACCOUNTS = [
@@ -141,15 +144,28 @@ function updateAccount(id, patch = {}) {
 
 /* ─── periods ────────────────────────────────────────────────── */
 
-function isLocked(companyId, period) {
-  const r = getDb().prepare('SELECT status FROM accounting_periods WHERE company_id = ? AND period = ?').get(companyId, period);
-  return r?.status === 'locked';
+/**
+ * §5.2 rule 3, as decided at review (2026-10-08): a lock means the books are
+ * CLOSED THROUGH that month. The company's "closed through" month is its latest
+ * locked month; every month at or before it is locked, whether or not it has
+ * its own row. Only the latest locked month can be unlocked (admin), which
+ * moves "closed through" back to the previous month that was itself locked.
+ */
+function closedThrough(companyId) {
+  const r = getDb().prepare("SELECT MAX(period) AS p FROM accounting_periods WHERE company_id = ? AND status = 'locked'").get(companyId);
+  return r?.p || null;
 }
 
-/** The first day of the first open month AFTER `period`. */
+function isLocked(companyId, period) {
+  const ct = closedThrough(companyId);
+  return !!ct && period <= ct;
+}
+
+/** The first day of the first open month after `period` (always after "closed through"). */
 function firstOpenDateAfter(companyId, period) {
-  let p = addMonths(period, 1);
-  for (let i = 0; i < 1200 && isLocked(companyId, p); i += 1) p = addMonths(p, 1);
+  const ct = closedThrough(companyId);
+  const p = addMonths(ct && ct >= period ? ct : period, 1);
+  if (isLocked(companyId, p)) throw badRequest(`${humanMonth(p)} is locked — there is no open month to post into`);
   return `${p}-01`;
 }
 
@@ -157,11 +173,7 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 function humanDate(d) { return `${Number(d.slice(8, 10))} ${MONTHS[Number(d.slice(5, 7)) - 1].slice(0, 3)} ${d.slice(0, 4)}`; }
 function humanMonth(p) { return `${MONTHS[Number(p.slice(5, 7)) - 1]} ${p.slice(0, 4)}`; }
 
-function setPeriodStatus(companyId, period, status, note) {
-  if (!companyId) throw badRequest('Company is required');
-  assertPeriod(period);
-  const before = isLocked(companyId, period) ? 'locked' : 'open';
-  if (before === status) return { period, status };
+function writePeriod(companyId, period, status, note) {
   const now = Date.now();
   getDb().prepare(`
     INSERT INTO accounting_periods (id, company_id, period, status, locked_by_user_id, locked_at, lock_note, updated_at)
@@ -169,12 +181,32 @@ function setPeriodStatus(companyId, period, status, note) {
     ON CONFLICT(company_id, period) DO UPDATE SET status = excluded.status, locked_by_user_id = excluded.locked_by_user_id,
       locked_at = excluded.locked_at, lock_note = excluded.lock_note, updated_at = excluded.updated_at
   `).run({ id: uuid(), companyId, period, status, by: getCallerUserId(), lockedAt: status === 'locked' ? now : null, note: str(note, 500), now });
-  audit('ledger_period', `${companyId}:${period}`, status === 'locked' ? 'lock' : 'unlock', { before: { status: before }, after: { status, note: str(note, 500) } });
-  return { period, status };
 }
 
-function lockPeriod(companyId, period, note) { return setPeriodStatus(companyId, period, 'locked', note); }
-function unlockPeriod(companyId, period, note) { return setPeriodStatus(companyId, period, 'open', note); }
+/** Close the books through `period` (a month that has ended). Locking an already-closed month is a no-op. */
+function lockPeriod(companyId, period, note) {
+  if (!companyId) throw badRequest('Company is required');
+  assertPeriod(period);
+  if (period >= todayPhnomPenh().slice(0, 7)) throw badRequest(`${humanMonth(period)} has not ended yet — it cannot be locked`);
+  const before = closedThrough(companyId);
+  if (before && period <= before) return { period, status: 'locked', closedThrough: before };
+  writePeriod(companyId, period, 'locked', note);
+  audit('ledger_period', `${companyId}:${period}`, 'lock', { before: { closedThrough: before }, after: { closedThrough: period, note: str(note, 500) } });
+  return { period, status: 'locked', closedThrough: period };
+}
+
+/** Reopen the LATEST locked month only (admin). */
+function unlockPeriod(companyId, period, note) {
+  if (!companyId) throw badRequest('Company is required');
+  assertPeriod(period);
+  const before = closedThrough(companyId);
+  if (!before || period > before) return { period, status: 'open', closedThrough: before };
+  if (period !== before) throw badRequest(`The books are closed through ${humanMonth(before)} — unlock that month first`);
+  writePeriod(companyId, period, 'open', note);
+  const after = closedThrough(companyId);
+  audit('ledger_period', `${companyId}:${period}`, 'unlock', { before: { closedThrough: before }, after: { closedThrough: after, note: str(note, 500) } });
+  return { period, status: 'open', closedThrough: after };
+}
 
 /** Months with entries or a lock, newest first: { period, status, entryCount, totalMinor, lockedAt, lockNote }. */
 function listPeriods(companyId) {
@@ -184,11 +216,14 @@ function listPeriods(companyId) {
   for (const r of db.prepare('SELECT period, COUNT(*) AS n, SUM(total_minor) AS t FROM journal_entries WHERE company_id = ? GROUP BY period').all(companyId)) {
     byPeriod.set(r.period, { period: r.period, status: 'open', entryCount: r.n, totalMinor: r.t, lockedAt: null, lockNote: null });
   }
-  for (const r of db.prepare('SELECT * FROM accounting_periods WHERE company_id = ?').all(companyId)) {
+  for (const r of db.prepare("SELECT * FROM accounting_periods WHERE company_id = ? AND status = 'locked'").all(companyId)) {
     const row = byPeriod.get(r.period) || { period: r.period, entryCount: 0, totalMinor: 0 };
-    byPeriod.set(r.period, { ...row, status: r.status, lockedAt: r.locked_at ?? null, lockedByUserId: r.locked_by_user_id ?? null, lockNote: r.lock_note ?? null });
+    byPeriod.set(r.period, { ...row, lockedAt: r.locked_at ?? null, lockedByUserId: r.locked_by_user_id ?? null, lockNote: r.lock_note ?? null });
   }
-  return [...byPeriod.values()].sort((a, b) => (a.period < b.period ? 1 : -1));
+  const ct = closedThrough(companyId);
+  return [...byPeriod.values()]
+    .map((r) => ({ lockedAt: null, lockNote: null, ...r, status: ct && r.period <= ct ? 'locked' : 'open' }))
+    .sort((a, b) => (a.period < b.period ? 1 : -1));
 }
 
 /* ─── entries ────────────────────────────────────────────────── */
@@ -380,14 +415,23 @@ function entriesForAsset(assetId) {
  * The per-asset sub-ledger as plain sums by line role (signed so that cost
  * and accumulated depreciation read as positive balances).
  */
-function assetLedgerTotals(assetId) {
-  const rows = getDb().prepare(`
-    SELECT line_role, SUM(debit_minor) AS d, SUM(credit_minor) AS c FROM journal_lines WHERE asset_id = ? GROUP BY line_role
-  `).all(assetId);
+function assetLedgerTotals(assetId, { throughDate = null } = {}) {
+  const rows = throughDate
+    ? getDb().prepare(`
+      SELECT l.line_role, SUM(l.debit_minor) AS d, SUM(l.credit_minor) AS c FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
+       WHERE l.asset_id = ? AND e.entry_date <= ? GROUP BY l.line_role`).all(assetId, throughDate)
+    : getDb().prepare(`
+      SELECT line_role, SUM(debit_minor) AS d, SUM(credit_minor) AS c FROM journal_lines WHERE asset_id = ? GROUP BY line_role
+    `).all(assetId);
   const by = Object.fromEntries(rows.map((r) => [r.line_role, { d: r.d || 0, c: r.c || 0 }]));
   const dr = (k) => (by[k] ? by[k].d - by[k].c : 0);
   const cr = (k) => (by[k] ? by[k].c - by[k].d : 0);
-  return { costMinor: dr('cost'), accumDepMinor: cr('accum_dep'), impairmentMinor: cr('impairment') };
+  return {
+    costMinor: dr('cost'),
+    accumDepMinor: cr('accum_dep') + cr('accum_disposal') + cr('accum_reval'),
+    impairmentMinor: cr('impairment'),
+    revaluationSurplusMinor: cr('revaluation'),
+  };
 }
 
 /** §7 integrity pass: entries whose lines do not balance in USD or riel, or are missing lines. */
@@ -406,6 +450,6 @@ function checkIntegrity(companyId) {
 module.exports = {
   ACCOUNT_TYPES, SOURCE_KINDS, LINE_ROLES, SEED_ACCOUNTS,
   ensureChart, listAccounts, getAccount, accountByKey, updateAccount,
-  isLocked, firstOpenDateAfter, lockPeriod, unlockPeriod, listPeriods,
+  isLocked, closedThrough, firstOpenDateAfter, lockPeriod, unlockPeriod, listPeriods, humanMonth,
   post, reverse, getEntry, entriesForAsset, assetLedgerTotals, checkIntegrity,
 };

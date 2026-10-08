@@ -179,7 +179,8 @@ const CHANNEL_RULES = [
   //   and fx:list/rateOn are baseline reads (ASSET_BASELINE_READS below).
   [/^stocktake:(list|get|scan|tick|addUnknown|claimTag|listMyScans|lookupTag)$/, ['assets.count', 'assets.manage']],
   [/^assets:(getFile|lookupTag)$/,                      ['assets.count', 'assets.view', 'assets.manage']],
-  [/^assets:(list|get|getSchedule|getReport|getWorkbook|listCategories|getSettings|previewDepreciation|listRuns|listEvents|getTaxYear)$/, ['assets.view', 'assets.manage']],
+  [/^assets:(markTaxYearFiled|unfileTaxYear)$/,         ADMIN_ONLY],
+  [/^assets:(list|get|getSchedule|getReport|getWorkbook|saveWorkbook|listCategories|getSettings|previewDepreciation|listRuns|listEvents|getTaxYear|checkIntegrity)$/, ['assets.view', 'assets.manage']],
   [/^(assets|stocktake):/,                              'assets.manage'],
   [/^branches:(create|update|close|suggestFromFuel)$/,  'system.manage'],
   [/^ledger:(lockPeriod|unlockPeriod)$/,                ADMIN_ONLY],

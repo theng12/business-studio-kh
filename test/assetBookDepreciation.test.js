@@ -154,3 +154,25 @@ test('disposal stops the schedule at the last counted period', () => {
   assert.equal(s.rows.length, 3);
   assert.equal(s.accumMinor, 30_000);
 });
+
+test('A2: charged-to-date, the position at a month, and the A2 change kinds', () => {
+  const base = { basisMinor: 120_000, salvageMinor: 0, lifeMonths: 12, startPeriod: '2026-01' };
+  assert.equal(B.chargedThrough(base, '2025-12'), 0);
+  assert.equal(B.chargedThrough(base, '2026-03'), 30_000);
+  assert.equal(B.chargedThrough(base, '2030-01'), 120_000);
+  assert.equal(B.chargedThrough({ ...base, endPeriod: '2026-02' }, '2026-06'), 20_000, 'a disposal ends the charge');
+  assert.deepEqual(B.positionAt(base, '2026-04'), { basisMinor: 120_000, accumMinor: 30_000, impairedMinor: 0, nbvMinor: 90_000, salvageMinor: 0, remainingMonths: 9, chargedMinor: 30_000 });
+  assert.equal(B.positionAt(base, '2026-01').remainingMonths, 12);
+  assert.equal(B.positionAt(base, '2027-06').remainingMonths, 0, 'fully depreciated: no life left');
+  // Partial disposal from May: 40 % of cost and accumulated leave; the rest runs on.
+  const part = B.bookSchedule({ ...base, changes: [{ period: '2026-05', removeBasisMinor: 48_000, removeAccumMinor: 16_000 }] });
+  assert.equal(part.basisMinor, 72_000);
+  assert.equal(part.nbvMinor, 0);
+  assert.equal(part.chargedMinor, 40_000 + 72_000 - 24_000, 'charged = 4 months + the rest of the 60 % share');
+  assert.deepEqual(part.rows.slice(4, 6).map((r) => r.amountMinor), [6_000, 6_000]);
+  // Revaluation (elimination): accumulated goes to 0 and the new value runs over the months left.
+  const rev = B.bookSchedule({ ...base, changes: [{ period: '2026-07', revalueToMinor: 60_000 }] });
+  assert.deepEqual(rev.rows.slice(6).map((r) => r.amountMinor), [10_000, 10_000, 10_000, 10_000, 10_000, 10_000]);
+  assert.equal(rev.accumMinor, 60_000, 'the balance after elimination');
+  assert.equal(rev.chargedMinor, 120_000);
+});

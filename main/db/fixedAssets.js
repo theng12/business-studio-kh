@@ -53,7 +53,7 @@ const EVENT_KINDS = ['acquire', 'open', 'activate', 'transfer', 'custodian', 'st
 /** Events with no money effect: voidable by a manager with a reason (§3.5). */
 const VOIDABLE_KINDS = ['transfer', 'custodian', 'status', 'repair', 'note', 'life_change', 'salvage_change'];
 /** Events that posted a journal: reversible only. */
-const REVERSIBLE_KINDS = ['acquire', 'open', 'capex'];
+const REVERSIBLE_KINDS = ['acquire', 'open', 'capex', 'dispose', 'partial_dispose', 'impair', 'revalue'];
 
 /* ─── reading ─────────────────────────────────────────────────── */
 
@@ -92,6 +92,7 @@ function rowToAsset(r) {
     activatedAt: r.activated_at ?? null, activatedByUserId: r.activated_by_user_id ?? null,
     acquisitionEntryId: r.acquisition_entry_id ?? null,
     cancelledAt: r.cancelled_at ?? null, cancelReason: r.cancel_reason ?? null,
+    disposedOn: r.disposed_on ?? null, disposalEventId: r.disposal_event_id ?? null,
     notes: r.notes ?? null, createdAt: r.created_at, updatedAt: r.updated_at, updatedByUserId: r.updated_by_user_id ?? null,
   };
 }
@@ -192,11 +193,18 @@ function checkSupplier(companyId, supplierId) {
   return supplierId;
 }
 
-function checkCategory(companyId, categoryId) {
+function checkCategory(companyId, categoryId, { allowArchived = false } = {}) {
   const c = config.getCategory(categoryId);
   if (!c || c.companyId !== companyId) throw badRequest('Pick a category');
-  if (c.archived) throw badRequest(`Category ${c.nameEn} is archived`);
+  if (c.archived && !allowArchived) throw badRequest(`Category ${c.nameEn} is archived`);
   return c;
+}
+
+/** A date that has already happened (purchase and in-service dates, L2). */
+function pastDateOrNull(v, label) {
+  const d = dateOrNull(v, label);
+  if (d && d > todayPhnomPenh()) throw badRequest(`${label} cannot be in the future`);
+  return d;
 }
 
 function oneOf(v, list, label, fallback) {
@@ -285,11 +293,12 @@ function claimTag(companyId, raw, exceptAssetId = null) {
  * `input.origin` / `input.fuelAssetId` / `input.needsCost` are internal (the
  * Fuel link and import set them; the IPC handler strips them).
  */
-function create(input = {}) {
+function create(input = {}, { allowArchivedCategory = false } = {}) {
   const companyId = input.companyId;
   if (!companyId) throw badRequest('Company is required');
   config.ensureCategories(companyId);
-  const category = checkCategory(companyId, input.categoryId);
+  // The Fuel link creates drafts for Fuel's vehicles whatever the category's state — it must never break Fuel.
+  const category = checkCategory(companyId, input.categoryId, { allowArchived: allowArchivedCategory });
   const name = str(input.name, 160);
   if (!name) throw badRequest('Give the asset a name');
   const tag = input.tagCode ? claimTag(companyId, input.tagCode) : allocateTag(companyId, category);
@@ -321,7 +330,7 @@ function create(input = {}) {
     override: override(input.depreciateOverride), needsCost: input.needsCost ? 1 : 0,
     origin: oneOf(input.origin, ORIGINS, 'Origin', 'manual'),
     kind: oneOf(input.acquisitionKind, ACQUISITION_KINDS, 'Acquisition', 'purchase'),
-    purchaseDate: dateOrNull(input.purchaseDate, 'Purchase date'), inServiceDate: dateOrNull(input.inServiceDate, 'In-service date'),
+    purchaseDate: pastDateOrNull(input.purchaseDate, 'Purchase date'), inServiceDate: pastDateOrNull(input.inServiceDate, 'In-service date'),
     supplierId: checkSupplier(companyId, input.supplierId), poId: str(input.purchaseOrderId, 60), invoiceNo: str(input.invoiceNo, 80),
     costMinor: minorOrNull(input.costMinor, 'Cost'), costCurrency,
     costFx: input.costFxKhrPerUsd == null || input.costFxKhrPerUsd === '' ? null : positiveRate(input.costFxKhrPerUsd),
@@ -369,8 +378,8 @@ function draftOnly(a) {
     categoryId: ['category_id', (v) => checkCategory(c, v).id],
     quantity: ['quantity', (v) => quantity(v)],
     acquisitionKind: ['acquisition_kind', (v) => oneOf(v, ACQUISITION_KINDS, 'Acquisition', 'purchase')],
-    purchaseDate: ['purchase_date', (v) => dateOrNull(v, 'Purchase date')],
-    inServiceDate: ['in_service_date', (v) => dateOrNull(v, 'In-service date')],
+    purchaseDate: ['purchase_date', (v) => pastDateOrNull(v, 'Purchase date')],
+    inServiceDate: ['in_service_date', (v) => pastDateOrNull(v, 'In-service date')],
     supplierId: ['supplier_id', (v) => checkSupplier(c, v)],
     purchaseOrderId: ['purchase_order_id', (v) => str(v, 60)],
     costMinor: ['cost_minor', (v) => minorOrNull(v, 'Cost')],
@@ -416,7 +425,10 @@ function update(id, rawPatch = {}) {
     // A whole-form save repeats unchanged values: only a real change is refused.
     const current = k === 'depreciateOverride' ? existing.depreciateOverride : existing[k];
     if ((patch[k] ?? null) === (current ?? null) || (patch[k] === '' && current == null)) continue;
-    if (k === 'inServiceDate' && !existing.inServiceDate && existing.accountingTreatment) {
+    // §11 "bought, not in use yet": a purchase activated without an in-service
+    // date may be given one, once. Never an opening (its basis is fixed at the start).
+    if (k === 'inServiceDate' && !existing.inServiceDate && !existing.depreciationStartPeriod
+      && ['purchase', 'gift', 'self_built'].includes(existing.acquisitionKind)) {
       map[k] = def;
       continue;
     }
@@ -445,12 +457,14 @@ function update(id, rawPatch = {}) {
   }
   if (!sets.length) return existing;
   // Activating an in-service date on an active asset: its schedule starts now.
-  if (!isDraft && 'inServiceDate' in changed && changed.inServiceDate && existing.accountingTreatment === 'capitalised') {
-    if (existing.inServiceDate == null && existing.purchaseDate && changed.inServiceDate < existing.purchaseDate) {
-      throw badRequest('The in-service date cannot be before the purchase date');
+  if (!isDraft && 'inServiceDate' in changed && changed.inServiceDate) {
+    const settings = config.getSettings(existing.companyId);
+    if (existing.purchaseDate && changed.inServiceDate < existing.purchaseDate) throw badRequest('The in-service date cannot be before the purchase date');
+    if (changed.inServiceDate < settings.registerStartDate) throw badRequest(`The in-service date cannot be before the register start (${settings.registerStartDate})`);
+    if (existing.accountingTreatment === 'capitalised') {
+      sets.push('depreciation_start_period = @startPeriod');
+      params.startPeriod = book.firstPeriod(changed.inServiceDate, settings.convention);
     }
-    sets.push('depreciation_start_period = @startPeriod');
-    params.startPeriod = book.firstPeriod(changed.inServiceDate, config.getSettings(existing.companyId).convention);
   }
   params.updatedAt = nextUpdatedAt(existing.updatedAt);
   params.by = getCallerUserId();
@@ -537,6 +551,8 @@ function planActivation(id, { dryRun = false } = {}) {
     }
   } else {
     if (!a.purchaseDate) throw badRequest('Add the purchase date first');
+    if (a.purchaseDate > todayPhnomPenh()) throw badRequest('The purchase date cannot be in the future');
+    if (a.inServiceDate && a.inServiceDate > todayPhnomPenh()) throw badRequest('The in-service date cannot be in the future');
     if (a.purchaseDate < regStart) throw badRequest(`Bought before the register start (${regStart}) — enter it as "Already owned", at its opening value`);
     if (a.inServiceDate && a.inServiceDate < a.purchaseDate) throw badRequest('The in-service date cannot be before the purchase date');
     entryDate = a.purchaseDate;
@@ -601,6 +617,8 @@ function planActivation(id, { dryRun = false } = {}) {
     }
     // A cost paid in riel keeps its real riel figure on the cost line (the clearing line takes any rounding).
     if (a.costCurrency === 'KHR' && !opening) lines[0].khrMinor = a.costMinor;
+    // A fully used-up old asset with no salvage has no opening equity: zero lines are left out.
+    for (let i = lines.length - 1; i >= 0; i -= 1) if (!(lines[i].debitMinor || lines[i].creditMinor)) lines.splice(i, 1);
     entry = {
       companyId: a.companyId, entryDate,
       sourceKind: opening ? 'asset_open' : 'asset_acquire', sourceId: a.id,
@@ -649,6 +667,7 @@ function activate(id) {
     db.prepare(`
       UPDATE fixed_assets SET record_state = 'active', accounting_treatment = @treatment, needs_cost = 0,
         cost_usd_minor = @costUsd, cost_fx_khr_per_usd = COALESCE(@costFx, cost_fx_khr_per_usd), salvage_minor = @salvage,
+        salvage_defaulted = @salvageDefaulted, cost_fx_defaulted = @costFxDefaulted,
         cost_basis = @costBasis, opening_as_of = @openingAsOf, opening_accum_minor = @openingAccum,
         schedule_life_months = @scheduleLife, depreciation_start_period = @startPeriod,
         accum_minor = @openingAccum, nbv_minor = @nbv,
@@ -658,6 +677,9 @@ function activate(id) {
       WHERE id = @id
     `).run({
       id: a.id, treatment: p.treatment, costUsd: p.costUsdMinor, costFx: p.costFxKhrPerUsd, salvage: p.salvageMinor,
+      // Remember which figures activation filled in, so undoing it clears them again (review M4).
+      salvageDefaulted: a.salvageMinor == null && p.salvageMinor != null ? 1 : 0,
+      costFxDefaulted: a.costCurrency === 'KHR' && a.costFxKhrPerUsd == null && p.costFxKhrPerUsd != null ? 1 : 0,
       costBasis: p.opening ? (p.deemed ? 'deemed' : 'actual') : 'actual',
       openingAsOf: p.opening ? p.settings.registerStartDate : null, openingAccum: p.openingAccumMinor,
       scheduleLife: p.scheduleLifeMonths, startPeriod: p.depreciationStartPeriod, nbv: p.nbvMinor,
@@ -756,6 +778,54 @@ function eventDate(v) {
   return d;
 }
 
+/** The earliest date anything can happen to an asset: its purchase date, or the register start for an opening asset. */
+function acquisitionFloor(a) {
+  if (a.acquisitionKind === 'opening') return a.recordState === 'active' ? config.getSettings(a.companyId).registerStartDate : null;
+  return a.purchaseDate || null;
+}
+
+const EVENT_GROUPS = { move: ['transfer', 'custodian'], status: ['status'] };
+
+/**
+ * An event's date for this asset (review M7 / L1): not in the future, not before
+ * the asset was acquired (or the register start), and — for moves and status
+ * changes — not before the latest live one of that kind, so the asset's
+ * current branch / custodian / status is always the latest event's.
+ */
+function eventDateFor(a, v, group = null) {
+  const d = eventDate(v);
+  const floor = acquisitionFloor(a);
+  if (floor && d < floor) {
+    throw badRequest(`The date cannot be before ${floor} (${a.acquisitionKind === 'opening' ? 'the register start' : 'the purchase date'})`);
+  }
+  if (group) {
+    const kinds = EVENT_GROUPS[group];
+    const last = getDb().prepare(`SELECT MAX(event_date) AS d FROM asset_events WHERE asset_id = ? AND voided_at IS NULL AND kind IN (${kinds.map(() => '?').join(',')})`).get(a.id, ...kinds).d;
+    if (last && d < last) throw badRequest(`A later ${group === 'status' ? 'status change' : 'move'} is recorded on ${last} — date this one on or after it`);
+  }
+  return d;
+}
+
+/**
+ * The latest month the company's depreciation has been posted for (runs not
+ * reversed), or null. Changes to an asset's schedule (capex, life, salvage,
+ * impairment…) must take effect after it, so a posted month is never restated.
+ */
+function lastDepreciationPeriod(companyId) {
+  const r = getDb().prepare(`
+    SELECT MAX(period) AS p FROM depreciation_runs WHERE company_id = ? AND status = 'posted'
+  `).get(companyId);
+  return r?.p || null;
+}
+
+function assertAfterPosted(a, d) {
+  const last = lastDepreciationPeriod(a.companyId);
+  if (last && d.slice(0, 7) <= last) {
+    const next = book.addMonths(last, 1);
+    throw badRequest(`Depreciation is already posted through ${ledger.humanMonth(last)} — date this change in ${ledger.humanMonth(next)} or later`);
+  }
+}
+
 /** An asset that can still have things happen to it. */
 function liveAsset(id, { activeOnly = false } = {}) {
   const a = get(id);
@@ -794,6 +864,7 @@ function transfer({ companyId, assetIds, toBranchId, toEmployeeId, date, reason 
     for (const id of new Set(assetIds)) {
       const a = liveAsset(id);
       if (a.companyId !== companyId) throw badRequest('That asset belongs to a different company');
+      eventDateFor(a, d, 'move');
       const nb = moveBranch ? branchId : a.branchId;
       const ne = moveCustodian ? employeeId : a.custodianEmployeeId;
       if (nb === a.branchId && ne === a.custodianEmployeeId) { out.unchanged.push(a.id); continue; }
@@ -814,7 +885,7 @@ function setCustodian({ id, employeeId = null, date, reason } = {}) {
   const a = liveAsset(id);
   const ne = checkEmployee(a.companyId, employeeId);
   if (ne === a.custodianEmployeeId) return { asset: a, eventId: null };
-  const d = eventDate(date);
+  const d = eventDateFor(a, date, 'move');
   let eventId;
   getDb().transaction(() => {
     eventId = insertEvent({ companyId: a.companyId, assetId: id, kind: 'custodian', eventDate: d, reason: str(reason, 500), fromEmployeeId: a.custodianEmployeeId, toEmployeeId: ne });
@@ -830,7 +901,7 @@ function setStatus({ id, status, date, reason } = {}) {
   const s = oneOf(status, SETTABLE_STATUSES, 'Status', null);
   if (!s) throw badRequest('Choose in use, in storage or in repair');
   if (s === a.status) return { asset: a, eventId: null };
-  const d = eventDate(date);
+  const d = eventDateFor(a, date, 'status');
   let eventId;
   getDb().transaction(() => {
     eventId = insertEvent({ companyId: a.companyId, assetId: id, kind: 'status', eventDate: d, reason: str(reason, 500), fromStatus: a.status, toStatus: s });
@@ -854,7 +925,7 @@ function recordRepair({ id, date, amountMinor, currency, vendor, supplierId, rea
   const a = liveAsset(id);
   const why = str(reason, 1000);
   if (!why) throw badRequest('Say what was repaired');
-  const d = eventDate(date);
+  const d = eventDateFor(a, date);
   const cur = oneOf(currency, CURRENCIES, 'Currency', 'USD');
   const amount = minorOrNull(amountMinor, 'Repair cost');
   const fileIds = checkFileIds(id, documentFileIds);
@@ -891,7 +962,8 @@ function recordCapex({ id, date, amountMinor, currency, fxKhrPerUsd, extendsLife
   assertDepreciating(a);
   const why = str(reason, 1000);
   if (!why) throw badRequest('Say what the improvement was');
-  const d = eventDate(date);
+  const d = eventDateFor(a, date);
+  assertAfterPosted(a, d);
   const cur = oneOf(currency, CURRENCIES, 'Currency', 'USD');
   const amount = minorOrNull(amountMinor, 'Amount');
   if (!amount) throw badRequest('Enter the amount of the improvement');
@@ -902,6 +974,11 @@ function recordCapex({ id, date, amountMinor, currency, fxKhrPerUsd, extendsLife
   }
   const extra = extendsLifeMonths == null || extendsLifeMonths === '' ? null : int(extendsLifeMonths);
   if (extra != null && (extra < 0 || extra > 1200)) throw badRequest('Extra months must be 0–1200');
+  // Review M2: an improvement to an asset with no life left must say how long it adds, or it would never depreciate.
+  const spec = scheduleSpec(a);
+  if (spec && (extra == null || extra < 1) && book.positionAt(spec, d.slice(0, 7)).remainingMonths === 0) {
+    throw badRequest(`${a.tagCode} has no months of life left — say how many months the improvement adds`);
+  }
   const category = config.getCategory(a.categoryId);
   const fileIds = checkFileIds(id, documentFileIds);
   const eventId = uuid();
@@ -921,7 +998,7 @@ function recordCapex({ id, date, amountMinor, currency, fxKhrPerUsd, extendsLife
       fxKhrPerUsd: entry.fxKhrPerUsd, amountUsdMinor: usd, extendsLifeMonths: extra, supplierId: checkSupplier(a.companyId, supplierId),
       journalEntryId: entry.id, documentFileIds: fileIds,
     });
-    touch(id, ['nbv_minor = nbv_minor + @usd'], { usd });
+    require('./assetDepreciation').refreshSnapshot(id);
   })();
   audit('asset_event', eventId, 'capex', { after: { assetId: id, date: d, amountUsdMinor: usd, extendsLifeMonths: extra, entryNo: entry.entryNo } });
   return { asset: get(id), event: getEvent(eventId), entry };
@@ -936,7 +1013,8 @@ function changeLife({ id, date, newLifeMonths, reason } = {}) {
   if (!why) throw badRequest('A reason is required — it is shown on the schedule');
   const n = int(newLifeMonths);
   if (n == null || n < 1 || n > 1200) throw badRequest('Months left must be 1–1200');
-  const d = eventDate(date);
+  const d = eventDateFor(a, date);
+  assertAfterPosted(a, d);
   const eventId = insertEvent({ companyId: a.companyId, assetId: id, kind: 'life_change', eventDate: d, reason: why, newLifeMonths: n });
   audit('asset_event', eventId, 'life_change', { after: { assetId: id, date: d, newLifeMonths: n, reason: why } });
   return { asset: get(id), event: getEvent(eventId) };
@@ -951,7 +1029,8 @@ function changeSalvage({ id, date, newSalvageMinor, reason } = {}) {
   if (!why) throw badRequest('A reason is required — it is shown on the schedule');
   const s = minorOrNull(newSalvageMinor, 'Salvage');
   if (s == null) throw badRequest('Enter the new salvage value');
-  const d = eventDate(date);
+  const d = eventDateFor(a, date);
+  assertAfterPosted(a, d);
   const eventId = insertEvent({ companyId: a.companyId, assetId: id, kind: 'salvage_change', eventDate: d, reason: why, newSalvageMinor: s });
   audit('asset_event', eventId, 'salvage_change', { after: { assetId: id, date: d, newSalvageMinor: s, reason: why } });
   return { asset: get(id), event: getEvent(eventId) };
@@ -962,17 +1041,9 @@ function addNote({ id, date, text } = {}) {
   if (!a) throw notFound('Asset');
   const t = str(text, 2000);
   if (!t) throw badRequest('Write the note');
-  const eventId = insertEvent({ companyId: a.companyId, assetId: id, kind: 'note', eventDate: eventDate(date), reason: t });
+  const eventId = insertEvent({ companyId: a.companyId, assetId: id, kind: 'note', eventDate: eventDateFor(a, date), reason: t });
   audit('asset_event', eventId, 'note', { after: { assetId: id, text: t } });
   return { asset: a, event: getEvent(eventId) };
-}
-
-/** Depreciation posted for this asset in or after `period` (A2's monthly runs). */
-function depreciationPostedFrom(assetId, period) {
-  return !!getDb().prepare(`
-    SELECT 1 FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
-     WHERE l.asset_id = ? AND l.line_role IN ('accum_dep', 'dep_expense', 'dep_catch_up') AND e.source_kind = 'asset_depreciation' AND e.period >= ? LIMIT 1
-  `).get(assetId, period);
 }
 
 const SNAPSHOT_FIELD = { transfer: ['branch_id', 'custodian_employee_id'], custodian: ['custodian_employee_id'], status: ['status'] };
@@ -994,7 +1065,8 @@ function voidEvent(id, reason) {
   const why = str(reason, 500);
   if (!why) throw badRequest('A reason is required to void an event');
   const a = get(e.assetId);
-  if (['life_change', 'salvage_change'].includes(e.kind) && depreciationPostedFrom(e.assetId, e.effectivePeriod)) {
+  const lastRun = lastDepreciationPeriod(e.companyId);
+  if (['life_change', 'salvage_change'].includes(e.kind) && lastRun && lastRun >= e.effectivePeriod) {
     throw badRequest('Depreciation has already been posted with this change — make a new change instead');
   }
   const db = getDb();
@@ -1018,18 +1090,43 @@ function voidEvent(id, reason) {
 }
 
 /**
- * Reverse an event that posted (§3.5): a mirror entry in the current open
- * month and a `reversal` event. Reversing an acquisition or opening sends the
- * asset back to DRAFT so its figures can be corrected and activated again —
- * allowed only while nothing else is posted for it.
+ * Depreciation actually charged for an asset to date (US cents): its
+ * `accum_dep` lines on every entry except its opening (and a reversal of the
+ * opening). Runs, disposal / write-off months, run reversals and the
+ * adjustment below all count. `throughPeriod` limits it to entries posted in
+ * or before that month.
+ */
+const POSTED_DEP_SQL = `
+  SELECT COALESCE(SUM(l.credit_minor - l.debit_minor), 0) AS n
+    FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
+    LEFT JOIN journal_entries o ON o.id = e.reverses_entry_id
+   WHERE l.asset_id = @assetId AND l.line_role = 'accum_dep'
+     AND e.source_kind <> 'asset_open' AND COALESCE(o.source_kind, '') <> 'asset_open'`;
+
+function postedDepreciation(assetId, { throughPeriod = null } = {}) {
+  const sql = throughPeriod ? `${POSTED_DEP_SQL} AND e.period <= @through` : POSTED_DEP_SQL;
+  return getDb().prepare(sql).get({ assetId, through: throughPeriod }).n;
+}
+
+/**
+ * Reverse an event that posted (§3.5). A capex reversal posts the mirror entry
+ * in the current open month. Reversing an acquisition or opening sends the
+ * asset back to DRAFT so its figures can be corrected and activated again;
+ * its mirror is dated the ORIGINAL entry date (review H1), so a corrected
+ * re-activation on the same date never leaves the cost counted twice at any
+ * month-end (a locked month still redirects it, like the re-activation).
+ * Depreciation already posted for it is taken back by one adjustment entry
+ * in the current open month; the next run catches up from the start.
  */
 function reverseEvent(id, reason) {
   const e = getEvent(id);
   if (!e) throw notFound('Event');
-  if (!REVERSIBLE_KINDS.includes(e.kind)) throw badRequest(VOIDABLE_KINDS.includes(e.kind) ? 'This event did not post anything — void it instead' : 'This event cannot be reversed yet');
+  if (e.kind === 'lost') throw badRequest('A write-off is undone with "Found again"');
+  if (!REVERSIBLE_KINDS.includes(e.kind)) throw badRequest(VOIDABLE_KINDS.includes(e.kind) ? 'This event did not post anything — void it instead' : 'This event cannot be reversed');
   if (e.voided || e.reversedByEventId) throw badRequest('This event has already been undone');
   const why = str(reason, 500);
   if (!why) throw badRequest('A reason is required to reverse an event');
+  if (['dispose', 'partial_dispose', 'impair', 'revalue'].includes(e.kind)) return require('./assetDisposals').reverseMoneyEvent(e, why);
   const a = get(e.assetId);
   const db = getDb();
   const revEventId = uuid();
@@ -1038,14 +1135,33 @@ function reverseEvent(id, reason) {
     if (e.kind === 'acquire' || e.kind === 'open') {
       const others = db.prepare(`
         SELECT 1 FROM journal_lines l JOIN journal_entries j ON j.id = l.entry_id
-         WHERE l.asset_id = ? AND j.reversed_by_entry_id IS NULL AND j.reverses_entry_id IS NULL AND j.id IS NOT ? LIMIT 1
+         WHERE l.asset_id = ? AND j.reversed_by_entry_id IS NULL AND j.reverses_entry_id IS NULL AND j.id IS NOT ?
+           AND j.source_kind NOT IN ('asset_depreciation', 'reversal') LIMIT 1
       `).get(e.assetId, e.journalEntryId);
-      if (others) throw badRequest('Other entries are posted for this asset — reverse those first');
-      const laterLive = db.prepare(`SELECT 1 FROM asset_events WHERE asset_id = ? AND kind IN ('capex', 'life_change', 'salvage_change') AND voided_at IS NULL AND reversed_by_event_id IS NULL LIMIT 1`).get(e.assetId);
-      if (laterLive) throw badRequest('Undo the later improvements and life or salvage changes first');
+      if (others) throw badRequest('Other entries are posted for this asset (a disposal, impairment or revaluation) — reverse those first');
+      const laterLive = db.prepare(`SELECT 1 FROM asset_events WHERE asset_id = ? AND kind IN ('capex', 'life_change', 'salvage_change', 'impair', 'revalue', 'partial_dispose', 'dispose', 'lost') AND voided_at IS NULL AND reversed_by_event_id IS NULL LIMIT 1`).get(e.assetId);
+      if (laterLive) throw badRequest('Undo the later events (improvements, life or salvage changes, disposals) first');
     }
+    const acquisition = e.kind === 'acquire' || e.kind === 'open';
     if (e.journalEntryId) {
-      rev = ledger.reverse(e.journalEntryId, why, { sourceKind: 'reversal', sourceId: revEventId });
+      const orig = acquisition ? ledger.getEntry(e.journalEntryId) : null;
+      rev = ledger.reverse(e.journalEntryId, why, { sourceKind: 'reversal', sourceId: revEventId, date: orig ? (orig.intendedDate || orig.entryDate) : null });
+    }
+    if (acquisition) {
+      const charged = postedDepreciation(e.assetId);
+      if (charged !== 0) {
+        const category = config.getCategory(a.categoryId);
+        const n = db.prepare("SELECT COUNT(*) AS n FROM journal_entries WHERE company_id = ? AND idempotency_key LIKE ?").get(a.companyId, `asset:${a.id}:undo-dep:%`).n;
+        const dims = { assetId: a.id, branchId: a.branchId };
+        ledger.post({
+          companyId: a.companyId, entryDate: todayPhnomPenh(), sourceKind: 'reversal', sourceId: revEventId,
+          idempotencyKey: `asset:${a.id}:undo-dep:${n + 1}`,
+          memo: `Depreciation taken back: ${a.tagCode} ${a.name} returned to draft (${why})`,
+          lines: charged > 0
+            ? [{ accountId: category.glAccumAccountId, debitMinor: charged, lineRole: 'accum_dep', ...dims }, { accountId: category.glExpenseAccountId, creditMinor: charged, lineRole: 'dep_catch_up', ...dims }]
+            : [{ accountId: category.glExpenseAccountId, debitMinor: -charged, lineRole: 'dep_catch_up', ...dims }, { accountId: category.glAccumAccountId, creditMinor: -charged, lineRole: 'accum_dep', ...dims }],
+        });
+      }
     }
     insertEvent({
       id: revEventId, companyId: e.companyId, assetId: e.assetId, kind: 'reversal', eventDate: todayPhnomPenh(), reason: why,
@@ -1053,7 +1169,7 @@ function reverseEvent(id, reason) {
     });
     db.prepare('UPDATE asset_events SET reversed_by_event_id = ? WHERE id = ?').run(revEventId, e.id);
     if (e.kind === 'capex') {
-      touch(e.assetId, ['nbv_minor = nbv_minor - @usd'], { usd: e.amountUsdMinor || 0 });
+      require('./assetDepreciation').refreshSnapshot(e.assetId);
     } else {
       // Back to a draft, figures kept for correction; the basis is worked out again at the next activation.
       touch(e.assetId, [
@@ -1061,6 +1177,10 @@ function reverseEvent(id, reason) {
         'schedule_life_months = NULL', 'depreciation_start_period = NULL', 'accum_minor = 0', 'nbv_minor = NULL',
         'acquisition_entry_id = NULL', 'activated_at = NULL', 'activated_by_user_id = NULL', 'cost_usd_minor = NULL',
         'tax_cost_khr_minor = NULL', 'tax_fx_khr_per_usd = NULL', 'tax_fx_source = NULL', 'tax_opening_wdv_khr_minor = NULL',
+        'last_posted_period = NULL',
+        // Review M4: figures activation filled in are cleared again, so the next activation works them out afresh.
+        'salvage_minor = CASE WHEN salvage_defaulted = 1 THEN NULL ELSE salvage_minor END', 'salvage_defaulted = 0',
+        'cost_fx_khr_per_usd = CASE WHEN cost_fx_defaulted = 1 THEN NULL ELSE cost_fx_khr_per_usd END', 'cost_fx_defaulted = 0',
       ], {});
     }
   })();
@@ -1075,25 +1195,42 @@ function scheduleSpec(a, { endPeriod = null } = {}) {
   if (a.accountingTreatment !== 'capitalised' || !a.depreciationStartPeriod) return null;
   const events = getDb().prepare(`
     SELECT * FROM asset_events WHERE asset_id = ? AND voided_at IS NULL AND reversed_by_event_id IS NULL
-       AND kind IN ('capex', 'life_change', 'salvage_change') ORDER BY event_date, created_at
+       AND kind IN ('capex', 'life_change', 'salvage_change', 'impair', 'revalue', 'partial_dispose', 'dispose', 'lost')
+     ORDER BY event_date, created_at
   `).all(a.id).map(rowToEvent);
-  const changes = events.map((e) => {
+  const changes = [];
+  let end = endPeriod;
+  for (const e of events) {
     const period = e.effectivePeriod || e.eventDate.slice(0, 7);
-    if (e.kind === 'capex') return { period, addBasisMinor: e.amountUsdMinor || 0, extendMonths: e.extendsLifeMonths || 0 };
-    if (e.kind === 'life_change') return { period, lifeMonths: e.newLifeMonths };
-    return { period, salvageMinor: e.newSalvageMinor };
-  });
+    const d = e.detail || {};
+    if (e.kind === 'capex') changes.push({ period, addBasisMinor: e.amountUsdMinor || 0, extendMonths: e.extendsLifeMonths || 0 });
+    else if (e.kind === 'life_change') changes.push({ period, lifeMonths: e.newLifeMonths });
+    else if (e.kind === 'salvage_change') changes.push({ period, salvageMinor: e.newSalvageMinor });
+    else if (e.kind === 'impair') changes.push({ period, impairMinor: e.amountUsdMinor || 0 });
+    else if (e.kind === 'revalue') changes.push({ period, revalueToMinor: e.amountUsdMinor || 0 });
+    else if (e.kind === 'partial_dispose') {
+      changes.push({ period, removeBasisMinor: d.costShareMinor || 0, removeAccumMinor: d.accumShareMinor || 0, removeImpairMinor: d.impairShareMinor || 0, salvageMinor: d.salvageAfterMinor });
+    } else if (e.kind === 'dispose' || e.kind === 'lost') {
+      // The last month that depreciates (the §4.1 convention, worked out when it was recorded).
+      const last = d.lastPeriod || book.lastPeriod(e.eventDate, config.getSettings(a.companyId).convention);
+      if (!end || last < end) end = last;
+    }
+  }
   return {
     basisMinor: a.costUsdMinor || 0, salvageMinor: a.salvageMinor || 0, openingAccumMinor: a.openingAccumMinor || 0,
-    lifeMonths: a.scheduleLifeMonths || 0, startPeriod: a.depreciationStartPeriod, endPeriod, changes,
+    lifeMonths: a.scheduleLifeMonths || 0, startPeriod: a.depreciationStartPeriod, endPeriod: end, changes,
   };
 }
 
 /** Depreciation actually posted for this asset, by period (A2's runs and disposals). */
 function postedByPeriod(assetId) {
   const rows = getDb().prepare(`
-    SELECT e.period, SUM(l.credit_minor - l.debit_minor) AS amount FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
-     WHERE l.asset_id = ? AND l.line_role = 'accum_dep' AND e.source_kind <> 'asset_open' GROUP BY e.period
+    SELECT e.period, SUM(l.credit_minor - l.debit_minor) AS amount
+      FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id
+      LEFT JOIN journal_entries o ON o.id = e.reverses_entry_id
+     WHERE l.asset_id = ? AND l.line_role = 'accum_dep'
+       AND e.source_kind <> 'asset_open' AND COALESCE(o.source_kind, '') <> 'asset_open'
+     GROUP BY e.period
   `).all(assetId);
   return new Map(rows.map((r) => [r.period, r.amount]));
 }
@@ -1150,4 +1287,5 @@ module.exports = {
   planActivation, previewActivation, activate,
   insertEvent, getEvent, listEvents, transfer, setCustodian, setStatus, recordRepair, recordCapex, changeLife, changeSalvage, addNote,
   voidEvent, reverseEvent, scheduleSpec, getSchedule, rowToAsset, checkEmployee,
+  postedDepreciation, lastDepreciationPeriod, assertAfterPosted, eventDateFor, eventDate, liveAsset, touch, pastDateOrNull, assertDepreciating, amountInUsd,
 };

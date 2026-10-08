@@ -172,6 +172,7 @@ function bookSchedule(spec) {
   let segTotal = Math.max(0, basis - salvage - accum);
   let segDone = 0;
   let segment = 0;
+  let charged = 0;
   const rows = [];
   let fullyAt = null;
 
@@ -185,6 +186,13 @@ function bookSchedule(spec) {
       const remaining = segN - segDone;
       if (c.addBasisMinor != null) basis += int(c.addBasisMinor, 'capex');
       if (c.impairMinor != null) impaired += int(c.impairMinor, 'impairment');
+      // Partial disposal (A2): a share of cost, accumulated depreciation and impairment leaves.
+      if (c.removeBasisMinor != null) basis -= int(c.removeBasisMinor, 'removed cost');
+      if (c.removeAccumMinor != null) accum -= int(c.removeAccumMinor, 'removed depreciation');
+      if (c.removeImpairMinor != null) impaired -= int(c.removeImpairMinor, 'removed impairment');
+      // Revaluation (A2, elimination method): accumulated depreciation and
+      // impairment are eliminated against cost, and cost becomes the new value.
+      if (c.revalueToMinor != null) { basis = int(c.revalueToMinor, 'revalued amount'); accum = 0; impaired = 0; }
       if (c.salvageMinor != null) salvage = int(c.salvageMinor, 'salvage');
       let newRemaining = remaining;
       if (c.lifeMonths != null) newRemaining = int(c.lifeMonths, 'life');
@@ -203,6 +211,7 @@ function bookSchedule(spec) {
       const amount = cumulativeAt(segTotal, segN, segDone + 1) - cumulativeAt(segTotal, segN, segDone);
       segDone += 1;
       accum += amount;
+      charged += amount;
       rows.push({ period: periodFromIndex(p), amountMinor: amount, accumMinor: accum, nbvMinor: basis - impaired - accum, segment });
       if (segDone === segN) fullyAt = periodFromIndex(p);
     } else if (p >= lastChangeIdx) {
@@ -213,6 +222,9 @@ function bookSchedule(spec) {
   return {
     rows,
     openingAccumMinor: openingAccum,
+    chargedMinor: charged,
+    remainingMonths: Math.max(0, segN - segDone),
+    salvageMinor: salvage,
     accumMinor: accum,
     basisMinor: basis,
     impairedMinor: impaired,
@@ -231,6 +243,37 @@ function accumThrough(spec, period) {
     accum = r.accumMinor;
   }
   return accum;
+}
+
+/** Depreciation CHARGED from the start period through `period` (inclusive), opening excluded. */
+function chargedThrough(spec, period) {
+  const idx = periodIndex(assertPeriod(period));
+  if (idx < periodIndex(spec.startPeriod)) return 0;
+  return bookSchedule({ ...spec, endPeriod: minPeriod(spec.endPeriod, period) }).chargedMinor;
+}
+
+function minPeriod(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return periodIndex(a) <= periodIndex(b) ? a : b;
+}
+
+/**
+ * Where the asset stands at the START of `period`, before any change dated
+ * that period: { basisMinor, accumMinor, impairedMinor, nbvMinor, salvageMinor,
+ * remainingMonths, chargedMinor }. Before the start period nothing has run.
+ */
+function positionAt(spec, period) {
+  const idx = periodIndex(assertPeriod(period));
+  const startIdx = periodIndex(spec.startPeriod);
+  const changes = (spec.changes || []).filter((c) => periodIndex(c.period) < idx);
+  if (idx <= startIdx) {
+    const basis = Number(spec.basisMinor || 0);
+    const accum = Number(spec.openingAccumMinor || 0);
+    return { basisMinor: basis, accumMinor: accum, impairedMinor: 0, nbvMinor: basis - accum, salvageMinor: Number(spec.salvageMinor || 0), remainingMonths: Number(spec.lifeMonths || 0), chargedMinor: 0 };
+  }
+  const s = bookSchedule({ ...spec, changes, endPeriod: minPeriod(spec.endPeriod, periodFromIndex(idx - 1)) });
+  return { basisMinor: s.basisMinor, accumMinor: s.accumMinor, impairedMinor: s.impairedMinor, nbvMinor: s.nbvMinor, salvageMinor: s.salvageMinor, remainingMonths: s.remainingMonths, chargedMinor: s.chargedMinor };
 }
 
 /** Depreciation for one period (0 outside the schedule). */
@@ -252,6 +295,6 @@ module.exports = {
   CONVENTIONS,
   periodOf, periodIndex, periodFromIndex, addMonths, monthsBetween, dayBefore,
   firstPeriod, lastPeriod, cumulativeAt, allocate,
-  openingPosition, bookSchedule, accumThrough, amountFor, amountBetween,
+  openingPosition, bookSchedule, accumThrough, amountFor, amountBetween, chargedThrough, positionAt,
   assertDate, assertPeriod,
 };
