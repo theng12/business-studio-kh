@@ -190,12 +190,13 @@ function register({ expose }) {
     const companyId = company();
     return ownView(companyId, callerEmployee(companyId).id);
   });
-  expose('attendance:requestCorrectionSelf', ({ workDate, inTime = null, outTime = null, reason } = {}) => {
+  /** `clientRef` (the phone's outbox): a resend returns the saved request with `duplicate: true`. */
+  expose('attendance:requestCorrectionSelf', ({ workDate, inTime = null, outTime = null, reason, clientRef = null } = {}) => {
     const companyId = company();
     const me = callerEmployee(companyId);
-    const c = attendance.requestCorrection({ companyId, employeeId: me.id, workDate, inTime, outTime, reason, via: 'phone' });
-    emitHrChange('correction', 'create', c.id, companyId);
-    return c;
+    const c = attendance.requestCorrection({ companyId, employeeId: me.id, workDate, inTime, outTime, reason, via: 'phone', clientRef });
+    if (!c.duplicate) emitHrChange('correction', 'create', c.id, companyId);
+    return { ...c, duplicate: !!c.duplicate };
   });
 
   /* ─── supervisor (attendance.supervise) ─── */
@@ -283,12 +284,13 @@ function register({ expose }) {
   });
 
   /* ─── leave: my own (phone) ─── */
-  expose('leave:requestSelf', ({ leaveTypeId, fromDate, toDate = null, halfDay = null, reason = null } = {}) => {
+  /** `clientRef` (the phone's outbox): a resend returns the saved request with `duplicate: true`. */
+  expose('leave:requestSelf', ({ leaveTypeId, fromDate, toDate = null, halfDay = null, reason = null, clientRef = null } = {}) => {
     const companyId = company();
     const me = callerEmployee(companyId);
-    const r = leave.createRequest({ companyId, employeeId: me.id, leaveTypeId, fromDate, toDate, halfDay, reason, via: 'phone' });
-    emitHrChange('leave', 'create', r.id, companyId);
-    return r;
+    const r = leave.createRequest({ companyId, employeeId: me.id, leaveTypeId, fromDate, toDate, halfDay, reason, via: 'phone', clientRef });
+    if (!r.duplicate) emitHrChange('leave', 'create', r.id, companyId);
+    return { ...r, duplicate: !!r.duplicate };
   });
   expose('leave:cancelSelf', ({ id, reason = null } = {}) => {
     const companyId = company();

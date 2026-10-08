@@ -128,6 +128,10 @@ function logEvent(event, detail) {
 
 logEvent('boot', `pid=${process.pid} electron=${process.versions.electron} node=${process.versions.node}`);
 
+// HR1: kiosk-mode events (quit blocked, kiosk left, …) go to crash.log too.
+const kioskWindow = require('./kioskWindow');
+kioskWindow.configureKiosk({ log: logEvent });
+
 process.on('uncaughtException', (err) => {
   logEvent('uncaughtException', err && (err.stack || err.message));
 });
@@ -190,6 +194,18 @@ function resolveAppImageUrl(srcUrl) {
 let mainWindow = null;
 
 function createWindow() {
+  /* HR1: on the shop Mac's attendance kiosk (config.json `kioskMode`), the only
+   * window is the locked-down full-screen Kiosk screen — main/kioskWindow.js. */
+  if (kioskWindow.isKioskMode(loadConfig())) {
+    const devUrl = process.env.VITE_DEV_SERVER_URL;
+    mainWindow = kioskWindow.createKioskWindow({
+      preloadPath: path.join(__dirname, '..', 'preload', 'preload.js'),
+      rendererUrl: isDev && devUrl ? devUrl : 'app://local/index.html',
+    });
+    mainWindow.on('closed', () => { mainWindow = null; });
+    return;
+  }
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,

@@ -198,7 +198,10 @@ const CHANNEL_RULES = [
   // The staff directory is shared by fuel and HR; fuel.record callers get
   // tiles only (main/ipc/staff.js).
   [/^staff:me$/,                                           ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage', 'attendance.self', 'attendance.supervise']],
-  [/^staff:(list|get|getPhoto)$/,                          ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage']],
+  // A supervisor sees the faces of THEIR OWN crew only (main/ipc/staff.js checks
+  // the person is in the caller's crew); fuel / HR callers as before.
+  [/^staff:getPhoto$/,                                     ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage', 'attendance.supervise']],
+  [/^staff:(list|get)$/,                                   ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage']],
   [/^staff:/,                                              ['fuel.manage', 'hr.manage']],
   [/^fuel:(getSettings|listAssetTypes|listAssets|getAsset|listLocations|getLocation|getChart|getDipLitres|listStations|listPrices|recordFill|recordDip|recordDelivery|recordTransfer|receiveTransfer|addPhoto|getPhoto|listMyRecent|listPendingTransfers|voidMyRecord)$/, ['fuel.record', 'fuel.manage']],
   [/^fuel:/,                                            'fuel.manage'],

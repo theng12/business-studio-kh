@@ -1474,6 +1474,42 @@ function registerClientProxies(loadConfigFn) {
      the `client:rpcActivity` push channel (see broadcastRpcActivity). */
   handleLocal('client:syncStats', () => getSyncStats());
 
+  /* HR1: this Mac as the shop's attendance kiosk — the client half of the
+   * kioskMode:* channels (standalone half: main/ipc/kioskMode.js; both from
+   * makeKioskModeHandlers in main/kioskWindow.js). The manager PIN is checked
+   * by the SERVER over RPC; enabling needs this Mac's account to hold
+   * attendance.kiosk or hr.manage (from /api/whoami). */
+  {
+    const kioskModeHandlers = require('../kioskWindow').makeKioskModeHandlers({
+      verifyManagerPin: (args) => rpc('kiosk:verifyManagerPin', args),
+      getCaps: async () => {
+        await ensureWhoami();
+        return _connectionState.user?.caps || null;
+      },
+      // The recovery code is accepted only while the office Mac cannot answer
+      // for this account: /api/whoami must fail (down, unreachable, or the
+      // kiosk account's token no longer accepted).
+      isServerReachable: async () => {
+        const url = baseUrl();
+        const auth = authHeader();
+        if (!url || !auth) return false;
+        try {
+          const res = await fetch(`${url}/api/whoami`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(5000) });
+          return res.ok;
+        } catch (_) {
+          return false;
+        }
+      },
+    });
+    handleLocal('kioskMode:status', () => kioskModeHandlers.status());
+    handleLocal('kioskMode:askCamera', () => kioskModeHandlers.askCamera());
+    handleLocal('kioskMode:newRecoveryCode', () => kioskModeHandlers.newRecoveryCode());
+    handleLocal('kioskMode:enable', (args) => kioskModeHandlers.enable(args || {}));
+    handleLocal('kioskMode:recover', (args) => kioskModeHandlers.recover(args));
+    handleLocal('kioskMode:leave', (args) => kioskModeHandlers.leave(args));
+    handleLocal('kioskMode:quit', (args) => kioskModeHandlers.quit(args));
+  }
+
   /* ─── v0.16.0: client-mode local handlers ──────────────────────
    * These channels run on the client's own Mac (the OS dialog is its
    * dialog, the disk scan is its disk). They don't talk to the server

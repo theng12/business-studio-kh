@@ -77,6 +77,8 @@ function rowToEmployee(row) {
     statusReason: row.status_reason ?? null,
     hasPin: !!row.kiosk_pin_hash,
     pinLockedUntil: row.pin_locked_until && row.pin_locked_until > Date.now() ? row.pin_locked_until : null,
+    // HR1 screens: a lock that never runs out (the 3rd in a day) — only hr:unlockPin lifts it.
+    pinManagerOnly: !!row.pin_manager_only,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     updatedByUserId: row.updated_by_user_id ?? null,

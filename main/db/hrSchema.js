@@ -339,6 +339,13 @@ function ensureHrSchema(db) {
   }
   // No absence before the company started keeping attendance in the app.
   addColumnIfMissing(db, 'hr_settings', 'attendance_start_date', 'TEXT');
+  // Phone requests ("I forgot", leave) go through the phone's offline outbox:
+  // a client_ref + a hash of the content make a resend return the saved request.
+  for (const t of ['attendance_corrections', 'leave_requests']) {
+    addColumnIfMissing(db, t, 'client_ref', 'TEXT');
+    addColumnIfMissing(db, t, 'client_ref_hash', 'TEXT');
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_${t}_client_ref ON ${t}(client_ref) WHERE client_ref IS NOT NULL`);
+  }
   db.exec(`
     /* Dated suspensions: a suspended day is "suspended", never "absent". */
     CREATE TABLE IF NOT EXISTS employee_suspensions (

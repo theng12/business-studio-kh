@@ -677,6 +677,7 @@ confirmation is marked `needsReapproval` (with the reason) — not voided; re-ap
 | Channel | Args | Returns | Cap |
 |---|---|---|---|
 | `staff:list` / `staff:get` | as §9 (`role` also `'supervisor'`) | `Employee` narrowed to the caller (table above) | fuel.record, fuel.manage, V |
+| `staff:getPhoto` | as §9 | as §9 | fuel.record, fuel.manage, V, or **Sup for their own active crew only** (anyone else: "You can only see the photos of your own crew") |
 | `staff:create` / `update` / `markLeft` / `reactivate` / `setPhoto` | as §9 (`markLeft` also sets `endDate`) | `Employee` | fuel.manage or M |
 | `staff:me` | — | the caller's tile | as §9, or Me / Sup |
 | `hr:getProfile` | `id` | `Employee` (narrowed) + `{ position, positionText, schedules, suspensions ([{ fromDate, toDate }]; reasons M only), documents (count, M only) }` | V |
@@ -732,11 +733,19 @@ company — never an id from the phone ("This account is not linked to a staff r
 |---|---|---|---|
 | `attendance:clockSelf` | `{ photo (selfie, required), clientRef?, queuedForMs? }` | `{ event, duplicate, doubleTap }` — `source 'phone'`, `reviewStatus 'pending'` | Me |
 | `attendance:mine` | — | `OwnView` | Me |
-| `attendance:requestCorrectionSelf` | `{ workDate, inTime?, outTime?, reason }` | `Correction` (`via 'phone'`) | Me |
-| `leave:requestSelf` | `{ leaveTypeId, fromDate, toDate?, halfDay?: 'am'\|'pm', reason? }` | `LeaveRequest` (`via 'phone'`) | Me |
+| `attendance:requestCorrectionSelf` | `{ workDate, inTime?, outTime?, reason, clientRef? }` | `Correction & { duplicate }` (`via 'phone'`) | Me |
+| `leave:requestSelf` | `{ leaveTypeId, fromDate, toDate?, halfDay?: 'am'\|'pm', reason?, clientRef? }` | `LeaveRequest & { duplicate }` (`via 'phone'`) | Me |
 | `leave:cancelSelf` | `{ id, reason? }` (own, still pending) | `LeaveRequest` | Me |
 | `attendance:crew` | — | `[tile + { today: { status, firstIn, lastOut }, lastEvent }]` — active staff whose `supervisorEmployeeId` is the caller's record | Sup |
 | `attendance:markCrew` | `{ employeeId (crew only, not yourself), kind?: 'in'\|'out' (default: decided), photo?, note?, clientRef?, queuedForMs? }` | `{ event, duplicate, doubleTap }` — `source 'supervisor'`, pending review | Sup |
+
+The two phone requests go through the phone's offline outbox like clock-ins: `clientRef` (same rule
+as `attendance:clockSelf`) + a hash of the request's content — a resend from the same account returns
+the saved request with `duplicate: true` (checked before "already a correction waiting for that day" /
+the leave overlap rule); the same ref with other content, or from another account, is refused ("already
+used for a different request"). Columns `client_ref` (unique when set) / `client_ref_hash` on
+`attendance_corrections` and `leave_requests`. The kiosk's `kiosk:requestLeave` / `kiosk:requestCorrection`
+are online-only and take no `clientRef`.
 
 `OwnView = { employee (tile), today (day result), lastEvent, thisMonth: { month, totals, days,
 latenessConfirmed }, lastMonth: { … }, leave: Balance[], requests: { leave: pending[], corrections:
@@ -777,13 +786,50 @@ in January, its cancellation, a back-dated adjustment) writes a compensating `ad
 | `kiosk:requestLeave` | `{ sessionToken, leaveTypeId, fromDate, toDate?, halfDay?, reason? }` | `LeaveRequest` (`via 'kiosk'`) | K |
 | `kiosk:requestCorrection` | `{ sessionToken, workDate, inTime?, outTime?, reason }` ("I forgot to clock out" — a request, never an event) | `Correction` | K |
 | `kiosk:signOut` | `{ sessionToken }` | `{ ended }` | K |
-| `kiosk:verifyManagerPin` | `{ employeeId, pin }` — a staff member linked to an account with `hr.manage` (or admin); the PIN is checked first, with the same per-person and per-kiosk limits | `{ ok: true, managerId }` | K |
+| `kiosk:verifyManagerPin` | `{ employeeId, pin, purpose? }` — a staff member linked to an account with `hr.manage` (or admin); the PIN is checked first, with the same per-person and per-kiosk limits. `purpose`: `'leave'` (default) / `'quit'` → History `kiosk:manager-exit`; `'no-photo'` (a manager lets someone clock while the camera is broken) → `kiosk:manager-no-photo` | `{ ok: true, managerId }` | K |
 
 A session token is random, held in the server's memory, bound to the kiosk **account** that signed in
 and the company, valid `kioskSessionSeconds` (120) after its last use and `kioskSessionMaxMinutes` (10)
 at most; a restart ends every session. After sign-in nothing the screen sends names an employee.
 PINs are scrypt-hashed asynchronously (never blocking the server); the per-kiosk counter is in memory,
 the per-person locks are in the database.
+
+**The kiosk Mac itself (`kioskMode:*`, local).** `config.json` `kioskMode` (+ `kioskOpenAtLogin`) turns
+the Mac into the kiosk: one full-screen window on `index.html#kiosk` (`renderer/modules/Kiosk`, only
+`kiosk:*` / `kioskMode:*`), `kiosk: true`, a menu with no Quit/Hide/Close/Reload/DevTools, every ⌘/Ctrl
+chord except ⌘A/C/V/X/Z swallowed, any other quit (Dock, AppleScript, `kill`) refused until a manager PIN
+(a shutdown / restart / log-out passes), opened at login. Machine-local: not in `PORTABLE_CONFIG_KEYS`,
+and the generic settings setters refuse both keys on both paths (`assertValidConfigValues`). Code:
+`main/kioskWindow.js` (+ `main/ipc/kioskMode.js` exposeLocal, `main/client/index.js` handleLocal — same
+handlers; validators in `main/server/hrValidators.js`). `kioskMode:enable` re-checks `/api/whoami` caps
+on a client; `leave` / `quit` call `kiosk:verifyManagerPin` (in-process, or over RPC on a client).
+| Channel | Args | Returns |
+|---|---|---|
+| `kioskMode:status` | — | `{ enabled, openAtLogin, mode, canEnable (attendance.kiosk / hr.manage / owner's window), camera ('granted'\|'denied'\|'restricted'\|'not-determined'), packaged, windowed }` |
+| `kioskMode:askCamera` | — | `{ status }` — `systemPreferences.askForMediaAccess('camera')` (NSCameraUsageDescription is in `build.mac.extendInfo`) |
+| `kioskMode:newRecoveryCode` | — | `{ code }` (`XXXX-XXXX-XXXX`, shown ONCE in the turn-on dialog; only a scrypt hash + salt are kept, and only when `enable` follows within 15 min) |
+| `kioskMode:enable` | `{ openAtLogin? }` | `{ ok }`, then relaunches as the kiosk (refused unless a recovery code was just shown) |
+| `kioskMode:leave` | `{ employeeId, pin }` (a manager) | `{ ok }`, then relaunches as the normal app |
+| `kioskMode:quit` | `{ employeeId, pin }` (a manager) | `{ ok }`, then quits |
+| `kioskMode:recover` | `{ code }` | `{ ok }`, then relaunches as the normal app — **only while the office Mac cannot answer** (a client whose `/api/whoami` fails; never on a standalone / server Mac); 5 wrong codes → local lock 15 min, then 30, 60 … ≤ 24 h, kept in config.json; each use / wrong try is written to crash.log (`kiosk:recovery-used`, `kiosk:recovery-wrong`) |
+Main → screen: `kioskMode:quitRequested` (a quit was refused; the screen asks for a manager). Without the
+camera a clock-in needs a manager PIN (`purpose: 'no-photo'`) and the photo saved is a plain card saying
+"NO CAMERA PHOTO — allowed by <manager>". The screen never queues a clock-in on the shop Mac: when the
+office Mac cannot be reached it says so and retries every 15 s. Dev/test only (ignored when packaged):
+`MSKH_KIOSK_WINDOWED=1` (a normal window), `MSKH_KIOSK_FAKE_CAMERA=granted|denied`.
+
+**The recovery code** (`main/util/kioskRecovery.js`): 12 characters from `ABCDEFGHJKMNPQRTWXYZ2346789` (no
+0/O, 1/I/L, U/V, 5/S), ≈57 bits; config keys `kioskRecoveryHash`, `kioskRecoverySalt`,
+`kioskRecoveryFailures`, `kioskRecoveryLockedUntil`, `kioskRecoveryLockCount` — machine-local, not portable,
+refused by `settings:setOne`/`setMany`. The kiosk offers "Office Mac unreachable? Use recovery code" (manager
+menu, the offline screen, the quit screen) only while it cannot reach the office Mac. Leaving with a manager
+PIN or the code drops the stored hash; the next turn-on makes a new code. Its use is in this Mac's crash.log
+only (not in History).
+
+**Last resort, by hand (no code, no office Mac):** hold **Shift** while logging in to the shop Mac's macOS
+account — macOS then skips login items, so the kiosk does not open. Then in Terminal (as that user) set
+`"kioskMode": false` in `~/Library/Application Support/Media Studio KH/config.json` (quit the app first; keep
+the rest of the file), and open the app normally.
 
 ### Jobs and export
 | Channel | Args | Returns | Cap |

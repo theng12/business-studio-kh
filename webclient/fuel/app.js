@@ -1,5 +1,8 @@
 /*
- * Fuel phone page (`/f`) — the screens (docs/PEOPLE_AND_FUEL_PLAN.md §5.3).
+ * Fuel and attendance phone page (`/f`) — the screens (docs/PEOPLE_AND_FUEL_PLAN.md
+ * §5.3, §7b, §10). What shows depends on the account: fuel.record → the fuel
+ * tiles; attendance.self → Clock in/out (selfie), My attendance, leave and
+ * "I forgot"; attendance.supervise → My crew.
  *
  * Talks only to the server that served it (`location.origin`), with the
  * account token kept in localStorage. Pairing: the Mac's QR code opens
@@ -40,7 +43,7 @@
 
   var S = {
     user: null, companies: [], companyId: null, settings: {}, assets: [], locations: [], staff: [], stations: [], me: null,
-    items: [], online: true, storageOk: true, chartCache: {},
+    items: [], online: true, storageOk: true, chartCache: {}, access: L.pageAccess([]), mine: null,
   };
   var screen = { name: 'loading' };
   var view = document.getElementById('view');
@@ -79,7 +82,7 @@
   }
 
   function isRead(channel) {
-    return /^(get|list|me)([A-Z]|$)/.test(String(channel).split(':')[1] || '');
+    return /^(get|list|me|mine|crew)([A-Z]|$)/.test(String(channel).split(':')[1] || '');
   }
 
   function request(path, opts, ms) {
@@ -181,9 +184,11 @@
   function refreshItems() {
     if (!outbox) return Promise.resolve();
     return outbox.list().then(function (items) {
+      var clocks = clockItems().length;
       S.items = items || [];
       renderChip();
-      if (screen.name === 'outbox') render();
+      // Home only when the Clock tile's word may change — a redraw eats taps for 350 ms.
+      if (screen.name === 'outbox' || (screen.name === 'home' && clocks !== clockItems().length)) render();
     });
   }
 
@@ -198,8 +203,28 @@
 
   function kick() {
     if (!outbox || !S.user || !S.companyId) return Promise.resolve();
-    return outbox.flush().catch(function () { /* each item keeps its own error */ }).then(scheduleWake);
+    var hadClock = clockItems().length > 0;
+    return outbox.flush().catch(function () { /* each item keeps its own error */ }).then(refreshItems).then(function () {
+      // A clock-in sent from the outbox changes what the Clock tile should say.
+      if (hadClock && !clockItems().length) refreshMine().then(function () { if (screen.name === 'home') render(); }, function () { /* later */ });
+      scheduleWake();
+    });
   }
+  /** Clock-ins of this account still on the phone (not refused). */
+  function clockItems() {
+    var c = outboxCtx();
+    return S.items.filter(function (it) {
+      return it.channel === 'attendance:clockSelf' && it.state !== 'failed' && (!it.userId || it.userId === c.userId) && (!it.companyId || it.companyId === c.companyId);
+    });
+  }
+  function refreshMine() {
+    if (!S.access.self || !S.me) return Promise.resolve(null);
+    return rpc('attendance:mine').then(function (m) { S.mine = m; return m; });
+  }
+  function clockKind() {
+    return L.nextClockKind(S.mine && S.mine.lastEvent, clockItems().map(function (it) { return { kind: it.summary && it.summary.expect, at: it.takenAt }; }), Date.now());
+  }
+  function appTitle() { return tr(S.access.fuel || !S.access.any ? 'app_title' : 'app_title_hr'); }
 
   /* ── tiny DOM helper ───────────────────────────────────────────── */
   function h(tag, attrs, kids) {
@@ -246,6 +271,11 @@
     cash: 'M3 7h18v10H3z|M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
     camera: 'M4 8h3l2-3h6l2 3h3v11H4z|M12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
     list: 'M8 6h12|M8 12h12|M8 18h12|M4 6h.01|M4 12h.01|M4 18h.01',
+    clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z|M12 7v5l3 2',
+    cal: 'M4 6h16v15H4z|M4 10h16|M8 3v4|M16 3v4',
+    leave: 'M4 6h16v15H4z|M4 10h16|M8 3v4|M16 3v4|M9 15l2 2 4-4',
+    forgot: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z|M12 7v6|M12 16.5h.01',
+    crew: 'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z|M3 20a6 6 0 0 1 12 0|M16 5.2a3 3 0 0 1 0 5.6|M21 20a6 6 0 0 0-4-5.6',
   };
 
   var toastTimer = null;
@@ -660,12 +690,128 @@
         ];
       },
     },
+
+    /* ── attendance (HR1) ── the person is the staff record linked to this
+       account; the server decides in/out and the time (it never takes one
+       from the phone). */
+    clock: {
+      title: function (d) { return d.kind === 'out' ? 'home_clock_out' : 'home_clock_in'; }, again: false,
+      start: function (d) { d.kind = clockKind(); },
+      steps: [
+        { type: 'photo', kind: 'selfie', title: 'selfie_title', selfie: true, required: true },
+        { type: 'review' },
+      ],
+      build: function (d) { return { channel: 'attendance:clockSelf', args: {}, kindLabel: 'kind_clock', expect: d.kind, noTime: true }; },
+      facts: function (d) { return [['field_person', staffName(S.me)], ['field_kind', tr(d.kind === 'out' ? 'kind_out' : 'kind_in')]]; },
+    },
+
+    mark: {
+      title: 'home_crew', again: showCrew,
+      steps: [
+        {
+          type: 'choice', key: 'kind', titleText: function (d) { return tr('mark_title', { name: staffName(d.person) }); },
+          options: function (d) {
+            var list = [{ value: 'in', label: tr('mark_in') }, { value: 'out', label: tr('mark_out') }];
+            return L.nextClockKind(d.person.lastEvent, [], Date.now()) === 'out' ? list.reverse() : list;
+          },
+        },
+        { type: 'photo', kind: 'crew', title: 'photo_person' },
+        { type: 'review' },
+      ],
+      start: function (d) { d.kind = L.nextClockKind(d.person.lastEvent, [], Date.now()); },
+      build: function (d) { return { channel: 'attendance:markCrew', args: { employeeId: d.person.id, kind: d.kind }, kindLabel: 'home_crew', noTime: true }; },
+      facts: function (d) { return [['field_person', staffName(d.person)], ['field_kind', tr(d.kind === 'out' ? 'kind_out' : 'kind_in')]]; },
+    },
+
+    // "I forgot to clock in/out": a REQUEST the office approves, never an entry.
+    // Through the outbox like everything else: kept offline, client_ref on resend.
+    forgot: {
+      title: 'home_forgot', again: false, request: true,
+      steps: [
+        { type: 'tiles', key: 'workDate', title: 'pick_day', items: function () { return recentDays(7); } },
+        { type: 'choice', key: 'which', title: 'forgot_q', options: function () { return [{ value: 'in', label: tr('forgot_in') }, { value: 'out', label: tr('forgot_out') }, { value: 'both', label: tr('forgot_both') }]; } },
+        { type: 'time', key: 'inTime', title: 'time_in_q', when: function (d) { return d.which !== 'out'; } },
+        { type: 'time', key: 'outTime', title: 'time_out_q', when: function (d) { return d.which !== 'in'; } },
+        { type: 'tiles', key: 'reasonKey', title: 'pick_reason', other: 'reason_other', items: function () { return ['reason_forgot', 'reason_battery', 'reason_network'].map(function (k) { return { id: k, title: tr(k), sub: '', noImg: true }; }); } },
+        { type: 'text', key: 'reasonText', title: 'reason_text', when: function (d) { return d.reasonKey === '__other'; } },
+        { type: 'review' },
+      ],
+      build: function (d) {
+        var args = { workDate: d.workDate, reason: reasonOf(d) };
+        if (d.which !== 'out') args.inTime = d.inTime;
+        if (d.which !== 'in') args.outTime = d.outTime;
+        return { channel: 'attendance:requestCorrectionSelf', args: args, kindLabel: 'home_forgot' };
+      },
+      facts: function (d) {
+        return [
+          ['field_day', dayName(d.workDate)],
+          d.which !== 'out' ? ['field_in', d.inTime] : null,
+          d.which !== 'in' ? ['field_out', d.outTime] : null,
+          ['field_reason', reasonOf(d)],
+        ];
+      },
+    },
+
+    leave: {
+      title: 'home_leave', again: false, request: true,
+      start: function () { return refreshMine().catch(function (err) { if (!S.mine) throw err; }); },
+      steps: [
+        {
+          type: 'tiles', key: 'leaveTypeId', title: 'pick_leave_type',
+          items: function () {
+            return ((S.mine && S.mine.leave) || []).map(function (b) {
+              return { id: b.leaveTypeId, title: lang === 'km' ? (b.nameKm || b.nameEn) : (b.nameEn || b.nameKm), sub: b.tracksBalance && b.balance != null ? tr('days_left', { n: num(b.balance, 1) }) : '', noImg: true };
+            });
+          },
+        },
+        { type: 'date', key: 'fromDate', title: 'leave_from' },
+        { type: 'date', key: 'toDate', title: 'leave_to', same: 'same_day', min: function (d) { return d.fromDate; } },
+        {
+          type: 'choice', key: 'halfDay', title: 'half_q', when: function (d) { return d.toDate === d.fromDate; },
+          options: function () { return [{ value: null, label: tr('half_full') }, { value: 'am', label: tr('half_am') }, { value: 'pm', label: tr('half_pm') }]; },
+        },
+        { type: 'text', key: 'reason', title: 'reason_q', optional: true },
+        { type: 'review' },
+      ],
+      build: function (d) {
+        var args = { leaveTypeId: d.leaveTypeId, fromDate: d.fromDate };
+        if (d.toDate && d.toDate !== d.fromDate) args.toDate = d.toDate;
+        else if (d.halfDay) args.halfDay = d.halfDay;
+        if (d.reason) args.reason = d.reason;
+        return { channel: 'leave:requestSelf', args: args, kindLabel: 'home_leave' };
+      },
+      facts: function (d) {
+        var b = byLeaveType(d.leaveTypeId);
+        return [
+          ['field_type', b ? (lang === 'km' ? (b.nameKm || b.nameEn) : (b.nameEn || b.nameKm)) : ''],
+          ['field_dates', d.toDate && d.toDate !== d.fromDate ? dayName(d.fromDate) + ' – ' + dayName(d.toDate) : dayName(d.fromDate) + (d.halfDay ? ' · ' + tr(d.halfDay === 'am' ? 'half_am' : 'half_pm') : '')],
+          d.reason ? ['field_reason', d.reason] : null,
+        ];
+      },
+    },
   };
   var FLOW_ORDER_ATTENDANT = ['give', 'dip', 'send', 'received', 'delivery', 'bought'];
   var FLOW_ORDER_DRIVER = ['bought', 'give', 'dip', 'send', 'received', 'delivery'];
   var FLOW_SUB = { give: 'home_give_sub', dip: 'home_dip_sub', send: 'home_send_sub', received: 'home_received_sub', delivery: 'home_delivery_sub', bought: 'home_bought_sub' };
 
   function yesNo() { return [{ value: true, label: tr('yes') }, { value: false, label: tr('no') }]; }
+  function reasonOf(d) { return d.reasonKey === '__other' ? d.reasonText : tr(d.reasonKey); }
+  function byLeaveType(id) { var l = (S.mine && S.mine.leave) || []; for (var i = 0; i < l.length; i += 1) if (l[i].leaveTypeId === id) return l[i]; return null; }
+  /** "Today", "Yesterday", else the weekday and date — for a work date 'YYYY-MM-DD'. */
+  function dayName(date) {
+    var today = L.ppDate(Date.now());
+    if (date === today) return tr('today');
+    if (date === L.addDays(today, -1)) return tr('yesterday');
+    try {
+      return new Intl.DateTimeFormat(lang === 'km' ? 'km-KH' : 'en-GB', { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(date + 'T00:00:00Z'));
+    } catch (_) { return date; }
+  }
+  function recentDays(n) {
+    var today = L.ppDate(Date.now());
+    var out = [];
+    for (var i = 0; i < n; i += 1) { var dt = L.addDays(today, -i); out.push({ id: dt, title: dayName(dt), sub: i > 1 ? '' : dt, noImg: true }); }
+    return out;
+  }
   function hasChart(d) { var c = S.chartCache[d.locationId]; return Array.isArray(c) && c.length >= 2; }
   function dipLive(d, v) {
     if (v == null) return null;
@@ -691,9 +837,9 @@
   function label(v, d) { return typeof v === 'function' ? v(d) : v; }
   function stepOn(step, d) { return !step.when || !!step.when(d); }
 
-  function startFlow(key) {
+  function startFlow(key, init) {
     var flow = FLOWS[key];
-    var d = { photos: {} };
+    var d = Object.assign({ photos: {} }, init || {});
     screen = { name: 'flow', key: key, flow: flow, data: d, index: -1, trail: [], session: null };
     showLoading();
     Promise.resolve(flow.start ? flow.start(d) : null).then(function () { advance(); }, function (err) {
@@ -759,6 +905,7 @@
       render();
       return;
     }
+    if (screen.name === 'flow' && screen.key === 'mark') { showCrew(); return; }
     goHome();
   }
 
@@ -805,7 +952,7 @@
     syncHistory();
   }
   function showLoading() {
-    setTitle(tr('app_title'), screen.name === 'flow');
+    setTitle(appTitle(), screen.name !== 'loading' && screen.name !== 'home');
     mount([h('div', { class: 'spinner', role: 'progressbar', 'aria-label': tr('loading') })]);
   }
 
@@ -825,7 +972,7 @@
     renderChip();
     var fn = {
       connect: renderConnect, loading: showLoading, error: renderError, home: renderHome, flow: renderStep,
-      saving: renderSaving, result: renderResult, outbox: renderOutbox, recent: renderRecent,
+      saving: renderSaving, result: renderResult, outbox: renderOutbox, recent: renderRecent, mine: renderMine, crew: renderCrew,
     }[screen.name];
     (fn || renderHome)();
   }
@@ -854,31 +1001,52 @@
   }
 
   function renderError() {
-    setTitle(tr('app_title'), false);
+    setTitle(appTitle(), false);
     mount([h('div', { class: 'stack' }, [
       h('div', { class: 'notice notice--bad', text: screen.message || tr('cant_reach') }),
       h('button', { type: 'button', class: 'big', text: tr('try_again'), onclick: boot }),
     ])]);
   }
 
+  function homeTile(key, icon, title, sub, onclick) {
+    return h('button', { type: 'button', class: 'flow-tile', 'data-flow': key, onclick: onclick }, [
+      svg(ICON[icon]),
+      h('span', {}, [h('span', { class: 'flow-tile__t', text: title }), sub ? h('span', { class: 'flow-tile__s', text: sub }) : null]),
+    ]);
+  }
+
   function renderHome() {
-    setTitle(tr('app_title'), false);
+    setTitle(appTitle(), false);
+    var A = S.access;
+    var linked = !!S.me;
     var order = S.me && S.me.isDriver && !S.me.isFuelAttendant ? FLOW_ORDER_DRIVER : FLOW_ORDER_ATTENDANT;
-    var tiles = order.filter(function (k) { return FLOWS[k].available(); }).map(function (k) {
-      var f = FLOWS[k];
-      return h('button', { type: 'button', class: 'flow-tile', 'data-flow': k, onclick: function () { startFlow(k); } }, [
-        svg(ICON[f.icon]),
-        h('span', {}, [h('span', { class: 'flow-tile__t', text: tr(f.title) }), h('span', { class: 'flow-tile__s', text: tr(FLOW_SUB[k]) })]),
-      ]);
+    var tiles = !A.fuel ? [] : order.filter(function (k) { return FLOWS[k].available(); }).map(function (k) {
+      return homeTile(k, FLOWS[k].icon, tr(FLOWS[k].title), tr(FLOW_SUB[k]), function () { startFlow(k); });
     });
     var co = byId(S.companies, S.companyId);
     var nodes = [];
     if (!S.storageOk) nodes.push(h('div', { class: 'notice notice--warn small', text: tr('storage_warning') }));
-    if (!tiles.length) nodes.push(h('div', { class: 'notice notice--warn', text: tr('nothing_setup') }));
-    nodes.push(h('div', { class: 'home' }, tiles));
-    nodes.push(h('button', { type: 'button', class: 'flow-tile', onclick: showRecent }, [
-      svg(ICON.list), h('span', {}, [h('span', { class: 'flow-tile__t', text: tr('home_recent') })]),
-    ]));
+    // Attendance needs the account linked to a staff record (the office does it).
+    // An owner's full-access account just doesn't get the tiles.
+    if ((A.self || A.supervise) && !linked && !A.admin) nodes.push(h('div', { class: 'notice notice--warn', 'data-not-linked': '1', text: tr('not_linked') }));
+    if (A.self && linked) {
+      var kind = clockKind();
+      var last = S.mine && S.mine.lastEvent;
+      nodes.push(h('div', { class: 'home' }, [homeTile('clock', 'clock', tr(kind === 'out' ? 'home_clock_out' : 'home_clock_in'),
+        kind === 'out' && last && last.kind === 'in' && !clockItems().length ? tr('st_in', { time: L.ppTime(last.at) }) : tr('home_clock_sub'),
+        function () { startFlow('clock'); })]));
+    }
+    if (A.fuel && !tiles.length) nodes.push(h('div', { class: 'notice notice--warn', text: tr('nothing_setup') }));
+    if (tiles.length) nodes.push(h('div', { class: 'home' }, tiles));
+    var more = [];
+    if (A.self && linked) {
+      more.push(homeTile('mine', 'cal', tr('home_mine'), tr('home_mine_sub'), showMine));
+      more.push(homeTile('leave', 'leave', tr('home_leave'), tr('home_leave_sub'), function () { startFlow('leave'); }));
+      more.push(homeTile('forgot', 'forgot', tr('home_forgot'), tr('home_forgot_sub'), function () { startFlow('forgot'); }));
+    }
+    if (A.supervise && linked) more.push(homeTile('crew', 'crew', tr('home_crew'), tr('home_crew_sub'), showCrew));
+    if (A.fuel) more.push(homeTile('recent', 'list', tr('home_recent'), '', showRecent));
+    if (more.length) nodes.push(h('div', { class: 'home' }, more));
     var who = [S.user && S.user.name, S.companies.length > 1 && co ? co.name : null].filter(Boolean).join(' · ');
     nodes.push(h('p', { class: 'muted small', style: 'text-align:center;margin-top:18px', text: who }));
     if (S.companies.length > 1) {
@@ -891,6 +1059,7 @@
   }
 
   function stepTitle(st, d) {
+    if (st.titleText) return st.titleText(d);
     var k = label(st.title, d);
     return st.type === 'photo' && st.label ? tr(st.label) + ' — ' + tr(k) : tr(k);
   }
@@ -908,9 +1077,10 @@
     var st = f.steps[screen.index];
     var d = screen.data;
     if (!st) { goHome(); return; }
-    setTitle(tr(f.title), true);
+    setTitle(tr(label(f.title, d)), true);
     var body = {
       tiles: tilesStep, photo: photoStep, number: numberStep, choice: choiceStep, cans: cansStep, text: textStep, review: reviewStep,
+      time: timeStep, date: dateStep,
     }[st.type](st, d);
     mount([dots(), h('h1', { text: st.type === 'review' ? tr('review') : stepTitle(st, d) })].concat(body));
   }
@@ -926,12 +1096,7 @@
       grid.textContent = '';
       var needle = String(q || '').trim().toLowerCase();
       items.filter(function (it) { return !needle || (it.title + ' ' + it.sub).toLowerCase().indexOf(needle) !== -1; }).forEach(function (it) {
-        var img = h('div', { class: 'tile__img', text: initials(it.title) });
-        var tile = h('button', { type: 'button', class: 'tile' + (it.id === picked ? ' is-picked' : ''), 'data-id': it.id, onclick: function () { stepDone(it.id); } }, [
-          img, h('div', { class: 'tile__t', text: it.title }), it.sub ? h('div', { class: 'tile__s', text: it.sub }) : null,
-        ]);
-        if (it.photo) tilePhoto(img, it.photo);
-        grid.appendChild(tile);
+        grid.appendChild(tileEl(it, it.id === picked, function () { stepDone(it.id); }));
       });
       if (st.none) grid.appendChild(h('button', { type: 'button', class: 'tile tile--plain', 'data-id': '', onclick: function () { stepDone(null); } }, [h('div', { class: 'tile__t', text: tr(st.none) })]));
       if (st.other) grid.appendChild(h('button', { type: 'button', class: 'tile tile--plain', 'data-id': '__other', onclick: function () { stepDone('__other'); } }, [h('div', { class: 'tile__t', text: tr(st.other) })]));
@@ -944,13 +1109,22 @@
     return out;
   }
 
+  function tileEl(it, picked, onclick) {
+    var img = it.noImg ? null : h('div', { class: 'tile__img', text: initials(it.title) });
+    if (img && it.photo) tilePhoto(img, it.photo);
+    return h('button', { type: 'button', class: 'tile' + (it.noImg ? ' tile--plain' : '') + (picked ? ' is-picked' : ''), 'data-id': it.id, onclick: onclick }, [
+      img, h('div', { class: 'tile__t', text: it.title }), it.sub ? h('div', { class: 'tile__s', text: it.sub }) : null,
+    ]);
+  }
+
   function photoKey(st) { return st.slot ? st.slot + ':' + st.kind : st.kind; }
 
   function photoStep(st, d) {
     var key = photoKey(st);
     var have = d.photos[key];
     var status = h('p', { class: 'muted', style: 'text-align:center' });
-    var input = h('input', { type: 'file', accept: 'image/*', capture: 'environment', 'aria-label': tr('take_photo') });
+    // A selfie (clock in/out) opens the FRONT camera; everything else the back one.
+    var input = h('input', { type: 'file', accept: 'image/*', capture: st.selfie ? 'user' : 'environment', 'aria-label': tr('take_photo') });
     input.addEventListener('change', function () {
       var file = input.files && input.files[0];
       if (!file) return;
@@ -972,7 +1146,8 @@
       out.push(camera);
     }
     out.push(status);
-    out.push(h('button', {
+    // A clock-in needs its selfie: no "No photo" there.
+    if (!st.required) out.push(h('button', {
       type: 'button', class: 'link', text: tr('no_photo'),
       onclick: function () {
         if (d.photos[key] && d.photos[key].url) URL.revokeObjectURL(d.photos[key].url);
@@ -1055,9 +1230,45 @@
 
   function textStep(st, d) {
     var input = h('input', { class: 'textin', type: 'text', value: d[st.key] || '', 'aria-label': stepTitle(st, d) });
-    var next = h('button', { type: 'button', class: 'big', text: tr('next'), onclick: function () { var v = input.value.trim(); if (v) stepDone(v.slice(0, 200)); } });
-    setTimeout(function () { try { input.focus(); } catch (_) { /* fine */ } }, 50);
-    return [input, h('div', { style: 'height:12px' }), next];
+    var next = h('button', { type: 'button', class: 'big', text: tr('next'), onclick: function () { var v = input.value.trim(); if (v) stepDone(v.slice(0, 200)); else if (st.optional) stepDone(null); } });
+    if (!st.optional) setTimeout(function () { try { input.focus(); } catch (_) { /* fine */ } }, 50);
+    return [input, h('div', { style: 'height:12px' }), next, st.optional ? h('button', { type: 'button', class: 'link', text: tr('skip'), onclick: function () { stepDone(null); } }) : null];
+  }
+
+  /** A clock time on a keypad: 7 5 2 → 07:52 (no typing, no picker). */
+  function timeStep(st, d) {
+    var text = d[st.key] ? d[st.key].replace(':', '') : '';
+    var readout = h('div', { class: 'readout', 'data-readout': '1' });
+    var live = h('div', { class: 'live' });
+    var next = h('button', { type: 'button', class: 'big', text: tr('next'), onclick: function () { var v = L.parseHm(text); if (v) stepDone(v); } });
+    function update() {
+      var v = L.parseHm(text);
+      readout.textContent = v || text || '--:--';
+      live.textContent = text && !v ? tr('time_bad') : '';
+      live.className = 'live' + (text && !v ? ' is-warn' : '');
+      next.disabled = !v;
+    }
+    var pad = h('div', { class: 'keypad' }, ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'back'].map(function (k) {
+      if (!k) return h('span');
+      return h('button', {
+        type: 'button', class: 'key', 'data-key': k, 'aria-label': k === 'back' ? tr('key_delete') : k, text: k === 'back' ? '⌫' : k,
+        onclick: function () { text = L.timePress(text, k); update(); },
+      });
+    }));
+    update();
+    return [readout, live, pad, next];
+  }
+
+  /** A day from the phone's own date picker (a tap, not typing). */
+  function dateStep(st, d) {
+    var input = h('input', { class: 'textin', type: 'date', value: d[st.key] || (st.min && st.min(d)) || L.ppDate(Date.now()), 'aria-label': stepTitle(st, d) });
+    if (st.min && st.min(d)) input.min = st.min(d);
+    var out = [input, h('div', { style: 'height:12px' }), h('button', {
+      type: 'button', class: 'big', text: tr('next'),
+      onclick: function () { var v = input.value; if (/^\d{4}-\d{2}-\d{2}$/.test(v) && (!input.min || v >= input.min)) stepDone(v); },
+    })];
+    if (st.same) out.push(h('button', { type: 'button', class: 'big big--soft', style: 'margin-top:12px', 'data-same': '1', text: tr(st.same), onclick: function () { stepDone(st.min(d)); } }));
+    return out;
   }
 
   function factsList(rows) {
@@ -1081,7 +1292,7 @@
     return [
       h('div', { class: 'card' }, [factsList(f.facts(d)), photoThumbs(d)]),
       h('div', { style: 'height:14px' }),
-      h('button', { type: 'button', class: 'big', 'data-save': '1', text: tr('save'), onclick: save }),
+      h('button', { type: 'button', class: 'big', 'data-save': '1', text: screen.key === 'clock' ? tr(label(f.title, d)) : tr('save'), onclick: save }),
     ];
   }
 
@@ -1094,6 +1305,7 @@
   function save() {
     var f = screen.flow;
     var d = screen.data;
+    if (screen.name !== 'flow') return; // a second tap while the first is saving
     var built = f.build(d);
     // One client_ref per record, made at the first Save. A Save of exactly the
     // same thing again (after a refusal or a lost answer) reuses it; anything
@@ -1119,7 +1331,7 @@
         args: args, photos: ph ? [{ kind: 'stick', data: ph.buf }] : [],
       };
     });
-    var summary = { kindLabel: built.kindLabel, facts: f.facts(d).filter(Boolean) };
+    var summary = { kindLabel: built.kindLabel, facts: f.facts(d).filter(Boolean), expect: built.expect || null, noTime: !!built.noTime };
     var saved = { flow: screen.key, data: d, built: built, summary: summary };
     screen = Object.assign({}, screen, { name: 'saving' });
     render();
@@ -1153,6 +1365,9 @@
       }
       screen = { name: 'result', saved: saved, outcome: outcome };
       render();
+      var ev = outcome.result && outcome.result.event;
+      if (ev && built.channel === 'attendance:clockSelf' && S.mine) S.mine.lastEvent = { kind: ev.kind, at: ev.at };
+      if (ev || f.request) refreshMine().catch(function () { /* the tile keeps its guess */ });
       return null;
     }).catch(function (err) {
       clearTimeout(timer);
@@ -1165,7 +1380,7 @@
   }
 
   function renderSaving() {
-    setTitle(tr(screen.flow.title), false);
+    setTitle(tr(label(screen.flow.title, screen.data)), false);
     mount([h('div', { class: 'spinner' }), h('p', { class: 'muted', style: 'text-align:center', text: tr('saving') })]);
   }
 
@@ -1200,9 +1415,33 @@
   function renderResult() {
     var o = screen.outcome;
     var saved = screen.saved;
+    var flow = FLOWS[saved.flow];
     setTitle(tr(saved.summary.kindLabel), false);
     var nodes = [];
-    if (o.status === 'sent') {
+    var ev = o.status === 'sent' && o.result && o.result.event;
+    if (o.status === 'sent' && flow.request) {
+      nodes.push(h('div', { class: 'notice notice--ok', 'data-result': 'sent' }, [
+        h('b', { text: tr('sent_office') }), h('span', { text: tr('sent_office_body') }),
+        o.result && o.result.duplicate ? h('span', { text: ' ' + tr('saved_already') }) : null,
+      ]));
+      var rows = saved.summary.facts.slice();
+      if (o.result && o.result.days != null) rows.push(['leave_title', tr('days_n', { n: num(o.result.days, 1) })]);
+      nodes.push(h('div', { class: 'card' }, factsList(rows)));
+    } else if (ev) {
+      // The time is the server's — never the phone's clock.
+      var time = L.ppTime(ev.at);
+      var head = saved.flow === 'mark'
+        ? tr(ev.kind === 'out' ? 'marked_out' : 'marked_in', { name: staffName(saved.data.person), time: time })
+        : tr(ev.kind === 'out' ? 'clocked_out' : 'clocked_in', { time: time });
+      nodes.push(h('div', { class: 'notice notice--ok', 'data-result': 'sent', 'data-kind': ev.kind }, [
+        h('b', { text: head }),
+        o.result.doubleTap ? h('span', { 'data-double-tap': '1', text: tr('double_tap', { time: time }) }) : o.result.duplicate ? h('span', { text: tr('saved_already') }) : null,
+      ]));
+      if (L.isHeld(ev)) nodes.push(h('div', { class: 'notice notice--warn', 'data-held': '1', text: tr('held_note') }));
+      nodes.push(h('div', { class: 'card' }, factsList([
+        ['field_person', staffName(saved.flow === 'mark' ? saved.data.person : S.me)], ['field_day', dayName(ev.workDate)],
+      ])));
+    } else if (o.status === 'sent') {
       var res = o.result || {};
       nodes.push(h('div', { class: 'notice notice--ok', 'data-result': 'sent' }, [h('b', { text: tr('saved_title') }), res.duplicate ? h('span', { text: tr('saved_already') }) : null]));
       nodes.push(h('div', { class: 'card' }, factsList(serverFacts(res))));
@@ -1214,13 +1453,19 @@
       }
     } else {
       nodes.push(h('div', { class: 'notice notice--warn', 'data-result': 'queued' }, [h('b', { text: tr('queued_title') }), h('span', { text: tr('queued_body') })]));
+      // An attendance entry that waits is HELD by the server once it is 15 min late.
+      if (saved.summary.noTime) nodes.push(h('div', { class: 'notice notice--warn', 'data-queued-clock': '1', text: tr('queued_clock') }));
       nodes.push(h('div', { class: 'card' }, factsList(saved.summary.facts)));
     }
     nodes.push(h('div', { style: 'height:14px' }));
-    nodes.push(h('div', { class: 'row2' }, [
-      h('button', { type: 'button', class: 'big big--soft', text: tr('another'), onclick: function () { startFlow(saved.flow); } }),
-      h('button', { type: 'button', class: 'big', text: tr('done'), onclick: goHome }),
-    ]));
+    var done = h('button', { type: 'button', class: 'big', text: tr('done'), onclick: goHome });
+    if (flow.again === false) nodes.push(done);
+    else {
+      nodes.push(h('div', { class: 'row2' }, [
+        h('button', { type: 'button', class: 'big big--soft', text: tr(flow.again ? 'home_crew' : 'another'), onclick: function () { if (flow.again) flow.again(); else startFlow(saved.flow); } }),
+        done,
+      ]));
+    }
     // Free the photo previews; the outbox holds its own copy of the bytes.
     Object.keys(saved.data.photos || {}).forEach(function (k) { var u = saved.data.photos[k].url; setTimeout(function () { URL.revokeObjectURL(u); }, 60000); });
     mount(nodes);
@@ -1237,7 +1482,9 @@
       var state = !here ? tr('other_account') : it.state === 'failed' ? tr('state_failed', { error: errorText(it.lastError) }) : it.state === 'sending' ? tr('state_sending') : tr('state_waiting');
       var sm = it.summary || {};
       return h('div', { class: 'card' }, [
-        h('b', { text: (sm.kindLabel ? tr(sm.kindLabel) : it.channel) + ' · ' + fmtTime(it.savedAt) }),
+        // An attendance entry shows no time: the server sets it when it arrives.
+        h('b', { text: (sm.kindLabel ? tr(sm.kindLabel) : it.channel) + (sm.noTime ? '' : ' · ' + fmtTime(it.savedAt)) }),
+        sm.noTime ? h('div', { class: 'small muted', text: tr('queued_clock') }) : null,
         sm.facts ? factsList(sm.facts) : null,
         h('div', { class: it.state === 'failed' ? 'small notice notice--bad' : 'small muted', text: state }),
         here ? h('div', { class: 'row2' }, [
@@ -1286,6 +1533,91 @@
     render();
   }
 
+  /* ── my attendance and my crew (read when opened; nothing cached offline) ── */
+  function showMine() {
+    screen = { name: 'mine' };
+    showLoading();
+    refreshMine().then(function () { if (screen.name === 'mine') render(); }, function (err) { toast(err.message); goHome(); });
+  }
+
+  function monthCard(titleKey, m) {
+    var t = m && m.totals;
+    var v = function (x) { return t ? String(x == null ? 0 : x) : '—'; };
+    return h('div', { class: 'card', 'data-month': titleKey }, [
+      h('b', { text: tr(titleKey) }),
+      factsList([
+        ['m_days', v(t && t.daysWorked)],
+        ['m_late', t ? tr('late_value', { min: t.lateMin || 0, days: t.lateDays || 0 }) : '—'],
+        ['m_missing', v(t && t.missingOutDays)],
+        ['m_absent', v(t && t.absentDays)],
+        ['m_leave', v(t && t.leaveDays)],
+      ]),
+    ]);
+  }
+
+  function renderMine() {
+    setTitle(tr('home_mine'), true);
+    var m = S.mine || {};
+    var st = L.dayState(m.today, m.lastEvent, Date.now());
+    var nodes = [h('div', { class: 'notice notice--ok', 'data-today': '1' }, [h('b', { text: tr('today') }), h('span', { text: tr(st.key, { time: st.time }) })])];
+    nodes.push(h('div', { class: 'list' }, [monthCard('this_month', m.thisMonth), monthCard('last_month', m.lastMonth)]));
+    var bal = (m.leave || []).map(function (b) {
+      var name = lang === 'km' ? (b.nameKm || b.nameEn) : (b.nameEn || b.nameKm);
+      return [name, b.tracksBalance && b.balance != null ? tr('days_left', { n: num(b.balance, 1) }) : tr('days_taken', { n: num(b.takenThisYear || 0, 1) })];
+    });
+    if (bal.length) nodes.push(h('h1', { text: tr('leave_title') }), h('div', { class: 'card', 'data-leave': '1' }, factsList(bal)));
+    var req = (m.requests && m.requests.leave) || [];
+    var cor = (m.requests && m.requests.corrections) || [];
+    if (req.length || cor.length) {
+      nodes.push(h('h1', { text: tr('pending_title') }));
+      nodes.push(h('div', { class: 'list' }, req.map(function (r) {
+        var b = byLeaveType(r.leaveTypeId);
+        var name = b ? (lang === 'km' ? (b.nameKm || b.nameEn) : (b.nameEn || b.nameKm)) : tr('leave_title');
+        return h('div', { class: 'card' }, [
+          h('b', { text: name + ' · ' + tr('days_n', { n: num(r.days || 0, 1) }) }),
+          h('span', { text: dayName(r.fromDate) + (r.toDate && r.toDate !== r.fromDate ? ' – ' + dayName(r.toDate) : '') }),
+          h('button', { type: 'button', class: 'big big--soft', 'data-withdraw': r.id, text: tr('withdraw'), onclick: function () { withdraw(r.id); } }),
+        ]);
+      }).concat(cor.map(function (c) {
+        return h('div', { class: 'card' }, [
+          h('b', { text: tr('home_forgot') + ' · ' + dayName(c.workDate) }),
+          h('span', { text: [c.proposedInAt ? tr('field_in') + ' ' + L.ppTime(c.proposedInAt) : '', c.proposedOutAt ? tr('field_out') + ' ' + L.ppTime(c.proposedOutAt) : ''].filter(Boolean).join(' · ') }),
+        ]);
+      }))));
+    }
+    mount(nodes);
+  }
+
+  function withdraw(id) {
+    if (!window.confirm(tr('withdraw_confirm'))) return;
+    rpc('leave:cancelSelf', { id: id }).then(function () { toast(tr('withdrawn')); return refreshMine(); }).then(function () {
+      if (screen.name === 'mine') render();
+    }, function (err) { toast(err && err.network ? tr('need_connection') : tr('save_failed', { error: errorText(err && err.message) })); });
+  }
+
+  function showCrew() {
+    screen = { name: 'crew', list: null };
+    showLoading();
+    rpc('attendance:crew').then(function (list) {
+      if (screen.name !== 'crew') return;
+      // Never yourself: you clock yourself in with your own selfie.
+      screen.list = (list || []).filter(function (p) { return !S.me || p.id !== S.me.id; });
+      render();
+    }, function (err) { toast(err.message); goHome(); });
+  }
+
+  function renderCrew() {
+    setTitle(tr('home_crew'), true);
+    var list = screen.list || [];
+    if (!list.length) { mount([h('p', { class: 'muted', text: tr('crew_empty') })]); return; }
+    var now = Date.now();
+    mount([h('div', { class: 'grid' }, list.map(function (p) {
+      var st = L.dayState(p.today, p.lastEvent, now);
+      var it = { id: p.id, title: staffName(p), sub: tr(st.key, { time: st.time }), photo: S.access.staffPhotos && p.hasPhoto ? { kind: 'staff', id: p.id, key: p.id + ':' + (p.photoSha256 || '') } : null };
+      return tileEl(it, false, function () { startFlow('mark', { person: p }); });
+    }))]);
+  }
+
   /* ── session ───────────────────────────────────────────────────── */
   function onTokenRejected() {
     if (screen.name === 'connect') return;
@@ -1317,20 +1649,25 @@
    *  Dip tank and Delivery arrived still work if the connection drops later. If
    *  this fails, what was loaded before stays (the caller shows the error). */
   function loadData() {
-    return Promise.all([
-      rpc('fuel:getSettings'),
-      rpc('fuel:listAssets', { status: 'active' }),
-      rpc('fuel:listLocations', {}),
-      rpc('staff:list', { status: 'active' }),
-      rpc('fuel:listStations', {}),
-      rpc('staff:me').catch(function () { return null; }),
-    ]).then(function (r) {
-      S.settings = r[0] || {};
-      S.assets = r[1] || [];
-      S.locations = (r[2] || []).filter(function (l) { return l.status !== 'retired'; });
-      S.staff = (r[3] || []).filter(function (e) { return e.status === 'active'; });
-      S.stations = r[4] || [];
-      S.me = r[5] || null;
+    // Only what this account may read (logic.js bootReads): an attendance-only
+    // phone never calls a fuel channel. staff:me is "who am I" for both.
+    var reads = L.bootReads(S.access);
+    return Promise.all(reads.map(function (r) {
+      var p = rpc(r[0], r[1]);
+      return r[0] === 'staff:me' ? p.catch(function () { return null; }) : p;
+    })).then(function (list) {
+      var r = {};
+      reads.forEach(function (x, i) { r[x[0]] = list[i]; });
+      S.me = r['staff:me'] || null;
+      S.mine = null;
+      // My attendance feeds the Clock tile's label; without it the tile still works.
+      var mine = refreshMine().catch(function () { return null; });
+      if (!S.access.fuel) return mine;
+      S.settings = r['fuel:getSettings'] || {};
+      S.assets = r['fuel:listAssets'] || [];
+      S.locations = (r['fuel:listLocations'] || []).filter(function (l) { return l.status !== 'retired'; });
+      S.staff = (r['staff:list'] || []).filter(function (e) { return e.status === 'active'; });
+      S.stations = r['fuel:listStations'] || [];
       var charts = {};
       var keep = S.chartCache || {};
       return Promise.all(S.locations.map(function (l) {
@@ -1338,7 +1675,7 @@
         return rpc('fuel:getChart', l.id).then(function (c) { charts[l.id] = c || null; }, function () {
           if (keep[l.id] !== undefined) charts[l.id] = keep[l.id]; // keep the last good one
         });
-      })).then(function () { S.chartCache = charts; });
+      })).then(function () { S.chartCache = charts; return mine; });
     });
   }
 
@@ -1348,12 +1685,15 @@
     render();
     request('/api/whoami', {}, READ_TIMEOUT_MS).then(function (who) {
       var u = who && who.user;
-      if (!u || !L.canRecordFuel(u.caps)) {
-        screen = { name: 'connect', message: tr('no_fuel_access') };
+      var access = L.pageAccess(u && u.caps);
+      if (!u || !access.any) {
+        screen = { name: 'connect', message: tr('no_access') };
         render();
         return null;
       }
       S.user = u;
+      S.access = access;
+      document.title = appTitle() + ' · Media Studio KH';
       return Promise.all([rpc('companies:list'), rpc('companies:getActiveId').catch(function () { return null; })]).then(function (r) {
         S.companies = r[0] || [];
         if (!S.companies.length) throw new Error(tr('no_company'));

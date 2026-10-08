@@ -110,6 +110,28 @@ function existingForRef(clientRef, hash) {
   return row;
 }
 
+/**
+ * A phone request (correction, leave) already saved under this client_ref:
+ * same content from the same account → that row (a resend); different
+ * content, or another account → a plain conflict. Null when the ref is new.
+ */
+function requestForRef(table, clientRef, hash) {
+  if (!clientRef) return null;
+  const row = getDb().prepare(`SELECT * FROM ${table} WHERE client_ref = ?`).get(clientRef);
+  if (!row) return null;
+  if ((row.requested_by_user_id ?? null) !== (getCallerUserId() ?? null)) {
+    const err = new Error('That record reference was already used by someone else. Start a new request.');
+    err.code = 'CLIENT_REF_CONFLICT';
+    throw err;
+  }
+  if (row.client_ref_hash && row.client_ref_hash !== hash) {
+    const err = new Error('That record reference was already used for a different request. Start a new request instead of resending this one.');
+    err.code = 'CLIENT_REF_CONFLICT';
+    throw err;
+  }
+  return row;
+}
+
 /* ─── approvals that the attendance moved under (review fix M2) ── */
 
 /**
@@ -411,7 +433,12 @@ function anchorInFor(companyId, employeeId, workDate) {
  * "I forgot to clock out" — a REQUEST, never an event. A manager approves it
  * (decideCorrection), which is when events are added.
  */
-function requestCorrection({ companyId, employeeId, workDate, inTime = null, outTime = null, reason, via }) {
+function requestCorrection({ companyId, employeeId, workDate, inTime = null, outTime = null, reason, via, clientRef = null }) {
+  // A resend from the phone's outbox returns the request it already made
+  // (checked first: the "already waiting for that day" rule would refuse it).
+  const hash = clientRef ? payloadHash({ employeeId, workDate, inTime: inTime || null, outTime: outTime || null, reason: str(reason, 500) }) : null;
+  const again = requestForRef('attendance_corrections', clientRef, hash);
+  if (again) return { ...rowToCorrection(again), duplicate: true };
   const emp = employees.get(employeeId);
   if (!emp || emp.companyId !== companyId) throw badRequest('Staff member not found');
   if (!calc.isDate(workDate)) throw badRequest('workDate must be a real date like 2026-10-08');
@@ -423,8 +450,8 @@ function requestCorrection({ companyId, employeeId, workDate, inTime = null, out
     throw badRequest('There is already a correction waiting for that day');
   }
   const id = uuid();
-  db.prepare(`INSERT INTO attendance_corrections (id, company_id, employee_id, work_date, proposed_in_at, proposed_out_at, reason, requested_by_user_id, requested_via, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`).run(id, companyId, employeeId, workDate, inAt, outAt, str(reason, 500), getCallerUserId(), via, Date.now());
+  db.prepare(`INSERT INTO attendance_corrections (id, company_id, employee_id, work_date, proposed_in_at, proposed_out_at, reason, requested_by_user_id, requested_via, status, created_at, client_ref, client_ref_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`).run(id, companyId, employeeId, workDate, inAt, outAt, str(reason, 500), getCallerUserId(), via, Date.now(), clientRef, hash);
   hrAudit('attendance_correction', id, 'request', { after: { employeeId, workDate, proposedInAt: inAt, proposedOutAt: outAt, via } });
   return getCorrection(id);
 }
@@ -743,7 +770,7 @@ module.exports = {
   SOURCES, rowToEvent, getEvent, getEventRow, lastActiveEvent, activeEventsByEmployee, touchDate,
   addAlert, listAlerts, getAlert, ackAlert,
   clock, addManual, voidEvent, listReview, review, listEvents,
-  getCorrection, requestCorrection, decideCorrection, listCorrections,
+  getCorrection, requestCorrection, decideCorrection, listCorrections, requestForRef, payloadHash,
   computeDays, monthSummary, daySheet,
   approveOvertime, revokeOvertime, getOvertime, listOvertime,
   confirmLateness, listLateness,

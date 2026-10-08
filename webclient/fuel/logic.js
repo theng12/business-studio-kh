@@ -1,6 +1,6 @@
 /*
- * Fuel phone page (`/f`) — the pure part: words in Khmer and English, numbers,
- * the offline outbox. No DOM, no network, no IndexedDB: those live in app.js and
+ * Fuel and attendance phone page (`/f`) — the pure part: words in Khmer and
+ * English, numbers, times, the offline outbox. No DOM, no network, no IndexedDB: those live in app.js and
  * are handed in. Tested under plain `npm test` (test/fuelPhone*.test.js) and
  * inlined into the page by scripts/build-webclient.js.
  *
@@ -22,11 +22,10 @@
       app_title: 'ប្រេងឥន្ធនៈ',
       lang_other: 'English',
       connect_title: 'ភ្ជាប់ទូរស័ព្ទនេះ',
-      connect_help: 'នៅលើ Mac បើក ប្រេងឥន្ធនៈ → ដំឡើងទូរស័ព្ទ ហើយស្កេនកូដ QR ដោយកាមេរ៉ាទូរស័ព្ទនេះ។',
+      connect_help: 'នៅលើ Mac បើក «ដំឡើងទូរស័ព្ទ» ហើយស្កេនកូដ QR ដោយកាមេរ៉ាទូរស័ព្ទនេះ។',
       connect_paste: 'ឬបិទភ្ជាប់លេខសម្ងាត់ (token) នៃគណនី៖',
       connect_btn: 'ភ្ជាប់',
       token_rejected: 'Mac មិនទទួលស្គាល់គណនីនេះទេ។ សូមស្កេនកូដ QR ម្តងទៀត។',
-      no_fuel_access: 'គណនីនេះមិនមានសិទ្ធិកត់ត្រាប្រេងទេ។ សូមសួរម្ចាស់ឱ្យប្រើគណនីដែលមានសិទ្ធិ «កត់ត្រាប្រេង»។',
       loading: 'កំពុងផ្ទុក…',
       cant_reach: 'មិនអាចទាក់ទង Mac បានទេ។ ពិនិត្យថា Mac កំពុងបើក ហើយទូរស័ព្ទនេះនៅលើ Tailscale ឬ Wi-Fi ដូចគ្នា។',
       try_again: 'ព្យាយាមម្តងទៀត',
@@ -170,16 +169,104 @@
       state_failed: 'ផ្ញើមិនបាន៖ {error}',
       required: 'សូមបំពេញ',
       search: 'ស្វែងរក',
+      app_title_hr: 'វត្តមាន',
+      no_access: 'គណនីនេះមិនអាចប្រើទំព័រនេះបានទេ។ សូមសួរម្ចាស់ឱ្យប្រើគណនីដែលមានសិទ្ធិ «កត់ត្រាប្រេង» ឬ «ចុះវត្តមានលើទូរស័ព្ទ»។',
+      not_linked: 'គណនីនេះមិនទាន់ភ្ជាប់ជាមួយបុគ្គលិកណាម្នាក់ទេ។ សូមសុំការិយាល័យឱ្យភ្ជាប់វា ទើបអាចចុះវត្តមានបាន។',
+      home_clock_in: 'ចុះម៉ោងចូល',
+      home_clock_out: 'ចុះម៉ោងចេញ',
+      home_clock_sub: 'ថតរូបខ្លួនឯង ហើយរក្សាទុក',
+      home_mine: 'វត្តមានរបស់ខ្ញុំ',
+      home_mine_sub: 'ថ្ងៃធ្វើការ ម៉ោងយឺត និងច្បាប់ឈប់សម្រាក',
+      home_leave: 'សុំច្បាប់ឈប់សម្រាក',
+      home_leave_sub: 'ផ្ញើទៅការិយាល័យ',
+      home_forgot: 'ខ្ញុំភ្លេចចុះម៉ោង',
+      home_forgot_sub: 'សុំការិយាល័យកែម៉ោងឱ្យ',
+      home_crew: 'ក្រុមការងាររបស់ខ្ញុំ',
+      home_crew_sub: 'ចុះវត្តមានឱ្យក្រុមរបស់ខ្ញុំ',
+      selfie_title: 'ថតរូបខ្លួនឯង (កាមេរ៉ាមុខ)',
+      kind_clock: 'វត្តមាន',
+      kind_in: 'ចូល',
+      kind_out: 'ចេញ',
+      field_person: 'បុគ្គលិក',
+      field_kind: 'ចូល ឬចេញ',
+      clocked_in: 'បានចុះម៉ោងចូល {time}',
+      clocked_out: 'បានចុះម៉ោងចេញ {time}',
+      marked_in: '{name} ចូល {time}',
+      marked_out: '{name} ចេញ {time}',
+      double_tap: 'បានរក្សាទុករួចហើយ ម៉ោង {time} — មិនរក្សាទុកពីរដងទេ។',
+      held_note: 'វត្តមាននេះបានរង់ចាំនៅលើទូរស័ព្ទយូរ។ ការិយាល័យនឹងពិនិត្យវាសិន ទើបវារាប់។',
+      queued_clock: 'វត្តមានដែលផ្ញើយឺតជាង ១៥ នាទី ត្រូវការិយាល័យពិនិត្យសិន ទើបវារាប់។',
+      mark_title: 'ចុះវត្តមានឱ្យ {name}',
+      mark_in: 'ចូលធ្វើការ',
+      mark_out: 'ចេញពីការងារ',
+      photo_person: 'ថតរូបបុគ្គលិកនោះ (បើអាច)',
+      crew_empty: 'មិនទាន់មាននរណាម្នាក់ក្នុងក្រុមរបស់អ្នកទេ។ ការិយាល័យកំណត់ក្រុមនៅលើ Mac។',
+      st_in: 'ចូលតាំងពី {time}',
+      st_out: 'ចេញម៉ោង {time}',
+      st_none: 'មិនទាន់ចូល',
+      st_leave: 'ឈប់សម្រាក',
+      st_holiday: 'ថ្ងៃបុណ្យ',
+      st_off: 'ថ្ងៃឈប់',
+      st_absent: 'អវត្តមាន',
+      this_month: 'ខែនេះ',
+      last_month: 'ខែមុន',
+      m_days: 'ថ្ងៃធ្វើការ',
+      m_late: 'មកយឺត',
+      late_value: '{min} នាទី ({days} ថ្ងៃ)',
+      m_missing: 'ភ្លេចចុះម៉ោងចេញ',
+      m_absent: 'ថ្ងៃអវត្តមាន',
+      m_leave: 'ថ្ងៃឈប់សម្រាក',
+      today: 'ថ្ងៃនេះ',
+      yesterday: 'ម្សិលមិញ',
+      leave_title: 'ច្បាប់ឈប់សម្រាក',
+      days_left: 'នៅសល់ {n} ថ្ងៃ',
+      days_taken: 'ឆ្នាំនេះឈប់ {n} ថ្ងៃ',
+      days_n: '{n} ថ្ងៃ',
+      pending_title: 'កំពុងរង់ចាំការិយាល័យ',
+      withdraw: 'ដកវិញ',
+      withdraw_confirm: 'ដកសំណើនេះវិញ?',
+      withdrawn: 'បានដកវិញ',
+      pick_leave_type: 'ឈប់សម្រាកប្រភេទណា?',
+      leave_from: 'ថ្ងៃដំបូង',
+      leave_to: 'ថ្ងៃចុងក្រោយ',
+      same_day: 'តែមួយថ្ងៃ',
+      half_q: 'ពេញមួយថ្ងៃ ឬកន្លះថ្ងៃ?',
+      half_full: 'ពេញមួយថ្ងៃ',
+      half_am: 'តែពេលព្រឹក',
+      half_pm: 'តែពេលរសៀល',
+      reason_q: 'មូលហេតុ (បើចង់សរសេរ)',
+      field_type: 'ប្រភេទ',
+      field_dates: 'ថ្ងៃ',
+      field_day: 'ថ្ងៃណា',
+      field_reason: 'មូលហេតុ',
+      field_in: 'ម៉ោងចូល',
+      field_out: 'ម៉ោងចេញ',
+      sent_office: 'បានផ្ញើទៅការិយាល័យ',
+      sent_office_body: 'វានឹងរាប់ នៅពេលការិយាល័យយល់ព្រម។',
+      need_connection: 'ត្រូវមានការតភ្ជាប់ ដើម្បីផ្ញើសំណើនេះ។ សូមព្យាយាមម្តងទៀត ពេលមានការតភ្ជាប់។',
+      pick_day: 'ថ្ងៃណា?',
+      forgot_q: 'អ្នកភ្លេចអ្វី?',
+      forgot_in: 'ភ្លេចចុះម៉ោងចូល',
+      forgot_out: 'ភ្លេចចុះម៉ោងចេញ',
+      forgot_both: 'ភ្លេចទាំងពីរ',
+      time_in_q: 'អ្នកចូលធ្វើការម៉ោងប៉ុន្មាន?',
+      time_out_q: 'អ្នកចេញពីការងារម៉ោងប៉ុន្មាន?',
+      time_bad: 'ម៉ោងនេះមិនត្រឹមត្រូវ',
+      pick_reason: 'ហេតុអ្វី?',
+      reason_battery: 'ទូរស័ព្ទអស់ថ្ម',
+      reason_network: 'គ្មានការតភ្ជាប់',
+      reason_forgot: 'ខ្ញុំភ្លេច',
+      reason_other: 'មូលហេតុផ្សេង…',
+      reason_text: 'សរសេរមូលហេតុ',
     },
     en: {
       app_title: 'Fuel',
       lang_other: 'ខ្មែរ',
       connect_title: 'Connect this phone',
-      connect_help: 'On the Mac open Fuel → Phone set-up, then scan the QR code with this phone’s camera.',
+      connect_help: 'On the Mac open “Set up a phone”, then scan the QR code with this phone’s camera.',
       connect_paste: 'Or paste the account’s token:',
       connect_btn: 'Connect',
       token_rejected: 'The Mac did not accept this account. Scan the QR code again.',
-      no_fuel_access: 'This account can’t record fuel. Ask the owner for an account with “Record fuel”.',
       loading: 'Loading…',
       cant_reach: 'Can’t reach the Mac. Check it’s awake and this phone is on Tailscale or the same Wi-Fi.',
       try_again: 'Try again',
@@ -323,6 +410,95 @@
       state_failed: 'Couldn’t send: {error}',
       required: 'Needed',
       search: 'Search',
+      app_title_hr: 'Attendance',
+      no_access: 'This account can’t use this page. Ask the owner for an account with “Record fuel” or “Clock in on my phone”.',
+      not_linked: 'This account is not linked to a staff member yet. Ask the office to link it, then you can clock in.',
+      home_clock_in: 'Clock in',
+      home_clock_out: 'Clock out',
+      home_clock_sub: 'Take a selfie and save',
+      home_mine: 'My attendance',
+      home_mine_sub: 'Days worked, late minutes and leave',
+      home_leave: 'Request leave',
+      home_leave_sub: 'Sent to the office',
+      home_forgot: 'I forgot to clock in or out',
+      home_forgot_sub: 'Ask the office to fix the time',
+      home_crew: 'My crew',
+      home_crew_sub: 'Mark your crew in and out',
+      selfie_title: 'Take a selfie (front camera)',
+      kind_clock: 'Clock in / out',
+      kind_in: 'In',
+      kind_out: 'Out',
+      field_person: 'Person',
+      field_kind: 'In or out',
+      clocked_in: 'Clocked in {time}',
+      clocked_out: 'Clocked out {time}',
+      marked_in: '{name} in at {time}',
+      marked_out: '{name} out at {time}',
+      double_tap: 'Already saved at {time} — not saved twice.',
+      held_note: 'This waited on the phone for a while. The office will check it before it counts.',
+      queued_clock: 'A clock-in sent more than 15 minutes late is checked by the office before it counts.',
+      mark_title: 'Mark {name}',
+      mark_in: 'Mark in',
+      mark_out: 'Mark out',
+      photo_person: 'Photograph the person (if you can)',
+      crew_empty: 'Nobody is in your crew yet. The office sets crews on the Mac.',
+      st_in: 'In since {time}',
+      st_out: 'Out at {time}',
+      st_none: 'Not in yet',
+      st_leave: 'On leave',
+      st_holiday: 'Holiday',
+      st_off: 'Day off',
+      st_absent: 'Absent',
+      this_month: 'This month',
+      last_month: 'Last month',
+      m_days: 'Days worked',
+      m_late: 'Late',
+      late_value: '{min} min ({days} days)',
+      m_missing: 'Missing clock-outs',
+      m_absent: 'Absent days',
+      m_leave: 'Leave days',
+      today: 'Today',
+      yesterday: 'Yesterday',
+      leave_title: 'Leave',
+      days_left: '{n} days left',
+      days_taken: '{n} days taken this year',
+      days_n: '{n} days',
+      pending_title: 'Waiting for the office',
+      withdraw: 'Withdraw',
+      withdraw_confirm: 'Withdraw this request?',
+      withdrawn: 'Withdrawn',
+      pick_leave_type: 'Which kind of leave?',
+      leave_from: 'First day',
+      leave_to: 'Last day',
+      same_day: 'Just one day',
+      half_q: 'Whole day or half a day?',
+      half_full: 'Whole day',
+      half_am: 'Morning only',
+      half_pm: 'Afternoon only',
+      reason_q: 'Reason (if you want)',
+      field_type: 'Kind',
+      field_dates: 'Dates',
+      field_day: 'Day',
+      field_reason: 'Reason',
+      field_in: 'Clock in',
+      field_out: 'Clock out',
+      sent_office: 'Sent to the office',
+      sent_office_body: 'It counts once the office approves it.',
+      need_connection: 'This request needs a connection. Try again when the phone is connected.',
+      pick_day: 'Which day?',
+      forgot_q: 'What did you forget?',
+      forgot_in: 'To clock in',
+      forgot_out: 'To clock out',
+      forgot_both: 'Both',
+      time_in_q: 'What time did you start work?',
+      time_out_q: 'What time did you finish work?',
+      time_bad: 'That is not a real time',
+      pick_reason: 'Why?',
+      reason_battery: 'The phone battery was flat',
+      reason_network: 'No connection',
+      reason_forgot: 'I forgot',
+      reason_other: 'Another reason…',
+      reason_text: 'Write the reason',
     },
   };
 
@@ -498,7 +674,20 @@
     'fuel:recordDelivery': 'clientRef',
     'fuel:recordTransfer': 'clientRef',
     'fuel:receiveTransfer': 'id',
+    // HR1: a phone clock-in (selfie) and a supervisor's mark. The server binds
+    // the client_ref to the person, the kind and the photo's hash.
+    'attendance:clockSelf': 'clientRef',
+    'attendance:markCrew': 'clientRef',
+    // …and the phone's requests to the office (the server answers a resend
+    // with the saved request, `duplicate: true`).
+    'attendance:requestCorrectionSelf': 'clientRef',
+    'leave:requestSelf': 'clientRef',
   };
+  /** Attendance saves carry ONE photo as `photo`, no `source` and no `companyId`
+   *  (the server uses the caller's active company and decides the source). */
+  var SINGLE_PHOTO = { 'attendance:clockSelf': true, 'attendance:markCrew': true };
+  /** Requests carry only their own fields and the client_ref — no wait, no photo. */
+  var REQUEST = { 'attendance:requestCorrectionSelf': true, 'leave:requestSelf': true };
 
   function retryDelay(attempts) {
     var i = Math.max(0, Math.min(RETRY_DELAYS_MS.length - 1, (attempts || 1) - 1));
@@ -560,16 +749,20 @@
     var k;
     for (k in item.args) if (Object.prototype.hasOwnProperty.call(item.args, k)) out[k] = item.args[k];
     if (item.preDone) for (k in item.preDone) if (Object.prototype.hasOwnProperty.call(item.preDone, k)) out[k] = item.preDone[k];
-    out.source = 'phone';
+    var single = SINGLE_PHOTO[item.channel];
+    var request = REQUEST[item.channel];
+    if (request) { out.clientRef = item.clientRef; return out; }
+    if (!single) out.source = 'phone';
     if (IDEMPOTENT_CHANNELS[item.channel] === 'clientRef') out.clientRef = item.clientRef;
     var company = companyId || item.companyId;
-    if (company && item.channel !== 'fuel:receiveTransfer') out.companyId = company;
+    if (company && !single && item.channel !== 'fuel:receiveTransfer') out.companyId = company;
     // How long ago this was done, by the phone's own clock — a difference, so a
     // phone set to the wrong date does not matter. Never a clock time.
     out.queuedForMs = Math.max(0, Math.round(now - (item.takenAt || item.savedAt || now)));
     delete out.at;
     if (item.photos && item.photos.length) {
-      out.photos = item.photos.map(function (p) { return { kind: p.kind, bytes: encode ? encode(p.data) : p.data }; });
+      if (single) out.photo = encode ? encode(item.photos[0].data) : item.photos[0].data;
+      else out.photos = item.photos.map(function (p) { return { kind: p.kind, bytes: encode ? encode(p.data) : p.data }; });
     }
     return out;
   }
@@ -799,6 +992,98 @@
     return caps.indexOf('*') !== -1 || caps.indexOf('fuel.record') !== -1 || caps.indexOf('fuel.manage') !== -1;
   }
 
+  /** What the page offers this account (main/util/capabilities.js decides what the server allows). */
+  function pageAccess(caps) {
+    var c = Array.isArray(caps) ? caps : [];
+    var all = c.indexOf('*') !== -1;
+    var has = function (k) { return all || c.indexOf(k) !== -1; };
+    var a = {
+      admin: all,
+      fuel: canRecordFuel(c),
+      self: has('attendance.self'),
+      supervise: has('attendance.supervise'),
+      // staff:getPhoto is open to fuel and HR callers, and to a supervisor for their own crew.
+      staffPhotos: canRecordFuel(c) || has('hr.view') || has('hr.manage') || has('attendance.supervise'),
+    };
+    a.any = a.fuel || a.self || a.supervise;
+    return a;
+  }
+
+  /** The reads the page makes when it opens — only channels this account may call
+   *  (an attendance-only phone must not hit a fuel channel and get a 403). */
+  function bootReads(access) {
+    var list = [['staff:me', null]];
+    if (access && access.fuel) {
+      list.push(['fuel:getSettings', null], ['fuel:listAssets', { status: 'active' }], ['fuel:listLocations', {}],
+        ['staff:list', { status: 'active' }], ['fuel:listStations', {}]);
+    }
+    return list;
+  }
+
+  /* ── attendance (HR1) ──────────────────────────────────────────────
+     Times on screen are the SERVER's (an event's `at`), shown in Phnom Penh
+     time — Cambodia is UTC+7 all year, no daylight saving. */
+  var PP_OFFSET_MS = 7 * 3600 * 1000;
+  // Mirrors of the server's defaults (main/db/hr.js settings): an entry that
+  // waited longer than queuedReviewMinutes is HELD until a manager accepts it;
+  // an `in` older than maxShiftHours no longer makes the next tap an `out`.
+  var QUEUED_REVIEW_MS = 15 * 60 * 1000;
+  var MAX_SHIFT_MS = 20 * 3600 * 1000;
+
+  function ppDate(ms) { return new Date(ms + PP_OFFSET_MS).toISOString().slice(0, 10); }
+  function ppTime(ms) { return isNum(ms) ? new Date(ms + PP_OFFSET_MS).toISOString().slice(11, 16) : ''; }
+  function addDays(date, n) {
+    var d = new Date(date + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  }
+
+  /** A phone entry the office must accept before it counts (waited > 15 min). */
+  function isHeld(ev) {
+    return !!ev && ev.reviewStatus === 'pending' && (ev.queuedForMs || 0) > QUEUED_REVIEW_MS;
+  }
+
+  /**
+   * What the next tap will most likely be — the label on the Clock tile. The
+   * server decides for real (and the result shows what it decided).
+   * `pending`: clock-ins still on the phone, each { kind, at } by the phone's clock.
+   */
+  function nextClockKind(lastEvent, pending, now) {
+    var last = lastEvent ? { kind: lastEvent.kind, at: lastEvent.at } : null;
+    (pending || []).slice().sort(function (a, b) { return (a.at || 0) - (b.at || 0); }).forEach(function (p) {
+      if (p && (p.kind === 'in' || p.kind === 'out')) last = { kind: p.kind, at: p.at };
+    });
+    return last && last.kind === 'in' && now - (last.at || 0) < MAX_SHIFT_MS ? 'out' : 'in';
+  }
+
+  /** A person's state today: { key, time } for the words st_*. */
+  function dayState(today, lastEvent, now) {
+    if (lastEvent && lastEvent.kind === 'in' && now - lastEvent.at < MAX_SHIFT_MS) return { key: 'st_in', time: ppTime(lastEvent.at) };
+    if (today && today.lastOut) return { key: 'st_out', time: ppTime(today.lastOut) };
+    var s = today && today.status;
+    if (s === 'leave' || s === 'holiday' || s === 'off' || s === 'absent') return { key: 'st_' + s, time: '' };
+    return { key: 'st_none', time: '' };
+  }
+
+  /** Time keypad: up to 4 digits (`752` → 07:52, `1705` → 17:05, `7` → 07:00). */
+  function timePress(text, key) {
+    var s = String(text || '');
+    if (key === 'back') return s.slice(0, -1);
+    if (key === 'clear') return '';
+    if (!/^[0-9]$/.test(key) || s.length >= 4) return s;
+    return s + key;
+  }
+  function parseHm(text) {
+    var s = String(text || '');
+    if (!/^[0-9]{1,4}$/.test(s)) return null;
+    var hh = s.length <= 2 ? s : s.slice(0, s.length - 2);
+    var mm = s.length <= 2 ? '00' : s.slice(-2);
+    var hn = Number(hh);
+    var mn = Number(mm);
+    if (hn > 23 || mn > 59) return null;
+    return (hn < 10 ? '0' : '') + hn + ':' + mm;
+  }
+
   /** Token from a pairing link's fragment (`#t=<token>`), or null. */
   function tokenFromHash(hash) {
     var m = /(?:^#|&)t=([^&]+)/.exec(String(hash || ''));
@@ -841,6 +1126,17 @@
     createOutbox: createOutbox,
     memoryStore: memoryStore,
     canRecordFuel: canRecordFuel,
+    pageAccess: pageAccess,
+    bootReads: bootReads,
     tokenFromHash: tokenFromHash,
+    QUEUED_REVIEW_MS: QUEUED_REVIEW_MS,
+    ppDate: ppDate,
+    ppTime: ppTime,
+    addDays: addDays,
+    isHeld: isHeld,
+    nextClockKind: nextClockKind,
+    dayState: dayState,
+    timePress: timePress,
+    parseHm: parseHm,
   };
 });

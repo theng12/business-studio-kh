@@ -32,9 +32,11 @@ test('the registry has a Fuel module and a People module, gated by the fuel capa
     assert.ok(m, `nav item ${id}`);
     return m[0];
   };
-  for (const id of ['fueloverview', 'fuelreports', 'staff']) {
+  for (const id of ['fueloverview', 'fuelreports']) {
     assert.match(item(id), /caps: \['fuel\.manage'\]/, `${id} is fuel.manage only`);
   }
+  // HR1: Staff stays open to fuel.manage and is also the hr.view / hr.manage directory.
+  assert.match(item('staff'), /caps: \['fuel\.manage', 'hr\.view', 'hr\.manage'\]/, 'staff keeps fuel.manage');
   for (const id of ['fuelassets', 'fuelfills', 'fueltanks', 'fuelprices']) {
     assert.match(item(id), /caps: \['fuel\.record', 'fuel\.manage'\]/, `${id} is open to recorders`);
   }

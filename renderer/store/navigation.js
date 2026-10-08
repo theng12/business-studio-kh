@@ -22,7 +22,11 @@ const MODULES = ['home', 'dashboard', 'company', 'brands', 'library', 'workspace
   'socialgrid',
   'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support',
   // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §5) + the thin staff list.
-  'fueloverview', 'fuelassets', 'fuelfills', 'fueltanks', 'fuelprices', 'fuelreports', 'staff'];
+  'fueloverview', 'fuelassets', 'fuelfills', 'fueltanks', 'fuelprices', 'fuelreports', 'staff',
+  // HR1: People (docs/PEOPLE_AND_FUEL_PLAN.md §5.1).
+  'attendance', 'attreview', 'attcorrections', 'overtime', 'lateness', 'leave',
+  // HR1: the attendance kiosk preview (renderer/modules/Kiosk).
+  'kiosk'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the
 // header copy inside the module itself.
