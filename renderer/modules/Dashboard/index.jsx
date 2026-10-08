@@ -7,6 +7,7 @@ import { useCostingCaps } from '../PurchaseOrders/costingCaps.js';
 import { formatDate, timeAgo } from '../../lib/format.js';
 import { openPurchaseOrdersWithStatus } from '../PurchaseOrders/poNav.js';
 import { DEFAULT_FILTERS } from '../../store/productsDefaults.js';
+import { noCompanyState } from '../Home/noCompany.js';
 
 /** Counts read "2,500", not "2500". */
 const fmtCount = (n) => (Number(n) || 0).toLocaleString();
@@ -41,19 +42,17 @@ export function Dashboard() {
   const active = companies.find((c) => c.id === activeCompanyId) ?? null;
 
   if (!activeCompanyId) {
+    // Same copy as Home's first-run message (modules/Home/noCompany.js).
+    const noCompany = noCompanyState(companies.length);
     return (
       <div className="page">
         <PageHeader title="Dashboard" subtitle="Set up a company to get started." />
         <EmptyState
-          title={companies.length === 0 ? 'Welcome to Media Studio KH' : 'No company selected'}
-          body={
-            companies.length === 0
-              ? 'Create a company to start building one shared product library for images, labels, catalogs, and operations.'
-              : 'Choose a company from the sidebar switcher, or create a new one.'
-          }
+          title={noCompany.title}
+          body={noCompany.body}
           action={
             <Button variant="primary" onClick={() => setActiveModule('company')}>
-              {companies.length === 0 ? '+ Create your first company' : 'Open Company'}
+              {noCompany.action}
             </Button>
           }
         />
