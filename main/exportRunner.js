@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const sharp = require('sharp');
+require('./util/sharpLimits');   // process-wide libvips cache cap (perf audit 2026-10)
 const { exportSubfolder, containedMediaPath } = require('./util/mediaPaths');
 const { getDataDir } = require('./db');
 const products = require('./db/products');
@@ -9,6 +10,40 @@ const brands = require('./db/brands');
 const { slugifyUnicode } = require('./util/slug');
 const { formatIndexToken } = require('./util/exportIndex');
 const { logSoftFailure } = require('./util/softFailure');
+const { selectImages, MAX_IMAGE_POSITION } = require('./util/imageScope');
+
+/* ── Image scope ──────────────────────────────────────────────── */
+
+/**
+ * Which of a product's images an export writes. `{ mode: 'all' }` (the
+ * default, and what every run did before this option existed), `{ mode:
+ * 'main' }` (position 1 only) or `{ mode: 'first', count: N }` (positions
+ * 1…N). Anything unrecognised falls back to 'all', so an older caller that
+ * sends nothing keeps today's behaviour.
+ */
+function normalizeExportScope(scope) {
+  const mode = scope && typeof scope === 'object' ? scope.mode : null;
+  if (mode === 'main') return { mode: 'main', count: 1 };
+  if (mode === 'first') {
+    const n = Math.round(Number(scope.count));
+    if (Number.isFinite(n) && n >= 1) return { mode: 'first', count: Math.min(MAX_IMAGE_POSITION, n) };
+  }
+  return { mode: 'all', count: null };
+}
+
+/**
+ * The scoped image rows with their ORIGINAL index, so {INDEX} in a file name
+ * still names the image's position in the product (image 1 stays `-001`).
+ * The positions rule is the shared one in util/imageScope.js.
+ */
+function scopedImages(images, scope) {
+  const list = Array.isArray(images) ? images : [];
+  const s = normalizeExportScope(scope);
+  if (s.mode === 'all') return list.map((img, i) => ({ img, i }));
+  const positions = Array.from({ length: s.count }, (_, k) => k + 1);
+  const { chosen } = selectImages(list, { positions });
+  return chosen.map((img) => ({ img, i: list.indexOf(img) }));
+}
 
 /* ── Filename token builder ───────────────────────────────────── */
 
@@ -158,7 +193,7 @@ function resolveOutputPath(dir, base, ext, mode = 'keepBoth', claimed = null, ex
  *
  * @returns {{ totalExpected: number, entries: Array<{rel: string, sku: string}> }}
  */
-function expectedOutputs({ profile, productIds }) {
+function expectedOutputs({ profile, productIds, imageScope = null }) {
   if (!profile || !Array.isArray(productIds) || productIds.length === 0) {
     return { totalExpected: 0, entries: [] };
   }
@@ -179,7 +214,7 @@ function expectedOutputs({ profile, productIds }) {
     if (!product) continue;
     const brand = product.brandId ? brands.get(product.brandId) : null;
     const images = productImages.listByProduct(productId);
-    for (let i = 0; i < images.length; i++) {
+    for (const { i } of scopedImages(images, imageScope)) {
       const ctx = { product, brand, imageIndex: i, dateStr, profile };
       const base = buildFilename(profile.namingPattern || '{SKU}-{INDEX}', ctx);
       const { outPath } = resolveOutputPath('/', base, ext, 'keepBoth', claimed, never);
@@ -199,9 +234,9 @@ function expectedOutputs({ profile, productIds }) {
  * only the structure changed so the name-computation half can be
  * reused over RPC in client mode.
  */
-function previewCollisions({ profile, productIds, outputRoot }) {
+function previewCollisions({ profile, productIds, outputRoot, imageScope = null }) {
   if (!outputRoot) return { totalExpected: 0, collisionCount: 0, sampleCollisions: [] };
-  const { totalExpected, entries } = expectedOutputs({ profile, productIds });
+  const { totalExpected, entries } = expectedOutputs({ profile, productIds, imageScope });
   const collisions = [];
   for (const { rel, sku } of entries) {
     const direct = containedMediaPath(outputRoot, rel);
@@ -291,7 +326,7 @@ async function processOneImage({ sourceAbs, profile, outPath }) {
  *   backward compatibility with callers that haven't been updated.
  * @returns {Promise<{exported: number, skipped: number, replaced: number, products: number, outputPath: string, skips: Array<{sku, reason}>}>}
  */
-async function runExport({ profile, productIds, outputRoot, onProgress, onExisting = 'keepBoth', saveToLibrary = false, isCancelled = null }) {
+async function runExport({ profile, productIds, outputRoot, onProgress, onExisting = 'keepBoth', saveToLibrary = false, isCancelled = null, imageScope = null }) {
   if (!profile) throw new Error('Profile is required');
   if (!outputRoot) throw new Error('Output folder is required');
   const outputPath = containedMediaPath(outputRoot, exportSubfolder(profile.outputSubfolder), 'Output subfolder', true);
@@ -326,6 +361,10 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
   // output paths here and import them back AFTER the main loop (importing
   // mid-loop would renumber on-disk files and invalidate the source paths
   // we still need to read). Map: productId → [outFile, …] in export order.
+  //
+  // Only the export of the MAIN image (position 1) is added back. Adding every
+  // copy doubled a product's gallery on each run — a 6-image product came back
+  // with 12, then 18 — which is not what "save to library" means to anyone.
   const toLibrary = saveToLibrary ? new Map() : null;
   // v0.1.89: paths written by this run, and how many names repeated inside it.
   const claimed = new Set();
@@ -361,8 +400,11 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
     }
 
     let productExported = 0;
+    const selected = scopedImages(images, imageScope);
+    const wanted = new Set(selected.map(({ i }) => i));
     for (let i = 0; i < images.length; i++) {
       if (cancelRequested()) break;
+      if (!wanted.has(i)) continue;   // outside this profile's image scope
       const img = images[i];
 
       // Export is now pass-through: use the processed file when one exists,
@@ -444,7 +486,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
           if (bytes < minBytes) minBytes = bytes;
           if (bytes > maxBytes) maxBytes = bytes;
         }
-        if (toLibrary) {
+        if (toLibrary && i === 0) {
           if (!toLibrary.has(productId)) toLibrary.set(productId, []);
           toLibrary.get(productId).push(outFile);
         }
@@ -465,7 +507,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
 
     // Complete requested work must be written this run. Collision Skip keeps an
     // existing file but does not prove it contains the current product image.
-    if (productExported === images.length && images.some((im) => im.isProcessed)) {
+    if (productExported === selected.length && selected.length > 0 && selected.some(({ img }) => img.isProcessed)) {
       try {
         products.setProcessStatus(product.id, 'exported');
       } catch (err) {
@@ -537,4 +579,4 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
   };
 }
 
-module.exports = { runExport, buildFilename, slugifyFilename, previewCollisions, expectedOutputs, resolveOutputPath, claimKey };
+module.exports = { runExport, buildFilename, slugifyFilename, previewCollisions, expectedOutputs, resolveOutputPath, claimKey, normalizeExportScope, scopedImages };

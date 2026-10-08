@@ -116,9 +116,12 @@ test('the Library hands memoized children stable props', () => {
 });
 
 test('the sort uses one shared collator with the old ordering', () => {
-  assert.match(LIBRARY, /const SORT_COLLATOR = new Intl\.Collator\(undefined, \{ numeric: true, sensitivity: 'base' \}\)/);
-  assert.match(LIBRARY, /SORT_COLLATOR\.compare\(String\(av\), String\(bv\)\)/);
-  assert.doesNotMatch(LIBRARY, /localeCompare\(String\(bv\), undefined, \{ numeric: true/);
+  // 0.1.94: the sort moved to librarySort.js, shared with Edit in table.
+  const SORT = read('renderer/modules/ProductLibrary/librarySort.js');
+  assert.match(LIBRARY, /import \{[^}]*sortProducts[^}]*\} from '\.\/librarySort\.js'/);
+  assert.match(SORT, /const SORT_COLLATOR = new Intl\.Collator\(undefined, \{ numeric: true, sensitivity: 'base' \}\)/);
+  assert.match(SORT, /SORT_COLLATOR\.compare\(String\(av\), String\(bv\)\)/);
+  assert.doesNotMatch(SORT, /localeCompare\(String\(bv\), undefined, \{ numeric: true/);
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
   const skus = ['AV-M8200', 'av-m81', 'AV-M8101', 'BBC-2', 'bbc-10', 'Épice', 'epice-1', ''];
   const viaCollator = skus.slice().sort((a, b) => collator.compare(a, b));

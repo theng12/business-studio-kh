@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Button, Input, SliderField } from '../../components/ui.jsx';
+import { useAppStore } from '../../store/index.js';
 import { Section } from '../../components/Section.jsx';
 import { FILL_SWATCHES, MARKETPLACE_PRESETS, WATERMARK_CORNERS, getPreset } from '../../lib/presets.js';
 import { processingRecipe } from './processingRecipe.js';
@@ -24,6 +26,50 @@ export function SettingsPanel({
   // local @imgly engine; the picker, the API-key hint, and the store
   // wiring are gone with it.
   const wm = settings.watermark;
+  const addToast = useAppStore((s) => s.addToast);
+  // 0.1.94: the watermark → Overlay template name (null = field closed).
+  const [templateName, setTemplateName] = useState(null);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
+  async function saveWatermarkAsTemplate() {
+    const name = (templateName ?? '').trim();
+    if (!name || !wm?.relativePath) return;
+    // Map Workspace corner ('tl' / 'tr' / 'bl' / 'br') to template (x, y,
+    // anchor). Margin matches the pipeline's 3% of canvas; width matches the
+    // 18% rendered size.
+    const MARGIN = 0.03;
+    const cornerMap = {
+      tl: { x: MARGIN,     y: MARGIN,     anchor: 'tl' },
+      tr: { x: 1 - MARGIN, y: MARGIN,     anchor: 'tr' },
+      bl: { x: MARGIN,     y: 1 - MARGIN, anchor: 'bl' },
+      br: { x: 1 - MARGIN, y: 1 - MARGIN, anchor: 'br' },
+    };
+    const pos = cornerMap[wm.corner] || cornerMap.br;
+    const tpl = {
+      name,
+      canvasWidth:  settings.canvasWidth || 2000,
+      canvasHeight: settings.canvasHeight || 2000,
+      elements: [{
+        id: 'wm-1',
+        type: 'image',
+        source: `asset:${wm.relativePath}`,
+        width: 0.18,
+        opacity: wm.opacity ?? 0.7,
+        ...pos,
+      }],
+      tags: 'watermark',
+    };
+    setSavingTemplate(true);
+    try {
+      await window.api.templates.create(tpl);
+      setTemplateName(null);
+      if (typeof onWatermarkSavedAsTemplate === 'function') onWatermarkSavedAsTemplate(tpl.name);
+    } catch (err) {
+      addToast(`Couldn't save the template: ${err.message}`, 'error');
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
 
   function patch(part) {
     onChange({ ...settings, ...part });
@@ -284,50 +330,34 @@ export function SettingsPanel({
                   bulk-apply it to N products via Library\'s bulk overlay flow. */}
               {wm.relativePath ? (
                 <div className="ws-watermark-bridge">
-                  <Button
-                    onClick={async () => {
-                      const name = window.prompt(
-                        'Save this watermark as a reusable Overlay template?\n\nName:',
-                        `Watermark · ${new Date().toISOString().slice(0, 10)}`,
-                      );
-                      if (!name?.trim()) return;
-                      // Map Workspace corner ('tl' / 'tr' / 'bl' / 'br') to
-                      // template (x, y, anchor). Margin matches the pipeline\'s
-                      // 3% of canvas; width matches the 18% rendered size.
-                      const MARGIN = 0.03;
-                      const cornerMap = {
-                        tl: { x: MARGIN,     y: MARGIN,     anchor: 'tl' },
-                        tr: { x: 1 - MARGIN, y: MARGIN,     anchor: 'tr' },
-                        bl: { x: MARGIN,     y: 1 - MARGIN, anchor: 'bl' },
-                        br: { x: 1 - MARGIN, y: 1 - MARGIN, anchor: 'br' },
-                      };
-                      const pos = cornerMap[wm.corner] || cornerMap.br;
-                      const tpl = {
-                        name: name.trim(),
-                        canvasWidth:  settings.canvasWidth || 2000,
-                        canvasHeight: settings.canvasHeight || 2000,
-                        elements: [{
-                          id: 'wm-1',
-                          type: 'image',
-                          source: `asset:${wm.relativePath}`,
-                          width: 0.18,
-                          opacity: wm.opacity ?? 0.7,
-                          ...pos,
-                        }],
-                        tags: 'watermark',
-                      };
-                      try {
-                        await window.api.templates.create(tpl);
-                        // Use the workspace store\'s toast — patch passes
-                        // through to it via the parent component.
-                        if (typeof onWatermarkSavedAsTemplate === 'function') {
-                          onWatermarkSavedAsTemplate(tpl.name);
-                        }
-                      } catch (err) {
-                        window.alert(`Failed to save template: ${err.message}`);
-                      }
-                    }}
-                  >Save as Overlay template…</Button>
+                  {/* 0.1.94: an inline name field. This used window.prompt,
+                      which Electron does not implement — the button did
+                      nothing at all. */}
+                  {templateName == null ? (
+                    <Button onClick={() => setTemplateName(`Watermark · ${new Date().toISOString().slice(0, 10)}`)}>
+                      Save as Overlay template…
+                    </Button>
+                  ) : (
+                    <form
+                      className="ws-watermark-bridge__form"
+                      onSubmit={(e) => { e.preventDefault(); saveWatermarkAsTemplate(); }}
+                    >
+                      <Input
+                        autoFocus
+                        aria-label="Overlay template name"
+                        value={templateName}
+                        disabled={savingTemplate}
+                        onChange={(e) => setTemplateName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setTemplateName(null); }
+                        }}
+                      />
+                      <Button type="submit" disabled={savingTemplate || !templateName.trim()}>
+                        {savingTemplate ? 'Saving…' : 'Save template'}
+                      </Button>
+                      <Button type="button" onClick={() => setTemplateName(null)} disabled={savingTemplate}>Cancel</Button>
+                    </form>
+                  )}
                   <p className="ws-hint">
                     Lets you apply this watermark to many products at once via Library → bulk overlay.
                   </p>

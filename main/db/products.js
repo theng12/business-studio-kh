@@ -6,6 +6,9 @@ const { productAssetDir, companyDir } = require('../util/assetPath');
 const { trashPathInBackground } = require('../util/fileTrash');
 const { normalizeCurrency } = require('../util/currencies');
 const { rowHasAnyPrice } = require('../util/prices');
+// 0.1.94: the Library search shares ⌘K's matching rule (words ANDed, SKU
+// separators ignored, exact barcode, NFC / zero-width safe).
+const { compileProductSearch, matchProductSearch } = require('./search');
 
 // Late-required to break circular dependencies.
 let _companies;
@@ -170,15 +173,25 @@ function list(companyId, filters = {}) {
   //    A search of "   " used to LIKE %   % which matches every row
   //    with at least 2 spaces somewhere. Now we trim then bail if
   //    the result is empty.
-  const trimmedSearch = typeof search === 'string' ? search.trim() : '';
-  if (trimmedSearch) {
-    const escaped = trimmedSearch.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-    const term = `%${escaped}%`;
-    sql +=
-      " AND (p.sku LIKE ? ESCAPE '\\'" +
-      " OR p.name LIKE ? ESCAPE '\\'" +
-      " OR p.color_finish LIKE ? ESCAPE '\\')";
-    params.push(term, term, term);
+  //
+  // 0.1.94: the LIKE became the shared word rule in ./search.js
+  // (matchProductSearch): every word must match, SKU separators are ignored
+  // ("avm8101" finds "AV-M8101"), an exact barcode finds its product, and
+  // Khmer text is compared NFC-normalised without zero-width characters.
+  // It runs in JS over four short columns, then narrows the real query by id
+  // (one json_each parameter), so the image-count subqueries below still run
+  // only for the matching rows. No wildcard escaping is needed any more —
+  // nothing typed reaches LIKE.
+  const compiledSearch = compileProductSearch(typeof search === 'string' ? search : '');
+  if (compiledSearch) {
+    const ids = getDb()
+      .prepare('SELECT * FROM products WHERE company_id = ?')
+      .all(companyId)
+      .filter((r) => matchProductSearch(compiledSearch, { sku: r.sku, name: r.name, color: r.color_finish, barcode: r.barcode }))
+      .map((r) => r.id);
+    if (ids.length === 0) return [];
+    sql += ' AND p.id IN (SELECT value FROM json_each(?))';
+    params.push(JSON.stringify(ids));
   }
   sql += ' ORDER BY p.updated_at DESC';
   const rows = getDb().prepare(sql).all(...params);

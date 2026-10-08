@@ -30,6 +30,14 @@ import { appImageSrc } from '../../lib/imageUrl.js';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
+import { ProductCombobox } from '../AIStudio/ProductCombobox.jsx';
+
+/** True while a modal dialog is open (the shared Modal / confirm() mark
+ *  themselves `role="dialog" aria-modal="true"`). The editor's shortcuts
+ *  stand down then: Backspace in the delete confirm must not delete again. */
+function dialogOpen() {
+  try { return !!globalThis.document?.querySelector?.('[role="dialog"][aria-modal="true"]'); } catch { return false; }
+}
 
 /**
  * Template editor — the heart of Overlay Studio.
@@ -64,7 +72,12 @@ function groupPriceToken(product, key) {
 
 export function TemplateEditor({ templateId, onClose, onChanged }) {
   const addToast = useAppStore((s) => s.addToast);
-  const products = useAppStore((s) => s.products);
+  // Every product in the company — `products` mirrors the Library's search
+  // and filters, so "Preview against" lost products after a Library search.
+  // (`?? s.products` only for component tests that stub the old field.)
+  const storeProducts = useAppStore((s) => s.allProducts ?? s.products);
+  const products = useMemo(() => storeProducts ?? [], [storeProducts]);
+  const refreshAllProducts = useAppStore((s) => s.refreshAllProducts);
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
   // v0.1.78: the active company's price groups, so `{price_<key>}` tokens
@@ -77,6 +90,9 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
   const [template, setTemplate] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [backdropProductId, setBackdropProductId] = useState(null);
+  // True while the backdrop is the editor's own pick (the first product),
+  // not the user's — only then may it be replaced automatically.
+  const backdropAuto = useRef(true);
   const [productImages, setProductImages] = useState([]);
   const [saveStatus, setSaveStatus] = useState({ state: 'idle', lastSavedAt: null });
   // v0.26.15: single-product apply modal. Reuses the same component
@@ -155,6 +171,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
         lastSavedJSON.current = JSON.stringify(stripEphemeral(t));
         setSaveStatus({ state: 'saved', lastSavedAt: t.updatedAt });
         setBackdropProductId(products[0]?.id ?? null);
+        backdropAuto.current = true;
       } catch (err) {
         if (generation === editorGeneration.current) addToast(err.message, 'error');
       }
@@ -167,6 +184,35 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
     // The loaded products only choose the initial backdrop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId]);
+
+  useEffect(() => {
+    if (activeCompanyId && !products.length) refreshAllProducts?.();
+    // Once per company: an empty company must not refetch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCompanyId]);
+
+  /* A company switch (or a delete) can leave the backdrop pointing at a
+   * product this company does not have; the editor kept drawing the old
+   * company's photo and filling its tokens. Such a backdrop falls back to the
+   * first product (or the empty canvas while the list is still loading, and
+   * then the first product once it arrives). A deliberate "Empty canvas"
+   * stays empty. */
+  useEffect(() => {
+    if (backdropProductId && products.some((p) => p.id === backdropProductId)) return;
+    if (backdropProductId) {
+      backdropAuto.current = true;
+      setBackdropProductId(products[0]?.id ?? null);
+    } else if (backdropAuto.current && products.length) {
+      setBackdropProductId(products[0].id);
+    }
+  }, [products, backdropProductId]);
+
+  /** "Preview against" — takes a product id (or a change event). */
+  function pickBackdrop(value) {
+    const id = value && typeof value === 'object' ? value.target?.value : value;
+    backdropAuto.current = false;
+    setBackdropProductId(id || null);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -503,6 +549,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
   keyHandlerRef.current = function onKey(e) {
     const tag = (e.target?.tagName ?? '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.target?.isContentEditable || e.defaultPrevented || dialogOpen()) return;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();
@@ -569,6 +616,20 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
       actions={(
         <>
           <SaveStatus status={saveStatus} error={saveStatus.error} onSave={() => saveNow()} />
+          {/* Searchable: a native select of ~2,500 products cannot be searched.
+              Lives in the header so the editor toolbar fits one row. */}
+          <div className="ovl-editor__backdrop-picker" title="The product the canvas is previewed against">
+            <span className="muted">Preview against</span>
+            <ProductCombobox
+              aria-label="Preview against"
+              ariaLabel="Preview against"
+              products={products}
+              value={backdropProductId ?? ''}
+              onChange={pickBackdrop}
+              placeholder="Empty canvas"
+              clearLabel="Empty canvas"
+            />
+          </div>
           {/* v0.26.15: single-product apply. Renders the template against
               whichever product the user has in "Preview against" (the
               dropdown in the toolbar), routes the output per the
@@ -586,47 +647,48 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
       )}
     />
     <div className="ovl-editor">
-      <header className="ovl-editor__head">
-        <div className="ovl-editor__head-left">
+      {/* One toolbar row (it wraps on a narrow window): the name and canvas
+          size used to be a separate labelled row above it, which with the two
+          toolbar rows left a 440 px canvas on an 800 px screen. The labels
+          are still there for screen readers. */}
+      <div className="ovl-editor__toolbar">
+        <div className="ws-toolbar__group ovl-editor__identity">
           <Field label="Template name">
             {({ id }) => (
               <Input
                 id={id}
+                className="ovl-editor__name"
                 value={template.name}
                 onChange={(e) => updateTemplate({ ...template, name: e.target.value })}
                 placeholder="Untitled template"
+                title="Template name"
               />
             )}
           </Field>
-          <div className="ovl-editor__size">
-            <Field label="Canvas W">
-              {({ id }) => (
-                <CanvasDimensionInput
-                  id={id}
-                  label="width"
-                  value={template.canvasWidth}
-                  otherDim={template.canvasHeight}
-                  onCommit={(next) => updateTemplate({ ...template, canvasWidth: next })}
-                />
-              )}
-            </Field>
-            <Field label="Canvas H">
-              {({ id }) => (
-                <CanvasDimensionInput
-                  id={id}
-                  label="height"
-                  value={template.canvasHeight}
-                  otherDim={template.canvasWidth}
-                  onCommit={(next) => updateTemplate({ ...template, canvasHeight: next })}
-                />
-              )}
-            </Field>
-          </div>
+          <Field label="Canvas W">
+            {({ id }) => (
+              <CanvasDimensionInput
+                id={id}
+                label="width"
+                value={template.canvasWidth}
+                otherDim={template.canvasHeight}
+                onCommit={(next) => updateTemplate({ ...template, canvasWidth: next })}
+              />
+            )}
+          </Field>
+          <span className="muted" aria-hidden>×</span>
+          <Field label="Canvas H">
+            {({ id }) => (
+              <CanvasDimensionInput
+                id={id}
+                label="height"
+                value={template.canvasHeight}
+                otherDim={template.canvasWidth}
+                onCommit={(next) => updateTemplate({ ...template, canvasHeight: next })}
+              />
+            )}
+          </Field>
         </div>
-
-      </header>
-
-      <div className="ovl-editor__toolbar">
         <div className="ws-toolbar__group">
           <button type="button" className="segment" onClick={() => addElement('text')}>+ Text</button>
           <button type="button" className="segment" onClick={() => addElement('barcode')}>+ Barcode</button>
@@ -721,7 +783,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
             aria-pressed={snapToGrid}
             title="Snap dragged elements to an 8px grid. Smart-guide alignment to other elements is always on."
           >
-            {snapToGrid ? '⊞ Snap on' : '⊞ Snap off'}
+            Snap
           </button>
           <button
             type="button"
@@ -730,7 +792,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
             aria-pressed={showBounds}
             title="Outline every element's box so you can see the whole overlay footprint and spot collisions with the product."
           >
-            {showBounds ? '⧉ Bounds on' : '⧉ Bounds off'}
+            Bounds
           </button>
           <button
             type="button"
@@ -739,7 +801,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
             aria-pressed={placeholders}
             title="Show a labelled box for each element instead of the product photo and the real render — handy while you are placing things. Off = the real preview (the default)."
           >
-            {placeholders ? '▢ Placeholders on' : '▢ Placeholders off'}
+            Placeholders
           </button>
         </div>
         {/* v0.27.0: bulk inset. Shrinks the base image to leave a safe
@@ -755,7 +817,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
             aria-pressed={!!inset?.enabled}
             title="Shrink the base image to leave a safe margin for the overlay. Applied to every image when you Apply this template."
           >
-            {inset?.enabled ? '⤢ Inset on' : '⤢ Inset off'}
+            Inset
           </button>
           {inset?.enabled && (
             <>
@@ -808,19 +870,6 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
             </>
           )}
         </div>
-        <div className="ovl-editor__backdrop-picker">
-          <span className="muted">Preview against</span>
-          <Select
-            aria-label="Preview against"
-            value={backdropProductId ?? ''}
-            onChange={(e) => setBackdropProductId(e.target.value || null)}
-          >
-            <option value="">— Empty canvas —</option>
-            {products.map((p) => (
-              <option key={p.id} value={p.id}>{p.sku}{p.name ? ` · ${p.name}` : ''}</option>
-            ))}
-          </Select>
-        </div>
       </div>
 
       <div className="ovl-editor__body">
@@ -834,6 +883,7 @@ export function TemplateEditor({ templateId, onClose, onChanged }) {
             element={selectedElement}
             onChange={(patch) => updateElement(selectedElement.id, patch)}
             onDelete={deleteSelected}
+            priceGroups={priceGroups}
           />
           <LayersPanel
             elements={template.elements}

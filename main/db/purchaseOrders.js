@@ -148,6 +148,7 @@ function normalizeIncoterm(v) {
  * the full picture.
  */
 function list(companyId, filters = {}) {
+  filters = filters || {};
   if (!companyId) return [];
   let sql = `
     SELECT po.*, s.name AS supplier_name
@@ -160,15 +161,30 @@ function list(companyId, filters = {}) {
     sql += ` AND po.supplier_id = ?`;
     params.push(filters.supplierId);
   }
-  if (filters.status && filters.status !== 'all') {
+  if (filters.status === 'open') {
+    // The Dashboard's "open purchase orders" chip: not yet received.
+    sql += ` AND po.status IN ('draft', 'ordered', 'in_transit')`;
+  } else if (filters.status === 'owed') {
+    // The Dashboard's "owed to suppliers" chip: committed (not a draft) and
+    // not fully paid — the same rows its total adds up.
+    sql += ` AND po.status <> 'draft'
+             AND COALESCE(po.total_value_supplier, 0) - COALESCE(po.total_paid_supplier, 0) > 0.005`;
+  } else if (filters.status && filters.status !== 'all') {
     sql += ` AND po.status = ?`;
     params.push(filters.status);
   }
   if (filters.search) {
     const escaped = String(filters.search).replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
     const term = `%${escaped}%`;
-    sql += ` AND (po.po_number LIKE ? ESCAPE '\\' COLLATE NOCASE OR s.name LIKE ? ESCAPE '\\' COLLATE NOCASE)`;
-    params.push(term, term);
+    // PO number, supplier, or anything on its lines: our SKU, the product
+    // name, or the supplier's own SKU — "which PO had SKU 2213?".
+    sql += ` AND (po.po_number LIKE ? ESCAPE '\\' COLLATE NOCASE OR s.name LIKE ? ESCAPE '\\' COLLATE NOCASE
+              OR EXISTS (SELECT 1 FROM po_lines l LEFT JOIN products p ON p.id = l.product_id
+                          WHERE l.po_id = po.id
+                            AND (p.sku LIKE ? ESCAPE '\\' COLLATE NOCASE
+                                 OR p.name LIKE ? ESCAPE '\\' COLLATE NOCASE
+                                 OR l.supplier_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)))`;
+    params.push(term, term, term, term, term);
   }
   sql += ` ORDER BY COALESCE(po.received_at, po.ordered_at, po.created_at) DESC`;
   const rows = getDb().prepare(sql).all(...params);

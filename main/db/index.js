@@ -238,6 +238,10 @@ function initDb(dataDir) {
   addColumnIfMissing(db, 'export_profiles', 'index_pad', 'INTEGER');
   addColumnIfMissing(db, 'export_profiles', 'index_prefix', 'TEXT');
 
+  /* v0.1.94: per-profile image scope (JSON {mode, count?}). NULL = all
+     images, so existing profiles export exactly as before. */
+  addColumnIfMissing(db, 'export_profiles', 'image_scope', 'TEXT');
+
   /* v0.49.47: PO + product carton extensions for container utilization
      and by-volume / by-weight cost allocation.
      - po_lines: carton qty + outer dims (cm) + per-unit weight (kg).

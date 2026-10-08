@@ -174,6 +174,7 @@ export function Sidebar({ onSearch }) {
   const connStatus = useAppStore((s) => s.clientConnection?.status);
   const connServerVersion = useAppStore((s) => s.clientConnection?.serverVersion);
   const connLastError = useAppStore((s) => s.clientConnection?.lastError);
+  const connServerName = useAppStore((s) => s.clientConnection?.serverName);
   // v0.17.0: currently-connected users (server + clients with an open
   // WebSocket). Updated via the `users:presence` push event from main.
   // Only meaningful in server / client modes; in standalone it's [].
@@ -185,6 +186,19 @@ export function Sidebar({ onSearch }) {
   const [connLegendOpen, setConnLegendOpen] = useState(false);
 
   const modKey = platform === 'darwin' ? '⌘' : 'Ctrl+';
+
+  // Tooltip for the client chip and the collapsed-rail dot.
+  const connTitle = (() => {
+    const s = connStatus;
+    const server = connServerName ? `the server Mac “${connServerName}”` : 'the server Mac';
+    if (s === 'connected') return `Connected to ${server}${connServerVersion ? ` (v${connServerVersion})` : ''}. Click for details.`;
+    if (s === 'disconnected') return `Can't reach ${server}: ${connLastError || 'check the server address and token in Settings.'} Click for help.`;
+    // v0.26.38: 'degraded' — server returned a 5xx on
+    // /api/ping. Connection is up but the server had a
+    // transient hiccup. Distinct from disconnected.
+    if (s === 'degraded') return `${connServerName || 'The server Mac'} is reachable but returned an error: ${connLastError || 'unknown'}. Click for details.`;
+    return 'Checking the connection to the server Mac… click for details.';
+  })();
 
   // v0.26.30: collapse/expand toggle. The state lives here (not in
   // the store) because it's a pure UI preference local to the sidebar
@@ -223,6 +237,25 @@ export function Sidebar({ onSearch }) {
     document.body.dataset.role = role;
     return () => { document.body.dataset.role = ''; };
   }, [role]);
+
+  // At 800 px tall the primary nav scrolls and whole sections sit below the
+  // fold. Keep the active page in view after any navigation (⌘K, a Dashboard
+  // chip), and fade the bottom edge while there is more to scroll to.
+  const navRef = useRef(null);
+  const [navHasMore, setNavHasMore] = useState(false);
+  useEffect(() => {
+    navRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeModule]);
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return undefined;
+    const update = () => setNavHasMore(nav.scrollHeight - nav.scrollTop - nav.clientHeight > 2);
+    update();
+    nav.addEventListener('scroll', update, { passive: true });
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null;
+    ro?.observe(nav);
+    return () => { nav.removeEventListener('scroll', update); ro?.disconnect(); };
+  }, [collapsed, closedSections, caps]);
 
   function renderSection(section) {
     const items = (!closedSections[section.label] || collapsed ? section.items : [])
@@ -306,7 +339,7 @@ export function Sidebar({ onSearch }) {
           <span>Search</span><span className="sidebar__item-shortcut">{modKey}K</span>
         </button>
 
-        <nav className="sidebar__nav" aria-label="Primary">
+        <nav ref={navRef} className={`sidebar__nav${navHasMore ? ' sidebar__nav--more' : ''}`} aria-label="Primary">
           {NAV.filter((section) => !section.pinned).map(renderSection)}
         </nav>
         {NAV.some((section) => section.pinned) ? (
@@ -351,6 +384,22 @@ export function Sidebar({ onSearch }) {
               loading" or "frozen". */}
           {appMode === 'client' ? <NetworkChip /> : null}
 
+          {/* 0.1.94: the collapsed rail hides the whole footer row, which used
+              to take every connection signal with it — a red server went
+              unnoticed. This dot is shown only when collapsed (CSS) and opens
+              the same legend as the chip. */}
+          {appMode === 'client' ? (
+            <button
+              type="button"
+              className={`sidebar__conn-rail sidebar__storage-tag--conn-${connStatus || 'unknown'}`}
+              onClick={() => setConnLegendOpen(true)}
+              title={connTitle}
+              aria-label={connTitle}
+            >
+              <span className="sidebar__conn-dot" aria-hidden="true" />
+            </button>
+          ) : null}
+
           <div className="sidebar__footer-row">
             <span className="sidebar__version">v{version || '0.0.0'}</span>
             {appMode === 'server' ? (
@@ -366,19 +415,11 @@ export function Sidebar({ onSearch }) {
                 type="button"
                 className={`sidebar__storage-tag sidebar__storage-tag--client sidebar__storage-tag--conn-${connStatus || 'unknown'}`}
                 onClick={() => setConnLegendOpen(true)}
-                title={(() => {
-                  const s = connStatus;
-                  if (s === 'connected') return `Connected to server${connServerVersion ? ` (v${connServerVersion})` : ''}. Click for details.`;
-                  if (s === 'disconnected') return `Disconnected: ${connLastError || 'check Server URL / Token in Settings.'} Click for help.`;
-                  // v0.26.38: 'degraded' — server returned a 5xx on
-                  // /api/ping. Connection is up but the server had a
-                  // transient hiccup. Distinct from disconnected.
-                  if (s === 'degraded') return `Server is reachable but returned an error: ${connLastError || 'unknown'}. Click for details.`;
-                  return 'Checking connection to server… click for details.';
-                })()}
+                title={connTitle}
               >
                 <span className="sidebar__conn-dot" aria-hidden="true" />
                 Client
+                {connServerName ? <span className="sidebar__conn-server">· {connServerName}</span> : null}
               </button>
             ) : dataDirIsCloud ? (
               <span

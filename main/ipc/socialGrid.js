@@ -27,6 +27,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const sharp = require('sharp');
+require('../util/sharpLimits');   // process-wide libvips cache cap (perf audit 2026-10)
 const presets = require('../db/socialGridPresets');
 const templates = require('../db/socialGridTemplates');
 const productsDb = require('../db/products');
@@ -67,9 +68,9 @@ function contextFor(rawConfig) {
  * identical everywhere. `fit: 'fill'` cannot distort anything here because
  * the capture has the same aspect ratio as the target.
  */
-async function renderPageBytes(products, brands, config, pageIndex, pageCount, format, quality, maxPx = null) {
+async function renderPageBytes(products, brands, config, pageIndex, pageCount, format, quality, maxPx = null, resolveImage = assetDataUri) {
   const html = buildPageHtml({
-    products, brands, config, pageIndex, pageCount, resolveImage: assetDataUri,
+    products, brands, config, pageIndex, pageCount, resolveImage,
   });
   const raw = await withWindow(html, { width: config.width, height: config.height, zoomFactor: 1 },
     (win) => win.webContents.capturePage());
@@ -80,6 +81,31 @@ async function renderPageBytes(products, brands, config, pageIndex, pageCount, f
   return format === 'jpeg'
     ? base.jpeg({ quality }).toBuffer()
     : base.png({ compressionLevel: 9 }).toBuffer();
+}
+
+/**
+ * Preview only: product photos come from the shared thumbnail cache (640 px
+ * WebP, main/util/thumbCache.js) instead of being read and base64'd at full
+ * size — a 9-tile preview used to inline nine 1200–1600 px originals into the
+ * capture window on every debounced edit (perf audit 2026-10). The preview is
+ * 560 px wide, so nothing visible is lost. Anything the cache cannot serve
+ * falls back to the original, exactly as the export reads it.
+ */
+async function previewImageResolver(products) {
+  const { readArtwork } = require('../util/mediaPaths');
+  const { getThumbnail } = require('../util/thumbCache');
+  const { getDataDir } = require('../db');
+  const map = new Map();
+  const rels = [...new Set((products || []).map((p) => p?.mainImagePath).filter(Boolean))];
+  await Promise.all(rels.map(async (rel) => {
+    try {
+      const image = readArtwork(getDataDir(), rel, { headerOnly: true });
+      if (!image) { map.set(rel, ''); return; }
+      const thumb = await getThumbnail(image.abs, { w: 640 });
+      if (thumb) map.set(rel, `data:image/webp;base64,${(await fs.promises.readFile(thumb)).toString('base64')}`);
+    } catch (_) { /* fall back to the original below */ }
+  }));
+  return (rel) => (map.has(rel) ? map.get(rel) : assetDataUri(rel));
 }
 
 function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActiveCompany }) {
@@ -195,6 +221,8 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       ctx.config.format === 'jpeg' ? 'jpeg' : 'png',
       Math.min(85, ctx.config.quality),
       PREVIEW_MAX,
+      // Photos from the 640 px thumbnail cache, not full-size originals.
+      await previewImageResolver(pages[idx]),
     );
     const mime = ctx.config.format === 'jpeg' ? 'image/jpeg' : 'image/png';
     return { dataUrl: `data:${mime};base64,${bytes.toString('base64')}`, summary, pageCount, pageIndex: idx };

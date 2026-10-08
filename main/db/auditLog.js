@@ -291,7 +291,65 @@ function listRecent({ limit = 100, offset = 0, entityType = null, userId = null,
        LIMIT @limit OFFSET @offset
     `)
     .all(params);
-  return rows.map(rowToEntry);
+  return attachEntityNames(db, rows.map(rowToEntry));
+}
+
+/**
+ * Name every row of the global feed from the live tables, in the same call.
+ *
+ * The History page used to look names up in the renderer's product list,
+ * which only holds the ACTIVE company — so most rows about another
+ * company's products said "(deleted product)" while those products were
+ * alive and well. Names are still looked up at read time, never copied onto
+ * an audit row (HANDOFF: an entity's name follows the live record), but here
+ * against every company: one query per entity type for the page's ids.
+ *
+ * Adds `entity: { exists, sku, name, companyId, companyName }` to each entry.
+ * `exists: false` means the row is really gone (or in Recently deleted).
+ */
+function attachEntityNames(db, entries) {
+  const idsOf = (types) => [...new Set(entries.filter((e) => types.includes(e.entityType)).map((e) => e.entityId).filter(Boolean))];
+  const lookup = (table, cols, ids) => {
+    const map = new Map();
+    // SQLite's default variable limit is 999; a page is at most 500 rows.
+    for (let i = 0; i < ids.length; i += 500) {
+      const chunk = ids.slice(i, i + 500);
+      const rows = db.prepare(`
+        SELECT t.id, ${cols}, t.company_id, c.name AS company_name
+          FROM ${table} t
+          LEFT JOIN companies c ON c.id = t.company_id
+         WHERE t.id IN (${chunk.map(() => '?').join(',')})
+      `).all(...chunk);
+      for (const r of rows) map.set(r.id, r);
+    }
+    return map;
+  };
+  let products = new Map();
+  let brands = new Map();
+  let categories = new Map();
+  try {
+    products = lookup('products', 't.sku, t.name', idsOf(['product', 'image']));
+    brands = lookup('brands', 'NULL AS sku, t.name', idsOf(['brand']));
+    categories = lookup('categories', 'NULL AS sku, t.name', idsOf(['category']));
+  } catch (err) {
+    // A lookup failure must not take the feed down: the renderer falls back
+    // to its own lookup when `entity` is absent.
+    process.stderr.write(`[auditLog] entity names unavailable: ${err.message}\n`);
+    return entries;
+  }
+  return entries.map((e) => {
+    const map = e.entityType === 'product' || e.entityType === 'image' ? products
+      : e.entityType === 'brand' ? brands
+        : e.entityType === 'category' ? categories : null;
+    if (!map) return e;
+    const r = map.get(e.entityId);
+    return {
+      ...e,
+      entity: r
+        ? { exists: true, sku: r.sku ?? null, name: r.name ?? null, companyId: r.company_id ?? null, companyName: r.company_name ?? null }
+        : { exists: false, sku: null, name: null, companyId: null, companyName: null },
+    };
+  });
 }
 
 /**

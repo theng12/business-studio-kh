@@ -53,6 +53,23 @@ let productsInvalidation = 0;
 const freshThrough = new Map();     // view key → invalidation its last committed fetch started after
 const allFreshThrough = new Map();  // companyId → same, for the filter-agnostic list
 
+/* 0.1.94: the background list refresh after a product save (see
+ * updateProduct). One timer coalesces a burst of autosaves; the save is noted
+ * as an invalidation, and the timer skips its fetch when any refresh started
+ * after that note (typically the save's own catalog echo) already ran. */
+const BACKGROUND_REFRESH_MS = 600;
+let backgroundRefreshTimer = null;
+let backgroundRefreshMark = 0;
+function scheduleBackgroundProductsRefresh(get) {
+  backgroundRefreshMark = get().noteProductsInvalidated();
+  if (backgroundRefreshTimer) return;
+  backgroundRefreshTimer = setTimeout(() => {
+    backgroundRefreshTimer = null;
+    if (get().productsFreshThrough(backgroundRefreshMark)) return;
+    Promise.resolve(get().refreshProducts()).catch(() => { /* refreshProducts toasts its own errors */ });
+  }, BACKGROUND_REFRESH_MS);
+}
+
 function filtersAreDefault(filters) {
   return filters.search === '' &&
     (filters.brandIds == null || filters.brandIds.length === 0) &&
@@ -199,7 +216,7 @@ export function createProductsSlice(set, get) {
       // Clicking the same column toggles direction. Clicking a different
       // column starts in 'asc' for text columns, 'desc' for numeric/date
       // columns so the most-useful values surface first.
-      const NUMERIC_DEFAULTS_DESC = new Set(['images', 'updated']);
+      const NUMERIC_DEFAULTS_DESC = new Set(['images', 'updated', 'stock']);
       set((s) => {
         const prev = s.productSort;
         const nextSort = prev.key === key
@@ -372,10 +389,40 @@ export function createProductsSlice(set, get) {
       ]);
       return created;
     },
+    /* 0.1.94: a product save no longer waits for the whole list.
+     *
+     * Every autosave used to await `refreshProducts()` — the full company list
+     * (2,500 rows, ~2.8 MB, 35–50 ms in the main process, twice with a filter)
+     * — before the panel could say "Saved". The update already returns the
+     * saved row, so it is merged into `products` / `allProducts` straight away
+     * and the list is refreshed in the background, coalesced across a burst of
+     * autosaves. The refresh still happens (the edit can move the row in or out
+     * of a filter, and another Mac may have changed something), and it keeps
+     * the catalog-event bookkeeping honest: the save is noted as an
+     * invalidation, so whichever refresh starts first after it — the edit's own
+     * `catalog:changed` echo, or this one — satisfies the other. Nothing here
+     * marks the list fresh without fetching it. */
     async updateProduct(id, patch) {
       const updated = await window.api.products.update(id, patch);
-      await get().refreshProducts();
+      get().mergeProductRow(updated);
+      scheduleBackgroundProductsRefresh(get);
       return updated;
+    },
+
+    /** Replace a row (by id) in the Library list and the full list, in place. */
+    mergeProductRow(row) {
+      if (!row?.id) return;
+      const companyId = get().activeCompanyId;
+      if (row.companyId && companyId && row.companyId !== companyId) return;
+      const swap = (list) => {
+        if (!Array.isArray(list)) return list;
+        const at = list.findIndex((p) => p.id === row.id);
+        if (at < 0) return list;
+        const next = list.slice();
+        next[at] = { ...list[at], ...row };
+        return next;
+      };
+      set((s) => ({ products: swap(s.products), allProducts: swap(s.allProducts) }));
     },
     async removeProduct(id) {
       await window.api.products.remove(id);

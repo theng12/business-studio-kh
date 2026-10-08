@@ -119,7 +119,7 @@ function resolveBackupsDir(cfg) {
  * @param {(stage: string) => void} [args.onProgress]
  *   Stages: 'snapshot' | 'manifest' | 'archive' | 'cleanup' | 'done'.
  */
-async function createBackup({ destDir, onProgress } = {}) {
+async function createBackup({ destDir, onProgress, auto = false } = {}) {
   const config = require('./config');
   const cfg = config.loadConfig();
   const dataDir = cfg.dataDir;
@@ -132,7 +132,7 @@ async function createBackup({ destDir, onProgress } = {}) {
 
   const createdAt = Date.now();
   const stamp = backupStamp(new Date(createdAt));
-  const fileName = backupFilename(stamp, app.getVersion());
+  const fileName = auto ? autoBackupFilename(stamp, app.getVersion()) : backupFilename(stamp, app.getVersion());
   const outputPath = path.join(backupsDir, fileName);
 
   // Stage into a temp dir (mkdtemp) so a crash/cancel leaves nothing
@@ -171,6 +171,7 @@ async function createBackup({ destDir, onProgress } = {}) {
       backupFormatVersion: BACKUP_FORMAT_VERSION,
       appVersion: app.getVersion(),
       createdAt,
+      ...(auto ? { automatic: true } : {}),
       sourceDataDir: dataDir,   // informational; restore uses the live dataDir
       includes,
     };
@@ -235,11 +236,182 @@ async function listBackups() {
         sizeBytes: stat.size,
         // Birth time when available (macOS reports it), else mtime.
         createdAt: Math.round((stat.birthtimeMs || stat.mtimeMs) || 0),
+        auto: isAutoBackupName(name),
       });
     } catch (_) { /* skip unreadable */ }
   }
   backups.sort((a, b) => b.createdAt - a.createdAt);
-  return { backupsDir, backups };
+  return { backupsDir, backups, autoBackup: autoBackupStatus(cfg, backupsDir, backups) };
+}
+
+/* ─── automatic weekly backups ─────────────────────────────────── */
+
+/**
+ * 0.1.94 — owner's decision: a weekly automatic backup while the app is
+ * open, keeping the newest four automatic ones.
+ *
+ *   - Checked shortly after launch and every few hours after that; when the
+ *     newest AUTOMATIC backup in the backups folder is 7+ days old (or there
+ *     is none), one is made in the background.
+ *   - Automatic backups are told apart by their filename
+ *     (`media-studio-kh-backup-auto-…`), which isBackupFilename() already
+ *     accepts, so they list and restore like any other.
+ *   - Retention only ever touches automatic backups: the oldest beyond four
+ *     go to the macOS Trash (main/util/fileTrash.js — never erased). A
+ *     backup the user made by hand is never pruned.
+ *   - Only the Mac that holds the data runs it: main/index.js starts the
+ *     scheduler on the standalone / server boot path, and the check refuses
+ *     client mode too, in case that ever changes.
+ *   - It runs as a tracked operation, so a restore or data-folder move waits
+ *     for it instead of moving the folder out from under the archive.
+ */
+const AUTO_BACKUP_INTERVAL_MS = 7 * 24 * 3600 * 1000;
+const AUTO_BACKUP_KEEP = 4;
+const AUTO_BACKUP_CHECK_MS = 3 * 3600 * 1000;
+const AUTO_BACKUP_FIRST_CHECK_MS = 2 * 60 * 1000;
+const AUTO_PREFIX = 'media-studio-kh-backup-auto-';
+
+function autoBackupFilename(stamp, appVersion) {
+  return backupFilename(stamp, appVersion).replace('media-studio-kh-backup-', AUTO_PREFIX);
+}
+
+function isAutoBackupName(name) {
+  return typeof name === 'string' && name.startsWith(AUTO_PREFIX) && isBackupFilename(name);
+}
+
+/** Newest automatic backup's time in a newest-first listing, or null. */
+function lastAutoBackupAt(backups) {
+  const hit = (backups || []).find((b) => b.auto ?? isAutoBackupName(b.fileName));
+  return hit ? hit.createdAt : null;
+}
+
+/** True when an automatic backup should run now. */
+function autoBackupDue({ lastAutoAt, now = Date.now(), intervalMs = AUTO_BACKUP_INTERVAL_MS } = {}) {
+  if (lastAutoAt == null || !Number.isFinite(Number(lastAutoAt))) return true;
+  // A clock that went backwards (or a file dated in the future) counts as due
+  // rather than postponing the next backup indefinitely.
+  if (Number(lastAutoAt) > now) return true;
+  return now - Number(lastAutoAt) >= intervalMs;
+}
+
+/**
+ * The automatic backups to retire: every automatic one beyond the newest
+ * `keep`, oldest last. Manual backups are never in the result.
+ */
+function autoBackupsToPrune(backups, keep = AUTO_BACKUP_KEEP) {
+  const autos = (backups || [])
+    .filter((b) => b.auto ?? isAutoBackupName(b.fileName))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  return autos.slice(Math.max(0, keep));
+}
+
+/** True when the two paths live on the same disk (the nearest existing ancestor of each). */
+function sameDisk(a, b) {
+  const devOf = (p) => {
+    let cur = path.resolve(p);
+    for (;;) {
+      try { return fs.statSync(cur).dev; } catch (_) { /* climb */ }
+      const up = path.dirname(cur);
+      if (up === cur) return null;
+      cur = up;
+    }
+  };
+  const da = devOf(a);
+  const db = devOf(b);
+  return da != null && db != null && da === db;
+}
+
+const autoState = { running: false, lastError: null, lastErrorAt: null, timer: null, firstTimer: null };
+
+function autoBackupStatus(cfg, backupsDir, backups) {
+  const lastAt = lastAutoBackupAt(backups);
+  return {
+    enabled: cfg?.autoBackupEnabled !== false,
+    intervalDays: AUTO_BACKUP_INTERVAL_MS / (24 * 3600 * 1000),
+    keep: AUTO_BACKUP_KEEP,
+    lastAt,
+    nextDueAt: lastAt == null ? null : lastAt + AUTO_BACKUP_INTERVAL_MS,
+    running: autoState.running,
+    lastError: autoState.lastError,
+    lastErrorAt: autoState.lastErrorAt,
+    // "Same disk as the data" is the real risk (one drive failing takes both);
+    // a backups folder inside the data folder is the default case of it.
+    sameDiskAsData: cfg?.dataDir ? sameDisk(backupsDir, cfg.dataDir) : false,
+  };
+}
+
+/**
+ * Make an automatic backup if one is due, then retire automatic backups
+ * beyond the newest four. Never throws: a failure is logged and remembered
+ * for Settings, and the next check retries.
+ *
+ * `deps` lets a test supply the pieces; production passes nothing.
+ */
+async function runAutoBackupIfDue({ now = Date.now(), log = () => {}, deps = {} } = {}) {
+  const config = deps.config || require('./config');
+  const list = deps.listBackups || listBackups;
+  const create = deps.createBackup || createBackup;
+  const trash = deps.trashPath || require('./util/fileTrash').trashPath;
+  const track = deps.runTracked || ((fn) => {
+    const lifecycle = require('./util/maintenanceLifecycle');
+    if (lifecycle.isMaintenanceActive()) return { skipped: 'maintenance' };
+    return lifecycle.runTrackedOperation('backups:auto', fn);
+  });
+  if (autoState.running) return { skipped: 'running' };
+  const cfg = config.loadConfig();
+  if (cfg.mode === 'client') return { skipped: 'client' };
+  if (cfg.autoBackupEnabled === false) return { skipped: 'disabled' };
+  autoState.running = true;
+  try {
+    const before = await list();
+    let created = null;
+    if (autoBackupDue({ lastAutoAt: lastAutoBackupAt(before.backups), now })) {
+      // A custom folder on an external drive that is not plugged in: making
+      // it would quietly create /Volumes/<drive>/… on the internal disk.
+      if (cfg.backupsDir && !(deps.exists || fs.existsSync)(cfg.backupsDir)) {
+        throw new Error(`The backups folder is not available: ${cfg.backupsDir}. Connect the drive, or choose another folder in Settings → Backups.`);
+      }
+      const result = await track(() => create({ auto: true }));
+      if (result?.skipped) return result;
+      created = result;
+      log('backup:auto', `${created.fileName} ${created.sizeBytes} bytes`);
+    }
+    const after = created ? await list() : before;
+    const pruned = [];
+    for (const old of autoBackupsToPrune(after.backups)) {
+      const outcome = await trash(old.backupPath);
+      pruned.push({ fileName: old.fileName, outcome });
+      log('backup:auto-retired', `${old.fileName} → ${outcome}`);
+    }
+    autoState.lastError = null;
+    autoState.lastErrorAt = null;
+    return { created, pruned };
+  } catch (err) {
+    autoState.lastError = err.message;
+    autoState.lastErrorAt = now;
+    log('backup:auto-failed', err.message);
+    return { error: err.message };
+  } finally {
+    autoState.running = false;
+  }
+}
+
+/** Start the weekly check (first one a couple of minutes after launch). Returns a stop function. */
+function startAutoBackupScheduler({ log = () => {} } = {}) {
+  stopAutoBackupScheduler();
+  const tick = () => { runAutoBackupIfDue({ log }).catch(() => { /* never throws; belt-and-braces */ }); };
+  autoState.firstTimer = setTimeout(tick, AUTO_BACKUP_FIRST_CHECK_MS);
+  autoState.timer = setInterval(tick, AUTO_BACKUP_CHECK_MS);
+  autoState.firstTimer.unref?.();
+  autoState.timer.unref?.();
+  return stopAutoBackupScheduler;
+}
+
+function stopAutoBackupScheduler() {
+  clearTimeout(autoState.firstTimer);
+  clearInterval(autoState.timer);
+  autoState.firstTimer = null;
+  autoState.timer = null;
 }
 
 /** The single most-recent backup (or null). Cheap call for the "last backup was…" affordance. */
@@ -453,4 +625,15 @@ module.exports = {
   previewBackup,
   restoreBackup,
   resolveBackupsDir,
+  // 0.1.94 automatic weekly backups
+  AUTO_BACKUP_INTERVAL_MS,
+  AUTO_BACKUP_KEEP,
+  autoBackupFilename,
+  isAutoBackupName,
+  autoBackupDue,
+  autoBackupsToPrune,
+  lastAutoBackupAt,
+  runAutoBackupIfDue,
+  startAutoBackupScheduler,
+  stopAutoBackupScheduler,
 };

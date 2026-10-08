@@ -12,6 +12,8 @@ import { DesignerLayers } from './DesignerLayers.jsx';
 import { useDesignerHistory } from './useDesignerHistory.js';
 import { alignPatches, distributePatches, normalizeElements } from './designerGeometry.js';
 import { keepTypedName } from './editorRules.js';
+import { NumberField } from './NumberField.jsx';
+import { ProductCombobox } from '../AIStudio/ProductCombobox.jsx';
 
 const TYPES = [
   ['text', 'Text'], ['sku', 'SKU'], ['price', 'Price'], ['barcode', 'Barcode'], ['qr', 'QR code'],
@@ -23,6 +25,13 @@ const TYPES = [
  * along, so printing a VIP price was possible from the API and impossible from
  * this screen. */
 import { fieldOptions } from './labelFields.js';
+
+/** True while a modal dialog is open (the shared Modal / confirm() mark
+ *  themselves `role="dialog" aria-modal="true"`). Designer shortcuts stand
+ *  down then, so Backspace in a confirm cannot delete what is behind it. */
+function dialogOpen() {
+  try { return !!globalThis.document?.querySelector?.('[role="dialog"][aria-modal="true"]'); } catch { return false; }
+}
 
 function makeElement(type, n) {
   const base = { id: `${type}-${Date.now()}-${n}`, type, x: 4, y: 4 + n * 2, width: 30, height: 8,
@@ -135,9 +144,11 @@ function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, on
       {/^(priceRetail|priceWholesale|price\.)/.test(element.field || '') && !element.manualValue ? <p className="ld-inspector-note">Prices print as a plain number, like 1,234.50. Put the currency in Prefix or Suffix.</p> : null}
     </div> : null}
     {['image', 'cert'].includes(element.type) ? <Button variant="ghost" onClick={onPickImage}>{element.src ? 'Replace image…' : 'Choose image…'}</Button> : null}
-    <div className="inspector-grid"><label>X (mm)<Input type="number" value={element.x} onChange={(e) => set('x', Number(e.target.value))} /></label><label>Y (mm)<Input type="number" value={element.y} onChange={(e) => set('y', Number(e.target.value))} /></label><label>Width<Input type="number" value={element.width} onChange={(e) => set('width', Number(e.target.value))} /></label><label>Height<Input type="number" value={element.height} onChange={(e) => set('height', Number(e.target.value))} /></label></div>
-    <label>Rotation<Input type="number" min="-180" max="180" value={element.rotation || 0} onChange={(e) => set('rotation', Number(e.target.value))} /></label>
-    {!NON_TEXT_TYPES.includes(element.type) ? <div className="inspector-grid"><label>Font size<Input type="number" value={element.fontSize || 10} onChange={(e) => set('fontSize', Number(e.target.value))} /></label><label>Weight<Select value={element.fontWeight || 400} onChange={(e) => set('fontWeight', Number(e.target.value))}><option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Heavy</option></Select></label><label>Color<Input type="color" value={element.color || '#111827'} onChange={(e) => set('color', e.target.value)} /></label><label>Align<Select value={element.align || 'left'} onChange={(e) => set('align', e.target.value)}><option>left</option><option>center</option><option>right</option></Select></label></div> : null}
+    {/* Numbers commit on blur / Enter, so clearing a box to type "12" no longer
+        moves the element to 0 first (NumberField). */}
+    <div className="inspector-grid"><label>X (mm)<NumberField step="0.1" value={element.x} onCommit={(v) => set('x', v)} /></label><label>Y (mm)<NumberField step="0.1" value={element.y} onCommit={(v) => set('y', v)} /></label><label>Width<NumberField step="0.1" min={0.5} value={element.width} onCommit={(v) => set('width', v)} /></label><label>Height<NumberField step="0.1" min={0.5} value={element.height} onCommit={(v) => set('height', v)} /></label></div>
+    <label>Rotation<NumberField min={-180} max={180} value={element.rotation || 0} onCommit={(v) => set('rotation', v)} /></label>
+    {!NON_TEXT_TYPES.includes(element.type) ? <div className="inspector-grid"><label>Font size<NumberField min={1} max={200} step="0.5" value={element.fontSize || 10} onCommit={(v) => set('fontSize', v)} /></label><label>Weight<Select value={element.fontWeight || 400} onChange={(e) => set('fontWeight', Number(e.target.value))}><option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Heavy</option></Select></label><label>Color<Input type="color" value={element.color || '#111827'} onChange={(e) => set('color', e.target.value)} /></label><label>Align<Select value={element.align || 'left'} onChange={(e) => set('align', e.target.value)}><option>left</option><option>center</option><option>right</option></Select></label></div> : null}
     {['rect', 'colorbar'].includes(element.type) ? <label>Fill<Input type="color" value={element.fill || '#eef2ff'} onChange={(e) => set('fill', e.target.value)} /></label> : null}
     {element.type === 'barcode' ? <label>Format<Select value={element.format || 'code128'} onChange={(e) => set('format', e.target.value)}><option value="code128">Code 128</option><option value="ean13">EAN-13</option><option value="upca">UPC-A</option><option value="code39">Code 39</option></Select></label> : null}
     <div className="inspector-actions"><Button variant="ghost" onClick={onDuplicate}>Duplicate</Button><Button variant="ghost" onClick={() => onLayer(-1)}>Send back</Button><Button variant="ghost" onClick={() => onLayer(1)}>Bring front</Button></div>
@@ -145,8 +156,14 @@ function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, on
 }
 
 export function LabelTemplates() {
-  const companyId = useAppStore((s) => s.activeCompanyId); const products = useAppStore((s) => s.products); const addToast = useAppStore((s) => s.addToast);
+  const companyId = useAppStore((s) => s.activeCompanyId); const addToast = useAppStore((s) => s.addToast);
+  // The whole company, not the Library's filtered view (`?? s.products` only
+  // for component tests that stub the old field).
+  const products = useAppStore((s) => s.allProducts ?? s.products);
+  const refreshAllProducts = useAppStore((s) => s.refreshAllProducts);
   const companySwitching = useAppStore((s) => s.companySwitching);
+  // Which layer's name is being edited inline in the Layers list.
+  const [renamingId, setRenamingId] = useState(null);
   const [items, setItems] = useState([]); const [editing, setEditing] = useState(null); const [draft, setDraft] = useState(null); const [selectedIds, setSelectedIds] = useState([]);
   const [saveState, setSaveState] = useState('saved'); const [savedAt, setSavedAt] = useState(null); const [newOpen, setNewOpen] = useState(false); const [newName, setNewName] = useState('');
   const timer = useRef(null);
@@ -166,6 +183,11 @@ export function LabelTemplates() {
     () => (companies ?? []).find((c) => c.id === companyId)?.priceGroups ?? [],
     [companies, companyId],
   );
+  useEffect(() => {
+    if (companyId && !(Array.isArray(products) && products.length)) refreshAllProducts?.();
+    // Once per company — an empty company must not refetch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyId]);
   const requestSeq = useRef(0); const remoteSeq = useRef(0); const editorGeneration = useRef(0); const latest = useRef(null); const dirty = useRef(false); const saveQueue = useRef(null); const saveRef = useRef(null); const acknowledgedRevision = useRef(null);
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
@@ -343,13 +365,19 @@ export function LabelTemplates() {
     history.push(draft.elements);
     setElements(draft.elements.map((x) => (x.id === id ? { ...x, visible } : x)));
   }
+  /* Double-click (or the canvas's Rename) opens an inline box in the Layers
+   * list; the browser prompt() dialog is not implemented in Electron, so it did nothing. */
   function renameElement(id) {
+    if (draft.elements.some((x) => x.id === id)) setRenamingId(id);
+  }
+  function finishRename(id, name) {
+    setRenamingId(null);
+    if (name == null) return;
     const el = draft.elements.find((x) => x.id === id);
-    if (!el) return;
-    const next = window.prompt('Layer name', el.name || '');
-    if (next == null) return;
+    const next = name.trim() || undefined;
+    if (!el || (el.name || undefined) === next) return;
     history.push(draft.elements);
-    setElements(draft.elements.map((x) => (x.id === id ? { ...x, name: next.trim() || undefined } : x)));
+    setElements(draft.elements.map((x) => (x.id === id ? { ...x, name: next } : x)));
   }
   function nudge(dx, dy) {
     if (!selectedIds.length) return;
@@ -432,6 +460,9 @@ export function LabelTemplates() {
     if (!editing) return undefined;
     const key = (e) => {
       if (/INPUT|TEXTAREA|SELECT/.test(e.target?.tagName) || e.target?.isContentEditable) return;
+      // A dialog over the designer (a confirm, the conflict prompt) owns the
+      // keyboard: Backspace there must not delete the selected element.
+      if (e.defaultPrevented || dialogOpen()) return;
       const meta = e.metaKey || e.ctrlKey;
       const el = draft;
       if (!el) return;
@@ -474,12 +505,17 @@ export function LabelTemplates() {
             <>
               <SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} />
               {productList.length ? (
-                <label className="ld-sample-picker" title="The product the canvas and preview are drawn with">
+                <div className="ld-sample-picker" title="The product the canvas and preview are drawn with">
                   <span>Preview with</span>
-                  <Select value={sample?.id || ''} onChange={(e) => setSampleId(e.target.value)}>
-                    {productList.map((p) => <option key={p.id} value={p.id}>{p.sku ? `${p.sku} — ` : ''}{p.name || 'Unnamed product'}</option>)}
-                  </Select>
-                </label>
+                  {/* Searchable — a native select of ~2,500 products is not. */}
+                  <ProductCombobox
+                    products={productList}
+                    value={sample?.id || ''}
+                    onChange={(id) => setSampleId(id || '')}
+                    allowClear={false}
+                    ariaLabel="Preview with product"
+                  />
+                </div>
               ) : null}
               <div className="ld-history" role="group" aria-label="History">
                 <Button size="sm" onClick={undo} disabled={!history.canUndo} title="Undo (⌘Z)"><UndoIcon />Undo</Button>
@@ -511,9 +547,9 @@ export function LabelTemplates() {
             ))}
           </div>
           <div className="designer-toolbar__size">
-            <Input type="number" value={draft.widthMm} onChange={(e) => change({ widthMm: Number(e.target.value) })} />
+            <NumberField aria-label="Label width (mm)" min={5} max={500} step="0.5" value={draft.widthMm} onCommit={(v) => change({ widthMm: v })} />
             <span>×</span>
-            <Input type="number" value={draft.heightMm} onChange={(e) => change({ heightMm: Number(e.target.value) })} />
+            <NumberField aria-label="Label height (mm)" min={5} max={500} step="0.5" value={draft.heightMm} onCommit={(v) => change({ heightMm: v })} />
             <span>mm</span>
             <Input type="color" value={draft.backgroundColor} onChange={(e) => change({ backgroundColor: e.target.value })} />
           </div>
@@ -566,6 +602,8 @@ export function LabelTemplates() {
               selectedIds={selectedIds}
               onSelect={setSelectedIds}
               onAction={handleCanvasAction}
+              renamingId={renamingId}
+              onRename={finishRename}
             />
           </div>
           <Inspector
@@ -593,6 +631,6 @@ export function LabelTemplates() {
         {items.map((item) => <TemplateCard key={item.id} item={item} onOpen={() => open(item)} onDuplicate={() => duplicate(item)} onDelete={() => remove(item)} />)}
       </div>
     ) : <EmptyState title="No label templates yet" body="Create your first one to start printing labels." action={<Button variant="primary" onClick={() => setNewOpen(true)}>+ New template</Button>} />}
-    <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New label template" footer={<><Button onClick={() => setNewOpen(false)}>Cancel</Button><Button variant="primary" onClick={createTemplate}>Create template</Button></>}><label className="field"><span className="field__label">Template name</span><Input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Retail price label" /></label></Modal>
+    <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New label template" footer={<><Button onClick={() => setNewOpen(false)}>Cancel</Button><Button variant="primary" onClick={createTemplate}>Create template</Button></>}><label className="field"><span className="field__label">Template name</span><Input autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent?.isComposing) { e.preventDefault(); void createTemplate(); } }} placeholder="e.g. Retail price label" /></label></Modal>
   </section>;
 }

@@ -111,6 +111,13 @@ export default defineConfig({
       },
     },
   },
+  // 0.1.94: background removal runs in a module Worker
+  // (renderer/lib/bgRemoval.worker.js). @imgly loads onnxruntime with dynamic
+  // imports, i.e. the worker bundle has more than one chunk, which the default
+  // 'iife' worker format cannot express ("UMD and IIFE output formats are not
+  // supported for code-splitting builds"). The app's renderer is ES modules
+  // already, and Chromium runs `{ type: 'module' }` workers.
+  worker: { format: 'es' },
   plugins: [
     stripCrossoriginPlugin(),
     react(),

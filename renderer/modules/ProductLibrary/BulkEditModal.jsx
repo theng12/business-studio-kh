@@ -10,11 +10,20 @@
  *   - field checked + value set → that value applied to every row
  *   - field checked + value cleared (empty option) → set to NULL
  *     on every row (intentional "clear this field" workflow)
+ *
+ * 0.1.94: the two "Retail / Wholesale price" rows became one Price row —
+ * pick retail, wholesale or a company price group, then Set it, or raise or
+ * lower it by a percentage (rounded: USD to 0.05, KHR to 100), with a
+ * three-product before → after preview. The arithmetic is in bulkPriceEdit.js;
+ * the write is one bulkUpsert (overwrite, keyed by SKU, only that price field),
+ * dry-run first so a SKU that changed elsewhere can never create a product.
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal, Button, Select, Input, Textarea } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
+import { formatPriceEntry } from '../../lib/prices.js';
+import { PRICE_MODES, buildPriceRows, parsePriceInput, priceChangeFor } from './bulkPriceEdit.js';
 
 const STATUS_OPTIONS = [
   { value: 'active',   label: 'Active' },
@@ -22,23 +31,76 @@ const STATUS_OPTIONS = [
   { value: 'draft',    label: 'Draft' },
 ];
 
+const INITIAL_ENABLED = {
+  brandId: false, categoryId: false, status: false,
+  subcategory: false, colorFinish: false, variant: false, unit: false,
+  price: false, description: false,
+};
+const INITIAL_VALUES = {
+  brandId: '', categoryId: '', status: 'active',
+  subcategory: '', colorFinish: '', variant: '', unit: '',
+  description: '',
+};
+const INITIAL_PRICE = { source: 'retail', mode: 'set', value: '' };
+
 export function BulkEditModal({ open, count, productIds, onClose, onDone }) {
   const brands = useAppStore((s) => s.brands);
   const categories = useAppStore((s) => s.categories);
+  const companies = useAppStore((s) => s.companies);
+  const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
 
   // Per-field "include in patch" toggles + current values.
-  const [enabled, setEnabled] = useState({
-    brandId: false, categoryId: false, status: false,
-    subcategory: false, colorFinish: false, variant: false, unit: false,
-    priceRetail: false, priceWholesale: false, description: false,
-  });
-  const [values, setValues] = useState({
-    brandId: '', categoryId: '', status: 'active',
-    subcategory: '', colorFinish: '', variant: '', unit: '',
-    priceRetail: '', priceWholesale: '', description: '',
-  });
+  const [enabled, setEnabled] = useState(INITIAL_ENABLED);
+  const [values, setValues] = useState(INITIAL_VALUES);
+  const [price, setPrice] = useState(INITIAL_PRICE);
   const [saving, setSaving] = useState(false);
+
+  // Start clean each time it opens: a stale ticked field is how a second
+  // bulk edit overwrites something the user did not mean to touch.
+  useEffect(() => {
+    if (!open) return;
+    setEnabled(INITIAL_ENABLED);
+    setValues(INITIAL_VALUES);
+    setPrice(INITIAL_PRICE);
+  }, [open]);
+
+  const priceGroups = useMemo(
+    () => (companies || []).find((c) => c.id === activeCompanyId)?.priceGroups ?? [],
+    [companies, activeCompanyId],
+  );
+  const priceSources = useMemo(() => [
+    { value: 'retail', label: 'Retail price' },
+    { value: 'wholesale', label: 'Wholesale price' },
+    ...priceGroups.filter((g) => g && g.key).map((g) => ({ value: g.key, label: g.label || g.key })),
+  ], [priceGroups]);
+
+  /** The selected products, from the store (the freshest copy of each). */
+  const selectedProducts = useMemo(() => {
+    if (!open) return [];
+    const state = useAppStore.getState();
+    const byId = new Map();
+    for (const p of state.allProducts ?? []) byId.set(p.id, p);
+    for (const p of state.products ?? []) byId.set(p.id, p);
+    return (productIds ?? []).map((id) => byId.get(id)).filter(Boolean);
+  }, [open, productIds]);
+
+  const parsedPrice = parsePriceInput(price.mode, price.value);
+  const priceOpts = parsedPrice.ok ? { source: price.source, mode: price.mode, value: parsedPrice.value } : null;
+  const pricePreview = useMemo(() => {
+    if (!enabled.price || !priceOpts) return { rows: [], changed: 0 };
+    const rows = [];
+    let changed = 0;
+    for (const p of selectedProducts) {
+      const change = priceChangeFor(p, priceOpts);
+      if (!change) continue;
+      changed += 1;
+      if (rows.length < 3) rows.push({ id: p.id, sku: p.sku, ...change });
+    }
+    return { rows, changed };
+    // priceOpts is rebuilt every render; its three parts are the real inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled.price, selectedProducts, price.source, price.mode, parsedPrice.ok, parsedPrice.value]);
 
   function setField(key, val) {
     setValues((v) => ({ ...v, [key]: val }));
@@ -56,39 +118,50 @@ export function BulkEditModal({ open, count, productIds, onClose, onDone }) {
     if (enabled.colorFinish) patch.colorFinish  = values.colorFinish.trim() || null;
     if (enabled.variant)     patch.variant      = values.variant.trim() || null;
     if (enabled.unit)        patch.unit         = values.unit.trim() || null;
-    /* v0.1.25: Number('') is 0, so ticking a price field and leaving the box EMPTY
-     * set every selected product's price to 0 — the opposite of the modal's own
-     * "leave blank to clear" copy. Blank means null. */
-    if (enabled.priceRetail) {
-      const raw = values.priceRetail.trim();
-      patch.priceRetail = raw === '' ? null : (Number.isFinite(Number(raw)) ? Number(raw) : null);
-    }
-    if (enabled.priceWholesale) {
-      const raw = values.priceWholesale.trim();
-      patch.priceWholesale = raw === '' ? null : (Number.isFinite(Number(raw)) ? Number(raw) : null);
-    }
     if (enabled.description) patch.description  = values.description.trim() || null;
     return patch;
   }
 
+  /** Write the price change. Returns the number of products changed. */
+  async function applyPrice() {
+    const { rows } = buildPriceRows(selectedProducts, priceOpts);
+    if (rows.length === 0) return 0;
+    const dry = await window.api.products.bulkUpsert(activeCompanyId, rows, { conflictPolicy: 'overwrite', dryRun: true });
+    const unsafe = (dry?.changes ?? []).find((c) => c && c.action !== 'update' && c.action !== 'no_change');
+    if (unsafe) {
+      throw new Error(`Prices not changed — ${unsafe.sku || 'a product'} ${unsafe.action === 'insert' ? 'no longer has that SKU (it changed elsewhere)' : unsafe.reason || 'could not be updated'}. Refresh and try again.`);
+    }
+    const live = await window.api.products.bulkUpsert(activeCompanyId, rows, { conflictPolicy: 'overwrite', dryRun: false });
+    return live?.updated ?? rows.length;
+  }
+
   async function handleApply() {
     const patch = buildPatch();
-    if (Object.keys(patch).length === 0) {
+    if (Object.keys(patch).length === 0 && !enabled.price) {
       addToast('Tick at least one field to apply.', 'info');
+      return;
+    }
+    if (enabled.price && !parsedPrice.ok) {
+      addToast(parsedPrice.reason, 'info');
       return;
     }
     setSaving(true);
     try {
-      const result = await window.api.products.bulkUpdate(productIds, patch);
-      const failedCount = result?.failed?.length ?? 0;
-      if (failedCount === 0) {
-        addToast(`Updated ${result.updated} product${result.updated === 1 ? '' : 's'}.`, 'success');
-      } else {
-        addToast(
-          `Updated ${result.updated} of ${productIds.length} — ${failedCount} failed.`,
-          'info',
-        );
+      const parts = [];
+      let failed = 0;
+      if (Object.keys(patch).length > 0) {
+        const result = await window.api.products.bulkUpdate(productIds, patch);
+        failed += result?.failed?.length ?? 0;
+        parts.push(`updated ${result.updated} product${result.updated === 1 ? '' : 's'}`);
       }
+      if (enabled.price) {
+        const changed = await applyPrice();
+        const label = priceSources.find((s) => s.value === price.source)?.label?.toLowerCase() ?? 'price';
+        parts.push(changed === 0 ? `no ${label} needed changing` : `changed the ${label} of ${changed}`);
+      }
+      const text = parts.join(' · ');
+      const sentence = text.charAt(0).toUpperCase() + text.slice(1);
+      addToast(failed === 0 ? `${sentence}.` : `${sentence} — ${failed} failed.`, failed === 0 ? 'success' : 'info');
       // Refresh the Library list so the changes show up.
       useAppStore.getState().refreshProducts();
       useAppStore.getState().refreshAllProducts?.();
@@ -103,12 +176,14 @@ export function BulkEditModal({ open, count, productIds, onClose, onDone }) {
   if (!open) return null;
 
   const anyEnabled = Object.values(enabled).some(Boolean);
+  const priceInputLabel = price.mode === 'set' ? 'New price (blank clears it)' : 'Percent';
 
   return (
     <Modal
       open={open}
       title={`Bulk edit · ${count} product${count === 1 ? '' : 's'}`}
       onClose={onClose}
+      busy={saving}
     >
       <div className="bulk-edit">
         <p className="bulk-edit__intro">
@@ -152,12 +227,72 @@ export function BulkEditModal({ open, count, productIds, onClose, onDone }) {
           <Input value={values.subcategory} onChange={(e) => setField('subcategory', e.target.value)} disabled={!enabled.subcategory} />
         </BulkRow>
 
-        <BulkRow label="Retail price" enabled={enabled.priceRetail} onToggle={() => toggleField('priceRetail')}>
-          <Input type="number" value={values.priceRetail} onChange={(e) => setField('priceRetail', e.target.value)} disabled={!enabled.priceRetail} />
-        </BulkRow>
-
-        <BulkRow label="Wholesale price" enabled={enabled.priceWholesale} onToggle={() => toggleField('priceWholesale')}>
-          <Input type="number" value={values.priceWholesale} onChange={(e) => setField('priceWholesale', e.target.value)} disabled={!enabled.priceWholesale} />
+        <BulkRow label="Price" enabled={enabled.price} onToggle={() => toggleField('price')}>
+          <div className="bulk-edit__price">
+            <div className="bulk-edit__price-row">
+              <Select
+                aria-label="Which price"
+                value={price.source}
+                onChange={(e) => setPrice((p) => ({ ...p, source: e.target.value }))}
+                disabled={!enabled.price}
+              >
+                {priceSources.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+              </Select>
+              <div className="segments" role="radiogroup" aria-label="How to change the price">
+                {PRICE_MODES.map((m) => (
+                  <button
+                    key={m.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={price.mode === m.value}
+                    className={`segment${price.mode === m.value ? ' is-active' : ''}`}
+                    disabled={!enabled.price}
+                    onClick={() => setPrice((p) => ({ ...p, mode: m.value, value: '' }))}
+                  >{m.label}</button>
+                ))}
+              </div>
+              <Input
+                type="number"
+                min="0"
+                step="any"
+                aria-label={priceInputLabel}
+                placeholder={price.mode === 'set' ? 'Blank clears it' : 'e.g. 10'}
+                value={price.value}
+                onChange={(e) => setPrice((p) => ({ ...p, value: e.target.value }))}
+                disabled={!enabled.price}
+                className="bulk-edit__price-input"
+              />
+              {price.mode !== 'set' ? <span className="muted">%</span> : null}
+            </div>
+            {enabled.price ? (
+              <div className="bulk-edit__price-preview" aria-live="polite">
+                {!parsedPrice.ok && price.value !== '' ? (
+                  <span className="muted">{parsedPrice.reason}</span>
+                ) : pricePreview.changed === 0 ? (
+                  <span className="muted">
+                    {price.mode === 'set' ? 'No product would change.' : 'No selected product has this price yet, so there is nothing to raise or lower.'}
+                  </span>
+                ) : (
+                  <>
+                    <ul className="bulk-edit__price-list">
+                      {pricePreview.rows.map((r) => (
+                        <li key={r.id}>
+                          <span className="bulk-edit__price-sku">{r.sku}</span>
+                          <span>{formatPriceEntry(r.before) || '—'}</span>
+                          <span aria-hidden>→</span>
+                          <span className="bulk-edit__price-after">{formatPriceEntry(r.after) || 'cleared'}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <span className="muted">
+                      {pricePreview.changed} of {selectedProducts.length} product{selectedProducts.length === 1 ? '' : 's'} change.
+                      {price.mode !== 'set' ? ' Rounded: USD to 0.05, KHR to 100. Products with no price are left alone.' : ''}
+                    </span>
+                  </>
+                )}
+              </div>
+            ) : null}
+          </div>
         </BulkRow>
 
         <BulkRow label="Description" enabled={enabled.description} onToggle={() => toggleField('description')}>
@@ -165,11 +300,11 @@ export function BulkEditModal({ open, count, productIds, onClose, onDone }) {
         </BulkRow>
 
         <footer className="bulk-edit__footer">
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose} disabled={saving}>Cancel</Button>
           <div style={{ flex: 1 }} />
           <Button
             variant="primary"
-            disabled={!anyEnabled || saving}
+            disabled={!anyEnabled || saving || (enabled.price && !parsedPrice.ok)}
             onClick={handleApply}
           >
             {saving ? 'Applying…' : `Apply to ${count}`}

@@ -1,6 +1,10 @@
 /**
  * v0.18.2: global search palette (Cmd+K).
  *
+ * 0.1.94: products match with the Library's rule (main/db/search.js — every
+ * word must match, SKU separators ignored, Khmer-safe) plus an EXACT barcode,
+ * which shows a "barcode" tag; an exact SKU / barcode hit is ranked first.
+ *
  * Opens via the Cmd/Ctrl+K shortcut wired in App.jsx. Searches
  * across products (SKU, name, color/finish — v0.49.37 narrowed from
  * the original sku+name+barcode+secondary_code+description+color set;
@@ -77,6 +81,11 @@ export function SearchPalette({ open, onClose }) {
   const resultScope = useRef(null);
   const currentScope = `${activeCompanyId}|${query.trim()}|${canSeeCosting}|${canSeeCatalog}`;
   const visibleResults = resultScope.current === currentScope ? results : [];
+  /* 0.1.94: Enter pressed before the results for what is typed have arrived
+   * (a barcode scanner types and presses Enter in one burst) is queued and
+   * opens the top result once they land, instead of being dropped. The top
+   * result is the best one: the server ranks an exact SKU / barcode first. */
+  const [enterQueued, setEnterQueued] = useState(false);
 
   // Reset state every time the palette opens, and focus the input.
   useEffect(() => {
@@ -85,6 +94,7 @@ export function SearchPalette({ open, onClose }) {
     setResults([]);
     setSearchError(null);
     setHighlight(0);
+    setEnterQueued(false);
     queueMicrotask(() => inputRef.current?.focus());
   }, [open]);
 
@@ -130,6 +140,7 @@ export function SearchPalette({ open, onClose }) {
         if (fresh()) {
           setResults([]);
           setSearchError(err?.message || String(err));
+          setEnterQueued(false);
         }
       } finally {
         if (fresh()) setSearching(false);
@@ -169,6 +180,14 @@ export function SearchPalette({ open, onClose }) {
     if (opened) onClose?.();
   }
 
+  useEffect(() => {
+    if (!enterQueued || searching || resultScope.current !== currentScope) return;
+    setEnterQueued(false);
+    if (visibleResults[0]) openResult(visibleResults[0]);
+    // openResult is recreated each render; the queue fires on the results.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enterQueued, searching, currentScope, results]);
+
   function onKeyDown(e) {
     if (e.key === 'Escape' || e.key === 'Tab') {
       e.preventDefault();
@@ -187,6 +206,10 @@ export function SearchPalette({ open, onClose }) {
     }
     if (e.key === 'Enter') {
       e.preventDefault();
+      if (query.trim() && (searching || resultScope.current !== currentScope)) {
+        setEnterQueued(true);
+        return;
+      }
       openResult(visibleResults[highlight]);
       return;
     }

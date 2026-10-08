@@ -13,6 +13,9 @@ import { parseConflictError, showConflict } from '../../components/ConflictModal
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { ReframeModal } from './ReframeModal.jsx';
+import { ConnImg } from '../../components/ConnImg.jsx';
+import { undoImageDeletes, undoProductDeletes } from './undoDelete.js';
+import { importableImageFiles, extOfImageFile, pasteTargetIsTextField } from './imageDrop.js';
 
 // v0.27.0: raised 20 → 50 (matches imageManager.MAX_IMAGES_PER_PRODUCT
 // server-side). This is the client-side guard for the ProductForm image
@@ -224,6 +227,15 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [skuError, setSkuError] = useState(null);
   const [activeProductId, setActiveProductId] = useState(product?.id ?? null);
+  // 0.1.94: inline "+ New brand / category" (window.prompt does nothing in
+  // Electron). `{ kind: 'brand' | 'category', name }` while the field is open.
+  const [inlineCreate, setInlineCreate] = useState(null);
+  const [inlineCreating, setInlineCreating] = useState(false);
+  // 0.1.94: a file is being dragged over the panel (drop highlight), and the
+  // image import that a paste / drop / multi-pick started is running.
+  const [dropActive, setDropActive] = useState(false);
+  const [importingImages, setImportingImages] = useState(false);
+  const panelRef = useRef(null);
   /* v0.1.27: the optimistic-concurrency token has to advance with each write.
    *
    * It used to be read from the `product` prop every time. `product` is the
@@ -353,6 +365,7 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     // path image of the new product. Always reset.
     setSelectedImageIds(new Set());
     setCopyMenuOpen(false);
+    setInlineCreate(null);
     // createKey changes when the user asks for ANOTHER new product while the
     // panel is already in create mode; without it the effect would not re-run
     // and the previously created product would stay on screen. */
@@ -440,28 +453,55 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     setForm((f) => ({ ...f, [key]: value }));
   };
 
-  async function handleCreateBrandInline() {
-    const name = window.prompt('New brand name');
-    if (!name?.trim()) return;
+  /* 0.1.94: "+" beside Brand / Category opens a small inline name field. It
+   * used window.prompt, which Electron does not implement, so the button did
+   * nothing. Enter adds, Esc (handled here, so the panel stays open) cancels. */
+  async function submitInlineCreate() {
+    const pending = inlineCreate;
+    const name = pending?.name?.trim();
+    if (!pending || !name || inlineCreating) return;
+    setInlineCreating(true);
     try {
-      const b = await createBrand({ name: name.trim() });
-      setForm((f) => ({ ...f, brandId: b.id }));
-      addToast(`Brand "${b.name}" added`, 'success');
+      if (pending.kind === 'brand') {
+        const b = await createBrand({ name });
+        setForm((f) => ({ ...f, brandId: b.id }));
+        addToast(`Brand "${b.name}" added`, 'success');
+      } else {
+        const c = await createCategory({ name });
+        setForm((f) => ({ ...f, categoryId: c.id }));
+        addToast(`Category "${c.name}" added`, 'success');
+      }
+      setInlineCreate(null);
     } catch (err) {
       addToast(err.message, 'error');
+    } finally {
+      setInlineCreating(false);
     }
   }
 
-  async function handleCreateCategoryInline() {
-    const name = window.prompt('New category name');
-    if (!name?.trim()) return;
-    try {
-      const c = await createCategory({ name: name.trim() });
-      setForm((f) => ({ ...f, categoryId: c.id }));
-      addToast(`Category "${c.name}" added`, 'success');
-    } catch (err) {
-      addToast(err.message, 'error');
-    }
+  function inlineCreateField(kind) {
+    if (inlineCreate?.kind !== kind) return null;
+    const label = kind === 'brand' ? 'New brand name' : 'New category name';
+    return (
+      <div className="field__row pf-inline-create">
+        <Input
+          autoFocus
+          aria-label={label}
+          placeholder={label}
+          value={inlineCreate.name}
+          disabled={inlineCreating}
+          onChange={(e) => setInlineCreate({ kind, name: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); submitInlineCreate(); }
+            else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setInlineCreate(null); }
+          }}
+        />
+        <Button size="sm" onClick={submitInlineCreate} disabled={inlineCreating || !inlineCreate.name.trim()}>
+          {inlineCreating ? 'Adding…' : 'Add'}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setInlineCreate(null)} disabled={inlineCreating}>Cancel</Button>
+      </div>
+    );
   }
 
   function buildPayload() {
@@ -635,7 +675,24 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     try {
       await flushOwed();
       await removeProduct(id);
-      addToast(`Deleted ${sku || 'product'} — restore it from Settings → Recently deleted if that was a mistake.`, 'success');
+      const companyId = activeCompanyId;
+      addToast(`Deleted ${sku || 'product'} — restore it from Settings → Recently deleted if that was a mistake.`, 'success', {
+        // 0.1.94: Undo puts it straight back from the recycle bin.
+        action: {
+          label: 'Undo',
+          onClick: () => undoProductDeletes({
+            companyId,
+            productIds: [id],
+            addToast,
+            onRestored: () => {
+              const st = useAppStore.getState();
+              st.refreshProducts?.();
+              st.refreshAllProducts?.();
+              st.refreshDashboard?.();
+            },
+          }),
+        },
+      });
       if (gen === selectionGen.current) onClose();
     } catch (err) {
       addToast(err.message, 'error');
@@ -700,9 +757,66 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
 
   /* ─── Image grid handlers ─── */
 
-  async function handleAddImage() {
+  /**
+   * 0.1.94: one importer for every way a photo arrives — "+ Add image" (now a
+   * multi-select picker), ⌘V (every pasted image, not just the first) and
+   * drag-and-drop from Finder. Each source is `{ path }` (a file on this Mac,
+   * through images:importForProduct) or `{ file }` (a File/Blob, through
+   * images:importFromBytes — which is also what a client Mac needs, since the
+   * server cannot read a path on this Mac). Sequential, so each add lands in
+   * the next slot under the product's image lock; stops at the 50-photo cap.
+   */
+  async function importImages(sources, { pasted = false } = {}) {
     const gen = selectionGen.current;
     const productId = activeProductId;
+    if (!productId) {
+      addToast(`Save the product first, then ${pasted ? 'paste' : 'add'} images.`, 'info');
+      return;
+    }
+    const room = MAX_IMAGES - images.length;
+    if (room <= 0) {
+      addToast(`Image cap is ${MAX_IMAGES}.`, 'error');
+      return;
+    }
+    let added = 0;
+    let skipped = 0;
+    let overCap = 0;
+    const failures = [];
+    let latest = null;
+    setImportingImages(true);
+    try {
+      for (const src of sources) {
+        if (added >= room) { overCap += 1; continue; }
+        try {
+          const res = src.path
+            ? await window.api.images.importForProduct(productId, src.path)
+            : await window.api.images.importFromBytes(productId, await src.file.arrayBuffer(), extOfImageFile(src.file));
+          if (Array.isArray(res?.images)) latest = res.images;
+          if (res?.skipped) skipped += 1;
+          else added += 1;
+        } catch (err) {
+          failures.push(err.message);
+          if (/cap/i.test(err.message)) break;
+        }
+      }
+    } finally {
+      if (gen === selectionGen.current) setImportingImages(false);
+    }
+    if (latest && gen === selectionGen.current && productId === activeProductIdRef.current) setImages(latest);
+    if (added > 0) useAppStore.getState().refreshProducts();
+    if (sources.length === 1 && failures.length === 0) {
+      if (skipped) addToast('Same image already on this product — skipped.', 'info');
+      else addToast(pasted ? 'Image pasted' : 'Image added', 'success');
+      return;
+    }
+    const parts = [`${added} image${added === 1 ? '' : 's'} added`];
+    if (skipped) parts.push(`${skipped} already on this product`);
+    if (overCap) parts.push(`${overCap} over the ${MAX_IMAGES}-image cap`);
+    if (failures.length) parts.push(`${failures.length} failed: ${failures[0]}`);
+    addToast(parts.join(' · '), failures.length ? 'error' : added ? 'success' : 'info');
+  }
+
+  async function handleAddImage() {
     if (!activeProductId) {
       addToast('Save the product first, then add images.', 'info');
       return;
@@ -712,13 +826,11 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
       return;
     }
     try {
-      const filePath = await window.api.files.pickImageFile();
-      if (!filePath) return;
-      const res = await window.api.images.importForProduct(productId, filePath);
-      if (gen === selectionGen.current && productId === activeProductIdRef.current) setImages(res.images);
-      useAppStore.getState().refreshProducts();
-      if (res.skipped) addToast('Same image already on this product — skipped.', 'info');
-      else addToast('Image added', 'success');
+      // 0.1.94: pick several at once — the handler always supported it.
+      const picked = await window.api.files.pickImageFile({ multiple: true });
+      const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
+      if (paths.length === 0) return;
+      await importImages(paths.map((path) => ({ path })));
     } catch (err) {
       addToast(err.message, 'error');
     }
@@ -787,9 +899,76 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
       // the explicit visual confirmation of WHICH file the click
       // affected — important now that the surrounding tiles re-flow
       // and the user can't easily eyeball which one disappeared.
-      addToast(`Removed ${basename} — restore it from Settings → Recently deleted.`, 'success');
+      addToast(`Removed ${basename} — restore it from Settings → Recently deleted.`, 'success', {
+        action: { label: 'Undo', onClick: () => undoRemovedImages(productId, 1) },
+      });
     } catch (err) {
       addToast(err.message, 'error');
+    }
+  }
+
+  /** 0.1.94: Undo on a photo-remove toast — the newest `count` held photos. */
+  function undoRemovedImages(productId, count) {
+    return undoImageDeletes({
+      companyId: activeCompanyId,
+      productId,
+      count,
+      addToast,
+      onRestored: () => {
+        useAppStore.getState().refreshProducts?.();
+        if (productId !== activeProductIdRef.current) return;
+        const gen = selectionGen.current;
+        window.api.images.listByProduct(productId)
+          .then((rows) => { if (gen === selectionGen.current) setImages(rows); })
+          .catch(() => {});
+      },
+    });
+  }
+
+  /**
+   * 0.1.94: "Remove selected…" on the selection strip (its hint promised a
+   * Delete that did not exist). One confirm, then each photo is removed by its
+   * ROW ID and content hash, one after another — the server renumbers the
+   * survivors' files after each removal, but ids and hashes do not move, so
+   * the order is safe (HANDOFF: image lock / renumber rules). Each removal is
+   * held in Recently deleted like a single remove.
+   */
+  async function handleRemoveSelected() {
+    const gen = selectionGen.current;
+    const productId = activeProductId;
+    const targets = images.filter((im) => selectedImageIds.has(im.id));
+    if (!productId || targets.length === 0) return;
+    const n = targets.length;
+    const includesMain = targets.some((t) => t.id === images[0]?.id);
+    const ok = await confirm({
+      title: `Remove ${n} photo${n === 1 ? '' : 's'}?`,
+      message: includesMain
+        ? `The main image (position 1) is one of them${n < images.length ? '; the first photo left becomes the main image' : ''}.`
+        : `${n === 1 ? 'It' : 'They'} will be removed from this product.`,
+      detail: 'Restore them from Settings → Recently deleted if you remove them by mistake.',
+      danger: true,
+      confirmLabel: `Remove ${n}`,
+    });
+    if (!ok) return;
+    let removed = 0;
+    let latest = null;
+    const failures = [];
+    for (const t of targets) {
+      try {
+        latest = await window.api.images.removeFromProduct(productId, t.id, t.contentHash ?? null);
+        removed += 1;
+      } catch (err) {
+        failures.push(err.message);
+      }
+    }
+    if (latest && gen === selectionGen.current && productId === activeProductIdRef.current) setImages(latest);
+    if (removed > 0) useAppStore.getState().refreshProducts();
+    if (failures.length === 0) {
+      addToast(`Removed ${removed} photo${removed === 1 ? '' : 's'} — restore from Settings → Recently deleted.`, 'success', {
+        action: { label: 'Undo', onClick: () => undoRemovedImages(productId, removed) },
+      });
+    } else {
+      addToast(`Removed ${removed} of ${n} — ${failures[0]}`, 'error');
     }
   }
 
@@ -930,35 +1109,75 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     }
   }
 
-  async function handlePaste(e) {
-    const gen = selectionGen.current;
-    const productId = activeProductId;
-    const items = Array.from(e.clipboardData?.items ?? []);
-    const imageItem = items.find((it) => it.type.startsWith('image/'));
-    if (!imageItem) return;
+  /* 0.1.94: ⌘V imports EVERY pasted image (it took the first one), and it is
+   * no longer limited to a click inside the form grid: the panel catches a
+   * paste anywhere in it, and while it is open a paste anywhere on the page
+   * also lands here — unless the focus is in a text field (that paste is text)
+   * or a dialog is open (the bulk table takes its own pastes). */
+  function handlePaste(e) {
+    const files = [];
+    for (const it of Array.from(e.clipboardData?.items ?? [])) {
+      if (!String(it?.type ?? '').startsWith('image/')) continue;
+      const file = it.getAsFile?.();
+      if (file) files.push(file);
+    }
+    if (files.length === 0) return undefined;
     e.preventDefault();
+    if (importingImages) {
+      addToast('Still adding the last images — paste again in a moment.', 'info');
+      return undefined;
+    }
+    return importImages(files.map((file) => ({ file })), { pasted: true });
+  }
+  const handlePasteRef = useRef(handlePaste);
+  handlePasteRef.current = handlePaste;
+  useEffect(() => {
+    if (!visible || !activeProductId) return undefined;
+    const onDocPaste = (e) => {
+      if (e.defaultPrevented) return;
+      if (panelRef.current?.contains?.(e.target)) return; // the panel's own onPaste ran
+      if (pasteTargetIsTextField(e.target)) return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      handlePasteRef.current(e);
+    };
+    document.addEventListener('paste', onDocPaste);
+    return () => document.removeEventListener('paste', onDocPaste);
+  }, [visible, activeProductId]);
+
+  /* 0.1.94: drop photos from Finder onto the panel. The bytes go through
+   * images:importFromBytes, which works the same on a client Mac. A drag that
+   * started inside the panel (a thumbnail, the "Drag N" pill) is ignored, so
+   * dropping one of this product's own thumbnails back cannot add a low-res
+   * copy of it. */
+  const internalDragRef = useRef(false);
+  function dragHasFiles(e) {
+    return Array.from(e.dataTransfer?.types ?? []).includes('Files');
+  }
+  function handleDragOver(e) {
+    if (!activeProductId || internalDragRef.current || !dragHasFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    if (!dropActive) setDropActive(true);
+  }
+  function handleDragLeave(e) {
+    if (panelRef.current?.contains?.(e.relatedTarget)) return;
+    setDropActive(false);
+  }
+  function handleDrop(e) {
+    if (internalDragRef.current) { internalDragRef.current = false; return undefined; }
+    if (!dragHasFiles(e)) return undefined;
+    e.preventDefault();
+    setDropActive(false);
     if (!activeProductId) {
-      addToast('Save the product first, then paste images.', 'info');
-      return;
+      addToast('Save the product first, then add images.', 'info');
+      return undefined;
     }
-    if (images.length >= MAX_IMAGES) {
-      addToast(`Image cap is ${MAX_IMAGES}.`, 'error');
-      return;
+    const files = importableImageFiles(e.dataTransfer?.files);
+    if (files.length === 0) {
+      addToast('Only image files can be dropped here.', 'info');
+      return undefined;
     }
-    const blob = imageItem.getAsFile();
-    if (!blob) return;
-    try {
-      const buf = await blob.arrayBuffer();
-      const subtype = (blob.type.split('/')[1] || 'png').toLowerCase();
-      const ext = subtype === 'jpeg' ? '.jpg' : `.${subtype}`;
-      const res = await window.api.images.importFromBytes(productId, buf, ext);
-      if (gen === selectionGen.current && productId === activeProductIdRef.current) setImages(res.images);
-      useAppStore.getState().refreshProducts();
-      if (res.skipped) addToast('Same image already on this product — skipped.', 'info');
-      else addToast('Image pasted', 'success');
-    } catch (err) {
-      addToast(err.message, 'error');
-    }
+    return importImages(files.map((file) => ({ file })));
   }
 
   const title = isEmpty
@@ -1026,7 +1245,20 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
   }
 
   return (
-    <aside className="lib-panel" role="complementary" aria-label={title}>
+    <aside
+      ref={panelRef}
+      className={`lib-panel${dropActive ? ' is-drop-target' : ''}`}
+      role="complementary"
+      aria-label={title}
+      onPaste={handlePaste}
+      // Capture phase, so the "Drag N" pill (which starts a native drag of its
+      // own and cancels this one) is told apart by its target.
+      onDragStartCapture={(e) => { if (!e.target?.closest?.('.image-select-bar__drag')) internalDragRef.current = true; }}
+      onDragEndCapture={() => { internalDragRef.current = false; }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <header className="lib-panel__head">
         <div className="lib-panel__title">{title}</div>
         {!isCreate ? <SaveStatus state={saveState} savedAt={savedAt} /> : null}
@@ -1044,7 +1276,7 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
       </header>
 
       <div className="lib-panel__body">
-        <div className="form-grid" onPaste={handlePaste}>
+        <div className="form-grid">
         <Field label="SKU" required error={skuError} span="full">
           {({ id }) => (
             <Input
@@ -1063,7 +1295,7 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
         </Field>
 
         <Field label="Brand">
-          {({ id }) => (
+          {({ id }) => inlineCreateField('brand') ?? (
             <div className="field__row">
               <Select id={id} value={form.brandId} onChange={setField('brandId')}>
                 <option value="">— Unassigned —</option>
@@ -1071,7 +1303,7 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
               </Select>
-              <button type="button" className="field__inline-btn" onClick={handleCreateBrandInline} title="Create new brand">
+              <button type="button" className="field__inline-btn" onClick={() => setInlineCreate({ kind: 'brand', name: '' })} title="Create new brand" aria-label="Create new brand">
                 +
               </button>
             </div>
@@ -1087,7 +1319,7 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
         </Field>
 
         <Field label="Category">
-          {({ id }) => (
+          {({ id }) => inlineCreateField('category') ?? (
             <div className="field__row">
               {/* v0.22.19: searchable. With 70+ categories the native
                   <select> was a long scroll; this is type-to-filter
@@ -1106,7 +1338,7 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
                 emptyLabel="— Uncategorized —"
                 emptyValue=""
               />
-              <button type="button" className="field__inline-btn" onClick={handleCreateCategoryInline} title="Create new category">
+              <button type="button" className="field__inline-btn" onClick={() => setInlineCreate({ kind: 'category', name: '' })} title="Create new category" aria-label="Create new category">
                 +
               </button>
             </div>
@@ -1340,20 +1572,20 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
                       disabled={copyingImages}
                     >
                       <span className="copy-menu__label">Select all for multi-action</span>
-                      <span className="copy-menu__hint">Tick boxes appear on each image — then Copy / Drag / Delete from the strip</span>
+                      <span className="copy-menu__hint">Tick boxes appear on each image — then Copy, Drag or Remove from the strip</span>
                     </button>
                   </div>
                 ) : null}
               </div>
             ) : null}
-            <Button onClick={handleAddImage} disabled={!activeProductId || images.length >= MAX_IMAGES}>
-              + Add image
+            <Button onClick={handleAddImage} disabled={!activeProductId || images.length >= MAX_IMAGES || importingImages}>
+              {importingImages ? 'Adding…' : '+ Add image'}
             </Button>
           </div>
           <p className="field__hint">
             {activeProductId
-              ? `Paste images directly from clipboard (⌘V). Same image is detected and skipped automatically.`
-              : `Save the product first, then add images.`}
+              ? 'Paste (⌘V) or drop photos here. The same photo is skipped automatically.'
+              : 'Save the product first, then add images.'}
           </p>
           {/* v0.49.39: multi-select action strip. Appears only when the
               user has ticked at least one image (selectAllImages() from
@@ -1401,7 +1633,10 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
                   ? `Preparing ${selectedImageIds.size}…`
                   : `⤴ Drag ${selectedImageIds.size}`}
               </button>
-              <Button onClick={clearImageSelection}>Clear</Button>
+              <Button variant="danger" onClick={handleRemoveSelected} disabled={copyingImages}>
+                Remove selected…
+              </Button>
+              <Button variant="ghost" onClick={clearImageSelection}>Clear</Button>
             </div>
           ) : null}
           {images.length === 0 ? (
@@ -1509,6 +1744,19 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
               </Button>
               {moreMenuOpen ? (
                 <div className="copy-menu__panel copy-menu__panel--up" role="menu">
+                  {/* 0.1.94: Duplicate moved in here — the footer needed
+                      ~414px in a ≤400px panel and Save was clipped. */}
+                  <button
+                    type="button"
+                    className="copy-menu__item"
+                    role="menuitem"
+                    disabled={duplicating}
+                    onClick={() => { setMoreMenuOpen(false); handleDuplicate(); }}
+                  >
+                    <span className="copy-menu__label">{duplicating ? 'Duplicating…' : 'Duplicate…'}</span>
+                    <span className="copy-menu__hint">A copy with the same fields and photos; its SKU ends in “(copy)”.</span>
+                  </button>
+                  <div className="copy-menu__sep" aria-hidden />
                   <button
                     type="button"
                     className="copy-menu__item copy-menu__item--danger"
@@ -1525,16 +1773,16 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
                 </div>
               ) : null}
             </div>
-            <Button onClick={handleDuplicate} disabled={duplicating}>
-              {duplicating ? 'Duplicating…' : 'Duplicate'}
-            </Button>
           </>
         ) : null}
-        <div style={{ flex: 1 }} />
+        <div className="lib-panel__footer-spacer" />
         {!isCreate ? (
-          <Button onClick={handleProcess}>Process →</Button>
+          <Button onClick={handleProcess} title="Choose where to process this product: Image Workspace, AI Studio, Overlay or Social post">Process →</Button>
         ) : null}
-        <Button onClick={onClose}>Cancel</Button>
+        {/* 0.1.94: an existing product saves as you type, so this button
+            closes the panel (after the pending save). Only a new, unsaved
+            product has something to cancel. */}
+        <Button onClick={onClose}>{isCreate ? 'Cancel' : 'Close'}</Button>
         <Button variant="primary" disabled={!skuValid || saving} onClick={handleSave}>
           {saving ? 'Saving…' : isCreate ? 'Create' : 'Save'}
         </Button>
@@ -1581,7 +1829,7 @@ function ImageTile({ image, index, total, onSetMain, onMoveLeft, onMoveRight, on
         <label
           className="image-tile__check"
           onClick={(e) => e.stopPropagation()}
-          title="Select for multi-action (Copy / Drag / Delete)"
+          title="Select for multi-action (Copy, Drag or Remove)"
           aria-label={`Select image #${index + 1}`}
         >
           <input
@@ -1600,10 +1848,10 @@ function ImageTile({ image, index, total, onSetMain, onMoveLeft, onMoveRight, on
           aria-label={`Preview image #${index + 1} full size`}
           title="Click to preview"
         >
-          <img src={src} alt="" loading="lazy" />
+          <ConnImg src={src} alt="" loading="lazy" draggable={false} />
         </button>
       ) : (
-        <img src={src} alt="" loading="lazy" />
+        <ConnImg src={src} alt="" loading="lazy" draggable={false} />
       )}
       {isMain ? <span className="image-tile__badge">Main</span> : (
         <button type="button" className="image-tile__set-main" onClick={onSetMain}>

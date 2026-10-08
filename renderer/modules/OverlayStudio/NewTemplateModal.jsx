@@ -82,6 +82,14 @@ export function NewTemplateModal({ open, onClose, onCreate }) {
         </>
       }
     >
+      {/* Enter in any text box creates the template, like a form submit. */}
+      <div
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' || e.nativeEvent?.isComposing || e.target?.tagName !== 'INPUT') return;
+          e.preventDefault();
+          void handleCreate();
+        }}
+      >
       <p className="muted" style={{ marginTop: 0 }}>
         Pick the canvas size before you start placing elements — every element is
         positioned as a share of the canvas, so changing the size later makes you
@@ -152,6 +160,7 @@ export function NewTemplateModal({ open, onClose, onCreate }) {
           Width and height must be at least 16 px.
         </p>
       ) : null}
+      </div>
     </Modal>
   );
 }
