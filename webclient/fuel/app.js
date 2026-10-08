@@ -29,6 +29,7 @@
   var WRITE_TIMEOUT_MS = 120000;
   var PHOTO_MAX_PX = 1600;
   var PHOTO_QUALITY = 0.8;
+  var SAVE_WAIT_MS = 30000;
   var TZ = 'Asia/Phnom_Penh';
 
   var baseUrl = window.location.origin;
@@ -49,6 +50,12 @@
   var chip = document.getElementById('outboxChip');
 
   function tr(k, v) { return L.t(lang, k, v); }
+  /** A server refusal the page knows in both languages; anything else as the server said it. */
+  function errorText(msg) {
+    var m = String(msg || '');
+    if (/already recorded this delivery as received/i.test(m)) return tr('already_received');
+    return m;
+  }
 
   /* ── pairing token from the fragment ─────────────────────────── */
   (function readPairingToken() {
@@ -460,20 +467,22 @@
       steps: [
         { type: 'tiles', key: 'locationId', title: 'pick_tank_dip', autoSingle: true, remember: LS.tank, items: function () { return locTiles(['tank', 'farm_store']); }, after: loadChart },
         { type: 'photo', kind: 'stick', title: 'photo_stick' },
-        { type: 'number', key: 'dipCm', title: 'dip_cm', unit: 'unit_cm', decimals: 1, live: dipLive, when: hasChart, valid: function (d, v) { return v != null && v >= 0; } },
+        // The stick is always read in cm — with no chart yet, the litres too, so the
+        // office can build the chart from these readings (as the Mac's dip asks both).
+        { type: 'number', key: 'dipCm', title: 'dip_cm', unit: 'unit_cm', decimals: 1, live: dipLive, valid: function (d, v) { return v != null && v >= 0; } },
         { type: 'number', key: 'litres', title: 'litres', unit: 'unit_l', decimals: 2, intro: 'dip_no_chart', when: function (d) { return !hasChart(d); }, valid: function (d, v) { return v != null && v >= 0; } },
         { type: 'review' },
       ],
       build: function (d) {
-        var args = { locationId: d.locationId };
-        if (hasChart(d)) args.dipCm = d.dipCm; else args.litres = d.litres;
+        var args = { locationId: d.locationId, dipCm: d.dipCm };
+        if (!hasChart(d)) args.litres = d.litres;
         return { channel: 'fuel:recordDip', args: args, kindLabel: 'kind_dip' };
       },
       facts: function (d) {
         var live = hasChart(d) ? L.chartLitres(S.chartCache[d.locationId], d.dipCm) : null;
         return [
           ['field_tank', locName(d.locationId)],
-          hasChart(d) ? ['field_dip', num(d.dipCm, 1) + ' ' + tr('unit_cm')] : null,
+          ['field_dip', num(d.dipCm, 1) + ' ' + tr('unit_cm')],
           ['field_litres', live ? '≈ ' + litresText(live.litres) : litresText(d.litres)],
         ];
       },
@@ -558,27 +567,31 @@
         { type: 'tiles', key: 'locationId', title: 'pick_tank_delivery', autoSingle: true, remember: LS.tank, items: function () { return locTiles(['tank']); }, after: loadChart },
         // Dip before and after, saved as two dips linked to the delivery
         // (rule T2 "short delivery"). Each may be skipped; the office links them later.
-        { type: 'photo', kind: 'stick', slot: 'dipBefore', title: 'photo_stick', label: 'dip_before', optional: true, when: hasChart },
-        { type: 'number', key: 'dipBeforeCm', title: 'dip_before', unit: 'unit_cm', decimals: 1, optional: true, live: function (d, v) { return dipLive(d, v); }, when: hasChart, stamp: 'dipBeforeAt' },
+        // With no chart yet the litres are asked too: they are what a chart is built from.
+        { type: 'photo', kind: 'stick', slot: 'dipBefore', title: 'photo_stick', label: 'dip_before', optional: true },
+        { type: 'number', key: 'dipBeforeCm', title: 'dip_before', unit: 'unit_cm', decimals: 1, optional: true, live: function (d, v) { return dipLive(d, v); }, stamp: 'dipBeforeAt' },
+        { type: 'number', key: 'dipBeforeLitres', title: 'litres', label: 'dip_before', unit: 'unit_l', decimals: 2, intro: 'dip_no_chart', when: function (d) { return !hasChart(d) && d.dipBeforeCm != null; }, valid: function (d, v) { return v != null && v >= 0; } },
         { type: 'photo', kind: 'invoice', title: 'photo_invoice' },
         { type: 'number', key: 'litresInvoiced', title: 'litres_invoiced', unit: 'unit_l', decimals: 2, valid: function (d, v) { return v > 0; } },
         { type: 'photo', kind: 'truck', title: 'photo_truck', optional: true },
-        { type: 'photo', kind: 'stick', slot: 'dipAfter', title: 'photo_stick', label: 'dip_after', optional: true, when: hasChart },
-        { type: 'number', key: 'dipAfterCm', title: 'dip_after', unit: 'unit_cm', decimals: 1, optional: true, live: function (d, v) { return dipLive(d, v); }, when: hasChart, stamp: 'dipAfterAt' },
+        { type: 'photo', kind: 'stick', slot: 'dipAfter', title: 'photo_stick', label: 'dip_after', optional: true },
+        { type: 'number', key: 'dipAfterCm', title: 'dip_after', unit: 'unit_cm', decimals: 1, optional: true, live: function (d, v) { return dipLive(d, v); }, stamp: 'dipAfterAt' },
+        { type: 'number', key: 'dipAfterLitres', title: 'litres', label: 'dip_after', unit: 'unit_l', decimals: 2, intro: 'dip_no_chart', when: function (d) { return !hasChart(d) && d.dipAfterCm != null; }, valid: function (d, v) { return v != null && v >= 0; } },
         { type: 'review' },
       ],
       build: function (d) {
         var pre = [];
-        if (hasChart(d) && d.dipBeforeCm != null) pre.push({ as: 'dipBeforeId', key: 'dipBefore', cm: d.dipBeforeCm, at: d.dipBeforeAt });
-        if (hasChart(d) && d.dipAfterCm != null) pre.push({ as: 'dipAfterId', key: 'dipAfter', cm: d.dipAfterCm, at: d.dipAfterAt });
+        var chart = hasChart(d);
+        if (d.dipBeforeCm != null) pre.push({ as: 'dipBeforeId', key: 'dipBefore', cm: d.dipBeforeCm, litres: chart ? null : d.dipBeforeLitres, at: d.dipBeforeAt });
+        if (d.dipAfterCm != null) pre.push({ as: 'dipAfterId', key: 'dipAfter', cm: d.dipAfterCm, litres: chart ? null : d.dipAfterLitres, at: d.dipAfterAt });
         return { channel: 'fuel:recordDelivery', args: { locationId: d.locationId, litresInvoiced: d.litresInvoiced }, kindLabel: 'kind_delivery', pre: pre };
       },
       facts: function (d) {
         return [
           ['field_tank', locName(d.locationId)],
-          d.dipBeforeCm != null ? [tr('dip_before'), num(d.dipBeforeCm, 1) + ' ' + tr('unit_cm')] : null,
+          d.dipBeforeCm != null ? [tr('dip_before'), dipText(d, d.dipBeforeCm, d.dipBeforeLitres)] : null,
           ['litres_invoiced', litresText(d.litresInvoiced)],
-          d.dipAfterCm != null ? [tr('dip_after'), num(d.dipAfterCm, 1) + ' ' + tr('unit_cm')] : null,
+          d.dipAfterCm != null ? [tr('dip_after'), dipText(d, d.dipAfterCm, d.dipAfterLitres)] : null,
         ];
       },
     },
@@ -644,12 +657,18 @@
     if (r.litres == null) return null;
     return { text: tr('dip_litres_live', { litres: num(r.litres) }) + (r.outOfRange ? ' — ' + tr('dip_out_of_range') : ''), warn: r.outOfRange };
   }
+  function dipText(d, cm, litres) {
+    var live = hasChart(d) ? L.chartLitres(S.chartCache[d.locationId], cm) : null;
+    return num(cm, 1) + ' ' + tr('unit_cm') + ' · ' + (live ? '≈ ' + litresText(live.litres) : litresText(litres));
+  }
+  /** Charts are fetched with the lists (loadData); this only fills a gap. Offline it
+   *  simply goes on without a chart — the stick is then read in cm AND litres. */
   function loadChart(d) {
     var id = d.locationId;
     if (!id || S.chartCache[id] !== undefined) return Promise.resolve();
     var loc = byId(S.locations, id);
     if (loc && !loc.hasChart) { S.chartCache[id] = null; return Promise.resolve(); }
-    return rpc('fuel:getChart', id).then(function (c) { S.chartCache[id] = c || null; });
+    return rpc('fuel:getChart', id).then(function (c) { S.chartCache[id] = c || null; }, function () { /* not known yet */ });
   }
 
   /* ── flow engine ───────────────────────────────────────────────── */
@@ -755,7 +774,15 @@
     langBtn.textContent = tr('lang_other');
     document.documentElement.lang = lang;
   }
+  /* A double tap must not pick a tile on the NEXT screen: real taps in the first
+     moments after a screen appears are ignored (scripted clicks are not). */
+  var MOUNT_GUARD_MS = 350;
+  var mountedAt = 0;
+  view.addEventListener('click', function (e) {
+    if (e.isTrusted && Date.now() - mountedAt < MOUNT_GUARD_MS) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
   function mount(nodes) {
+    mountedAt = Date.now();
     view.textContent = '';
     nodes.forEach(function (n) { if (n) view.appendChild(n); });
     window.scrollTo(0, 0);
@@ -960,7 +987,7 @@
     var pad = h('div', { class: 'keypad' }, keys.map(function (k) {
       if (!k) return h('span');
       return h('button', {
-        type: 'button', class: 'key', 'data-key': k, 'aria-label': k === 'back' ? 'Delete' : k, text: k === 'back' ? '⌫' : k,
+        type: 'button', class: 'key', 'data-key': k, 'aria-label': k === 'back' ? tr('key_delete') : k, text: k === 'back' ? '⌫' : k,
         onclick: function () { text = L.keypadPress(text, k, { decimals: decimals, maxLen: 10 }); update(); },
       });
     }));
@@ -1001,9 +1028,9 @@
     return [
       h('p', { class: 'muted', text: tr('cans_count', { size: num(size) }) }),
       h('div', { class: 'stepper' }, [
-        h('button', { type: 'button', class: 'key', 'aria-label': '−', text: '−', onclick: function () { n = Math.max(1, n - 1); update(); } }),
+        h('button', { type: 'button', class: 'key', 'aria-label': tr('key_less'), text: '−', onclick: function () { n = Math.max(1, n - 1); update(); } }),
         count,
-        h('button', { type: 'button', class: 'key', 'aria-label': '+', text: '+', onclick: function () { n = Math.min(1000, n + 1); update(); } }),
+        h('button', { type: 'button', class: 'key', 'aria-label': tr('key_more'), text: '+', onclick: function () { n = Math.min(1000, n + 1); update(); } }),
       ]),
       total,
       h('button', { type: 'button', class: 'big', text: tr('next'), onclick: function () { stepDone(n); } }),
@@ -1044,7 +1071,7 @@
 
   /* ── saving ────────────────────────────────────────────────────── */
   function payloadKey(built, d) {
-    return JSON.stringify([built.channel, built.args, (built.pre || []).map(function (p) { return [p.as, p.cm]; }),
+    return JSON.stringify([built.channel, built.args, (built.pre || []).map(function (p) { return [p.as, p.cm, p.litres]; }),
       Object.keys(d.photos).sort().map(function (k) { return [k, d.photos[k].buf.byteLength]; })]);
   }
 
@@ -1057,42 +1084,67 @@
     // edited in between gets a new one — the server refuses a reused client_ref
     // with different contents.
     var pk = payloadKey(built, d);
-    if (!screen.session || screen.session.key !== pk) screen.session = { key: pk, ref: L.makeClientRef(device), pre: {} };
+    if (!screen.session || screen.session.key !== pk) screen.session = { key: pk, ref: L.makeClientRef(device) };
     var session = screen.session;
     var photos = Object.keys(d.photos).filter(function (k) { return !d.photos[k].slot; }).map(function (k) { return { kind: d.photos[k].kind, data: d.photos[k].buf }; });
+    // A delivery's dips keep their client_ref for the whole flow, keyed by what they
+    // say (tank, cm, litres, photo): fixing a refused delivery and saving again must
+    // not record the same dip twice — the server answers the same ref with the saved dip.
+    screen.dipRefs = screen.dipRefs || {};
+    var dipRefs = screen.dipRefs;
     var pre = (built.pre || []).map(function (p) {
-      var ref = session.pre[p.as] || (session.pre[p.as] = L.makeClientRef(device));
       var ph = d.photos[p.key + ':stick'];
+      var args = { locationId: d.locationId, dipCm: p.cm };
+      if (p.litres != null) args.litres = p.litres;
+      var dk = JSON.stringify([d.locationId, p.cm, p.litres == null ? null : p.litres, ph ? ph.buf.byteLength : 0]);
+      var ref = dipRefs[dk] || (dipRefs[dk] = L.makeClientRef(device));
       return {
         channel: 'fuel:recordDip', clientRef: ref, as: p.as, takenAt: p.at,
-        args: { locationId: d.locationId, dipCm: p.cm }, photos: ph ? [{ kind: 'stick', data: ph.buf }] : [],
+        args: args, photos: ph ? [{ kind: 'stick', data: ph.buf }] : [],
       };
     });
     var summary = { kindLabel: built.kindLabel, facts: f.facts(d).filter(Boolean) };
     var saved = { flow: screen.key, data: d, built: built, summary: summary };
     screen = Object.assign({}, screen, { name: 'saving' });
     render();
+    // The person is standing at the pump: after SAVE_WAIT_MS stop waiting and say the
+    // record is kept on the phone (it is — the outbox keeps sending it). An answer that
+    // comes later is then left to the outbox: a refusal shows there, not here.
+    var settled = false;
+    var timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      screen = { name: 'result', saved: saved, outcome: { status: 'queued' } };
+      render();
+    }, SAVE_WAIT_MS);
     outbox.add({
       channel: built.channel, args: built.args, photos: photos, pre: pre, clientRef: session.ref,
       companyId: S.companyId, userId: S.user && S.user.id, summary: summary,
       takenAt: Date.now(),
     }).then(function (outcome) {
+      clearTimeout(timer);
+      if (settled) return null;
+      settled = true;
       if (outcome.status === 'auth') return null; // kept on the phone; the connect screen is showing
+      if (outcome.status === 'deleted') { goHome(); return null; }
       if (outcome.status === 'failed') {
         // Not saved on the Mac. Take it off the phone's list; the person fixes and saves again.
         return outbox.remove(session.ref).then(function () {
           screen = Object.assign({}, screen, { name: 'flow' });
           render();
-          toast(tr('save_failed', { error: outcome.error && outcome.error.message }));
+          toast(tr('save_failed', { error: errorText(outcome.error && outcome.error.message) }));
         });
       }
       screen = { name: 'result', saved: saved, outcome: outcome };
       render();
       return null;
     }).catch(function (err) {
+      clearTimeout(timer);
+      if (settled) return;
+      settled = true;
       screen = Object.assign({}, screen, { name: 'flow' });
       render();
-      toast(tr('save_failed', { error: err.message }));
+      toast(tr('save_failed', { error: errorText(err.message) }));
     }).then(scheduleWake);
   }
 
@@ -1137,9 +1189,11 @@
       var res = o.result || {};
       nodes.push(h('div', { class: 'notice notice--ok', 'data-result': 'sent' }, [h('b', { text: tr('saved_title') }), res.duplicate ? h('span', { text: tr('saved_already') }) : null]));
       nodes.push(h('div', { class: 'card' }, factsList(serverFacts(res))));
-      var flags = (res.flags || []).filter(function (fl) { return fl && (fl.severity === 'red' || fl.severity === 'amber') && !fl.resolved; });
-      if (flags.length) {
-        nodes.push(h('div', { class: 'notice notice--warn' }, [h('b', { text: tr('check_this') })].concat(flags.map(function (fl) { return h('div', { class: 'small', text: fl.explanation || fl.ruleKey }); }))));
+      // Owner's decision: the person recording never sees what a check found or its
+      // numbers — only that the office will look at it.
+      var flagged = (res.flags || []).some(function (fl) { return fl && !fl.resolved && (fl.status == null || fl.status === 'open'); });
+      if (flagged) {
+        nodes.push(h('div', { class: 'notice notice--warn', 'data-office-check': '1', text: tr('office_check') }));
       }
     } else {
       nodes.push(h('div', { class: 'notice notice--warn', 'data-result': 'queued' }, [h('b', { text: tr('queued_title') }), h('span', { text: tr('queued_body') })]));
@@ -1163,7 +1217,7 @@
     if (!items.length) { mount([h('p', { class: 'muted', text: tr('outbox_empty') })]); return; }
     mount([h('div', { class: 'list' }, items.map(function (it) {
       var here = (!it.userId || it.userId === ctx.userId) && (!it.companyId || it.companyId === ctx.companyId);
-      var state = !here ? tr('other_account') : it.state === 'failed' ? tr('state_failed', { error: it.lastError }) : it.state === 'sending' ? tr('state_sending') : tr('state_waiting');
+      var state = !here ? tr('other_account') : it.state === 'failed' ? tr('state_failed', { error: errorText(it.lastError) }) : it.state === 'sending' ? tr('state_sending') : tr('state_waiting');
       var sm = it.summary || {};
       return h('div', { class: 'card' }, [
         h('b', { text: (sm.kindLabel ? tr(sm.kindLabel) : it.channel) + ' · ' + fmtTime(it.savedAt) }),
@@ -1242,8 +1296,10 @@
     });
   }
 
+  /** The lists, and the dip chart of every tank that has one — fetched now, so
+   *  Dip tank and Delivery arrived still work if the connection drops later. If
+   *  this fails, what was loaded before stays (the caller shows the error). */
   function loadData() {
-    S.chartCache = {};
     return Promise.all([
       rpc('fuel:getSettings'),
       rpc('fuel:listAssets', { status: 'active' }),
@@ -1258,6 +1314,14 @@
       S.staff = (r[3] || []).filter(function (e) { return e.status === 'active'; });
       S.stations = r[4] || [];
       S.me = r[5] || null;
+      var charts = {};
+      var keep = S.chartCache || {};
+      return Promise.all(S.locations.map(function (l) {
+        if (!l.hasChart) { charts[l.id] = null; return null; }
+        return rpc('fuel:getChart', l.id).then(function (c) { charts[l.id] = c || null; }, function () {
+          if (keep[l.id] !== undefined) charts[l.id] = keep[l.id]; // keep the last good one
+        });
+      })).then(function () { S.chartCache = charts; });
     });
   }
 

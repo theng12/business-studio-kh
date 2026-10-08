@@ -91,6 +91,14 @@ function assertMayRepeat(record) {
   }
 }
 
+function previousForReview(f) {
+  const { previousFill, previousMeterFill } = records.previousFills(f);
+  const since = previousMeterFill ? previousMeterFill.at : null;
+  const resetsSince = since == null ? [] : fuel.listResets({ assetId: f.assetId })
+    .filter((r) => r.at > since && r.at <= f.at);
+  return { previousFill, previousMeterFill, resetsSince };
+}
+
 /** Overview's "excess riel this month" costs a full monthly report: cached until the next fuel write. */
 const overviewCache = new Map();
 
@@ -464,6 +472,9 @@ function register({ expose, exposeLocal }) {
       photos: records.listPhotos('fill', f.rootId).map(records.publicPhoto),
       revisions: records.listRevisions(f.rootId),
       flags: flagsDb.flagsForFill(f.rootId),
+      // The previous fill of this vehicle, and the previous meter reading
+      // with any reset since, for the reviewer (fuel.manage only, like getFill).
+      ...previousForReview(f),
     };
   });
   expose('fuel:listDips', (filters = {}) => records.listDips(activeCompanyId(), filters || {}));

@@ -158,3 +158,60 @@ test('the photo thumbnail renders a button with an accessible name', () => {
   const strip = renderToStaticMarkup(React.createElement(mod.exports.PhotoStrip, { photos: [] }));
   assert.match(strip, /No photos/);
 });
+
+test('H3: "Fuel arrived at the farm" starts empty; the litres sent are only a hint', () => {
+  const src = code('renderer/modules/Fuel/FuelTanks.jsx');
+  const receive = src.slice(src.indexOf('function ReceiveModal'));
+  assert.doesNotMatch(receive, /litres: String\(transfer\.litresSent/);
+  assert.match(receive, /hint=\{transfer \? `Measure it/);
+});
+
+test('M1: the time field is offered only to fuel.manage', () => {
+  const shared = code('renderer/modules/Fuel/FuelShared.jsx');
+  assert.match(shared, /export function WhenField\(\{ canManage/);
+  assert.match(shared, /Saved with the time you press Save\./);
+  const tanks = code('renderer/modules/Fuel/FuelTanks.jsx');
+  assert.equal((tanks.match(/<WhenField canManage=\{canManage\}/g) || []).length, 4, 'dip, delivery, transfer, receive');
+  assert.doesNotMatch(tanks, /label="When \(Phnom Penh time\)"/);
+  assert.match(code('renderer/modules/Fuel/FillForms.jsx'), /timeIsNow: !canManage/);
+  assert.match(code('renderer/modules/Fuel/FuelFills.jsx'), /<AddFillModal [^\n]*canManage=\{canManage\}/);
+});
+
+test('L2: a saved record whose photo failed is edited, not created again', () => {
+  for (const f of ['renderer/modules/Fuel/FuelAssets.jsx', 'renderer/modules/Staff/index.jsx']) {
+    const src = code(f);
+    assert.match(src, /keepDraftFor\.current = saved\.id;\s*onSaved\?\.\(saved\);/, f);
+    assert.match(src, /onSaved=\{setEditing\}/, f);
+  }
+});
+
+test('L4: lists reset on a company switch; Settings → Fuel writes before the switch', () => {
+  for (const f of ['FuelOverview.jsx', 'FuelAssets.jsx', 'FuelFills.jsx', 'FuelTanks.jsx', 'FuelPrices.jsx', 'FuelReports.jsx', 'FuelSettingsPanel.jsx']) {
+    assert.match(code(`renderer/modules/Fuel/${f}`), /\[activeCompanyId(, month)?\]\);/, `${f} resets on a company switch`);
+  }
+  assert.match(code('renderer/modules/Staff/index.jsx'), /setRows\(\[\]\); setEditing\(null\); \}, \[activeCompanyId\]\)/);
+  assert.match(code('renderer/modules/Fuel/fuelHooks.js'), /setState\(EMPTY_LOOKUPS\)/);
+  assert.match(code('renderer/modules/Fuel/FuelSettingsPanel.jsx'), /registerCompanySwitchFlusher\(flush\)/);
+  const my = code('renderer/modules/Fuel/FuelFills.jsx');
+  assert.match(my.slice(my.indexOf('function MyFills')), /\}, \[activeCompanyId, tick, addToast\]\);/);
+});
+
+test('L5: resetting every threshold asks first', () => {
+  const src = code('renderer/modules/Fuel/FuelSettingsPanel.jsx');
+  const fn = src.slice(src.indexOf('async function resetDefaults'));
+  assert.ok(fn.indexOf('await confirm(') >= 0 && fn.indexOf('await confirm(') < fn.indexOf('queue(f.key, f.def)'));
+});
+
+test('L6: the review queue asks for the oldest waiting fills and shows the true total', () => {
+  const src = code('renderer/modules/Fuel/FuelFills.jsx');
+  assert.match(src, /listFills\(\{ reviewStatus: 'waiting', order: 'oldest', limit: 500 \}\)/);
+  assert.match(src, /\{index \+ 1\} of \{total\} waiting/);
+});
+
+test('L9: picked-photo previews are released on reset; lists use thumbnails', () => {
+  assert.match(code('renderer/modules/Fuel/FillForms.jsx'), /setPhotos\(\(old\) => \{ revokePreviews\(old\); return \[\]; \}\)/);
+  assert.match(code('renderer/modules/Fuel/FuelTanks.jsx'), /setPhotos\(\(prev\) => \{ revokePreviews\(prev\); return \[\]; \}\)/);
+  const shared = code('renderer/modules/Fuel/FuelShared.jsx');
+  assert.match(shared, /function FuelPhotoThumb[\s\S]*?useFuelPhotoUrl\(photo\?\.id\)/, 'thumbnails ask for the 320 px size (the default)');
+  assert.match(shared, /function FuelPhotoLarge[\s\S]*?useFuelPhotoUrl\(photo\?\.id, \{ thumb: false \}\)/);
+});

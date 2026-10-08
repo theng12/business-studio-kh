@@ -84,7 +84,10 @@ export default [
   {
     ignores: [
       'node_modules/**', 'dist/**', 'dist-electron/**', 'dist-renderer/**',
-      'graphify-out/**', 'webclient/**', 'build/**', 'assets/**', 'data/**',
+      'graphify-out/**', 'build/**', 'assets/**', 'data/**',
+      // The catalogue viewer is one HTML file (no .js to lint); the fuel phone
+      // page's scripts ARE linted, by the webclient/fuel block below.
+      'webclient/*', '!webclient/fuel/',
       // `_trash/` is the owner's recoverable-delete folder — nothing in it is
       // read by the app, tests or build, so lint must not scan it either.
       '_trash/**',
@@ -123,6 +126,18 @@ export default [
       ecmaVersion: 2023,
       sourceType: 'module',
       globals: { ...globals.node },
+    },
+    rules: { ...correctness, ...style },
+  },
+
+  // ── Fuel phone page (/f): classic browser scripts, inlined into one HTML ─
+  // logic.js is also required by node:test, hence `module`.
+  {
+    files: ['webclient/fuel/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2020,
+      sourceType: 'script',
+      globals: { ...globals.browser, module: 'readonly' },
     },
     rules: { ...correctness, ...style },
   },

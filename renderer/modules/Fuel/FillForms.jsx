@@ -9,13 +9,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Field, Input, Modal, Select, Textarea } from '../../components/ui.jsx';
 import { newClientRef } from './fuelHooks.js';
-import { AssetSelect, LocationSelect, PhotoPicker, StaffSelect, photosPayload } from './FuelShared.jsx';
+import { AssetSelect, LocationSelect, PhotoPicker, StaffSelect, WhenField, photosPayload, revokePreviews } from './FuelShared.jsx';
 import {
   FILL_KINDS, PHOTO_KINDS, defaultPhotoKind, diffFillCorrection, emptyFillForm, errText, fillToCorrectionForm,
   flagHeadline, fmtLitres, meterWord, parseNumber, validateFillForm,
 } from './fuelModel.js';
 
-export function AddFillModal({ open, onClose, lookups, defaults }) {
+export function AddFillModal({ open, onClose, lookups, defaults, canManage = true }) {
   const addToast = useAppStore((s) => s.addToast);
   const settings = lookups.settings;
   const [form, setForm] = useState(() => emptyFillForm());
@@ -27,7 +27,7 @@ export function AddFillModal({ open, onClose, lookups, defaults }) {
   function reset(keep = null) {
     const base = emptyFillForm(Date.now(), { currency: settings?.defaultCurrency, kind: keep?.kind || defaults?.kind });
     setForm(keep ? { ...base, kind: keep.kind, locationId: keep.locationId, stationId: keep.stationId, attendantEmployeeId: keep.attendantEmployeeId, at: keep.at } : { ...base, ...(defaults || {}) });
-    setPhotos([]);
+    setPhotos((old) => { revokePreviews(old); return []; });
     setErrors({});
     setBusy(false);
     clientRef.current = newClientRef();
@@ -53,7 +53,7 @@ export function AddFillModal({ open, onClose, lookups, defaults }) {
   }, [form.cansCount, settings]);
 
   async function save(another) {
-    const { errors: errs, payload } = validateFillForm(form, { asset, location });
+    const { errors: errs, payload } = validateFillForm(form, { asset, location, timeIsNow: !canManage });
     setErrors(errs);
     if (!payload) return;
     setBusy(true);
@@ -101,9 +101,7 @@ export function AddFillModal({ open, onClose, lookups, defaults }) {
         <Field label="Vehicle or machine" required error={errors.assetId}>
           {({ id }) => <AssetSelect id={id} assets={activeAssets} value={form.assetId} onChange={pickAsset} invalid={!!errors.assetId} />}
         </Field>
-        <Field label="When (Phnom Penh time)" required error={errors.at} hint="The time on the slip.">
-          {({ id }) => <Input id={id} type="datetime-local" value={form.at} invalid={!!errors.at} onChange={(e) => set('at')(e.target.value)} />}
-        </Field>
+        <WhenField canManage={canManage} value={form.at} error={errors.at} onChange={set('at')} />
         {cash ? (
           <Field label="Station" required error={errors.stationId} hint="Pick one, or type a new name below.">
             {({ id }) => (

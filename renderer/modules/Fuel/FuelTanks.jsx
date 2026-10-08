@@ -12,7 +12,7 @@ import { Badge, Button, EmptyState, Field, Input, Modal, Select, Textarea, cx } 
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { newClientRef, useFuelCaps, useFuelIntent, useFuelLookups, useFuelTick } from './fuelHooks.js';
-import { LocationSelect, PhotoPicker, PhotoStrip, PhotoViewer, ReasonModal, StaffSelect, photosPayload } from './FuelShared.jsx';
+import { LocationSelect, PhotoPicker, PhotoStrip, PhotoViewer, ReasonModal, StaffSelect, WhenField, photosPayload, revokePreviews } from './FuelShared.jsx';
 import {
   FUEL_TYPES, PHOTO_KINDS, chartError, chartPoints, dipAge, errText, fmtDay, fmtLitres, fmtMoney, fmtNumber, fmtWhen,
   fuelTypeLabel, intervalVerdict, monthLabel, parseChartText, parseNumber, parsePpInput, ppInputValue, ppMonthKey,
@@ -41,11 +41,17 @@ export function FuelTanks() {
   }, [intent, canManage]);
   useEffect(() => { setSelectedId(null); setDialog(null); }, [activeCompanyId]);
 
+  // L4: a company switch drops the previous company's last dips and transfers.
+  useEffect(() => { setOverview(null); setPending([]); }, [activeCompanyId]);
   useEffect(() => {
-    if (!activeCompanyId) return;
+    if (!activeCompanyId) return undefined;
     let alive = true;
     window.api.fuel.listPendingTransfers({}).then((p) => { if (alive) setPending(p || []); }).catch(() => { if (alive) setPending([]); });
-    if (canManage) window.api.fuel.getOverview().then((o) => { if (alive) setOverview(o); }).catch((err) => addToast(errText(err), 'error'));
+    if (canManage) {
+      window.api.fuel.getOverview()
+        .then((o) => { if (alive) setOverview(o); })
+        .catch((err) => { if (alive) { setOverview(null); addToast(errText(err), 'error'); } });
+    }
     return () => { alive = false; };
   }, [activeCompanyId, canManage, tick, addToast]);
 
@@ -148,10 +154,10 @@ export function FuelTanks() {
 
       <LocationEditorModal open={dialog?.kind === 'edit'} location={dialog?.location} onClose={() => setDialog(null)} />
       <ChartEditorModal open={dialog?.kind === 'chart'} location={dialog?.location} onClose={() => setDialog(null)} />
-      <DipModal open={dialog?.kind === 'dip'} location={dialog?.location} lookups={lookups} onClose={() => setDialog(null)} />
+      <DipModal open={dialog?.kind === 'dip'} location={dialog?.location} lookups={lookups} canManage={canManage} onClose={() => setDialog(null)} />
       <DeliveryModal open={dialog?.kind === 'delivery'} location={dialog?.location} lookups={lookups} canManage={canManage} onClose={() => setDialog(null)} />
-      <TransferModal open={dialog?.kind === 'transfer'} lookups={lookups} onClose={() => setDialog(null)} />
-      <ReceiveModal transfer={dialog?.kind === 'receive' ? dialog.transfer : null} lookups={lookups} onClose={() => setDialog(null)} />
+      <TransferModal open={dialog?.kind === 'transfer'} lookups={lookups} canManage={canManage} onClose={() => setDialog(null)} />
+      <ReceiveModal transfer={dialog?.kind === 'receive' ? dialog.transfer : null} lookups={lookups} canManage={canManage} onClose={() => setDialog(null)} />
     </div>
   );
 }
@@ -559,21 +565,27 @@ function useRecordForm(open, initial) {
   const ref = useRef(newClientRef());
   useEffect(() => {
     if (!open) return;
-    setForm(initial); setPhotos([]); setError(''); setBusy(false); ref.current = newClientRef();
+    setForm(initial); setPhotos((prev) => { revokePreviews(prev); return []; }); setError(''); setBusy(false); ref.current = newClientRef();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   const set = (k) => (v) => { setForm((f) => ({ ...f, [k]: v })); setError(''); };
   return { form, set, setForm, photos, setPhotos, error, setError, busy, setBusy, clientRef: ref.current };
 }
 
-function timeOrError(value) {
+/**
+ * The record's time. Only a manager entering a paper slip may give its own
+ * time; for anyone else the server uses the moment it is saved (it ignores a
+ * sent `at` — main/ipc/fuel.js scrubRecordInput), so none is sent (M1).
+ */
+function timeOrError(value, canManage = true) {
+  if (!canManage) return { at: undefined };
   const at = parsePpInput(value);
   if (at == null) return { error: 'Enter the date and time' };
   if (at > Date.now() + 60_000) return { error: 'The time cannot be in the future' };
   return { at };
 }
 
-function DipModal({ open, location, lookups, onClose }) {
+function DipModal({ open, location, lookups, canManage, onClose }) {
   const addToast = useAppStore((s) => s.addToast);
   const r = useRecordForm(open, { locationId: location?.id || '', dipCm: '', litres: '', takenBy: '', witness: '', at: ppInputValue(), note: '' });
   const loc = lookups.maps.locations.get(r.form.locationId);
@@ -594,11 +606,12 @@ function DipModal({ open, location, lookups, onClose }) {
     if (Number.isNaN(cm) || Number.isNaN(litres)) { r.setError('Dip and litres must be numbers'); return; }
     if (loc?.hasChart && cm == null) { r.setError('Enter the dip in cm'); return; }
     if (!loc?.hasChart && litres == null) { r.setError('This tank has no dip chart yet — enter the litres too'); return; }
-    const t = timeOrError(form.at);
+    const t = timeOrError(form.at, canManage);
     if (t.error) { r.setError(t.error); return; }
     r.setBusy(true);
     try {
-      const input = { locationId: form.locationId, at: t.at, source: 'mac', clientRef: r.clientRef };
+      const input = { locationId: form.locationId, source: 'mac', clientRef: r.clientRef };
+      if (t.at != null) input.at = t.at;
       if (cm != null) input.dipCm = cm;
       if (!loc?.hasChart && litres != null) input.litres = litres;
       if (form.takenBy) input.takenByEmployeeId = form.takenBy;
@@ -618,9 +631,7 @@ function DipModal({ open, location, lookups, onClose }) {
         <Field label="Tank" required>
           {({ id }) => <LocationSelect id={id} locations={lookups.locations.filter((l) => l.status !== 'retired')} value={r.form.locationId} onChange={r.set('locationId')} />}
         </Field>
-        <Field label="When (Phnom Penh time)" required>
-          {({ id }) => <Input id={id} type="datetime-local" value={r.form.at} onChange={(e) => r.set('at')(e.target.value)} />}
-        </Field>
+        <WhenField canManage={canManage} value={r.form.at} onChange={r.set('at')} hint="When it happened, if not just now." />
         <Field label="Dip (cm)" hint={preview ? `= ${fmtLitres(preview.litres, 0)}${preview.outOfRange ? ' (outside the chart — estimated)' : ''}` : loc && !loc.hasChart ? 'No dip chart yet — enter the litres as well.' : undefined}>
           {({ id }) => <Input id={id} inputMode="decimal" autoFocus value={r.form.dipCm} onChange={(e) => r.set('dipCm')(e.target.value)} />}
         </Field>
@@ -661,11 +672,12 @@ function DeliveryModal({ open, location, lookups, canManage, onClose }) {
     if (litres == null || Number.isNaN(litres) || litres <= 0) { r.setError('Enter the litres on the invoice'); return; }
     const price = parseNumber(form.price);
     if (Number.isNaN(price) || (price != null && price <= 0)) { r.setError('Price per litre must be a number more than 0'); return; }
-    const t = timeOrError(form.at);
+    const t = timeOrError(form.at, canManage);
     if (t.error) { r.setError(t.error); return; }
     r.setBusy(true);
     try {
-      const input = { locationId: form.locationId, litresInvoiced: litres, at: t.at, source: 'mac', clientRef: r.clientRef, currency: form.currency };
+      const input = { locationId: form.locationId, litresInvoiced: litres, source: 'mac', clientRef: r.clientRef, currency: form.currency };
+      if (t.at != null) input.at = t.at;
       if (price != null) input.priceMinorPerL = toMinor(price, form.currency);
       if (form.supplier.trim()) input.supplier = form.supplier.trim();
       if (form.invoiceNo.trim()) input.invoiceNo = form.invoiceNo.trim();
@@ -688,9 +700,7 @@ function DeliveryModal({ open, location, lookups, canManage, onClose }) {
         <Field label="Tank" required>
           {({ id }) => <LocationSelect id={id} locations={tanks} value={r.form.locationId} onChange={r.set('locationId')} />}
         </Field>
-        <Field label="When (Phnom Penh time)" required>
-          {({ id }) => <Input id={id} type="datetime-local" value={r.form.at} onChange={(e) => r.set('at')(e.target.value)} />}
-        </Field>
+        <WhenField canManage={canManage} value={r.form.at} onChange={r.set('at')} hint="When it happened, if not just now." />
         <Field label="Litres on the invoice" required>
           {({ id }) => <Input id={id} inputMode="decimal" autoFocus value={r.form.litresInvoiced} onChange={(e) => r.set('litresInvoiced')(e.target.value)} />}
         </Field>
@@ -733,7 +743,7 @@ function DeliveryModal({ open, location, lookups, canManage, onClose }) {
   );
 }
 
-function TransferModal({ open, lookups, onClose }) {
+function TransferModal({ open, lookups, canManage, onClose }) {
   const addToast = useAppStore((s) => s.addToast);
   const r = useRecordForm(open, { fromLocationId: '', toLocationId: '', litresSent: '', pumpBefore: '', pumpAfter: '', containers: '', containerNote: '', sentBy: '', at: ppInputValue(), note: '' });
   const from = lookups.maps.locations.get(r.form.fromLocationId);
@@ -748,11 +758,12 @@ function TransferModal({ open, lookups, onClose }) {
     if ([litres, before, after, containers].some((n) => Number.isNaN(n))) { r.setError('Litres, meter readings and containers must be numbers'); return; }
     if ((before == null) !== (after == null)) { r.setError('Enter both pump meter readings, or neither'); return; }
     if (litres == null && before == null) { r.setError('Enter the litres sent'); return; }
-    const t = timeOrError(form.at);
+    const t = timeOrError(form.at, canManage);
     if (t.error) { r.setError(t.error); return; }
     r.setBusy(true);
     try {
-      const input = { fromLocationId: form.fromLocationId, toLocationId: form.toLocationId, at: t.at, source: 'mac', clientRef: r.clientRef };
+      const input = { fromLocationId: form.fromLocationId, toLocationId: form.toLocationId, source: 'mac', clientRef: r.clientRef };
+      if (t.at != null) input.at = t.at;
       if (litres != null) input.litresSent = litres;
       if (before != null) { input.pumpMeterBefore = before; input.pumpMeterAfter = after; }
       if (containers != null) input.containers = Math.round(containers);
@@ -779,9 +790,7 @@ function TransferModal({ open, lookups, onClose }) {
         <Field label="Litres sent">
           {({ id }) => <Input id={id} inputMode="decimal" value={r.form.litresSent} onChange={(e) => r.set('litresSent')(e.target.value)} />}
         </Field>
-        <Field label="When (Phnom Penh time)" required>
-          {({ id }) => <Input id={id} type="datetime-local" value={r.form.at} onChange={(e) => r.set('at')(e.target.value)} />}
-        </Field>
+        <WhenField canManage={canManage} value={r.form.at} onChange={r.set('at')} hint="When it happened, if not just now." />
         {from?.hasFlowMeter ? (
           <>
             <Field label="Pump meter before">{({ id }) => <Input id={id} inputMode="decimal" value={r.form.pumpBefore} onChange={(e) => r.set('pumpBefore')(e.target.value)} />}</Field>
@@ -809,22 +818,21 @@ function TransferModal({ open, lookups, onClose }) {
   );
 }
 
-function ReceiveModal({ transfer, lookups, onClose }) {
+function ReceiveModal({ transfer, lookups, canManage, onClose }) {
   const addToast = useAppStore((s) => s.addToast);
   const open = !!transfer;
   const r = useRecordForm(open, { litres: '', receivedBy: '', at: ppInputValue(), note: '' });
-  const { setForm } = r;
-  useEffect(() => {
-    if (transfer) setForm((f) => ({ ...f, litres: String(transfer.litresSent ?? '') }));
-  }, [transfer, setForm]);
+  // H3: never pre-filled with the litres sent — a copied figure would hide
+  // exactly the loss rule F1 exists to catch. The sent figure is a hint.
   async function save() {
     const litres = parseNumber(r.form.litres);
     if (litres == null || Number.isNaN(litres) || litres < 0) { r.setError('Enter the litres that arrived'); return; }
-    const t = timeOrError(r.form.at);
+    const t = timeOrError(r.form.at, canManage);
     if (t.error) { r.setError(t.error); return; }
     r.setBusy(true);
     try {
-      const input = { id: transfer.id, litresReceived: litres, at: t.at, source: 'mac' };
+      const input = { id: transfer.id, litresReceived: litres, source: 'mac' };
+      if (t.at != null) input.at = t.at;
       if (r.form.receivedBy) input.receivedByEmployeeId = r.form.receivedBy;
       if (r.form.note.trim()) input.note = r.form.note.trim();
       if (r.photos.length) input.photos = await photosPayload(r.photos);
@@ -838,12 +846,10 @@ function ReceiveModal({ transfer, lookups, onClose }) {
       {r.error ? <p className="field__error" role="alert">{r.error}</p> : null}
       {transfer ? <p className="fuel-modal-text">{fmtLitres(transfer.litresSent)} sent {fmtDay(transfer.sentAt)} to {lookups.maps.locations.get(transfer.toLocationId)?.name || 'the farm store'}. Measure what actually arrived.</p> : null}
       <div className="form-grid">
-        <Field label="Litres that arrived" required>
+        <Field label="Litres that arrived" required hint={transfer ? `Measure it — ${fmtLitres(transfer.litresSent)} were sent.` : undefined}>
           {({ id }) => <Input id={id} inputMode="decimal" autoFocus value={r.form.litres} onChange={(e) => r.set('litres')(e.target.value)} />}
         </Field>
-        <Field label="When (Phnom Penh time)" required>
-          {({ id }) => <Input id={id} type="datetime-local" value={r.form.at} onChange={(e) => r.set('at')(e.target.value)} />}
-        </Field>
+        <WhenField canManage={canManage} value={r.form.at} onChange={r.set('at')} hint="When it happened, if not just now." />
         <Field label="Received by">
           {({ id }) => <StaffSelect id={id} staff={lookups.staff} value={r.form.receivedBy} onChange={r.set('receivedBy')} />}
         </Field>

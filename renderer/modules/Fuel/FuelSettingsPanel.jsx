@@ -11,6 +11,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Badge, Button, Input, Select } from '../../components/ui.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
+import { confirm } from '../../components/ConfirmModal.jsx';
+import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { useFuelTick } from './fuelHooks.js';
 import { AssetTypeModal } from './FuelAssets.jsx';
 import { FuelPhoneSetupSlot } from './PhoneSetupSlot.jsx';
@@ -30,8 +32,18 @@ export function FuelSettingsPanel() {
   const pending = useRef({});
   const timer = useRef(null);
 
+  // L4: another company's thresholds must not show (or be edited) here.
+  const companyRef = useRef(activeCompanyId);
   useEffect(() => {
-    if (!activeCompanyId) return;
+    if (companyRef.current === activeCompanyId) return;
+    companyRef.current = activeCompanyId;
+    clearTimeout(timer.current);
+    pending.current = {};
+    setSettings(null); setTypes([]); setDrafts({}); setFieldErrors({});
+    setSave({ state: 'idle', savedAt: null, error: null });
+  }, [activeCompanyId]);
+  useEffect(() => {
+    if (!activeCompanyId) return undefined;
     let alive = true;
     Promise.all([window.api.fuel.getSettings(), window.api.fuel.listAssetTypes({ includeArchived: true })])
       .then(([s, t]) => {
@@ -66,6 +78,9 @@ export function FuelSettingsPanel() {
     }
   }, [addToast]);
   useEffect(() => () => { clearTimeout(timer.current); }, []);
+  // A company switch writes waiting changes first, while they still belong to
+  // the company they were typed for (the server acts on the active company).
+  useEffect(() => registerCompanySwitchFlusher(flush), [flush]);
   // Leaving the tab with a change still waiting: write it now.
   useEffect(() => () => { if (Object.keys(pending.current).length) flush(); }, [flush]);
 
@@ -82,7 +97,15 @@ export function FuelSettingsPanel() {
     if (r.error) return;
     queue(field.key, r.value);
   }
-  function resetDefaults() {
+  async function resetDefaults() {
+    // L5: one click would overwrite every threshold the owner has tuned.
+    const ok = await confirm({
+      title: 'Reset all fuel thresholds?',
+      message: 'Every threshold on this page goes back to its default for this company. Flags are checked again with the defaults.',
+      confirmLabel: 'Reset to defaults',
+      danger: true,
+    });
+    if (!ok) return;
     for (const g of FUEL_SETTING_GROUPS) for (const f of g.fields) queue(f.key, f.def);
     setDrafts({});
     setFieldErrors({});

@@ -127,7 +127,11 @@
       saved_already: 'កំណត់ត្រានេះបានរក្សាទុករួចហើយពីមុន។',
       queued_title: 'រក្សាទុកនៅលើទូរស័ព្ទ',
       queued_body: 'គ្មានការតភ្ជាប់ឥឡូវនេះ។ វានឹងផ្ញើដោយខ្លួនឯងពេលមានការតភ្ជាប់វិញ — សូមទុកទំព័រនេះឱ្យបើក។',
-      check_this: 'សូមពិនិត្យ',
+      office_check: 'ការិយាល័យនឹងពិនិត្យកំណត់ត្រានេះ។',
+      already_received: 'មាននរណាម្នាក់បានកត់ត្រាថាបានទទួលប្រេងនេះរួចហើយ។',
+      key_delete: 'លុបលេខចុងក្រោយ',
+      key_more: 'បន្ថែមមួយ',
+      key_less: 'ដកមួយ',
       save_failed: 'រក្សាទុកមិនបាន៖ {error}',
       field_time: 'ម៉ោង',
       field_vehicle: 'រថយន្ត',
@@ -273,7 +277,11 @@
       saved_already: 'This record was already saved earlier.',
       queued_title: 'Kept on this phone',
       queued_body: 'No connection right now. It will send by itself when the connection is back — keep this page open.',
-      check_this: 'Please check',
+      office_check: 'The office will check this record.',
+      already_received: 'Someone else already recorded this delivery as received.',
+      key_delete: 'Delete last digit',
+      key_more: 'One more',
+      key_less: 'One fewer',
       save_failed: 'Couldn’t save: {error}',
       field_time: 'Time',
       field_vehicle: 'Vehicle',
@@ -620,10 +628,23 @@
       list.forEach(function (fn) { fn(outcome); });
     }
 
-    /** Resolves with { status: 'sent'|'queued'|'failed'|'auth', result?, error? } for this item's next attempt. */
+    function answerAll(status, error) {
+      Object.keys(waiters).forEach(function (ref) { notify(ref, { status: status, error: error || null }); });
+    }
+
+    /** Resolves with { status: 'sent'|'queued'|'failed'|'auth'|'deleted', result?, error? } for this item's next attempt. */
     function waitFor(clientRef) {
       return new Promise(function (resolve) {
         (waiters[clientRef] = waiters[clientRef] || []).push(resolve);
+      });
+    }
+
+    /** Write an item back only if it is still on the phone (Delete may have run meanwhile). */
+    function putIfPresent(next) {
+      return Promise.resolve(store.all()).then(function (items) {
+        var still = (items || []).some(function (it) { return it.clientRef === next.clientRef; });
+        if (!still) return false;
+        return Promise.resolve(store.put(next)).then(function () { return true; });
       });
     }
 
@@ -643,7 +664,7 @@
             item = Object.assign({}, item, { preDone: Object.assign({}, done) });
             // Remember the linked dip at once: a later failure must not send it again
             // under a new id (its client_ref would answer with the same one anyway).
-            return Promise.resolve(store.put(Object.assign({}, item, { state: 'sending' }))).then(nextPre);
+            return putIfPresent(Object.assign({}, item, { state: 'sending' })).then(nextPre);
           });
         }
         return nextPre();
@@ -655,10 +676,10 @@
         });
       }, function (err) {
         var after = afterError(item, err, ctx().now);
-        return Promise.resolve(store.put(after.item)).then(function () {
+        return putIfPresent(after.item).then(function (kept) {
           if (after.kind === 'auth') authBlocked = true;
           notify(item.clientRef, {
-            status: after.kind === 'retry' ? 'queued' : after.kind === 'auth' ? 'auth' : 'failed',
+            status: !kept ? 'deleted' : after.kind === 'retry' ? 'queued' : after.kind === 'auth' ? 'auth' : 'failed',
             error: err, item: after.item,
           });
           onChange();
@@ -695,8 +716,12 @@
         // Something was saved while this pass was running: send it now too.
         if (again && r === 'done') { again = false; return flush(); }
         again = false;
+        // Anyone still waiting (a Save made while this pass ran, which it never
+        // reached because the network dropped or the token was refused) gets an
+        // answer now — the record is on the phone and will be sent later.
+        answerAll(r === 'auth' ? 'auth' : 'queued');
         return r;
-      }, function (e) { flushing = null; again = false; throw e; });
+      }, function (e) { flushing = null; again = false; answerAll('queued', e); throw e; });
       return flushing;
     }
 
@@ -742,7 +767,12 @@
       retry: retry,
       nextWake: nextWake,
       unblock: function () { authBlocked = false; },
-      remove: function (ref) { return Promise.resolve(store.remove(ref)).then(function () { onChange(); }); },
+      remove: function (ref) {
+        return Promise.resolve(store.remove(ref)).then(function () {
+          notify(ref, { status: 'deleted' });
+          onChange();
+        });
+      },
       list: function () { return Promise.resolve(store.all()); },
     };
   }

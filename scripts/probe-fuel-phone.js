@@ -69,11 +69,15 @@ function finish(error) {
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(read, label, ms = 6000) {
   const deadline = Date.now() + ms;
+  let lastError = null;
   while (Date.now() < deadline) {
-    const value = await read();
+    // A read during a reload rejects ("Script failed to execute"); keep polling.
+    let value = null;
+    try { value = await read(); } catch (err) { lastError = err; }
     if (value) return value;
     await pause(40);
   }
+  if (lastError) throw new Error(`Timed out: ${label} (last error: ${lastError.message})`);
   throw new Error(`Timed out: ${label}`);
 }
 const js = (code) => win.webContents.executeJavaScript(code, true);
@@ -143,6 +147,10 @@ function fixture() {
         case 'fuel:getChart': return ok(ULLAGE);
         case 'fuel:recordFill': {
           const litres = args.litres ?? (args.cansCount ? args.cansCount * args.canSizeL : args.litresShownOnPump);
+          if (args.kind === 'cash_station') {
+            const out = save('fill', { kind: args.kind, assetId: args.assetId, litres, meterReading: args.meterReading ?? null, fullTank: !!args.fullTank, amountPaidMinor: args.amountPaidMinor ?? null, currency: args.currency ?? null });
+            return ok({ ...out, flags: [{ ruleKey: 'C1', severity: 'red', status: 'open', resolved: false, explanation: 'SECRET-EXPLANATION paid 4,068 riel per litre', measured: 4068 }] });
+          }
           return ok(save('fill', { kind: args.kind, assetId: args.assetId, litres, meterReading: args.meterReading ?? null, fullTank: !!args.fullTank, amountPaidMinor: args.amountPaidMinor ?? null, currency: args.currency ?? null }));
         }
         case 'fuel:recordDip': {
@@ -182,7 +190,7 @@ app.whenReady().then(async () => {
   });
   win = new BrowserWindow({ width: 390, height: 844, show: true, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, backgroundThrottling: false } });
 
-  /* 1. pairing from the QR link */
+  /* 1. pairing from the QR link; the tank charts come with the lists */
   await win.loadURL(`${base}/f#t=probe-pump-token`);
   await waitFor(() => exists('[data-flow="give"]'), 'home tiles');
   const home = await js(`({ hash: location.hash, href: location.href, stored: localStorage.getItem('mskh.fuel.token'), lang: document.documentElement.lang,
@@ -193,6 +201,7 @@ app.whenReady().then(async () => {
   assert.equal(home.lang, 'km');
   assert.equal(home.title, 'ប្រេងឥន្ធនៈ');
   assert.deepEqual(home.tiles.slice(0, 2), ['give', 'dip']);
+  assert.ok(state.calls.some((c) => c.channel === 'fuel:getChart' && c.args === 'tank1'), 'charts prefetched for offline dips');
   result.checks.push({ name: 'pairing-and-khmer-home', home });
   await screenshot('1-home-khmer');
 
@@ -298,6 +307,8 @@ app.whenReady().then(async () => {
   await waitFor(() => exists('[data-save]'), 'review');
   await click('[data-save]');
   await waitFor(() => exists('[data-result="sent"]'), 'bought saved');
+  assert.equal(await exists('[data-office-check]'), true, 'a neutral "the office will check" line');
+  assert.equal(await js(`document.body.textContent.includes('SECRET-EXPLANATION') || document.body.textContent.includes('4,068')`), false, 'no flag details for the recorder');
   const cash = state.calls.filter((c) => c.channel === 'fuel:recordFill')[1].args;
   assert.deepEqual({ kind: cash.kind, assetId: cash.assetId, amount: cash.amountPaidMinor, currency: cash.currency, shown: cash.litresShownOnPump, station: cash.stationId, meter: cash.meterReading, full: cash.fullTank },
     { kind: 'cash_station', assetId: 'truck1', amount: 120000, currency: 'KHR', shown: 29.5, station: 's1', meter: 50000, full: false });

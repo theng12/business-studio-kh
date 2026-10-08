@@ -27,15 +27,16 @@ export function FuelPrices() {
   const [voiding, setVoiding] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  useEffect(() => { setPrices([]); setStations([]); setStation(null); setPriceOpen(false); }, [activeCompanyId]); // L4
   useEffect(() => {
-    if (!activeCompanyId) return;
+    if (!activeCompanyId) return undefined;
     let alive = true;
     setLoading(true);
     Promise.all([
       window.api.fuel.listPrices({ includeVoided: showVoided }),
       window.api.fuel.listStations({ includeArchived: showArchived }),
     ]).then(([p, s]) => { if (alive) { setPrices(p || []); setStations(s || []); } })
-      .catch((err) => { if (alive) addToast(errText(err), 'error'); })
+      .catch((err) => { if (alive) { setPrices([]); setStations([]); addToast(errText(err), 'error'); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activeCompanyId, showVoided, showArchived, tick, addToast]);

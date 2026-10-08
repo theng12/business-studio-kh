@@ -7,7 +7,7 @@
  * record that names them. HR1 extends this screen.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Badge, Button, EmptyState, Field, Input, Modal, Pagination, Select, Textarea, cx, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
@@ -33,6 +33,7 @@ export function Staff() {
   const [pageSize, setPageSize] = useState(50);
 
   useEffect(() => { setPage(0); }, [status, role, q, pageSize, activeCompanyId]);
+  useEffect(() => { setRows([]); setEditing(null); }, [activeCompanyId]); // L4
   useEffect(() => {
     if (!activeCompanyId || !canManage) { setLoading(false); return undefined; }
     let alive = true;
@@ -40,7 +41,7 @@ export function Staff() {
     const t = setTimeout(() => {
       window.api.staff.list({ status: status === 'all' ? undefined : status, role: role || undefined, q: q.trim() || undefined })
         .then((list) => { if (alive) setRows(list || []); })
-        .catch((err) => { if (alive) addToast(`Couldn't load staff: ${errText(err)}`, 'error'); })
+        .catch((err) => { if (alive) { setRows([]); addToast(`Couldn't load staff: ${errText(err)}`, 'error'); } })
         .finally(() => { if (alive) setLoading(false); });
     }, 150);
     return () => { alive = false; clearTimeout(t); };
@@ -113,7 +114,7 @@ export function Staff() {
         </>
       )}
 
-      <StaffEditorModal open={editing !== null} employee={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />
+      <StaffEditorModal open={editing !== null} employee={editing === 'new' ? null : editing} onSaved={setEditing} onClose={() => setEditing(null)} />
     </div>
   );
 }
@@ -126,7 +127,7 @@ function staffForm(e) {
   };
 }
 
-function StaffEditorModal({ open, employee, onClose }) {
+function StaffEditorModal({ open, employee, onSaved, onClose }) {
   const addToast = useAppStore((s) => s.addToast);
   const [form, setForm] = useState(staffForm(null));
   const [errors, setErrors] = useState({});
@@ -134,8 +135,11 @@ function StaffEditorModal({ open, employee, onClose }) {
   const [photo, setPhoto] = useState(null);
   const [users, setUsers] = useState([]);
   const [leaving, setLeaving] = useState(false);
+  // L2: saved, but the photo failed — keep editing that record (no duplicate on Save).
+  const keepDraftFor = useRef(null);
   useEffect(() => {
-    if (!open) return;
+    if (!open) { keepDraftFor.current = null; return; }
+    if (employee?.id && employee.id === keepDraftFor.current) return;
     setForm(staffForm(employee)); setErrors({}); setBusy(false); setPhoto(null); setLeaving(false);
     window.api.users?.listForAttribution?.().then((u) => setUsers(Array.isArray(u) ? u : [])).catch(() => setUsers([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -157,7 +161,17 @@ function StaffEditorModal({ open, employee, onClose }) {
       const saved = employee
         ? await window.api.staff.update(employee.id, { ...input, expectedUpdatedAt: employee.updatedAt })
         : await window.api.staff.create(input);
-      if (photo?.file) await window.api.staff.setPhoto(saved.id, await photo.file.arrayBuffer());
+      if (photo?.file) {
+        try {
+          await window.api.staff.setPhoto(saved.id, await photo.file.arrayBuffer());
+        } catch (photoErr) {
+          keepDraftFor.current = saved.id;
+          onSaved?.(saved);
+          addToast(`Saved, but the photo did not upload: ${errText(photoErr)} Press Save to try the photo again.`, 'error');
+          setBusy(false);
+          return;
+        }
+      }
       addToast(employee ? 'Saved.' : `Added ${saved.nameEn || saved.nameKm || saved.staffCode}.`, 'success');
       onClose();
     } catch (err) { addToast(errText(err), 'error'); setBusy(false); }

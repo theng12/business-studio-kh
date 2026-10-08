@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Badge, Button, Field, Modal, Select, Textarea } from '../../components/ui.jsx';
+import { Badge, Button, Field, Input, Modal, Select, Textarea } from '../../components/ui.jsx';
 import { useFuelPhotoUrl, useStaffPhotoUrl } from './fuelHooks.js';
 import {
   fmtWhen, photoKindLabel, photoFileError, MAX_PHOTOS, severityOf, staffName, assetLabel, errText,
@@ -186,6 +186,11 @@ export function PhotoPicker({ kinds, value, onChange, defaultKind, onError }) {
   );
 }
 
+/** Release the preview blob URLs of picked photos (a form reset or close). */
+export function revokePreviews(list) {
+  for (const p of list || []) if (p?.previewUrl) URL.revokeObjectURL(p.previewUrl);
+}
+
 /** Picked photos → `[{ kind, bytes }]` for a record call. */
 export async function photosPayload(list) {
   const out = [];
@@ -231,6 +236,26 @@ export function ReasonModal({ open, title, message, label = 'Reason', confirmLab
   );
 }
 
+/**
+ * The record's time. A manager entering a paper slip types the slip's time;
+ * anyone else records "now" — the server ignores a sent time for them
+ * (main/ipc/fuel.js scrubRecordInput), so the field is not offered (M1).
+ */
+export function WhenField({ canManage, value, onChange, error, hint = 'The time on the slip.' }) {
+  if (!canManage) {
+    return (
+      <Field label="When">
+        {() => <p className="fuel-when-now muted">Saved with the time you press Save.</p>}
+      </Field>
+    );
+  }
+  return (
+    <Field label="When (Phnom Penh time)" required error={error} hint={hint}>
+      {({ id }) => <Input id={id} type="datetime-local" value={value} invalid={!!error} onChange={(e) => onChange(e.target.value)} />}
+    </Field>
+  );
+}
+
 /* ─── pickers ─────────────────────────────────────────────────────────── */
 
 export function AssetSelect({ assets, value, onChange, id, includeAll, allLabel = 'All vehicles & machines', invalid }) {
@@ -268,6 +293,16 @@ export function LocationSelect({ locations, value, onChange, id, kind, includeAl
 export function SeverityBadge({ severity }) {
   const s = severityOf(severity);
   return <Badge tone={s.tone}>{s.label}</Badge>;
+}
+
+/** A list that failed to load says so (with the real message) instead of showing old data. */
+export function LoadError({ message, onRetry }) {
+  return (
+    <div className="fuel-load-error" role="alert">
+      <span>Couldn't load this: {message}</span>
+      {onRetry ? <Button size="sm" onClick={onRetry}>Try again</Button> : null}
+    </div>
+  );
 }
 
 /** The "needs fuel.manage" / "no company" guard text in one place. */

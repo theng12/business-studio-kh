@@ -280,3 +280,41 @@ test('only record-saving channels may be queued, and only with a client_ref', ()
   assert.throws(() => L.makeItem({ channel: 'fuel:voidMyRecord', clientRef: 'f:dev:x1', args: {}, now: 1 }), /record-saving/);
   assert.throws(() => L.makeItem({ channel: 'fuel:recordFill', clientRef: '', args: {}, now: 1 }), /client_ref/);
 });
+
+test('a Save made while a background send is failing is answered (never hangs)', async () => {
+  const { server, box, tick } = setup();
+  server.setMode('offline');
+  await box.add(fill('f:dev:bg01'));
+  await box.flush();
+  tick(10 * 60 * 1000);
+  // A slow failing pass is running…
+  let release;
+  const realSend = server.send;
+  server.send = (ch, args) => new Promise((resolve, reject) => { release = () => reject(netErr()); });
+  const pass = box.flush();
+  await new Promise((r) => setImmediate(r));
+  // …when the person saves another record. That pass never reaches it.
+  const saved = box.add(fill('f:dev:bg02'));
+  await new Promise((r) => setImmediate(r));
+  release();
+  const out = await Promise.race([saved, new Promise((r) => setTimeout(() => r({ status: 'HUNG' }), 1000))]);
+  assert.equal(out.status, 'queued');
+  await pass;
+  server.send = realSend;
+  assert.equal((await box.list()).length, 2, 'both kept on the phone');
+});
+
+test('a record deleted while its send is failing stays deleted', async () => {
+  const { server, box } = setup();
+  let release;
+  server.send = () => new Promise((resolve, reject) => { release = () => reject(netErr()); });
+  const saved = box.add(fill('f:dev:del9'));
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  await box.remove('f:dev:del9');
+  release();
+  const out = await saved;
+  assert.equal(out.status, 'deleted');
+  await box.flush();
+  assert.equal((await box.list()).length, 0, 'not brought back by the failed attempt');
+});

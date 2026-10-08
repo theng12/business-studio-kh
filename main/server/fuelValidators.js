@@ -205,7 +205,11 @@ const FUEL_VALIDATORS = {
   'fuel:getPhoto': obj((a) => first(isNonEmpty(a.photoId) ? true : 'photoId is required', optBool(a.thumb) ? true : 'thumb must be true or false')),
 
   /* lists */
-  'fuel:listFills': LIST_FILTERS,
+  'fuel:listFills': optObj((a) => first(
+    LIST_FILTERS(a),
+    a.order == null || a.order === 'newest' || a.order === 'oldest' ? true : 'order must be newest or oldest',
+    a.reviewStatus == null || ['new', 'checked', 'needs_review', 'waiting'].includes(a.reviewStatus) ? true : 'reviewStatus must be new, checked, needs_review or waiting',
+  )),
   'fuel:getFill': idArg('fill id'),
   'fuel:listDips': LIST_FILTERS,
   'fuel:listDeliveries': LIST_FILTERS,

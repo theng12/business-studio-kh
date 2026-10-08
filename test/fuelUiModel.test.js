@@ -142,18 +142,19 @@ test('a flag answer needs a note, except "Theft confirmed"', () => {
 
 /* ─── review queue ────────────────────────────────────────────────────── */
 
-test('the review queue puts red flags first, then "needs review", then oldest', () => {
+test('the review queue starts from the oldest waiting fill and drops checked, void and duplicates', () => {
   const q = M.buildReviewQueue([
-    { id: 'old', reviewStatus: 'new', at: 1 },
     { id: 'newer', reviewStatus: 'new', at: 5 },
     { id: 'nr', reviewStatus: 'needs_review', at: 9 },
     { id: 'red', reviewStatus: 'new', at: 10, hasRedFlag: true, openFlags: 1 },
-    { id: 'amberFlag', reviewStatus: 'new', at: 7, openFlags: 2 },
+    { id: 'old', reviewStatus: 'new', at: 1 },
+    { id: 'tieB', reviewStatus: 'new', at: 7, createdAt: 2 },
+    { id: 'tieA', reviewStatus: 'new', at: 7, createdAt: 1 },
     { id: 'done', reviewStatus: 'checked', at: 0 },
     { id: 'void', reviewStatus: 'new', voided: true, at: 0 },
     { id: 'old', reviewStatus: 'new', at: 1 },
   ]);
-  assert.deepEqual(q.map((f) => f.id), ['red', 'nr', 'amberFlag', 'old', 'newer']);
+  assert.deepEqual(q.map((f) => f.id), ['old', 'newer', 'tieA', 'tieB', 'nr', 'red']);
 });
 
 /* ─── the paper-slip form ─────────────────────────────────────────────── */
@@ -361,4 +362,60 @@ test('simple record forms point at the missing field', () => {
   assert.ok(M.validateStaffForm({ staffCode: '', nameEn: '', nameKm: '' }).staffCode);
   assert.deepEqual(M.validateStaffForm({ staffCode: 'D01', nameEn: '', nameKm: 'សុខា' }), {});
   assert.equal(M.staffName({ nameEn: 'Sokha', nameKm: 'សុខា' }), 'Sokha (សុខា)');
+});
+
+/* ─── review fixes ────────────────────────────────────────────────────── */
+
+test('M1: without fuel.manage the slip time is neither checked nor sent', () => {
+  const r = M.validateFillForm(slip({ litres: '20', at: 'not a time' }), { now: NOW, timeIsNow: true });
+  assert.deepEqual(r.errors, {});
+  assert.equal('at' in r.payload, false, 'the server records the moment it is saved');
+});
+
+test('the typed meter reading is compared with the previous one, across a reset', () => {
+  assert.deepEqual(M.meterSincePrevious({ meterReading: 10500 }, { meterReading: 10000 }), { distance: 500, backwards: false, reset: false });
+  assert.equal(M.meterSincePrevious({ meterReading: 9900 }, { meterReading: 10000 }).backwards, true);
+  assert.deepEqual(
+    M.meterSincePrevious({ meterReading: 300 }, { meterReading: 10000 }, [{ at: 5, oldReading: 10100, newReading: 0 }]),
+    { distance: 400, backwards: false, reset: true },
+  );
+  assert.equal(M.meterSincePrevious({ meterReading: null }, { meterReading: 1 }), null);
+  assert.equal(M.meterSincePrevious({ meterReading: 5 }, null), null);
+});
+
+test('L9: the photo cache is a byte-capped LRU and never drops a photo still loading', async () => {
+  const released = [];
+  const cache = M.createPhotoCache({ maxBytes: 100, release: (v) => released.push(v.url) });
+  const load = (key, size) => cache.load(key, async () => ({ url: key, size }));
+  await load('a', 40);
+  await load('b', 40);
+  assert.equal(cache.bytes, 80);
+  await cache.get('a'); // a is now the most recently used
+  await load('c', 40); // 120 > 100: the least recently used (b) goes
+  assert.deepEqual(released, ['b']);
+  assert.equal(cache.has('a') && cache.has('c') && !cache.has('b'), true);
+  // One load per key, even when asked twice at once.
+  let calls = 0;
+  const slow = () => cache.load('d', async () => { calls += 1; return { url: 'd', size: 10 }; });
+  await Promise.all([slow(), slow()]);
+  assert.equal(calls, 1);
+  // A failed load is forgotten, so it can be retried.
+  await assert.rejects(cache.load('e', async () => { throw new Error('offline'); }));
+  assert.equal(cache.has('e'), false);
+  // A single photo larger than the cap is still kept while it is the newest.
+  await load('huge', 500);
+  assert.equal(cache.has('huge'), true);
+});
+
+test('L1: only the topmost dialog answers Esc and its backdrop', () => {
+  const UI = load('renderer/components/ui.jsx');
+  const a = { id: 'outer' };
+  const b = { id: 'inner' };
+  const doc = (...els) => ({ querySelectorAll: () => els });
+  assert.equal(UI.isTopmostModal(b, doc(a, b)), true);
+  assert.equal(UI.isTopmostModal(a, doc(a, b)), false, 'the dialog underneath ignores the Esc');
+  assert.equal(UI.isTopmostModal(a, doc(a)), true, 'once the top one closes, the next answers');
+  const src = require('node:fs').readFileSync(path.join(ROOT, 'renderer/components/ui.jsx'), 'utf8');
+  assert.match(src, /if \(!isTopmostModal\(backdropRef\.current\)\) return;/);
+  assert.match(src, /e\.target === e\.currentTarget && isTopmostModal\(e\.currentTarget\)/);
 });
