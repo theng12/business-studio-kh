@@ -31,7 +31,7 @@ test('module navigation waits for editor flush before changing routes', async ()
   const unregister = registerCompanySwitchFlusher(() => gate.promise);
   try {
     const navigation = state.setActiveModule('socialgrid');
-    assert.equal(state.activeModule, 'dashboard');
+    assert.equal(state.activeModule, 'home', 'the app opens on Home (2026-10-08)');
     gate.resolve();
     assert.equal(await navigation, true);
     assert.equal(state.activeModule, 'socialgrid');
@@ -46,7 +46,7 @@ test('failed editor flush keeps the current route and reports the error', async 
   const unregister = registerCompanySwitchFlusher(async () => { throw new Error('draft save failed'); });
   try {
     assert.equal(await state.setActiveModule('socialgrid'), false);
-    assert.equal(state.activeModule, 'dashboard');
+    assert.equal(state.activeModule, 'home');
     assert.deepEqual(messages, [{ message: "Couldn't leave this editor: draft save failed", variant: 'error' }]);
   } finally { unregister(); }
 });
@@ -72,6 +72,8 @@ test('the latest module request wins while an older navigation is flushing', asy
   const gate = deferred();
   const state = { activeCompanyId: 'company-1', addToast() {} };
   Object.assign(state, createNavigationSlice((patch) => Object.assign(state, patch), () => state));
+  // Start ON the dashboard, so re-requesting it is the no-flush fast path.
+  state.activeModule = 'dashboard';
   const unregister = registerCompanySwitchFlusher(() => gate.promise);
   try {
     const staleNavigation = state.setActiveModule('socialgrid');
@@ -116,7 +118,7 @@ for (const [action, pending, module] of [
     gate.resolve();
     assert.equal(await opening, false);
     assert.equal(state[pending], null);
-    assert.equal(state.activeModule, 'dashboard');
+    assert.equal(state.activeModule, 'home');
     assert.equal(await state[action]('record', 'company-2'), true);
     assert.equal(state[pending], 'record');
     assert.equal(state.activeModule, module);

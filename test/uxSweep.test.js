@@ -301,7 +301,7 @@ test('page shortcuts do nothing under a dialog or inside a text field', async ()
 
 test('the shortcuts list comes from the nav and follows the account', async () => {
   const { navShortcutRows } = await loadRenderer('renderer/components/ShortcutsModal.jsx');
-  const { NAV } = await loadRenderer('renderer/components/Sidebar.jsx');
+  const { NAV } = await loadRenderer('renderer/lib/modules.js');
   const all = navShortcutRows(NAV, ['*'], '⌘').map((r) => r.keys[0]);
   for (const k of ['⌘1', '⌘6', '⌘7', '⌘8', '⌘9', '⌘,']) assert.ok(all.includes(k), `${k} missing`);
   assert.equal(all[all.length - 1], '⌘,');
