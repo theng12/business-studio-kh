@@ -2,6 +2,20 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.97', date: '2026-10-09',
+    items: [
+      'NEW — People: full staff profiles (details, documents, positions, supervisor, schedule history, dated suspensions, app account and kiosk PIN). Private details (ID, bank, birth date, address) are shown only to HR managers.',
+      'NEW — Attendance: today\'s view and a month grid per person (present, late, absent, leave, holiday, suspended), day detail with clock photos, manual entries and voids with a reason, and an Excel export per month.',
+      'NEW — Approvals before payroll: a Review list for phone and supervisor clock-ins and PIN alerts, clock-out corrections, overtime by kind (150% normal, 200% night, day off and holiday; rates are yours to change) and the late minutes payroll may deduct, which you confirm or waive per month.',
+      'NEW — Leave: requests, approvals and balances, prefilled with Cambodian law defaults (annual 1.5 days a month, special 7 days a year, sick, maternity) for you to adjust with an accountant. Earned leave is added each month; anything over the carry-over limit expires on 31 December.',
+      'NEW — Shop Mac kiosk (Settings → Multi-Mac): staff tap their photo, type a PIN and the camera takes a photo; times come from the office Mac. Wrong PINs lock out step by step; leaving the kiosk needs a manager\'s PIN, or the recovery code shown once when you turn it on.',
+      'NEW — Phone page: Clock in / out with a selfie, My attendance, Request leave and "I forgot to clock in or out"; supervisors mark their crew. A clock-in sent more than 15 minutes late waits for a manager before it counts.',
+      'NEW — Settings → People: schedules, Cambodia\'s 2026 public holidays (from the official sub-decree; 2027 fixed dates only), leave types, overtime rates, grace minutes and kiosk limits.',
+      'FIX — History never clears staff, fuel or HR entries, and hides HR entries from anyone without HR access.',
+      'Internal — Capabilities attendance.kiosk / attendance.self / attendance.supervise / hr.view / hr.manage (not in the Editor preset); tables in main/db/hrSchema.js (additive); attendanceCalc.js / leaveCalc.js pure; kiosk window main/kioskWindow.js (exact-URL navigation, quit guard, recovery code in config.json); 422 for deliberate refusals over RPC; audit_log.sensitivity hr / hr_private. API in docs/PEOPLE_AND_FUEL_PLAN.md §10.',
+    ],
+  },
+  {
     version: '0.1.96', date: '2026-10-08',
     items: [
       'NEW — Home: the app now opens on a grid of modules — Products, Media Studio, Labels & Catalogs, Purchasing, Fuel, People and System. Open one and the sidebar shows only that module\'s pages, with Home at the top. New modules (Assets, Finance) will appear here as more squares.',
