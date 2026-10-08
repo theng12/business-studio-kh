@@ -1085,7 +1085,7 @@ const PROXIED_CHANNELS = [
   // Fuel F1: the staff list and every fuel record live with the data on the
   // server — pure DB + the server's own fuel/ folder — so straight RPC. The one
   // exception is fuel:saveMonthlyWorkbook (handleLocal below: dialog on this Mac).
-  'staff:list','staff:get','staff:create','staff:update','staff:markLeft','staff:reactivate','staff:setPhoto','staff:getPhoto',
+  'staff:list','staff:get','staff:create','staff:update','staff:markLeft','staff:reactivate','staff:setPhoto','staff:getPhoto','staff:me',
   'fuel:getSettings','fuel:updateSettings','fuel:listAssetTypes','fuel:createAssetType','fuel:updateAssetType',
   'fuel:listAssets','fuel:getAsset','fuel:createAsset','fuel:updateAsset','fuel:setAssetPhoto',
   'fuel:listLocations','fuel:getLocation','fuel:createLocation','fuel:updateLocation',

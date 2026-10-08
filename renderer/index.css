@@ -12182,3 +12182,130 @@ a:hover { text-decoration-thickness: 2px; }
 .page--workspace .ws-canvas__tools .ws-tool__label { min-width: 40px; padding: 0 4px; }
 .ws-watermark-bridge__form { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
 .ws-watermark-bridge__form .input { flex: 1 1 160px; min-width: 0; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ *  FUEL F1 — Fuel overview, Vehicles & machines, Fill-ups, Tanks & dips,
+ *  Fuel prices, Fuel reports, Staff and Settings → Fuel
+ *  (renderer/modules/Fuel, renderer/modules/Staff). Tokens only.
+ * ═══════════════════════════════════════════════════════════════════════ */
+.fuel-stats { margin-bottom: var(--s-6); }
+.fuel-setup-empty { margin-bottom: var(--s-5); }
+.fuel-stat--rose .stat-card__value { color: var(--c-rose); }
+.fuel-stat--amber .stat-card__value { color: var(--c-amber); }
+.fuel-section { margin-top: var(--s-6); }
+.fuel-section .section-head { flex-wrap: wrap; }
+.fuel-subsection { margin-top: var(--s-4); }
+.fuel-subhead { margin: var(--s-5) 0 var(--s-2); }
+.fuel-note { margin-top: var(--s-2); font-size: var(--fs-sm); }
+.fuel-modal-text { margin: 0 0 var(--s-4); color: var(--c-text-muted); font-size: var(--fs-md); line-height: 1.5; }
+.fuel-inline { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.fuel-inline > .input { flex: 1 1 120px; min-width: 0; }
+.fuel-check { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-md); align-self: end; padding-bottom: var(--s-2); }
+.fuel-check.field--full { grid-column: 1 / -1; }
+.fuel-toolbar { flex-wrap: wrap; }
+.fuel-toolbar .input--select { max-width: 220px; }
+.fuel-kind-switch { margin-bottom: var(--s-4); }
+.fuel-badges { display: flex; flex-wrap: wrap; gap: var(--s-1); }
+.fuel-missing { color: var(--c-amber); font-weight: 600; }
+.fuel-excess { font-variant-numeric: tabular-nums; }
+.fuel-excess.is-over { color: var(--c-rose); font-weight: 600; }
+.fuel-setting-input { width: 110px; text-align: right; }
+.fuel-plain-list { margin: 0; padding: 0; list-style: none; font-size: var(--fs-md); }
+.fuel-plain-list li { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) 0; border-bottom: 1px solid var(--c-border); }
+.fuel-plain-list li.is-muted { color: var(--c-text-subtle); }
+.fuel-dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--s-1) var(--s-4); margin: 0 0 var(--s-3); font-size: var(--fs-md); }
+.fuel-dl dt { color: var(--c-text-muted); }
+.fuel-dl dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+/* Flags */
+.fuel-flag-list { list-style: none; margin: 0 0 var(--s-3); padding: 0; display: flex; flex-direction: column; gap: var(--s-2); }
+.fuel-flag { display: flex; gap: var(--s-4); align-items: flex-start; padding: var(--s-3) var(--s-4); background: var(--c-surface); border: 1px solid var(--c-border); border-left: 3px solid var(--c-slate); border-radius: var(--radius-md); }
+.fuel-flag--red { border-left-color: var(--c-rose); }
+.fuel-flag--amber { border-left-color: var(--c-amber); }
+.fuel-flag__main { flex: 1; min-width: 0; }
+.fuel-flag__title { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-lg); flex-wrap: wrap; }
+.fuel-flag__why { margin: var(--s-1) 0 0; font-size: var(--fs-md); color: var(--c-text-muted); line-height: 1.45; }
+.fuel-flag__meta { margin: var(--s-1) 0 0; font-size: var(--fs-sm); }
+.fuel-flag__actions { display: flex; gap: var(--s-2); flex-wrap: wrap; justify-content: flex-end; }
+.fuel-flag-list--compact .fuel-flag { padding: var(--s-2) var(--s-3); }
+.fuel-flag-list--compact .fuel-flag__title { font-size: var(--fs-md); }
+.fuel-choice { border: 0; margin: var(--s-3) 0; padding: 0; display: flex; flex-direction: column; gap: var(--s-2); }
+.fuel-choice__opt { display: flex; gap: var(--s-2); align-items: flex-start; padding: var(--s-2) var(--s-3); border: 1px solid var(--c-border); border-radius: var(--radius-sm); cursor: pointer; font-size: var(--fs-md); }
+.fuel-choice__opt.is-active { border-color: var(--c-brand); background: var(--c-brand-soft); }
+
+/* Photos — always loaded as blob: URLs from the permission-checked channels. */
+.fuel-thumb { display: inline-flex; align-items: center; justify-content: center; padding: 0; overflow: hidden; border: 1px solid var(--c-border); border-radius: var(--radius-sm); background: var(--c-bg); cursor: zoom-in; flex: none; }
+.fuel-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fuel-thumb.is-tampered { border-color: var(--c-rose); box-shadow: 0 0 0 1px var(--c-rose); }
+.fuel-thumb--none { cursor: default; }
+.fuel-thumb__empty { color: var(--c-text-subtle); font-size: var(--fs-xs); }
+.fuel-photo-strip { display: inline-flex; gap: var(--s-1); align-items: center; flex-wrap: wrap; }
+.fuel-photo-strip .is-active .fuel-thumb { border-color: var(--c-brand); box-shadow: 0 0 0 1px var(--c-brand); }
+.fuel-photo-large { margin: 0; display: flex; flex-direction: column; gap: var(--s-2); }
+.fuel-photo-large__frame { display: flex; align-items: center; justify-content: center; min-height: 320px; max-height: 62vh; background: var(--c-bg); border: 1px solid var(--c-border); border-radius: var(--radius-md); overflow: hidden; }
+.fuel-photo-large__frame img { max-width: 100%; max-height: 62vh; object-fit: contain; display: block; }
+.fuel-photo-large__caption { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; font-size: var(--fs-md); }
+.fuel-photo-large.is-empty { min-height: 200px; align-items: center; justify-content: center; border: 1px dashed var(--c-border); border-radius: var(--radius-md); }
+.fuel-photo-preview { width: 64px; height: 64px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--c-border); }
+.fuel-avatar { display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-pill); overflow: hidden; background: var(--c-brand-soft); color: var(--c-text-muted); font-size: var(--fs-xs); font-weight: 600; flex: none; }
+.fuel-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.fuel-picker { display: flex; flex-direction: column; gap: var(--s-2); }
+.fuel-picker__list { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.fuel-picker__item { display: flex; flex-direction: column; gap: var(--s-1); width: 150px; }
+.fuel-picker__item img { width: 150px; height: 110px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--c-border); }
+.fuel-picker__actions { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+
+/* Review: the photo beside the typed readings */
+.fuel-review .toolbar { margin-bottom: var(--s-4); }
+.fuel-panel { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr); gap: var(--s-6); align-items: start; }
+.fuel-panel__photos { display: flex; flex-direction: column; gap: var(--s-2); position: sticky; top: 0; }
+.fuel-panel__head { display: flex; align-items: center; gap: var(--s-3); justify-content: space-between; margin-bottom: var(--s-3); }
+.fuel-review-box { padding: var(--s-4); border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); }
+.fuel-review-box__actions { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-3); }
+.fuel-review-box__actions .btn--danger { margin-left: auto; }
+@media (max-width: 1100px) {
+  .fuel-panel { grid-template-columns: 1fr; }
+  .fuel-panel__photos { position: static; }
+}
+
+/* Tanks */
+.fuel-tank-card.is-muted { opacity: 0.6; }
+.fuel-tank-detail { padding-top: var(--s-2); border-top: 1px solid var(--c-border); }
+.fuel-chart-editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 0.9fr); gap: var(--s-5); align-items: start; }
+.fuel-chart-editor__side { display: flex; flex-direction: column; gap: var(--s-2); align-items: flex-start; }
+.fuel-chart-table { margin-bottom: var(--s-2); }
+.fuel-chart-table .input { width: 100%; text-align: right; }
+
+/* ─── Fuel F1: phone set-up (renderer/modules/Fuel/FuelPhoneSetup.jsx) ────
+   Owned by the phone-page work; append-only block, keep it at the end. */
+.fuel-phone-setup { display: flex; flex-direction: column; gap: var(--s-3); }
+.fuel-phone-setup__controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-3); }
+.fuel-phone-setup__field { display: flex; flex-direction: column; gap: var(--s-1); min-width: 220px; flex: 1 1 220px; font-size: var(--fs-sm); color: var(--c-text-muted); }
+.fuel-phone-setup__field .input { width: 100%; }
+.fuel-phone-setup__show { display: flex; flex-wrap: wrap; gap: var(--s-4); align-items: flex-start; }
+.fuel-phone-setup__code {
+  width: 220px;
+  height: 220px;
+  padding: var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: #ffffff; /* scanners need dark-on-light, in dark mode too */
+}
+.fuel-phone-setup__code svg { width: 100%; height: 100%; display: block; }
+.fuel-phone-setup__link { display: flex; flex-direction: column; gap: var(--s-1); min-width: 0; flex: 1 1 200px; }
+.fuel-phone-setup__link code { font-size: var(--fs-md); overflow-wrap: anywhere; }
+.fuel-phone-setup__label { font-weight: 600; font-size: var(--fs-md); }
+.fuel-phone-setup__hint { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--c-text-muted); }
+.fuel-phone-setup__warn { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--c-amber); }
+.fuel-phone-setup__problem { margin: 0; font-size: var(--fs-md); line-height: 1.5; color: var(--c-text-muted); }
+.fuel-phone-setup__steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-2) var(--s-5);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--c-border);
+}
+.fuel-phone-setup__steps ol { margin: 0; padding-left: var(--s-5); font-size: var(--fs-md); line-height: 1.7; }
+.fuel-phone-setup__steps ol[lang="km"] { font-family: system-ui, -apple-system, "Khmer Sangam MN", "Khmer MN", "Noto Sans Khmer", sans-serif; line-height: 1.9; }
+.fuel-phone-setup__steps .fuel-phone-setup__hint { grid-column: 1 / -1; }
+.fuel-phone-setup__actions { display: flex; justify-content: flex-end; }

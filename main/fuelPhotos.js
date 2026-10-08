@@ -27,7 +27,8 @@ const { getDataDir, getDb } = require('./db/index');
 const { phnomPenhMonth } = require('./util/fuelAnomalies');
 
 const MAX_PHOTO_BYTES = 15 * 1024 * 1024;
-const MAX_PHOTOS_PER_RECORD = 6;
+const MAX_PHOTOS_PER_RECORD = 6;        // in one upload
+const MAX_PHOTOS_PER_RECORD_TOTAL = 12; // ever, counting photos added later (fuel:addPhoto)
 const MAX_EDGE = 1600;
 const THUMB_EDGE = 320;
 const EVIDENCE_OWNER_KINDS = ['fill', 'dip', 'delivery', 'transfer'];
@@ -212,8 +213,15 @@ function sweepRetention({ companyId = null, now = Date.now() } = {}) {
     const months = fuel.getSettings(cid).photoRetentionMonths;
     const cutoff = monthsAgo(now, months);
     const rows = db.prepare(`
-      SELECT * FROM fuel_photos WHERE company_id = ? AND retired_at IS NULL AND uploaded_at < ?
-         AND owner_kind IN (${EVIDENCE_OWNER_KINDS.map(() => '?').join(',')}) LIMIT 2000
+      SELECT * FROM fuel_photos p WHERE company_id = ? AND retired_at IS NULL AND uploaded_at < ?
+         AND owner_kind IN (${EVIDENCE_OWNER_KINDS.map(() => '?').join(',')})
+         -- Evidence for a flag still open, or one confirmed as theft, is kept
+         -- whatever its age: retiring it would remove the proof.
+         AND NOT EXISTS (
+           SELECT 1 FROM fuel_flags fl
+            WHERE (fl.subject_id = p.owner_id OR instr(fl.subject, p.owner_id) > 0)
+              AND ((fl.status = 'open' AND fl.resolved_at IS NULL) OR fl.status = 'confirmed'))
+         LIMIT 2000
     `).all(cid, cutoff, ...EVIDENCE_OWNER_KINDS);
     for (const row of rows) {
       const abs = absPath(row.rel_path);
@@ -233,6 +241,6 @@ function sweepRetention({ companyId = null, now = Date.now() } = {}) {
 }
 
 module.exports = {
-  MAX_PHOTO_BYTES, MAX_PHOTOS_PER_RECORD, EVIDENCE_OWNER_KINDS,
+  MAX_PHOTO_BYTES, MAX_PHOTOS_PER_RECORD, MAX_PHOTOS_PER_RECORD_TOTAL, EVIDENCE_OWNER_KINDS,
   toBuffer, preparePhoto, prepareUploads, stagePhotos, readPhotoFile, saveStaffPhoto, sweepRetention, absPath, evidenceRelPath,
 };

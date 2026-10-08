@@ -40,6 +40,14 @@ function badRequest(message) {
 const FUEL_TYPES = ['diesel', 'gasoline', 'other'];
 const CURRENCIES = ['KHR', 'USD'];
 
+/** A real calendar date written 'YYYY-MM-DD' (2026-02-30 is refused). */
+function isCalendarDate(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v ?? ''));
+  if (!m) return false;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
+}
+
 function fuelType(v, fallback = 'diesel') {
   if (v == null || v === '') return fallback;
   if (!FUEL_TYPES.includes(v)) throw badRequest('Fuel type must be diesel, gasoline or other');
@@ -52,4 +60,4 @@ function currency(v, fallback = 'KHR') {
   return v;
 }
 
-module.exports = { uuid, audit, str, num, int, badRequest, fuelType, currency, getCallerUserId, FUEL_TYPES, CURRENCIES };
+module.exports = { uuid, audit, str, num, int, badRequest, fuelType, currency, isCalendarDate, getCallerUserId, FUEL_TYPES, CURRENCIES };

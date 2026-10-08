@@ -83,6 +83,14 @@ const LabelJobs = lazy(() => import('./modules/LabelStudio/LabelJobs.jsx').then(
 const CatalogTemplates = lazy(() => import('./modules/CatalogStudio/index.jsx').then((m) => ({ default: m.CatalogTemplates })));
 const CatalogProjects = lazy(() => import('./modules/CatalogStudio/index.jsx').then((m) => ({ default: m.CatalogProjects })));
 const SocialGrid = lazy(() => import('./modules/SocialGrid/index.jsx').then((m) => ({ default: m.SocialGrid })));
+// Fuel F1 + the thin staff list — lazy: only the people who keep fuel records open them.
+const FuelOverview = lazy(() => import('./modules/Fuel/FuelOverview.jsx').then((m) => ({ default: m.FuelOverview })));
+const FuelAssets = lazy(() => import('./modules/Fuel/FuelAssets.jsx').then((m) => ({ default: m.FuelAssets })));
+const FuelFills = lazy(() => import('./modules/Fuel/FuelFills.jsx').then((m) => ({ default: m.FuelFills })));
+const FuelTanks = lazy(() => import('./modules/Fuel/FuelTanks.jsx').then((m) => ({ default: m.FuelTanks })));
+const FuelPrices = lazy(() => import('./modules/Fuel/FuelPrices.jsx').then((m) => ({ default: m.FuelPrices })));
+const FuelReports = lazy(() => import('./modules/Fuel/FuelReports.jsx').then((m) => ({ default: m.FuelReports })));
+const Staff = lazy(() => import('./modules/Staff/index.jsx').then((m) => ({ default: m.Staff })));
 
 const PAGES = {
   dashboard: Dashboard,
@@ -104,6 +112,13 @@ const PAGES = {
   catalogprojects: CatalogProjects,
   catalogstudio: CatalogProjects,
   socialgrid: SocialGrid,
+  fueloverview: FuelOverview,
+  fuelassets: FuelAssets,
+  fuelfills: FuelFills,
+  fueltanks: FuelTanks,
+  fuelprices: FuelPrices,
+  fuelreports: FuelReports,
+  staff: Staff,
   history:   History,
   settings:  Settings,
   support:   Support,

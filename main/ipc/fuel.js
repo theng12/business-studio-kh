@@ -22,16 +22,24 @@ const flagsDb = require('../db/fuelFlags');
 const reports = require('../db/fuelReports');
 const fuelPhotos = require('../fuelPhotos');
 const { buildChartFromDeliveries } = require('../util/tankCalibration');
-const { activeCompanyId, inCompany, emitFuelChange, callerCanManage, getCallerUserId } = require('./fuelAccess');
-const { phnomPenhMonth } = require('../util/fuelAnomalies');
+const { activeCompanyId, inCompany, emitFuelChange, callerCanManage, getCallerUserId, fuelWriteVersion } = require('./fuelAccess');
+const { phnomPenhMonth, deliveryEffectiveAt } = require('../util/fuelAnomalies');
 
 /** 'YYYY-MM' asked for, or this month in Phnom Penh time. */
 function monthOr(month) { return month || phnomPenhMonth(Date.now()); }
 
 /* ─── helpers ─────────────────────────────────────────────────── */
 
-function recompute(assetIds = [], locationIds = []) {
-  return flagsDb.recomputeForRecord({ assetIds, locationIds });
+/**
+ * Re-run the rules a change touched. `times` are the record's time(s) (old
+ * and new for a correction): only that stretch of history is recomputed, so a
+ * save stays fast however many years of records there are. Without `times`
+ * the whole history of those assets/tanks is recomputed (configuration edits).
+ */
+function recompute(assetIds = [], locationIds = [], times = null) {
+  const res = flagsDb.recomputeForRecord({ assetIds, locationIds, times });
+  overviewCache.clear();
+  return res;
 }
 
 function recomputeCompanyAssets(companyId) {
@@ -39,9 +47,52 @@ function recomputeCompanyAssets(companyId) {
   recompute(ids, []);
 }
 
-function fillFlags(rootId) {
-  return flagsDb.flagsForFill(rootId).filter((f) => !f.resolved);
+/**
+ * A recorder (pump / driver phone) sees that a record raised a flag and why,
+ * but not a manager's review note or the working figures behind it.
+ */
+function forCaller(flags) {
+  if (callerCanManage()) return flags;
+  return flags.map(({ details: _d, reviewNote: _n, reviewedByUserId: _u, reviewedAt: _a, ...rest }) => rest);
 }
+
+function fillFlags(rootId) {
+  return forCaller(flagsDb.flagsForFill(rootId).filter((f) => !f.resolved));
+}
+
+/** When a delivery counts for its tank (inside its linked dips — see rules.deliveryEffectiveAt). */
+function deliveryTime(d) {
+  const dips = new Map();
+  for (const id of [d.dipBeforeId, d.dipAfterId]) if (id) { const dip = records.getDip(id); if (dip) dips.set(id, dip); }
+  return deliveryEffectiveAt(d, dips);
+}
+
+/**
+ * Someone without fuel.manage records "now": the phone path. Their `at` is
+ * ignored and the source is forced to phone, so the server clock (minus the
+ * phone's capped offline wait, never before what the record must follow —
+ * main/db/fuelRecords.js capQueuedTime) decides when it happened. Only a
+ * manager entering a paper slip on the Mac may give the slip's own time.
+ */
+function scrubRecordInput(input) {
+  if (callerCanManage()) return input;
+  const { at: _at, ...rest } = input || {};
+  return { ...rest, source: 'phone' };
+}
+
+/** A client_ref retry is answered only to whoever saved it (or a manager). */
+function assertMayRepeat(record) {
+  if (callerCanManage()) return;
+  const uid = getCallerUserId();
+  if (!uid || record.recordedByUserId !== uid) {
+    const err = new Error('That record reference was already used by someone else. Start a new entry.');
+    err.code = 'CLIENT_REF_CONFLICT';
+    throw err;
+  }
+}
+
+/** Overview's "excess riel this month" costs a full monthly report: cached until the next fuel write. */
+const overviewCache = new Map();
 
 /**
  * Save a record together with its photos:
@@ -53,7 +104,10 @@ function fillFlags(rootId) {
  */
 async function saveWithPhotos({ ownerKind, prepare, insert, input, timeOf }) {
   const prep = prepare(input);
-  if (prep.duplicate) return { record: prep.duplicate, duplicate: true };
+  if (prep.duplicate) {
+    assertMayRepeat(prep.duplicate);
+    return { record: prep.duplicate, duplicate: true };
+  }
   const uploads = await fuelPhotos.prepareUploads(ownerKind, input.photos);
   const staged = fuelPhotos.stagePhotos({ recordId: prep.values.id, at: timeOf(prep.values), photos: uploads });
   let res;
@@ -66,6 +120,7 @@ async function saveWithPhotos({ ownerKind, prepare, insert, input, timeOf }) {
   const saved = res.fill || res.dip || res.delivery || res.transfer;
   if (res.duplicate) {
     staged.abort();
+    assertMayRepeat(res.duplicate);
     return { record: res.duplicate, duplicate: true };
   }
   staged.commit();
@@ -93,10 +148,11 @@ function photoOwnerCompany(ownerKind, ownerId) {
 function register({ expose, exposeLocal }) {
   /* ─── thresholds ─── */
   expose('fuel:getSettings', () => fuel.getSettings(activeCompanyId()));
-  expose('fuel:updateSettings', (patch = {}) => {
+  expose('fuel:updateSettings', async (patch = {}) => {
     const companyId = activeCompanyId();
     const next = fuel.updateSettings(companyId, patch);
-    flagsDb.recomputeAll({ companyId });
+    await flagsDb.recomputeAllAsync({ companyId });
+    overviewCache.clear();
     emitFuelChange('settings', 'update', companyId, companyId);
     return next;
   });
@@ -136,14 +192,20 @@ function register({ expose, exposeLocal }) {
     const asset = inCompany(fuel.getAsset(id), 'Vehicle or machine');
     const [prepared] = await fuelPhotos.prepareUploads('asset', [{ kind: 'asset', bytes }]);
     const staged = fuelPhotos.stagePhotos({ recordId: id, at: Date.now(), photos: [prepared] });
+    let next;
     try {
-      records.insertPhotoRow({ ...staged.rows[0], companyId: asset.companyId, ownerKind: 'asset', ownerId: id });
+      // Photo row and the asset's pointer to it in one transaction; the file
+      // takes its final name only after both are committed.
+      require('../db/index').getDb().transaction(() => {
+        records.insertPhotoRow({ ...staged.rows[0], companyId: asset.companyId, ownerKind: 'asset', ownerId: id });
+        next = fuel.setAssetPhoto(id, staged.rows[0].id);
+      })();
     } catch (err) {
       staged.abort();
       throw err;
     }
     staged.commit();
-    const next = fuel.setAssetPhoto(id, staged.rows[0].id);
+    // The photo replaced is kept (its row and file stay; it is simply no longer the tile).
     emitFuelChange('asset', 'update', id, asset.companyId);
     return next;
   });
@@ -185,16 +247,36 @@ function register({ expose, exposeLocal }) {
   /** A suggested chart built from this tank's deliveries that were dipped before and after (§7a). */
   expose('fuel:getChartSuggestion', ({ locationId, anchor, stepCm } = {}) => {
     inCompany(fuel.getLocation(locationId), 'Tank or store');
+    // The litres between the two dip levels = what arrived − what was drawn
+    // between the dips. When the dips' litres were measured without a chart
+    // (a gauge, typed) that is simply after − before; otherwise the invoice
+    // minus the draws is the best figure there is (a short delivery skews it),
+    // so the result is labelled an estimate.
     const deliveries = records.activeDeliveriesForLocation(locationId).filter((d) => d.dipBeforeId && d.dipAfterId);
+    const fills = records.activeFillsForLocation(locationId);
+    const transfers = records.activeTransfersForLocation(locationId);
+    const drawn = (from, to) => fills.filter((f) => f.at > from && f.at <= to).reduce((t, f) => t + f.litres, 0)
+      + transfers.filter((t) => t.fromLocationId === locationId && t.sentAt > from && t.sentAt <= to).reduce((t, x) => t + x.litresSent, 0);
     const observations = [];
+    let fromInvoices = 0;
     for (const d of deliveries) {
       const b = records.getDip(d.dipBeforeId);
       const a = records.getDip(d.dipAfterId);
-      if (b && a && !b.voided && !a.voided && b.dipCm != null && a.dipCm != null) {
-        observations.push({ dipBeforeCm: b.dipCm, dipAfterCm: a.dipCm, litresAdded: d.litresInvoiced });
-      }
+      if (!b || !a || b.voided || a.voided || b.dipCm == null || a.dipCm == null) continue;
+      const measured = b.litresSource === 'typed' && a.litresSource === 'typed';
+      const between = measured ? a.litres - b.litres : d.litresInvoiced - drawn(b.takenAt, a.takenAt);
+      if (!measured) fromInvoices += 1;
+      if (between > 0) observations.push({ dipBeforeCm: b.dipCm, dipAfterCm: a.dipCm, litresAdded: between });
     }
-    return buildChartFromDeliveries(observations, { anchor: anchor || undefined, stepCm });
+    const built = buildChartFromDeliveries(observations, { anchor: anchor || undefined, stepCm });
+    return {
+      ...built,
+      estimate: true,
+      basedOnInvoices: fromInvoices,
+      note: fromInvoices
+        ? `Estimate from ${observations.length} dipped deliveries (${fromInvoices} worked out from the invoice minus fuel drawn between the dips). Check it against a real dip before saving.`
+        : `Estimate from ${observations.length} dipped deliveries. Check it against a real dip before saving.`,
+    };
   });
 
   /* ─── stations ─── */
@@ -238,7 +320,7 @@ function register({ expose, exposeLocal }) {
   expose('fuel:recordMeterReset', (input = {}) => {
     const companyId = activeCompanyId(input.companyId);
     const r = fuel.recordReset({ ...input, companyId });
-    recompute([r.assetId], [r.locationId]);
+    recompute([r.assetId], [r.locationId], [r.at]);
     emitFuelChange('meterReset', 'create', r.id, companyId);
     return r;
   });
@@ -247,11 +329,11 @@ function register({ expose, exposeLocal }) {
   expose('fuel:recordFill', async (input = {}) => {
     const companyId = activeCompanyId(input.companyId);
     const { record, duplicate } = await saveWithPhotos({
-      ownerKind: 'fill', input: { ...input, companyId },
+      ownerKind: 'fill', input: { ...scrubRecordInput(input), companyId },
       prepare: records.prepareFill, insert: records.insertFill, timeOf: (v) => v.at,
     });
     if (!duplicate) {
-      recompute([record.assetId], [record.locationId]);
+      recompute([record.assetId], [record.locationId], [record.at]);
       emitFuelChange('fill', 'create', record.rootId, companyId);
     }
     return { fill: records.getFill(record.id), duplicate, flags: fillFlags(record.rootId) };
@@ -260,24 +342,25 @@ function register({ expose, exposeLocal }) {
   expose('fuel:recordDip', async (input = {}) => {
     const companyId = activeCompanyId(input.companyId);
     const { record, duplicate } = await saveWithPhotos({
-      ownerKind: 'dip', input: { ...input, companyId },
+      ownerKind: 'dip', input: { ...scrubRecordInput(input), companyId },
       prepare: records.prepareDip, insert: records.insertDip, timeOf: (v) => v.takenAt,
     });
     if (!duplicate) {
-      recompute([], [record.locationId]);
+      recompute([], [record.locationId], [record.takenAt]);
       emitFuelChange('dip', 'create', record.id, companyId);
     }
-    return { dip: record, duplicate, flags: flagsDb.listFlags(companyId, { locationId: record.locationId, limit: 20 }).items };
+    // Only the flags about THIS dip (the reconciliation it closes), not the tank's whole list.
+    return { dip: record, duplicate, flags: forCaller(flagsDb.flagsForDip(record.id)) };
   });
 
   expose('fuel:recordDelivery', async (input = {}) => {
     const companyId = activeCompanyId(input.companyId);
     const { record, duplicate } = await saveWithPhotos({
-      ownerKind: 'delivery', input: { ...input, companyId },
+      ownerKind: 'delivery', input: { ...scrubRecordInput(input), companyId },
       prepare: records.prepareDelivery, insert: records.insertDelivery, timeOf: (v) => v.at,
     });
     if (!duplicate) {
-      recompute([], [record.locationId]);
+      recompute([], [record.locationId], [deliveryTime(record)]);
       emitFuelChange('delivery', 'create', record.id, companyId);
     }
     return { delivery: record, duplicate };
@@ -286,7 +369,7 @@ function register({ expose, exposeLocal }) {
   expose('fuel:setDeliveryDips', ({ id, dipBeforeId, dipAfterId } = {}) => {
     const d = inCompany(records.getDelivery(id), 'Delivery');
     const next = records.setDeliveryDips(id, { dipBeforeId, dipAfterId });
-    recompute([], [d.locationId]);
+    recompute([], [d.locationId], [deliveryTime(d), deliveryTime(next)]);
     emitFuelChange('delivery', 'update', id, d.companyId);
     return next;
   });
@@ -294,11 +377,11 @@ function register({ expose, exposeLocal }) {
   expose('fuel:recordTransfer', async (input = {}) => {
     const companyId = activeCompanyId(input.companyId);
     const { record, duplicate } = await saveWithPhotos({
-      ownerKind: 'transfer', input: { ...input, companyId },
+      ownerKind: 'transfer', input: { ...scrubRecordInput(input), companyId },
       prepare: records.prepareTransfer, insert: records.insertTransfer, timeOf: (v) => v.at,
     });
     if (!duplicate) {
-      recompute([], [record.fromLocationId, record.toLocationId]);
+      recompute([], [record.fromLocationId, record.toLocationId], [record.sentAt]);
       emitFuelChange('transfer', 'create', record.id, companyId);
     }
     return { transfer: record, duplicate };
@@ -307,19 +390,20 @@ function register({ expose, exposeLocal }) {
   expose('fuel:receiveTransfer', async ({ id, photos, ...rest } = {}) => {
     const t = inCompany(records.getTransfer(id), 'Transfer');
     const uploads = await fuelPhotos.prepareUploads('transfer', photos);
-    const res = records.receiveTransfer(id, rest);
-    if (!res.duplicate && uploads.length) {
-      const staged = fuelPhotos.stagePhotos({ recordId: id, at: res.transfer.receivedAt, photos: uploads });
-      try {
-        for (const row of staged.rows) records.insertPhotoRow({ ...row, companyId: t.companyId, ownerKind: 'transfer', ownerId: id });
-      } catch (err) {
-        staged.abort();
-        throw err;
-      }
-      staged.commit();
+    // Photos are written to temporary names first; the receipt and their rows
+    // go in one transaction; the files take their final names only after it.
+    const staged = fuelPhotos.stagePhotos({ recordId: id, at: Date.now(), photos: uploads });
+    let res;
+    try {
+      res = records.receiveTransfer(id, scrubRecordInput(rest), { forbidSelf: !callerCanManage(), photoRows: staged.rows });
+    } catch (err) {
+      staged.abort();
+      throw err;
     }
+    if (res.duplicate) staged.abort();
+    else staged.commit();
     if (!res.duplicate) {
-      recompute([], [t.fromLocationId, t.toLocationId]);
+      recompute([], [t.fromLocationId, t.toLocationId], [t.sentAt, res.transfer.receivedAt]);
       emitFuelChange('transfer', 'update', id, t.companyId);
     }
     return res;
@@ -333,6 +417,10 @@ function register({ expose, exposeLocal }) {
     activeCompanyId(companyId);
     const rootId = ownerKind === 'fill' ? records.getActiveFill(ownerId).rootId : ownerId;
     assertOwnRecord(ownerKind, rootId);
+    const have = records.listPhotos(ownerKind, rootId, { includeRetired: false }).length;
+    if (have >= fuelPhotos.MAX_PHOTOS_PER_RECORD_TOTAL) {
+      throw new Error(`This record already has ${have} photos — the most one record can hold is ${fuelPhotos.MAX_PHOTOS_PER_RECORD_TOTAL}`);
+    }
     const uploads = await fuelPhotos.prepareUploads(ownerKind, [{ kind, bytes }]);
     const staged = fuelPhotos.stagePhotos({ recordId: rootId, at: Date.now(), photos: uploads });
     let photo;
@@ -346,7 +434,7 @@ function register({ expose, exposeLocal }) {
     require('../db/auditLog').log({ entityType: `fuel_${ownerKind}`, entityId: rootId, action: 'photo:add', after: { kind, sha256: photo.sha256 } });
     if (ownerKind === 'fill') {
       const f = records.getActiveFill(rootId);
-      recompute([f.assetId], [f.locationId]);
+      recompute([f.assetId], [f.locationId], [f.at]);
     }
     emitFuelChange(ownerKind, 'update', rootId, companyId);
     return records.publicPhoto(photo);
@@ -392,21 +480,21 @@ function register({ expose, exposeLocal }) {
   expose('fuel:reviewFill', ({ id, ...review } = {}) => {
     const f = inCompany(records.getActiveFill(id), 'Fill');
     const next = records.reviewFill(id, review);
-    recompute([f.assetId], []);
+    recompute([f.assetId], [], [f.at]);
     emitFuelChange('fill', 'update', f.rootId, f.companyId);
     return { fill: next, flags: fillFlags(f.rootId) };
   });
   expose('fuel:correctFill', ({ id, patch, reason } = {}) => {
     const f = inCompany(records.getActiveFill(id), 'Fill');
     const next = records.correctFill(id, patch || {}, reason);
-    recompute([f.assetId, next.assetId], [f.locationId, next.locationId]);
+    recompute([f.assetId, next.assetId], [f.locationId, next.locationId], [f.at, next.at]);
     emitFuelChange('fill', 'update', f.rootId, f.companyId);
     return { fill: next, flags: fillFlags(f.rootId) };
   });
 
   function afterVoid(res) {
     if (!res.already) {
-      recompute([res.assetId], res.locationIds);
+      recompute([res.assetId], res.locationIds, res.times);
       emitFuelChange(res.kind, 'void', res.id, res.companyId);
     }
     return res;
@@ -435,14 +523,23 @@ function register({ expose, exposeLocal }) {
     emitFuelChange('flag', 'update', id, f.companyId);
     return next;
   });
-  expose('fuel:recomputeFlags', () => flagsDb.recomputeAll({ companyId: activeCompanyId() }));
+  expose('fuel:recomputeFlags', async () => {
+    const res = await flagsDb.recomputeAllAsync({ companyId: activeCompanyId() });
+    overviewCache.clear();
+    return res;
+  });
   expose('fuel:getOverview', () => {
     const companyId = activeCompanyId();
     const ov = flagsDb.overview(companyId);
     const month = monthOr(null);
-    let excessRiel = null;
-    try { excessRiel = reports.monthlyReport(companyId, month).totals.excessRiel; } catch (_) { /* report is optional on the tile */ }
-    return { ...ov, month, excessRiel };
+    const key = `${companyId}|${month}|${fuelWriteVersion()}`;
+    if (!overviewCache.has(key)) {
+      let excessRiel = null;
+      try { excessRiel = reports.monthlyReport(companyId, month).totals.excessRiel; } catch (_) { /* report is optional on the tile */ }
+      overviewCache.clear();
+      overviewCache.set(key, excessRiel);
+    }
+    return { ...ov, month, excessRiel: overviewCache.get(key) };
   });
 
   /* ─── reports ─── */

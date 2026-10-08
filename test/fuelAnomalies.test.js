@@ -268,3 +268,69 @@ test('dates are Phnom Penh dates (UTC+7) and months are [start, end) in that zon
   assert.equal(rules.phnomPenhDate(end - 1), '2026-10-31');
   assert.throws(() => rules.monthRange('2026-13'), /month/);
 });
+
+/* ─── review fixes (2026-10-08) ─── */
+
+test('a delivery typed in after its "after" dip (the natural phone order) counts inside its dips — no false red', () => {
+  const dips = [
+    { id: 'b', locationId: TANK.id, takenAt: T0, dipCm: 120, litres: 1850 },
+    { id: 'a', locationId: TANK.id, takenAt: T0 + 3600e3, dipCm: 100, litres: 0 },
+    { id: 'c', locationId: TANK.id, takenAt: T0 + DAY, dipCm: 100, litres: 0 },
+  ];
+  dips[1].litres = 1850 + 2000; // the delivery shows in the "after" dip…
+  dips[2].litres = 1850 + 2000; // …and nothing moved until the next one
+  const late = { id: 'del', locationId: TANK.id, deliveredAt: T0 + 2 * 3600e3, litresInvoiced: 2000, dipBeforeId: 'b', dipAfterId: 'a' };
+  const out = rules.tankReconciliation({ location: TANK, chart: ULLAGE, dips, deliveries: [late] });
+  assert.deepEqual(out.flags, [], 'placed inside its dips, the books balance');
+  assert.equal(out.intervals[0].delivered, 2000);
+  assert.equal(rules.deliveryEffectiveAt(late, new Map(dips.map((d) => [d.id, d]))), T0 + 3600e3 - 1);
+  // Without the link it lands after the "after" dip: one red, one amber — the bug this fixes.
+  const unlinked = rules.tankReconciliation({ location: TANK, chart: ULLAGE, dips, deliveries: [{ ...late, dipBeforeId: null, dipAfterId: null }] });
+  assert.deepEqual(unlinked.flags.map((f) => f.severity).sort(), ['amber', 'red']);
+});
+
+test('M1 on a transfer compares the pump meter with what was TYPED, not with itself', () => {
+  const transfers = [{ id: 't1', fromLocationId: TANK.id, sentAt: T0, pumpMeterBefore: 0, pumpMeterAfter: 200, litresSent: 200, typedLitres: 220 }];
+  const out = rules.meterRules({ location: TANK, transfers });
+  assert.equal(out.flags.length, 1);
+  assert.equal(out.flags[0].ruleKey, 'M1');
+  assert.equal(out.flags[0].expected, 220);
+  assert.equal(rules.meterRules({ location: TANK, transfers: [{ ...transfers[0], typedLitres: 200 }] }).flags.length, 0);
+});
+
+test('F1 transfer loss: sent − received over 2% amber, over 5% red', () => {
+  const t = (received) => [{ id: 'x', fromLocationId: TANK.id, toLocationId: 'farm', sentAt: T0, litresSent: 200, litresReceived: received }];
+  assert.equal(rules.transferLoss({ location: TANK, transfers: t(197) }).flags.length, 0);
+  assert.equal(rules.transferLoss({ location: TANK, transfers: t(194) }).flags[0].severity, 'amber');
+  const red = rules.transferLoss({ location: TANK, transfers: t(180) }).flags[0];
+  assert.equal(red.ruleKey, 'F1');
+  assert.equal(red.severity, 'red');
+  assert.match(red.explanation, /20 L \(10%\)/);
+});
+
+test('Q1: a phone record that waited in the offline queue is noted (info) for the reviewer', () => {
+  const late = fill({ id: 'q', queuedForMs: 3 * 3600e3, meterReading: 5 });
+  const out = rules.assetRules({ asset: BIKE, fills: [late] });
+  const q1 = out.flags.find((f) => f.ruleKey === 'Q1');
+  assert.equal(q1.severity, 'info');
+  assert.match(q1.explanation, /3 h/);
+  assert.ok(!rules.assetRules({ asset: BIKE, fills: [fill({ id: 'q', queuedForMs: 60000 })] }).flags.some((f) => f.ruleKey === 'Q1'));
+  const loc = rules.locationQueuedNotes({ location: TANK, dips: [{ id: 'd', locationId: TANK.id, takenAt: T0, queuedForMs: 7200e3 }] });
+  assert.equal(loc.flags[0].subject, 'dip:d');
+});
+
+test('USD cash is compared with a KHR price at the exchange rate; no price → an info flag, not silence', () => {
+  // $3.66 at 4,100 KHR/USD = 15,006 KHR for 2.5 L shown → 6,002 KHR/L vs 4,000 posted.
+  const usd = fill({ id: 'u', kind: 'cash_station', amountPaidMinor: 366, currency: 'USD', litresShownOnPump: 2.5, meterReading: 5, photoKinds: ['meter', 'pump_display'] });
+  const out = rules.assetRules({ asset: BIKE, fills: [usd], priceFor: PRICE_4000, fxKhrPerUsd: 4100 });
+  const c1 = out.flags.find((f) => f.ruleKey === 'C1');
+  assert.equal(c1.severity, 'red');
+  assert.equal(c1.unit, 'KHR/L');
+  assert.match(c1.explanation, /\$3\.66 \(15,006 KHR at 4,100 KHR\/USD\)/);
+  assert.ok(out.flags.some((f) => f.ruleKey === 'C2'));
+  const noRate = rules.assetRules({ asset: BIKE, fills: [usd], priceFor: PRICE_4000, fxKhrPerUsd: null });
+  assert.equal(noRate.flags.find((f) => f.ruleKey === 'C0').severity, 'info');
+  assert.ok(!noRate.flags.some((f) => f.ruleKey === 'C1'));
+  const noPrice = rules.assetRules({ asset: BIKE, fills: [usd], priceFor: () => null, fxKhrPerUsd: 4100 });
+  assert.match(noPrice.flags.find((f) => f.ruleKey === 'C0').explanation, /No published/);
+});

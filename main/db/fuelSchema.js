@@ -394,6 +394,14 @@ function ensureFuelSchema(db) {
   // Room for later additive columns lives here (addColumnIfMissing), e.g. HR1's
   // employee fields. Kept as a call so the pattern is obvious to the next stage.
   addColumnIfMissing(db, 'employees', 'notes', 'TEXT');
+
+  // Review fixes (2026-10-08): how long a phone record waited in the phone's
+  // offline queue (recorded_at − at, after capping), and a hash of what was
+  // sent with a client_ref so a reused ref with different content is refused.
+  for (const t of ['fuel_fills', 'fuel_dips', 'fuel_deliveries', 'fuel_transfers']) {
+    addColumnIfMissing(db, t, 'queued_for_ms', 'INTEGER');
+    addColumnIfMissing(db, t, 'client_ref_hash', 'TEXT');
+  }
 }
 
 module.exports = { ensureFuelSchema };

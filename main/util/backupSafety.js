@@ -114,7 +114,9 @@ const ARCHIVE_TOP_LEVEL_FILES = new Set([
   'config.json',
   'config.partial.json',
 ]);
-const ARCHIVE_TOP_LEVEL_DIRS = new Set(['assets', 'processed', 'ai-gallery', 'overlays']);
+// Fuel F1: fuel/ (evidence photos) and hr/ (staff photos) must be restorable too —
+// they are in BACKUP_DATA_ENTRIES, and an archive entry outside this set is refused.
+const ARCHIVE_TOP_LEVEL_DIRS = new Set(['assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr']);
 
 function archivePathSupported(relPath) {
   const cleaned = relPath.replace(/\/$/, '');

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { hasCap } from '../../lib/capabilities.js';
 import { Button, Input, Modal, Select } from '../../components/ui.jsx';
@@ -17,6 +17,8 @@ import { PriceGroupsPanel } from './PriceGroupsPanel.jsx';
 import { RolesPanel } from './RolesPanel.jsx';
 import { ExchangeRateControl } from './ExchangeRateControl.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
+// Fuel F1: Settings → Fuel. Lazy so the fuel screens stay out of the boot bundle.
+const FuelSettingsPanel = lazy(() => import('../Fuel/FuelSettingsPanel.jsx').then((m) => ({ default: m.FuelSettingsPanel })));
 
 // v0.22.13: Settings is now tabbed. SETTINGS_TABS is the source of
 // truth for both the left rail (label + key) and the conditional
@@ -42,6 +44,9 @@ const SETTINGS_TABS = [
   // kind of thing — the place you go when something has gone wrong.
   { key: 'deleted',     label: 'Recently deleted' },
   { key: 'multi-mac',   label: 'Multi-Mac' },
+  // Fuel F1: thresholds, photo retention, vehicle types, phone set-up.
+  // Offered on a client Mac only to a user with fuel.manage (tab filter below).
+  { key: 'fuel',        label: 'Fuel' },
   // v0.49.51: custom roles + permission matrix.
   { key: 'roles',       label: 'Roles & permissions' },
   { key: 'about',       label: 'About' },
@@ -266,6 +271,7 @@ export function Settings() {
             .filter((t) => {
               if (!isClient) return true;                       // the host Mac owns everything
               if (t.key === 'roles') return canManageUsers;
+              if (t.key === 'fuel') return hasCap(caps, 'fuel.manage');
               // v0.1.86: the recycle bin is a data-folder operation like
               // backups — a client Mac may restore or purge, the server holds
               // the files. Same capability gate, for the same reason.
@@ -653,6 +659,12 @@ export function Settings() {
 
         {tab === 'deleted' && (
           <DeletedItemsPanel config={config} addToast={addToast} />
+        )}
+
+        {tab === 'fuel' && (!isClient || hasCap(caps, 'fuel.manage')) && (
+          <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
+            <FuelSettingsPanel />
+          </Suspense>
         )}
 
         {tab === 'roles' && (

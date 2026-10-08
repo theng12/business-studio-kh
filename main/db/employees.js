@@ -12,9 +12,22 @@
 
 const { getDb } = require('./index');
 const { prepareOptimisticPatch, nextUpdatedAt } = require('./_util');
-const { uuid, audit, str, badRequest, getCallerUserId } = require('./_fuelUtil');
+const { uuid, audit, str, badRequest, getCallerUserId, isCalendarDate } = require('./_fuelUtil');
 
 const STATUSES = ['active', 'left'];
+
+/**
+ * What goes into History for a staff change: never the phone number or the
+ * notes themselves (personal data; History is readable more widely than the
+ * staff list) — only that they were set or changed.
+ */
+const PRIVATE_FIELDS = ['phone', 'notes'];
+function redact(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const out = { ...obj };
+  for (const k of PRIVATE_FIELDS) if (k in out) out[k] = out[k] == null ? null : '(set)';
+  return out;
+}
 
 function rowToEmployee(row) {
   if (!row) return null;
@@ -41,7 +54,7 @@ function rowToEmployee(row) {
   };
 }
 
-function list(companyId, { status = null, role = null, q = null } = {}) {
+function list(companyId, { status = null, role = null, q = null, searchPhone = true } = {}) {
   if (!companyId) return [];
   const where = ['company_id = @companyId'];
   const params = { companyId };
@@ -49,7 +62,8 @@ function list(companyId, { status = null, role = null, q = null } = {}) {
   if (role === 'driver') where.push('is_driver = 1');
   if (role === 'attendant') where.push('is_fuel_attendant = 1');
   if (q && String(q).trim()) {
-    where.push('(staff_code LIKE @q OR name_en LIKE @q OR name_km LIKE @q OR phone LIKE @q)');
+    // A recorder's tile search must not reveal phone numbers by matching them.
+    where.push(`(staff_code LIKE @q OR name_en LIKE @q OR name_km LIKE @q${searchPhone ? ' OR phone LIKE @q' : ''})`);
     params.q = `%${String(q).trim()}%`;
   }
   return getDb()
@@ -113,7 +127,7 @@ function create(input = {}) {
     by: getCallerUserId(),
   });
   const created = get(id);
-  audit('employee', id, 'create', { after: created });
+  audit('employee', id, 'create', { after: redact(created) });
   return created;
 }
 
@@ -157,7 +171,7 @@ function update(id, rawPatch = {}) {
   params.by = getCallerUserId();
   getDb().prepare(`UPDATE employees SET ${sets.join(', ')} WHERE id = @id`).run(params);
   const diff = require('./auditLog').diffPatch(existing, changed);
-  if (diff) audit('employee', id, 'update', diff);
+  if (diff) audit('employee', id, 'update', { before: redact(diff.before), after: redact(diff.after) });
   return get(id);
 }
 
@@ -166,7 +180,8 @@ function markLeft(id, { leftOn = null, reason = null } = {}) {
   const existing = get(id);
   if (!existing) throw badRequest('Staff member not found');
   if (existing.status === 'left') return existing;
-  const date = leftOn && /^\d{4}-\d{2}-\d{2}$/.test(leftOn) ? leftOn : new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
+  if (leftOn != null && leftOn !== '' && !isCalendarDate(leftOn)) throw badRequest('Left on must be a real date like 2026-10-08');
+  const date = leftOn || new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
   getDb().prepare(`UPDATE employees SET status = 'left', left_on = ?, left_reason = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ?`)
     .run(date, str(reason, 500), nextUpdatedAt(existing.updatedAt), getCallerUserId(), id);
   audit('employee', id, 'mark-left', { before: { status: existing.status }, after: { status: 'left', leftOn: date, reason: str(reason, 500) } });

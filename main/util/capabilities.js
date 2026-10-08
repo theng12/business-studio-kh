@@ -172,8 +172,11 @@ const CHANNEL_RULES = [
   //   records) are open to fuel.record OR fuel.manage; everything else under
   //   staff:/fuel: is fuel.manage. Handlers still narrow what a recorder sees
   //   (photos: only their own records' — main/ipc/fuelAccess.js).
-  [/^staff:(list|get|getPhoto)$/,                       ['fuel.record', 'fuel.manage']],
-  [/^fuel:(getSettings|listAssetTypes|listAssets|getAsset|listLocations|getLocation|getChart|getDipLitres|listStations|listPrices|recordFill|recordDip|recordDelivery|setDeliveryDips|recordTransfer|receiveTransfer|addPhoto|getPhoto|listMyRecent|listPendingTransfers|voidMyRecord)$/, ['fuel.record', 'fuel.manage']],
+  //   fuel:setDeliveryDips is manage-only: the phone links a delivery's dips
+  //   when it records the delivery (dipBeforeId / dipAfterId), so re-linking an
+  //   existing delivery afterwards is a manager's correction.
+  [/^staff:(list|get|getPhoto|me)$/,                       ['fuel.record', 'fuel.manage']],
+  [/^fuel:(getSettings|listAssetTypes|listAssets|getAsset|listLocations|getLocation|getChart|getDipLitres|listStations|listPrices|recordFill|recordDip|recordDelivery|recordTransfer|receiveTransfer|addPhoto|getPhoto|listMyRecent|listPendingTransfers|voidMyRecord)$/, ['fuel.record', 'fuel.manage']],
   [/^staff:/,                                           'fuel.manage'],
   [/^fuel:/,                                            'fuel.manage'],
 ];

@@ -18,7 +18,9 @@ import { flushCompanySwitches } from '../lib/companySwitch.js';
 const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'export', 'aistudio', 'overlay',
   'labeltemplates', 'labelgenerate', 'barcodes', 'labeljobs', 'catalogtemplates', 'catalogprojects', 'catalogstudio',
   'socialgrid',
-  'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support'];
+  'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support',
+  // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §5) + the thin staff list.
+  'fueloverview', 'fuelassets', 'fuelfills', 'fueltanks', 'fuelprices', 'fuelreports', 'staff'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the
 // header copy inside the module itself.
@@ -176,6 +178,16 @@ export function createNavigationSlice(set, get) {
       if (!ids.length || !companyId) return Promise.resolve(false);
       return navigate({ exportQueueIds: ids, activeModule: 'export' }, ++navigationIntent, companyId);
     },
+
+    /* Fuel F1: open a fuel screen with something to do there, e.g.
+     * `openFuel('fuelfills', { reviewFillId })` from a flag, or
+     * `{ addFill: true }`. Carries the company so a switch cannot apply it to
+     * another company's records. */
+    fuelIntent: null,
+    openFuel(module, intent = null, companyId = get().activeCompanyId) {
+      return navigate({ fuelIntent: intent ? { ...intent, module, companyId } : null, activeModule: module }, ++navigationIntent, companyId);
+    },
+    clearFuelIntent() { set({ fuelIntent: null }); },
 
     isModuleAvailable(name) {
       if (ALWAYS_AVAILABLE.has(name)) return true;

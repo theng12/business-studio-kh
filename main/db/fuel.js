@@ -10,7 +10,7 @@
 
 const { getDb } = require('./index');
 const { nextUpdatedAt, prepareOptimisticPatch, parseJson } = require('./_util');
-const { uuid, audit, str, num, int, badRequest, fuelType, currency, getCallerUserId } = require('./_fuelUtil');
+const { uuid, audit, str, num, int, badRequest, fuelType, currency, isCalendarDate, getCallerUserId } = require('./_fuelUtil');
 const { normalizeChart, lookup } = require('../util/tankCalibration');
 const { mergeSettings, sanitizeSettingsPatch, phnomPenhDate } = require('../util/fuelAnomalies');
 
@@ -480,7 +480,7 @@ function setPrice(input = {}) {
   const price = int(input.priceMinorPerL);
   if (price == null || price <= 0) throw badRequest('Price per litre must be a whole number more than 0 (riel, or US cents)');
   const from = String(input.effectiveFrom || '');
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) throw badRequest('Effective from must be a date like 2026-10-08');
+  if (!isCalendarDate(from)) throw badRequest('Effective from must be a real date like 2026-10-08');
   const cur = currency(input.currency);
   const db = getDb();
   const id = uuid();
@@ -505,15 +505,35 @@ function setPrice(input = {}) {
   return created;
 }
 
+/**
+ * Void a price entered by mistake. The period before it was closed the day
+ * before this one started (setPrice); voiding gives that period its end back —
+ * it runs again until this one's end (or open-ended) — in the same
+ * transaction, so there is never a gap with no price.
+ */
 function voidPrice(id, reason) {
   const existing = getPrice(id);
   if (!existing) throw badRequest('Price not found');
   if (existing.voided) return existing;
   const why = str(reason, 500);
   if (!why) throw badRequest('A reason is required to void a price');
-  getDb().prepare('UPDATE fuel_prices SET voided_at = ?, void_reason = ?, voided_by_user_id = ? WHERE id = ?')
-    .run(Date.now(), why, getCallerUserId(), id);
-  audit('fuel_price', id, 'void', { before: existing, after: { voided: true, voidReason: why } });
+  const db = getDb();
+  let restored = null;
+  db.transaction(() => {
+    db.prepare('UPDATE fuel_prices SET voided_at = ?, void_reason = ?, voided_by_user_id = ? WHERE id = ?')
+      .run(Date.now(), why, getCallerUserId(), id);
+    const dayBefore = new Date(Date.parse(`${existing.effectiveFrom}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+    const prev = db.prepare(`
+      SELECT * FROM fuel_prices WHERE company_id = ? AND fuel_type = ? AND voided_at IS NULL
+         AND effective_from < ? AND effective_to = ?
+       ORDER BY effective_from DESC, created_at DESC LIMIT 1
+    `).get(existing.companyId, existing.fuelType, existing.effectiveFrom, dayBefore);
+    if (prev) {
+      db.prepare('UPDATE fuel_prices SET effective_to = ? WHERE id = ?').run(existing.effectiveTo, prev.id);
+      restored = { id: prev.id, effectiveTo: { before: prev.effective_to, after: existing.effectiveTo } };
+    }
+  })();
+  audit('fuel_price', id, 'void', { before: existing, after: { voided: true, voidReason: why, previousPeriodRestored: restored } });
   return getPrice(id);
 }
 
