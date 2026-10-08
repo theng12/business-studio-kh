@@ -316,7 +316,10 @@ test('phone viewer: thumbnails for lists, no per-card image lookups, never the t
   assert.match(viewer, /assetUrl\(rel, productId, \{ w: 640/, 'gallery tiles ask for the 640px thumbnail');
   assert.match(viewer, /hasOwnProperty\.call\(p, 'mainImagePath'\)/, 'cards use the main image named by products:list');
   assert.doesNotMatch(viewer, /showConnect\('Connected, but loading failed/, 'a load failure must not send the user back to the token form');
-  assert.match(viewer, /AbortSignal\.timeout/, 'requests have a deadline');
+  // A deadline for the answer to start, then a separate one for the body
+  // (test/reviewFixesWebclient.test.js runs it); AbortSignal.timeout could
+  // not be re-armed once headers arrived, so a slow list body was cut off.
+  assert.match(viewer, /function fetchT\(url, options, ms\)[\s\S]{0,1200}ctrl\.abort\(\)/, 'requests have a deadline');
   assert.match(viewer, /addEventListener\('popstate'/, 'Android Back closes the product sheet');
   assert.match(viewer, /history\.replaceState\(/, 'the pairing token is removed from the address bar');
   assert.match(viewer, /\(\?:\^#\|&\)t=/, 'the pairing token is read from the fragment');

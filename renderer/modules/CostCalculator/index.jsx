@@ -27,6 +27,7 @@ import { parseConflictError, resolveSaveConflict } from '../../components/Confli
 import { priceEntry, formatPriceEntry } from '../../lib/prices.js';
 import { formatPrice } from '../../lib/currencies.js';
 import { marginAgainst, retailInCurrency } from './costMath.js';
+import { useCostingCaps } from '../PurchaseOrders/costingCaps.js';
 
 // Stable getters for SearchableSelect (its filter memo depends on them). The
 // label carries SKU and name, so typing either finds the product — and the
@@ -49,6 +50,10 @@ function saveRates(rates) {
 export function CostCalculator() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
+  // Same rule as useUserCaps() (Sidebar.jsx), read without importing the
+  // sidebar: a view-only client must not be offered a price write the server
+  // refuses (products:update needs products.edit).
+  const { canEditProducts } = useCostingCaps();
 
   const [products, setProducts] = useState([]);
   const [productId, setProductId] = useState('');
@@ -176,7 +181,7 @@ export function CostCalculator() {
   async function saveAsRetail() {
     const p = selectedProduct;
     const usd = Number(retailUsd);
-    if (!p || !(usd > 0) || savingRetail) return;
+    if (!p || !(usd > 0) || savingRetail || !canEditProducts) return;
     const current = priceEntry(p, 'retail');
     const target = retailInCurrency(usd, current.currency, ratesPerUsd);
     const before = current.amount != null ? formatPriceEntry(current) : 'no retail price';
@@ -353,7 +358,7 @@ export function CostCalculator() {
             </label>
           </div>
 
-          {selectedProduct ? (
+          {selectedProduct && canEditProducts ? (
             <div className="setting-control-row costcalc__save">
               <Button
                 onClick={saveAsRetail}

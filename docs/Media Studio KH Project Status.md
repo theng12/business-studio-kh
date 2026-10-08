@@ -1,6 +1,6 @@
 # Business Studio KH — Development Status
 
-Updated: **2026-10-06, at 0.1.93.** This is the short "where is the project" page. The operating
+Updated: **2026-10-08, at 0.1.94.** This is the short "where is the project" page. The operating
 loop, paths, traps and the full list of open gaps live in [the session handoff](tasks/HANDOFF.md),
 which is updated on every release — read that first in a new session. If either document disagrees
 with the code, the code wins.
@@ -18,20 +18,21 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
   a spec/quality review from another agent in the same model family. No human or third-party model
   has reviewed the tree.
 
-## Current release — 0.1.93
+## Current release — 0.1.94
 
 | | |
 |---|---|
-| Version | `0.1.93` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
+| Version | `0.1.94` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
 | Integration | [PR #111](https://github.com/theng12/media-studio-kh/pull/111) merged as `0d8c15b`; owner main synchronized, build worktree archived with files preserved. Final receipt is local `graphify-out/ux-workflows/release-receipt.md`. |
-| Installed | **0.1.93** passed isolated smoke, attention-queue and product-search navigation checks; visible version and normal quit verified. Previous0.1.92 preserved under owner `_trash/installed-apps/`. Live data untouched. |
-| DMG | Owner `dist/Business Studio KH-0.1.93-arm64.dmg`, verified valid; SHA-256 `78f56b653364258f66786bf1fbc4a11166faa3272a3edbf34d25b48be14e8f66`. Keeps0.1.92/0.1.93;0.1.91 moved to `_trash/old-dmgs/`. |
+| Installed | **0.1.94** on the MacBook (`$HOME`), 2026-10-08, after a packaged smoke test on a throwaway profile; the previous app is kept under the owner `_trash/installed-apps/`. The Mac mini was on 0.1.93 at that time. |
+| DMG | Owner `dist/Business Studio KH-0.1.94-arm64.dmg` on the MacBook (the newest two releases are kept; older ones go to `_trash/old-dmgs/`). |
 
 **What changed since the last version of this page (0.1.72).** One line per release; the full
 wording is in the "What's new" changelog.
 
 | Version | Main change |
 |---|---|
+| 0.1.94 | Usability / smoothness / connectivity audit on a realistic 2,500-product dataset: Library, search, auto-match preview, weekly auto backups, multi-Mac liveness + offline banner, phone viewer, studios on the full catalogue, labels, exports, POs; 41 review findings fixed |
 | 0.1.93 | Seven everyday UX areas: Catalog disclosure/history, Library panels, processing recipe/keyboard crop/comparison, attention queues, catalog-aware search |
 | 0.1.92 | Eight audit batches: file/company safety, reliable editors/AI, source crop geometry, truthful labels/exports/Social previews, PO/cost/Settings recovery |
 | 0.1.91 | Catalog correctness, bulk picking/SKU paste, session undo, reusable print controls and paper preview |

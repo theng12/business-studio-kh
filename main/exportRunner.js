@@ -11,6 +11,7 @@ const { slugifyUnicode } = require('./util/slug');
 const { formatIndexToken } = require('./util/exportIndex');
 const { logSoftFailure } = require('./util/softFailure');
 const { selectImages, MAX_IMAGE_POSITION } = require('./util/imageScope');
+const { writeExclusiveFile } = require('./util/exclusiveFile');
 
 /* ── Image scope ──────────────────────────────────────────────── */
 
@@ -43,6 +44,41 @@ function scopedImages(images, scope) {
   const positions = Array.from({ length: s.count }, (_, k) => k + 1);
   const { chosen } = selectImages(list, { positions });
   return chosen.map((img) => ({ img, i: list.indexOf(img) }));
+}
+
+/* ── Library copies made by "Also save to product library" ─────── */
+
+/* A copy an export added back to the product is marked on its row
+ * (original_filepath `export:<profileId>`, the same idea as the overlay's
+ * `overlay:<templateId>`). Before this marker existed the only trace was
+ * dedup_exempt, which nothing but this runner ever sets — so a legacy row
+ * with that flag is an export copy too, of an unknown profile. */
+const EXPORT_COPY_PREFIX = 'export:';
+function exportCopyMarker(profile) {
+  return `${EXPORT_COPY_PREFIX}${profile?.id || 'unsaved'}`;
+}
+function isExportCopy(img) {
+  if (!img) return false;
+  if (typeof img.originalFilepath === 'string' && img.originalFilepath.startsWith(EXPORT_COPY_PREFIX)) return true;
+  return !!img.dedupExempt;
+}
+
+/**
+ * The images an export reads from. An export copy is never re-exported:
+ * exporting it again re-encoded the main photo once per run, generation after
+ * generation (audit 2026-10). The originals are used instead, so image 1 is
+ * the product's first real photo. A product whose only photos are export
+ * copies still exports them rather than exporting nothing.
+ */
+function exportSources(images) {
+  const list = Array.isArray(images) ? images : [];
+  const originals = list.filter((img) => !isExportCopy(img));
+  return originals.length > 0 ? originals : list;
+}
+
+/** The scope a run uses: the caller's, else the profile's stored one. */
+function effectiveScope(imageScope, profile) {
+  return normalizeExportScope(imageScope ?? profile?.imageScope ?? null);
 }
 
 /* ── Filename token builder ───────────────────────────────────── */
@@ -203,6 +239,7 @@ function expectedOutputs({ profile, productIds, imageScope = null }) {
             : profile.format === 'avif' ? '.avif'
             : '.jpg';
   const dateStr = todayStr();
+  const scope = effectiveScope(imageScope, profile);
   const entries = [];
   // Names this run would produce more than once get the same `-2`, `-3`
   // suffix the real run gives them, so the preview never reports a
@@ -213,8 +250,8 @@ function expectedOutputs({ profile, productIds, imageScope = null }) {
     const product = products.get(productId);
     if (!product) continue;
     const brand = product.brandId ? brands.get(product.brandId) : null;
-    const images = productImages.listByProduct(productId);
-    for (const { i } of scopedImages(images, imageScope)) {
+    const images = exportSources(productImages.listByProduct(productId));
+    for (const { i } of scopedImages(images, scope)) {
       const ctx = { product, brand, imageIndex: i, dateStr, profile };
       const base = buildFilename(profile.namingPattern || '{SKU}-{INDEX}', ctx);
       const { outPath } = resolveOutputPath('/', base, ext, 'keepBoth', claimed, never);
@@ -264,7 +301,7 @@ function parseHexColor(hex) {
   };
 }
 
-async function processOneImage({ sourceAbs, profile, outPath }) {
+async function encodeOneImage({ sourceAbs, profile }) {
   const meta = await sharp(sourceAbs).metadata();
   const bg = parseHexColor(profile.backgroundColor || '#FFFFFF');
 
@@ -307,7 +344,30 @@ async function processOneImage({ sourceAbs, profile, outPath }) {
       break;
   }
 
-  await pipeline.toFile(outPath);
+  return pipeline.toBuffer();
+}
+
+/* Write one encoded output. 'replace' overwrites on purpose; every other
+ * action claims the name with `wx` at WRITE time (writeExclusiveFile), so a
+ * second export writing into the same folder at the same moment cannot have
+ * picked the same name between our existence check and this write. On EEXIST
+ * the next free `-2`, `-3`… is tried. Resolves to the path actually written. */
+async function writeOutput(bytes, outFile, action, { dir, base, ext, claimed }) {
+  if (action === 'replace') {
+    await fs.promises.writeFile(outFile, bytes);
+    return outFile;
+  }
+  let target = outFile;
+  for (;;) {
+    try {
+      return await writeExclusiveFile(target, bytes);
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      claimed.add(claimKey(target));
+      target = uniqueOutputPath(dir, base, ext, claimed);
+      claimed.add(claimKey(target));
+    }
+  }
 }
 
 /* ── Run ─────────────────────────────────────────────────────── */
@@ -341,6 +401,9 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
             : profile.format === 'avif' ? '.avif'
             : '.jpg';
   const dateStr = todayStr();
+  // Missing scope = the profile's stored one (a caller that sends nothing
+  // still gets what the profile says), and only then "all".
+  const scope = effectiveScope(imageScope, profile);
 
   let exported = 0;
   let exportedFromRaw = 0;   // tally of how many used raw source vs processed
@@ -391,7 +454,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       continue;
     }
     const brand = product.brandId ? brands.get(product.brandId) : null;
-    const images = productImages.listByProduct(productId);
+    const images = exportSources(productImages.listByProduct(productId));
 
     if (images.length === 0) {
       skipped++;
@@ -400,7 +463,7 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
     }
 
     let productExported = 0;
-    const selected = scopedImages(images, imageScope);
+    const selected = scopedImages(images, scope);
     const wanted = new Set(selected.map(({ i }) => i));
     for (let i = 0; i < images.length; i++) {
       if (cancelRequested()) break;
@@ -449,7 +512,8 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       const base = buildFilename(profile.namingPattern || '{SKU}-{INDEX}', ctx);
       // v0.26.24: collision-aware resolver. Returns { outPath, action }
       // where action drives the per-iteration branch below.
-      const { outPath: outFile, action, inRun } = resolveOutputPath(outputPath, base, ext, onExisting, claimed);
+      const { outPath: plannedFile, action, inRun } = resolveOutputPath(outputPath, base, ext, onExisting, claimed);
+      let outFile = plannedFile;
 
       containedMediaPath(outputRoot, path.relative(path.resolve(outputRoot), outFile));
 
@@ -473,7 +537,8 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
       claimed.add(claimKey(outFile));
       if (inRun) renamedInRun++;
       try {
-        await processOneImage({ sourceAbs, profile, outPath: outFile });
+        const encoded = await encodeOneImage({ sourceAbs, profile });
+        outFile = await writeOutput(encoded, plannedFile, action, { dir: outputPath, base, ext, claimed });
         exported++;
         productExported++;
         if (action === 'replace') replaced++;
@@ -519,35 +584,55 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
     }
   }
 
-  // v0.31.0: import-back pass. Append each exported file onto its product
-  // as a new image, set the first one as the product's main, and flag every
-  // appended copy dedup_exempt so the near-duplicate scan never groups a
-  // small web export against its hi-res original. Done after the export
-  // loop so renumbering here can't disturb source paths we read above.
+  // v0.31.0: import-back pass. The export of each product's main image is
+  // added to the product and made its main image, flagged dedup_exempt so
+  // the near-duplicate scan never groups a small web export against its
+  // hi-res original. Done after the export loop so renumbering here can't
+  // disturb source paths we read above.
+  //
+  // Audit 2026-10: it used to APPEND every run, and the next run exported
+  // that copy — the main photo was re-encoded generation after generation and
+  // the gallery grew by one per run. Now the copy is marked with the profile
+  // (exportCopyMarker), exports read originals only (exportSources), and the
+  // copy this profile made last time is REPLACED: the new copy goes in first,
+  // then the old one is removed through productImages.remove, which holds it
+  // in Recently deleted. A user photo is never removed here.
   let savedToLibrary = 0;
   if (toLibrary) {
     const MAX = require('./imageManager').MAX_IMAGES_PER_PRODUCT;
+    const marker = exportCopyMarker(profile);
     for (const [pid, files] of toLibrary) {
-      let mainSet = false;
-      let added = 0;
-      for (const f of files) {
+      let changed = false;
+      for (const f of files.slice(0, 1)) {
         try {
-          if (productImages.listByProduct(pid).length >= MAX) break; // respect cap
-          const { image, skipped: addSkipped } = await productImages.addFromSource(pid, f, { originalFilepath: f });
-          if (image && !addSkipped) {
+          const before = productImages.listByProduct(pid);
+          if (before.length >= MAX) break; // respect cap
+          // makeMain: the add and the set-main by row id run in ONE turn of
+          // the product's image lock, so no renumber can slip between them.
+          const { image, skipped: addSkipped } = await productImages.addFromSource(pid, f, { originalFilepath: marker, makeMain: true });
+          if (!image) continue;
+          changed = true;
+          if (!addSkipped) {
             try { productImages.setDedupExempt(image.id, true); } catch (err) { logSoftFailure('exportRunner', 'flag imported copy dedup-exempt', err); }
             savedToLibrary++;
-            added++;
-            // By id: the add awaited, so the path it returned may be stale.
-            if (!mainSet) { try { productImages.setMainById(pid, image.id); } catch (err) { logSoftFailure('exportRunner', 'set main image on import-back', err); } mainSet = true; }
           }
+          // Previous copies from this same profile give way to the new one.
+          // Re-listed inside the lock, by row id + content hash (the add
+          // awaited, so anything read before it may be stale).
+          await productImages.withProductImageLock(pid, () => {
+            const stale = productImages.listByProduct(pid)
+              .filter((img) => img.id !== image.id && img.originalFilepath === marker);
+            for (const old of stale) {
+              try { productImages.remove(pid, old.id, old.contentHash ?? undefined); } catch (err) { logSoftFailure('exportRunner', 'replace the previous library copy', err); }
+            }
+          });
         } catch (_) { /* per-image best-effort; don't fail the whole export */ }
       }
       /* The add and the set-main renumber the product's files, so the bytes
        * behind `<sku>-001.jpg` changed while its URL did not. Bump the stamp
        * the Library's thumbnails cache-bust on (AGENTS.md §12), the same way
        * every image IPC handler does. */
-      if (added > 0) {
+      if (changed) {
         try { products.touchUpdated(pid); } catch (err) { logSoftFailure('exportRunner', 'refresh product stamp after import-back', err); }
       }
     }
@@ -579,4 +664,4 @@ async function runExport({ profile, productIds, outputRoot, onProgress, onExisti
   };
 }
 
-module.exports = { runExport, buildFilename, slugifyFilename, previewCollisions, expectedOutputs, resolveOutputPath, claimKey, normalizeExportScope, scopedImages };
+module.exports = { runExport, buildFilename, slugifyFilename, previewCollisions, expectedOutputs, resolveOutputPath, claimKey, normalizeExportScope, scopedImages, exportSources, isExportCopy, exportCopyMarker, effectiveScope, writeOutput };

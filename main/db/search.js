@@ -49,13 +49,30 @@ const { getDb } = require('./index');
  *     A substring of a 13-digit barcode matched half the catalogue for any
  *     number typed, which is why barcodes were taken out in v0.49.37; an exact
  *     scan still finds its product, and ⌘K labels that hit "barcode".
- *   - Both sides are NFC-normalised and stripped of zero-width characters
- *     (U+200B–U+200D, U+FEFF). Khmer text typed on one keyboard and stored
- *     from another can differ only in those, and LIKE treated them as
- *     different strings.
+ *   - Both sides are NFC-normalised and stripped of invisible characters
+ *     (U+200B–U+200D, U+2060 word joiner, U+FEFF, U+00AD soft hyphen). Khmer
+ *     text typed on one keyboard and stored from another can differ only in
+ *     those, and LIKE treated them as different strings.
+ *   - A query is capped at MAX_SEARCH_QUERY characters (a pasted paragraph
+ *     must not become thousands of AND-ed words per row per keystroke).
+ *
+ * The phone viewer (webclient/index.html, `search:begin`) carries a copy of
+ * this rule; test/searchParity.test.js runs both over the same samples.
  */
-const ZERO_WIDTH_RE = /[\u200B-\u200D\uFEFF]/g;
+const ZERO_WIDTH_RE = /[\u200B-\u200D\u2060\uFEFF\u00AD]/g;
 const SEPARATORS_RE = /[\s\-_./\\:,\u00B7|+#]+/g;
+const MAX_SEARCH_QUERY = 200;
+
+/** The query as searched: trimmed, at most MAX_SEARCH_QUERY characters. */
+function clampSearchQuery(query) {
+  return String(query ?? '').trim().slice(0, MAX_SEARCH_QUERY);
+}
+
+/** A LIKE pattern matching `text` anywhere, with `%`, `_` and the escape
+ *  character itself taken literally — use with `ESCAPE '\\'`. */
+function likeContains(text) {
+  return `%${String(text ?? '').replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+}
 
 function normalizeSearchText(value) {
   return String(value ?? '').normalize('NFC').replace(ZERO_WIDTH_RE, '').toLowerCase();
@@ -74,6 +91,7 @@ function searchTokens(query) {
  * Prepare a query once for matching many rows. Returns null for a blank query.
  */
 function compileProductSearch(query) {
+  query = clampSearchQuery(query);
   const tokens = searchTokens(query);
   if (tokens.length === 0) return null;
   return {
@@ -121,9 +139,12 @@ function matchNameSearch(compiled, name) {
  */
 function globalSearch(companyId, query, limit = 30, opts = {}) {
   if (!companyId) return [];
-  const q = (query ?? '').trim();
+  const q = clampSearchQuery(query);
   if (!q) return [];
-  const like = `%${q}%`;
+  // Escaped: a typed `%` or `_` is a character to find, not a wildcard.
+  // NFC + invisible characters removed, but NOT lower-cased: SQLite's LIKE
+  // folds ASCII case only, so lower-casing "É" would stop it matching "É".
+  const like = likeContains(q.normalize('NFC').replace(ZERO_WIDTH_RE, ''));
   const db = getDb();
   const compiled = compileProductSearch(q);
 
@@ -186,7 +207,7 @@ function globalSearch(companyId, query, limit = 30, opts = {}) {
       .prepare(
         `SELECT id, name, country FROM suppliers
           WHERE company_id = ?
-            AND (name LIKE ? COLLATE NOCASE OR contact_name LIKE ? COLLATE NOCASE)
+            AND (name LIKE ? ESCAPE '\\' OR contact_name LIKE ? ESCAPE '\\')
           ORDER BY name COLLATE NOCASE LIMIT ?`,
       )
       .all(companyId, like, like, limit);
@@ -198,7 +219,7 @@ function globalSearch(companyId, query, limit = 30, opts = {}) {
         `SELECT po.id, po.po_number, po.status, s.name AS supplier_name
            FROM purchase_orders po
            LEFT JOIN suppliers s ON s.id = po.supplier_id
-          WHERE po.company_id = ? AND po.po_number LIKE ? COLLATE NOCASE
+          WHERE po.company_id = ? AND po.po_number LIKE ? ESCAPE '\\'
           ORDER BY po.created_at DESC LIMIT ?`,
       )
       .all(companyId, like, limit);
@@ -218,7 +239,7 @@ function globalSearch(companyId, query, limit = 30, opts = {}) {
     // persistent record ID and remain reachable on the Templates screen.
     for (const [table, kind] of [['catalog_projects', 'catalogProject'], ['catalog_templates', 'catalogTemplate']]) {
       const rows = db.prepare(`SELECT id, name, description FROM ${table}
-        WHERE company_id = ? AND (name LIKE ? COLLATE NOCASE OR description LIKE ? COLLATE NOCASE)
+        WHERE company_id = ? AND (name LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')
         ORDER BY updated_at DESC LIMIT ?`).all(companyId, like, like, limit);
       for (const row of rows) results.push({ kind, id: row.id, label: row.name, sublabel: row.description || null });
     }
@@ -251,6 +272,9 @@ module.exports = {
   normalizeSearchText,
   compactSearchKey,
   compileProductSearch,
+  clampSearchQuery,
+  likeContains,
+  MAX_SEARCH_QUERY,
   matchProductSearch,
   matchNameSearch,
 };

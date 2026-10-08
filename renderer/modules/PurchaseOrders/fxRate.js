@@ -41,16 +41,24 @@ function trim(n, maxDecimals) {
 }
 
 /**
- * A stored rate as people read it. Under one cent per unit (or a per-USD
- * currency) it is inverted: "1 USD = 4,100 KHR". Otherwise "1 CNY = 0.14 USD".
+ * A stored rate as people read it, in the SAME direction the rate field asks
+ * for (fxLabel / FxRateInput): "1 USD = 4,100 KHR" for a per-USD currency,
+ * "1 CNY = 0.14 USD" otherwise. The direction depends on the currency only —
+ * inverting any rate under a cent showed "1 USD = 200 THB" beside a field
+ * labelled "1 THB = ? USD". A tiny rate keeps four significant digits instead,
+ * so it never prints as 0.
  */
 export function formatFx(currency, rateToUsd) {
   const c = code(currency) || '?';
   if (c === 'USD') return 'USD';
+  const perUsd = quotesPerUsd(c);
   const r = Number(rateToUsd);
-  if (!(r > 0)) return `1 ${c} = ? USD`;
-  if (r < 0.01 || quotesPerUsd(c)) return `1 USD = ${trim(1 / r, 2)} ${c}`;
-  return `1 ${c} = ${trim(r, 6)} USD`;
+  if (!(r > 0)) return perUsd ? `1 USD = ? ${c}` : `1 ${c} = ? USD`;
+  if (perUsd) return `1 USD = ${trim(1 / r, 2)} ${c}`;
+  const shown = r < 0.01
+    ? Number(r).toLocaleString(undefined, { maximumSignificantDigits: 4 })
+    : trim(r, 6);
+  return `1 ${c} = ${shown} USD`;
 }
 
 /** "4100" for a stored 1/4100 — the per-USD figure for the input box. */

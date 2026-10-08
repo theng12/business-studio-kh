@@ -124,7 +124,15 @@ export function BulkEditModal({ open, count, productIds, onClose, onDone }) {
 
   /** Write the price change. Returns the number of products changed. */
   async function applyPrice() {
-    const { rows } = buildPriceRows(selectedProducts, priceOpts);
+    /* Compute from the products as they are NOW, not as the store had them
+     * when the modal opened: a percentage applied to a price that another Mac
+     * changed meanwhile would overwrite that edit. Each row also carries the
+     * fresh `expectedUpdatedAt`, so a change landing between this read and
+     * the write is skipped by the server (reported below) instead of lost. */
+    const fresh = await window.api.products.list(activeCompanyId, {});
+    const freshById = new Map((Array.isArray(fresh) ? fresh : []).map((p) => [p.id, p]));
+    const current = (productIds ?? []).map((id) => freshById.get(id)).filter(Boolean);
+    const { rows } = buildPriceRows(current, priceOpts);
     if (rows.length === 0) return 0;
     const dry = await window.api.products.bulkUpsert(activeCompanyId, rows, { conflictPolicy: 'overwrite', dryRun: true });
     const unsafe = (dry?.changes ?? []).find((c) => c && c.action !== 'update' && c.action !== 'no_change');
@@ -132,6 +140,10 @@ export function BulkEditModal({ open, count, productIds, onClose, onDone }) {
       throw new Error(`Prices not changed — ${unsafe.sku || 'a product'} ${unsafe.action === 'insert' ? 'no longer has that SKU (it changed elsewhere)' : unsafe.reason || 'could not be updated'}. Refresh and try again.`);
     }
     const live = await window.api.products.bulkUpsert(activeCompanyId, rows, { conflictPolicy: 'overwrite', dryRun: false });
+    const conflicts = (live?.skips ?? []).filter((sk) => sk?.category === 'conflict');
+    if (conflicts.length > 0) {
+      addToast(`${conflicts.length} price${conflicts.length === 1 ? ' was' : 's were'} not changed — ${conflicts[0].sku || 'a product'} ${conflicts[0].reason}. Refresh and try again.`, 'info');
+    }
     return live?.updated ?? rows.length;
   }
 

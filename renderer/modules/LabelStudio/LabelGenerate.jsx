@@ -6,7 +6,7 @@ import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { GenerationExperience } from '../../components/GenerationExperience.jsx';
 import { clearLabelRerun, peekLabelRerun } from './labelRerun.js';
 import { NumberField } from './NumberField.jsx';
-import { centerPreviewHtml, filterLabelProducts, loadGenerateSettings, saveGenerateSettings } from './labelGenerateState.js';
+import { availablePrinter, centerPreviewHtml, filterLabelProducts, generateSettingsFor, loadGenerateSettings, saveGenerateSettings } from './labelGenerateState.js';
 
 export function LabelGenerate() {
   const companyId = useAppStore((s) => s.activeCompanyId); const addToast = useAppStore((s) => s.addToast);
@@ -40,14 +40,11 @@ export function LabelGenerate() {
     preferredTemplateRef.current = null;
     if (!companyId) return () => { templatesRequestRef.current += 1; };
     // This company's last-used output folder and layout (this Mac only).
-    const saved = loadGenerateSettings(companyId);
-    setOutputFolder(saved.outputFolder ?? ''); setPrinter(saved.printer ?? '');
-    if (saved.format) setFormat(saved.format);
-    if (saved.mode) setMode(saved.mode);
-    if (saved.pageSize) setPageSize(saved.pageSize);
-    if (saved.orientation) setOrientation(saved.orientation);
-    if (saved.marginMm != null) setMarginMm(saved.marginMm);
-    if (saved.gapMm != null) setGapMm(saved.gapMm);
+    // Missing keys fall back to the defaults, never to the previous company's.
+    const saved = generateSettingsFor(loadGenerateSettings(companyId));
+    setOutputFolder(saved.outputFolder); setPrinter(saved.printer);
+    setFormat(saved.format); setMode(saved.mode); setPageSize(saved.pageSize); setOrientation(saved.orientation);
+    setMarginMm(saved.marginMm); setGapMm(saved.gapMm); setCopies(1);
     const rerun = peekLabelRerun(companyId);
     if (rerun) {
       preferredTemplateRef.current = rerun.templateId || '';
@@ -78,7 +75,11 @@ export function LabelGenerate() {
     if (window.api?.events?.onCatalogChanged) offs.push(window.api.events.onCatalogChanged((event) => { if (event?.kind === 'labels') void loadTemplates(); }));
     if (window.api?.events?.onServerHello) offs.push(window.api.events.onServerHello(() => { void loadTemplates(); }));
     window.api.labels.listPrinters()
-      .then(setPrinters)
+      .then((rows) => {
+        setPrinters(rows);
+        // A remembered printer this Mac no longer has falls back to the dialog.
+        setPrinter((current) => availablePrinter(current, rows));
+      })
       .catch((err) => addToast(`Could not read the printer list — ${err.message}`, 'error'));
     return () => { templatesRequestRef.current += 1; offs.forEach((off) => off?.()); };
   },

@@ -506,7 +506,9 @@ export function ExportCenter() {
                   </label>
                   {/* v0.31.0: add the export back onto the product. Only the
                       MAIN image's export goes back (one per product, set as the
-                      new main) — the rest stay in the folder only. */}
+                      new main) — the rest stay in the folder only. Audit
+                      2026-10: one copy per profile, replaced on the next run,
+                      and exports always read the originals (exportRunner.js). */}
                   <label
                     className="export-runbar__tolib"
                     title="After the run, the exported copy of each product's main image is added to that product and becomes its main image. Other exported images stay in the folder only. The copy is left out of the duplicate scan."
@@ -537,6 +539,11 @@ export function ExportCenter() {
                     {running ? 'Exporting…' : 'Run export'}
                   </Button>
                 </div>
+                {saveToLibrary ? (
+                  <p className="field__hint">
+                    Each product keeps one copy per profile: running this profile again replaces its earlier copy, and the old one goes to Settings → Recently deleted. Exports always start from your original photos, never from an earlier copy.
+                  </p>
+                ) : null}
               </div>
 
               <div className="export-queue">

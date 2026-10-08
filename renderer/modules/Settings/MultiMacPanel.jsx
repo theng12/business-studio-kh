@@ -156,6 +156,7 @@ function PairingQr({ users, addresses, port }) {
       <p className="pairing-qr__hint">
         Scan with the phone&rsquo;s camera to open the viewer already signed in &mdash; no token to type.
         Whoever scans it is signed in as that user, so show it only to them.
+        After pairing, you can clear this page from the phone&rsquo;s browser history.
       </p>
       <div className="pairing-qr__controls">
         <Select value={user?.id ?? ''} onChange={choose(setUserId)} aria-label="User to pair">

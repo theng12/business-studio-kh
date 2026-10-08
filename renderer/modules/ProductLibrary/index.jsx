@@ -44,7 +44,7 @@ import {
   saveVisibleColumns,
 } from './LibraryColumns.jsx';
 import { selectionRange, sortProducts, stableOrder } from './librarySort.js';
-import { undoProductDeletes } from './undoDelete.js';
+import { entryIdsFrom, undoProductDeletes } from './undoDelete.js';
 import { PROCESS_STATUS_OPTIONS, STATUS_OPTIONS } from './libraryConstants.js';
 // v0.1.72: pure directional hover-intent test for the bulk menu's submenus.
 import { pointsTowardRect } from './menuIntent.mjs';
@@ -369,14 +369,13 @@ export function ProductLibrary() {
       const res = await window.api.products.bulkRemove(ids);
       const failedCount = res?.failed?.length ?? 0;
       if (failedCount === 0) {
-        const companyId = activeCompanyId;
-        useAppStore.getState().addToast(`Deleted ${res.deleted} product${res.deleted === 1 ? '' : 's'} — restore from Settings → Recently deleted if that was a mistake.`, 'success', {
-          // 0.1.94: Undo puts them all back from the recycle bin.
+        const entryIds = entryIdsFrom(res);
+        useAppStore.getState().addToast(`Deleted ${res.deleted} product${res.deleted === 1 ? '' : 's'} — restore from Settings → Recently deleted if that was a mistake.`, 'success', entryIds.length === 0 ? undefined : {
+          // 0.1.94: Undo puts back exactly the bin entries this delete made.
           action: {
             label: 'Undo',
             onClick: () => undoProductDeletes({
-              companyId,
-              productIds: ids,
+              entryIds,
               addToast: useAppStore.getState().addToast,
               onRestored: () => {
                 const st = useAppStore.getState();

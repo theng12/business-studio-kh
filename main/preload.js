@@ -233,10 +233,10 @@ contextBridge.exposeInMainWorld('api', {
     importForProduct:  (productId, sourcePath)              => invoke('images:importForProduct', { productId, sourcePath }),
     // 0.1.94: opts = { dryRun: true } (preview) or { files: [...] } (import a batch).
     autoMatchBySku:    (companyId, folderPath, opts)        => invoke('images:autoMatchBySku', { ...(opts || {}), companyId, folderPath }),
-    importFromBytes:   (productId, bytes, ext)              => invoke('images:importFromBytes', { productId, bytes, ext }),
+    importFromBytes:   (productId, bytes, ext, opts = {})   => invoke('images:importFromBytes', { productId, bytes, ext, ...(opts.makeMain === true ? { makeMain: true } : {}) }),
     setMainImage:      (productId, filepath)                => invoke('images:setMainImage', { productId, filepath }),
     reorderImages:     (productId, newOrder)                => invoke('images:reorderImages', { productId, newOrder }),
-    removeFromProduct: (productId, imageId, expectedContentHash) => invoke('images:removeFromProduct', { productId, imageId, expectedContentHash }),
+    removeFromProduct: (productId, imageId, expectedContentHash, opts = {}) => invoke('images:removeFromProduct', { productId, imageId, expectedContentHash, ...(opts.withEntry === true ? { withEntry: true } : {}) }),
     // v0.26.14: destructive flip of the source file (rewrites
     // bytes on disk + updates content_hash so the cache-bust kicks
     // in). axis: 'h' = mirror left/right, 'v' = mirror top/bottom.
@@ -526,7 +526,7 @@ contextBridge.exposeInMainWorld('api', {
     duplicateTemplate: (id) => invoke('socialGrid:duplicateTemplate', { id }),
     plan: (config) => invoke('socialGrid:plan', { config }),
     preview: (config, pageIndex) => invoke('socialGrid:preview', { config, pageIndex }),
-    exportImages: (config, outputFolder, presetId) => invoke('socialGrid:export', { config, outputFolder, presetId }),
+    exportImages: (config, outputFolder, presetId, runId) => invoke('socialGrid:export', { config, outputFolder, presetId, runId }),
   },
   /* v0.1.71: named bulk-table column sets, company-scoped in the database so
    * they follow the user across Macs. The last-used selection is localStorage,

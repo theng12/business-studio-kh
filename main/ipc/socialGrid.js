@@ -230,7 +230,7 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
 
   /* ── the actual export ──────────────────────────────────────────── */
 
-  exposeLocal('socialGrid:export', async ({ config, outputFolder, presetId } = {}) => {
+  exposeLocal('socialGrid:export', async ({ config, outputFolder, presetId, runId } = {}) => {
     if (!outputFolder) throw new Error('Pick an output folder');
     const ctx = contextFor(config);
     if (!ctx.selected.length) throw new Error('No products match these filters — nothing to export');
@@ -245,7 +245,9 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     // series moves to `name-2-01.png …` if any of its names is taken.
     const slug = freeSeriesSlug(seriesSlug(pages[0], ctx.config), pages.length, ext,
       (name) => fs.existsSync(path.join(outputFolder, name)));
-    const opId = `social-${Date.now()}`;
+    // The renderer names its run so its progress bar listens to this export
+    // only (isOwnSocialProgress); an unnamed or odd id gets a fresh one.
+    const opId = typeof runId === 'string' && /^social-[A-Za-z0-9-]{1,64}$/.test(runId) ? runId : `social-${Date.now()}`;
     const made = [];
     events.broadcast('progress:event', { id: opId, kind: 'socialGrid', done: 0, total: pages.length, phase: 'rendering', label: slug });
     try {

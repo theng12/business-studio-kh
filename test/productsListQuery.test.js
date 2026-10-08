@@ -97,7 +97,8 @@ function populate() {
     CREATE INDEX idx_products_updated_at ON products(updated_at);
     CREATE TABLE product_images (
       id TEXT PRIMARY KEY, product_id TEXT NOT NULL, filename TEXT NOT NULL,
-      filepath TEXT NOT NULL, order_index INTEGER NOT NULL, is_processed INTEGER NOT NULL
+      filepath TEXT NOT NULL, order_index INTEGER NOT NULL, is_processed INTEGER NOT NULL,
+      processed_filepath TEXT, content_hash TEXT, workspace_revision INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX idx_pi_product ON product_images(product_id);
     CREATE INDEX idx_pi_order ON product_images(product_id, order_index);

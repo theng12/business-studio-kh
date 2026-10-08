@@ -321,6 +321,7 @@ const VALIDATORS = {
     if (!isString(a.productId) || !a.productId.trim()) return 'productId required';
     if (!isString(a.imageId) || !a.imageId.trim()) return 'imageId required';
     if ('expectedContentHash' in a && !isNullableString(a.expectedContentHash)) return 'expectedContentHash must be a string or null';
+    if (a.withEntry !== undefined && typeof a.withEntry !== 'boolean') return 'withEntry must be a boolean';
     return true;
   },
   'images:flipSource': (a) => {
@@ -336,6 +337,7 @@ const VALIDATORS = {
     if (!isObject(a)) return 'expected object with productId + bytes';
     if (!isString(a.productId)) return 'productId required';
     if (a.bytes == null) return 'bytes required';
+    if (a.makeMain !== undefined && typeof a.makeMain !== 'boolean') return 'makeMain must be a boolean';
     return true;
   },
 
@@ -1096,7 +1098,25 @@ const VALIDATORS = {
 
   /* image import from a local folder */
   'images:importForProduct':     requireNonEmptyStringFields('productId', 'sourcePath'),
-  'images:autoMatchBySku':       requireNonEmptyStringFields('companyId', 'folderPath'),
+  /* 0.1.94 modes: `dryRun: true` previews, `files: [...]` imports a planned
+   * batch, neither is the legacy one-shot import. A malformed `dryRun` or
+   * `files` must be refused here — falling through to the one-shot import
+   * would write photos the user never previewed. Entry-level problems (a
+   * file outside the folder) are reported per entry by the handler. */
+  'images:autoMatchBySku': (a) => {
+    const base = requireNonEmptyStringFields('companyId', 'folderPath')(a);
+    if (base !== true) return base;
+    if (a.dryRun !== undefined && typeof a.dryRun !== 'boolean') return 'dryRun must be a boolean';
+    if (a.files !== undefined) {
+      if (!Array.isArray(a.files)) return 'files must be an array';
+      if (a.files.length > 200) return 'too many files in one batch (max 200)';
+      for (const f of a.files) {
+        if (!isObject(f) || !isString(f.sourcePath) || !isString(f.productId)) return 'each file needs productId and sourcePath strings';
+        if (f.makeMain !== undefined && typeof f.makeMain !== 'boolean') return 'makeMain must be a boolean';
+      }
+    }
+    return true;
+  },
 
   /* export — runs in-process and writes to a local folder */
   'exports:run': (a) => {

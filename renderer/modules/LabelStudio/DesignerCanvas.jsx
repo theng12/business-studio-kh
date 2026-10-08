@@ -748,7 +748,13 @@ function ElementPreview({ element, pxPerMm, sample }) {
         lineHeight: labelLineHeight(element, text),
         textAlign: element.align || 'left',
         whiteSpace: element.wrap === false ? 'nowrap' : 'normal',
-        wordBreak: element.wrap === false ? 'normal' : 'break-word',
+        // Same breaking as the print document (main/studioRenderer.js), which
+        // never splits inside a word: `break-word` here wrapped "$100.00" to
+        // "$100.0 / 0" on the canvas when screen rounding made the box a
+        // hair narrower than the text, while print and Exact preview kept it
+        // on one line.
+        wordBreak: 'normal',
+        overflowWrap: 'normal',
       }}
     >
       {text}

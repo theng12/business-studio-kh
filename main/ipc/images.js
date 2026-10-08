@@ -138,20 +138,25 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
   // (the RPC dispatcher deserializes the base64 envelope before
   // calling us); as an ArrayBuffer in local mode (structured
   // clone). addFromBytes accepts either.
-  expose('images:importFromBytes', async ({ productId, bytes, ext } = {}) => {
+  // `makeMain: true` (client-mode auto-match) sets the added photo as main by
+  // row id inside the same turn of the product's image lock — a separate
+  // images:setMainImage call by filepath afterwards could land on a different
+  // photo if a remove/reorder renumbered the files in between.
+  expose('images:importFromBytes', async ({ productId, bytes, ext, makeMain } = {}) => {
     assertProductInActiveCompany(productId);
     const current = productImages.listByProduct(productId);
     if (current.length >= imageManager.MAX_IMAGES_PER_PRODUCT) {
       throw new Error(`Image cap reached (${imageManager.MAX_IMAGES_PER_PRODUCT})`);
     }
-    const { image, skipped } = await productImages.addFromBytes(productId, bytes, ext);
+    const { image, skipped, madeMain } = await productImages.addFromBytes(productId, bytes, ext, { makeMain: makeMain === true });
     products.recomputeProcessStatus(productId);
-    if (!skipped) {
+    if (!skipped || madeMain) {
       products.touchUpdated(productId); // v0.22.8: cache-bust the table thumb
-      emitCatalogChange('images', 'add', productId);
-      auditImage(productId, 'image:add', { filename: lastSegment(image?.filepath), source: 'bytes' });
+      emitCatalogChange('images', skipped ? 'setMain' : 'add', productId);
     }
-    return { images: productImages.listByProduct(productId), added: image, skipped };
+    if (!skipped) auditImage(productId, 'image:add', { filename: lastSegment(image?.filepath), source: 'bytes' });
+    if (madeMain) auditImage(productId, 'image:set-main', { filename: lastSegment(image?.filepath) });
+    return { images: productImages.listByProduct(productId), added: image, skipped, madeMain: madeMain === true };
   });
 
   // v0.15.0: image reorder / set-main / remove are exposed.
@@ -279,7 +284,10 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     return updated;
   });
 
-  expose('images:removeFromProduct', ({ productId, imageId, expectedContentHash } = {}) => productImages.withProductImageLock(productId, () => {
+  // Returns the product's photos (an array) — or, with `withEntry: true`,
+  // `{ images, deletedEntryId }` so the toast's Undo restores exactly the
+  // recycle-bin entry this removal created (not "the newest one").
+  expose('images:removeFromProduct', ({ productId, imageId, expectedContentHash, withEntry } = {}) => productImages.withProductImageLock(productId, () => {
     assertProductInActiveCompany(productId);
     const removed = productImages.remove(productId, imageId, expectedContentHash);
     products.recomputeProcessStatus(productId);
@@ -290,7 +298,8 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
     products.touchUpdated(productId);
     emitCatalogChange('images', 'remove', productId);
     auditImage(productId, 'image:remove', { filename: lastSegment(removed.filepath) });
-    return productImages.listByProduct(productId);
+    const images = productImages.listByProduct(productId);
+    return withEntry === true ? { images, deletedEntryId: removed.deletedEntryId ?? null } : images;
   }));
 
   exposeLocal('images:autoMatchBySku', async ({ companyId, folderPath, dryRun, files } = {}) => {
@@ -342,16 +351,14 @@ function register({ expose, emitCatalogChange, assertProductInActiveCompany, SAF
         }
         try {
           assertProductInActiveCompany(entry.productId);
-          const { image, skipped } = await productImages.addFromSource(entry.productId, entry.sourcePath, {
+          // makeMain: set-main by row id inside the add's own lock turn.
+          const { skipped, madeMain } = await productImages.addFromSource(entry.productId, entry.sourcePath, {
             originalFilepath: entry.sourcePath,
+            makeMain: entry.makeMain === true,
           });
           if (skipped) skippedDup += 1;
           else { imported += 1; touched.add(entry.productId); }
-          if (entry.makeMain === true && image?.id) {
-            // By row id, inside the product's lock, after the add has left it.
-            await productImages.withProductImageLock(entry.productId, () => productImages.setMainById(entry.productId, image.id));
-            touched.add(entry.productId);
-          }
+          if (madeMain) touched.add(entry.productId);
         } catch (err) {
           failures.push({ filepath: relativeTo(folderPath, entry.sourcePath), sku: entry.sku ?? '', error: err.message });
         }

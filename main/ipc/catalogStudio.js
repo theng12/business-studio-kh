@@ -7,7 +7,7 @@ const brands = require('../db/brands');
 const categories = require('../db/categories');
 const companies = require('../db/companies');
 const { buildCatalogHtml } = require('../studioRenderer');
-const { outputBaseName, freeOutputPath } = require('../util/outputNames');
+const { outputBaseName } = require('../util/outputNames');
 const { toPdf, toPdfBuffer } = require('../renderWindow');
 const { slugifyUnicode } = require('../util/slug');
 const { normalizeCatalogConfig, applyCatalogDesign, catalogPdfOptions } = require('../util/catalogModel');
@@ -48,8 +48,9 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       const html = buildCatalogHtml(context(project));
       events.broadcast('progress:event', { id: opId, kind: 'catalog', done: 1, total: 3, phase: 'rendering', label: project.name });
       // Khmer name kept, readable date, never over an earlier export.
-      const target = freeOutputPath(outputFolder, outputBaseName(project.name, 'catalog'), 'pdf');
-      await toPdf(html, target, catalogPdfOptions(project.config));
+      // The name is claimed when the bytes are written (unique → `wx`), so two
+      // exports in the same minute cannot pick the same file.
+      const target = await toPdf(html, path.join(outputFolder, `${outputBaseName(project.name, 'catalog')}.pdf`), { ...catalogPdfOptions(project.config), unique: true });
       events.broadcast('progress:event', { id: opId, kind: 'catalog', done: 3, total: 3, phase: 'complete', label: project.name });
       projects.markExported(id);
       emitCatalogChange('catalogStudio', 'update', id);

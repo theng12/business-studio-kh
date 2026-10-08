@@ -14,8 +14,8 @@
  */
 
 const fs = require('node:fs');
-const { dialog, shell } = require('electron');
-const { openPathOrThrow } = require('../util/openPath');
+const { dialog } = require('electron');
+const { revealPath } = require('../util/openPath');
 const fileHandler = require('../fileHandler');
 const companies = require('../db/companies');
 const productsDb = require('../db/products');
@@ -72,11 +72,9 @@ function register({ exposeLocal }) {
    */
   exposeLocal('files:revealPath', async (absPath) => {
     if (!isAbsolutePath(absPath)) throw new Error('An absolute path is required');
-    let stat;
-    try { stat = fs.statSync(absPath); } catch { throw new Error(`Not found: ${absPath}`); }
-    if (stat.isDirectory()) return openPathOrThrow(absPath, 'folder');
-    shell.showItemInFolder(absPath);
-    return true;
+    // Plain folders open; files and packages (.app, .pkg …) are revealed,
+    // never opened — opening a package launches it (util/openPath.js).
+    return revealPath(absPath);
   });
 
   exposeLocal('files:pickImageFile', async ({ multiple = false } = {}) => {

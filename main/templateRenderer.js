@@ -685,9 +685,13 @@ async function buildBase({ inputImage, template, full, photoW, photoH, hasAlpha,
       process.stderr.write(`[overlay] inset failed, using the plain photo: ${err.message}\n`);
       const fb = outputCanvasSize({ canvasWidth: template.canvasWidth || 2000, canvasHeight: template.canvasHeight || 2000 }, photoW, photoH);
       const fs2 = outW / fb.width;
-      return buildBase({
+      const fallback = await buildBase({
         inputImage, template, full: fb, photoW, photoH, hasAlpha, s: fs2, outW, outH: Math.max(1, Math.round(fb.height * fs2)),
       });
+      // Marked so the preview cache does not keep it: the reframe error may
+      // be transient, and a cached fallback would hide the inset until the
+      // photo file itself changed.
+      return { ...fallback, fallback: true };
     }
   }
   if (full.mode === 'letterbox') {
@@ -716,32 +720,63 @@ async function buildBase({ inputImage, template, full, photoW, photoH, hasAlpha,
 
 /* Perf audit 2026-10: every debounced editor preview decoded and resized the
  * full-size photo again (~400 ms each). A preview base depends only on the
- * photo file and the preview geometry, so the last few are kept in memory,
- * keyed by path + size + mtime (a re-saved photo misses) and the geometry.
- * Previews only (s < 1): an export always reads the file. Small on purpose —
- * a 900 px RGBA base is ~3 MB; 8 of them stay well under 30 MB. */
-const PREVIEW_BASE_CACHE_MAX = 8;
-const previewBaseCache = new Map();
-function previewBaseKey(inputImage, args) {
+ * photo file and the preview geometry, so the last few are kept in memory.
+ * Previews only (s < 1): an export always reads the file.
+ *
+ * Bounded by BYTES, not by count: a base is raw RGBA, so a 1600 px preview is
+ * ~10 MB and eight of them were ~80 MB resident. The cache holds at most
+ * PREVIEW_BASE_CACHE_BYTES (least recently used out first) and never keeps a
+ * single base bigger than that.
+ *
+ * Keyed like the thumbnail cache (main/util/thumbCache.js): path + size +
+ * mtimeMs + ino + ctimeMs. Size + mtime alone could not tell a renumber apart
+ * — `-003.jpg` replaced by a different photo of the same size and mtime would
+ * have served the old preview; a rename onto the slot changes the inode and
+ * the ctime. */
+const PREVIEW_BASE_CACHE_BYTES = 32 * 1024 * 1024;
+const previewBaseCache = new Map();   // key → { base, bytes }
+let previewBaseCacheBytes = 0;
+async function previewBaseKey(inputImage, args) {
   if (typeof inputImage !== 'string') return null;
+  // Async: this runs on the main process for every debounced preview.
   let st;
-  try { st = fs.statSync(inputImage); } catch { return null; }
+  try { st = await fs.promises.stat(inputImage); } catch { return null; }
   const { template, full, s, outW, outH } = args;
-  return JSON.stringify([inputImage, st.size, st.mtimeMs, full.mode, full.width, full.height, s, outW, outH,
+  return JSON.stringify([inputImage, st.size, st.mtimeMs, st.ino, st.ctimeMs, full.mode, full.width, full.height, s, outW, outH,
     template?.canvasWidth, template?.canvasHeight, full.mode === 'inset' ? template?.inset : null]);
 }
+function baseBytes(base) {
+  return Buffer.isBuffer(base?.input) ? base.input.length : 0;
+}
+function rememberPreviewBase(key, base) {
+  if (!key || !base || base.fallback) return;   // never cache a fallback render
+  const bytes = baseBytes(base);
+  if (bytes > PREVIEW_BASE_CACHE_BYTES) return;
+  const prev = previewBaseCache.get(key);
+  if (prev) { previewBaseCacheBytes -= prev.bytes; previewBaseCache.delete(key); }
+  previewBaseCache.set(key, { base, bytes });
+  previewBaseCacheBytes += bytes;
+  while (previewBaseCacheBytes > PREVIEW_BASE_CACHE_BYTES && previewBaseCache.size > 0) {
+    const oldestKey = previewBaseCache.keys().next().value;
+    previewBaseCacheBytes -= previewBaseCache.get(oldestKey).bytes;
+    previewBaseCache.delete(oldestKey);
+  }
+}
 async function cachedPreviewBase(args) {
-  const key = args.s < 1 ? previewBaseKey(args.inputImage, args) : null;
+  const key = args.s < 1 ? await previewBaseKey(args.inputImage, args) : null;
   if (!key) return buildBase(args);
-  if (previewBaseCache.has(key)) {
-    const hit = previewBaseCache.get(key);
+  const hit = previewBaseCache.get(key);
+  if (hit) {
     previewBaseCache.delete(key); previewBaseCache.set(key, hit);   // most recent last
-    return hit;
+    return hit.base;
   }
   const base = await buildBase(args);
-  previewBaseCache.set(key, base);
-  while (previewBaseCache.size > PREVIEW_BASE_CACHE_MAX) previewBaseCache.delete(previewBaseCache.keys().next().value);
+  rememberPreviewBase(key, base);
   return base;
+}
+/** Test hook: what the preview cache holds right now. */
+function previewBaseCacheStats() {
+  return { entries: previewBaseCache.size, bytes: previewBaseCacheBytes, maxBytes: PREVIEW_BASE_CACHE_BYTES };
 }
 
 /** Open a base from buildBase with sharp. */
@@ -994,4 +1029,6 @@ module.exports = {
   defaultResolveAsset, compose, composeDetailed, fillTokens, outputPathFor, outputCanvasSize, designPixelScale,
   // Exported for tests: the editor's elementBox mirrors this, and a parity
   // test is the only thing that keeps the two from drifting apart.
-  resolveBox, overlayLineEm };
+  resolveBox, overlayLineEm,
+  // Exported for tests: the preview base cache's byte bound and its key.
+  previewBaseCacheStats, _previewBaseCache: { key: previewBaseKey, remember: rememberPreviewBase, get: (k) => previewBaseCache.get(k)?.base ?? null } };

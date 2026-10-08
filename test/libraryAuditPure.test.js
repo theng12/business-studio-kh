@@ -131,14 +131,14 @@ test('bulk price: Set / Increase % / Decrease %, read through priceEntry', () =>
   const p = { sku: 'A', priceRetail: 10, priceRetailCurrency: 'USD', priceWholesale: 41000, priceWholesaleCurrency: 'KHR', prices: { vip: 8 } };
   assert.deepEqual(priceChangeFor(p, { source: 'retail', mode: 'increase', value: 7 }).after, { amount: 10.7, currency: 'USD' });
   assert.deepEqual(priceChangeFor(p, { source: 'wholesale', mode: 'decrease', value: 10 }).after, { amount: 36900, currency: 'KHR' });
-  assert.deepEqual(priceChangeFor(p, { source: 'vip', mode: 'set', value: 9 }).after, { amount: 9, currency: 'USD' }, 'a legacy bare number reads as USD');
+  assert.deepEqual(priceChangeFor(p, { source: 'vip', mode: 'set', value: 9 }).after, { amount: 9, currency: null }, 'a legacy bare number keeps no currency (review fix 2026-10-08)');
   assert.equal(priceChangeFor({ sku: 'B' }, { source: 'retail', mode: 'increase', value: 5 }), null, 'no price, nothing to raise');
   assert.equal(priceChangeFor(p, { source: 'retail', mode: 'set', value: 10 }), null, 'unchanged is not a change');
   assert.deepEqual(parsePriceInput('set', ''), { ok: true, value: null });
   assert.equal(parsePriceInput('decrease', '100').ok, false);
   assert.equal(parsePriceInput('increase', '-1').ok, false);
   const { rows, skipped } = buildPriceRows([p, { sku: 'B' }], { source: 'vip', mode: 'increase', value: 50 });
-  assert.deepEqual(rows, [{ sku: 'A', prices: { vip: { amount: 12, currency: 'USD' } } }]);
+  assert.deepEqual(rows, [{ sku: 'A', prices: { vip: { amount: 12 } } }]);
   assert.equal(skipped.length, 1);
   assert.deepEqual(buildPriceRows([p], { source: 'retail', mode: 'set', value: null }).rows, [{ sku: 'A', priceRetail: '' }], 'clearing goes through overwrite as a blank');
 });
@@ -167,11 +167,18 @@ test('auto-match plans before importing, appends, and reports the cap', () => {
   const un = summarizeUnmatched(['/photos/x/b.PNG', '/photos/a.jpg'], root);
   assert.deepEqual(un.unmatchedSamples, ['a.jpg', 'x/b.PNG']);
   assert.deepEqual(un.unmatchedExtCounts, { '.jpg': 1, '.png': 1 });
-  assert.ok(isInsideFolder(root, '/photos/sub/a.jpg'));
-  assert.equal(isInsideFolder(root, '/photos/../etc/passwd'), false);
-  assert.equal(isInsideFolder(root, '/photosX/a.jpg'), false);
-  assert.match(importEntryProblem(root, { productId: 'p1', sourcePath: '/etc/hosts' }), /not inside/);
-  assert.equal(importEntryProblem(root, { productId: 'p1', sourcePath: '/photos/a.jpg' }), null);
+  // Containment needs real files now (it follows symlinks — review fix 2026-10-08).
+  const real = fs.realpathSync(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'msk-plan-')));
+  const photos = path.join(real, 'photos');
+  fs.mkdirSync(path.join(photos, 'sub'), { recursive: true });
+  fs.mkdirSync(path.join(real, 'photosX'));
+  for (const f of ['sub/a.jpg', 'a.jpg']) fs.writeFileSync(path.join(photos, f), 'x');
+  fs.writeFileSync(path.join(real, 'photosX', 'a.jpg'), 'x');
+  assert.ok(isInsideFolder(photos, path.join(photos, 'sub/a.jpg')));
+  assert.equal(isInsideFolder(photos, `${photos}/../etc/passwd`), false);
+  assert.equal(isInsideFolder(photos, path.join(real, 'photosX/a.jpg')), false);
+  assert.match(importEntryProblem(photos, { productId: 'p1', sourcePath: '/etc/hosts' }), /not inside/);
+  assert.equal(importEntryProblem(photos, { productId: 'p1', sourcePath: path.join(photos, 'a.jpg') }), null);
 });
 
 test('auto-match: both handlers offer dryRun + files, and the modal previews before importing', () => {
@@ -182,7 +189,7 @@ test('auto-match: both handlers offer dryRun + files, and the modal previews bef
     assert.match(src, /buildAutoMatchPlan\(/);
     assert.match(src, /importEntryProblem\(folderPath, entry\)/);
   }
-  assert.match(ipc, /setMainById\(entry\.productId, image\.id\)/, 'make-main must go by row id');
+  assert.match(ipc, /makeMain: entry\.makeMain === true/, 'make-main goes by row id inside the add (productImages.makeMainInLock)');
   const modal = read('renderer/modules/ProductLibrary/AutoMatchModal.jsx');
   assert.match(modal, /\{ dryRun: true \}/);
   assert.match(modal, /makeMain: makeMain && i === 0/);
@@ -212,18 +219,11 @@ test('page box clamps a typed page to the list', () => {
   assert.equal(ui.pageIndexFromInput('x', 9), null);
 });
 
-test('undo picks the newest bin entries of the deleted product / photos', () => {
+test('undo restores the bin entries the delete reported (not the newest for the product)', () => {
   const u = loadEsm('renderer/modules/ProductLibrary/undoDelete.js');
-  const items = [
-    { id: 'i3', kind: 'image', productId: 'P', label: 'p-002.jpg' },
-    { id: 'i2', kind: 'image', productId: 'P', label: 'p-002.jpg' },
-    { id: 'x', kind: 'image', productId: 'Q', label: 'q.jpg' },
-    { id: 'i1', kind: 'image', productId: 'P', label: 'p-001.jpg' },
-    { id: 'd1', kind: 'product', productId: 'A' },
-    { id: 'd0', kind: 'product', productId: 'A' },
-  ];
-  assert.deepEqual(u.pickImageEntries(items, 'P', 2).map((i) => i.id), ['i3', 'i2']);
-  assert.deepEqual(u.pickProductEntries(items, ['A', 'missing']).map((i) => i.id), ['d1']);
+  assert.deepEqual(u.entryIdsFrom({ deletedEntryId: 'i2' }), ['i2']);
+  assert.deepEqual(u.entryIdsFrom({ deletedEntryIds: ['d1', 'd2'] }), ['d1', 'd2']);
+  // More cases in test/reviewFixes.test.js.
 });
 
 test('dropped / pasted files: images only, the right extension, text fields left alone', () => {
@@ -306,7 +306,7 @@ test('Product panel: footer, Close label, remove selected, inline create, multi-
   assert.match(form, /handleDuplicate\(\); \}\}/, 'Duplicate lives in the ⋯ menu');
   assert.doesNotMatch(form, /window\.prompt\(/);
   assert.match(form, /Remove selected…/);
-  assert.match(form, /removeFromProduct\(productId, t\.id, t\.contentHash \?\? null\)/);
+  assert.match(form, /removeFromProduct\(productId, t\.id, t\.contentHash \?\? null, \{ withEntry: true \}\)/);
   assert.match(form, /pickImageFile\(\{ multiple: true \}\)/);
   assert.match(form, /document\.addEventListener\('paste', onDocPaste\)/);
   assert.match(form, /onDrop=\{handleDrop\}/);
