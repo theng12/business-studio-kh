@@ -5,7 +5,8 @@
  * modern Mac app uses for help. Lists every shortcut grouped by area
  * so users can discover features without hunting through menus.
  *
- * The Navigation group is derived from the sidebar's NAV (v0.1.89) and
+ * The Navigation group is derived from the module registry's NAV
+ * (renderer/lib/modules.js; v0.1.89, registry since 2026-10-08) and
  * filtered by the account's capabilities; the other groups are
  * hand-curated, because they are deeper than top-level navigation
  * (Workspace arrow keys, Library paste, etc.).
@@ -13,7 +14,8 @@
 
 import { Modal } from './ui.jsx';
 import { useAppStore } from '../store/index.js';
-import { NAV, useUserCaps } from './Sidebar.jsx';
+import { useUserCaps } from './Sidebar.jsx';
+import { NAV } from '../lib/modules.js';
 import { hasAnyCap } from '../lib/capabilities.js';
 
 /**
@@ -72,6 +74,7 @@ const GROUPS = (mod, caps) => [
   {
     title: 'Navigation',
     rows: [
+      { keys: [mod === '⌘' ? '⌘⇧H' : 'Ctrl+Shift+H'], action: 'Home — every module as a tile' },
       ...navShortcutRows(NAV, caps, mod),
       { keys: [`${mod}K`], action: 'Global search palette' },
       { keys: [`${mod}S`], action: 'Save the open editor (anywhere with a Save button; not while a dialog is open)' },

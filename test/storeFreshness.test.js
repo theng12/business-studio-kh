@@ -132,6 +132,8 @@ test('company switch rejects delayed prior-company rows and clears context-bound
 
   const { useAppStore } = await loadRendererModule('renderer/store/index.js', api);
   useAppStore.setState({
+    // The app opens on Home since 2026-10-08; this case is about the Dashboard.
+    activeModule: 'dashboard',
     activeCompanyId: 'company-a',
     activeProductId: 'product-a',
     aiSourceProductId: 'product-a',
@@ -384,6 +386,8 @@ test('bootstrap subscribes before initial reads and optional data cannot block t
   api.events.onProgress = listeners.subscribe('progress');
 
   const { useAppStore } = await loadRendererModule('renderer/store/index.js', api);
+  // The active page is the Dashboard here (the app opens on Home since 2026-10-08).
+  useAppStore.setState({ activeModule: 'dashboard' });
   const boot = useAppStore.getState().bootstrap();
   assert.equal(listeners.count('catalog'), 1);
   assert.equal(listeners.count('hello'), 1);

@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useAppStore } from './store/index.js';
-import { Sidebar, NAV, useUserCaps } from './components/Sidebar.jsx';
+import { Sidebar, useUserCaps } from './components/Sidebar.jsx';
+import { HOME_PAGE, isHomeShortcut, loadLastPages, shortcutMap, startPage } from './lib/modules.js';
 import { hasAnyCap } from './lib/capabilities.js';
 import { ToastHost } from './components/Toast.jsx';
 import { Button } from './components/ui.jsx';
@@ -40,6 +41,8 @@ import { OfflineBanner } from './components/OfflineBanner.jsx';
 // React.lazy() requires a default export, but our modules use named exports
 // to keep tree-shaking friendly. The `.then(...)` adapter rewraps them so
 // the dynamic import returns `{default: Component}` as React expects.
+// 2026-10-08: Home (the module grid) is where the app opens — eager.
+import { Home } from './modules/Home/index.jsx';
 import { Dashboard } from './modules/Dashboard/index.jsx';
 import { Companies } from './modules/Companies/index.jsx';
 import { Brands } from './modules/Brands/index.jsx';
@@ -93,6 +96,7 @@ const FuelReports = lazy(() => import('./modules/Fuel/FuelReports.jsx').then((m)
 const Staff = lazy(() => import('./modules/Staff/index.jsx').then((m) => ({ default: m.Staff })));
 
 const PAGES = {
+  home:      Home,
   dashboard: Dashboard,
   company:   Companies,
   brands:    Brands,
@@ -164,19 +168,12 @@ function PageFallback() {
   );
 }
 
-/* Derived from the sidebar's own NAV list, so a shortcut can never again be
- * advertised by the sidebar and missing here. Each entry keeps the item's
- * `caps`, because the keyboard must respect the same permissions the nav does —
- * previously ⌘3/⌘4/⌘5 opened modules the sidebar had hidden for this role. */
-const SHORTCUTS = (() => {
-  const map = {};
-  for (const section of NAV) {
-    for (const item of section.items || []) {
-      if (item.shortcut) map[item.shortcut] = { module: item.id, caps: item.caps };
-    }
-  }
-  return map;
-})();
+/* Derived from the module registry (renderer/lib/modules.js) — the list the
+ * sidebar and the Home grid render — so a shortcut can never be advertised by
+ * the nav and missing here. Each entry keeps the page's `caps`, because the
+ * keyboard must respect the same permissions the nav does (previously ⌘3/⌘4/⌘5
+ * opened modules the sidebar had hidden for this role). */
+const SHORTCUTS = shortcutMap();
 
 export default function App() {
   const activeModule = useAppStore((s) => s.activeModule);
@@ -244,6 +241,14 @@ export default function App() {
         setSearchOpen((v) => (v ? false : !dialogOpen));
         return;
       }
+      // 2026-10-08: ⌘⇧H → Home, under the same guard as the page shortcuts.
+      // (Not ⌘0: Electron's default View menu uses it for Actual Size.)
+      if (isHomeShortcut(e)) {
+        if (shortcutBlocked(e.target, document)) return;
+        e.preventDefault();
+        setActiveModule(HOME_PAGE);
+        return;
+      }
       if (e.shiftKey) return;
       const shortcut = SHORTCUTS[e.key];
       if (!shortcut) return;
@@ -262,7 +267,18 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [setActiveModule, isModuleAvailable, userCaps]);
 
-  const Page = PAGES[activeModule] ?? Dashboard;
+  /* Open on Home — or, when this account can reach exactly one module (System
+   * aside), straight into it. Only until the user has gone anywhere: once the
+   * page leaves Home, pressing Home later must stay on Home. */
+  const leftHome = useRef(false);
+  useEffect(() => {
+    if (activeModule !== HOME_PAGE) { leftHome.current = true; return; }
+    if (!ready || leftHome.current) return;
+    const target = startPage({ caps: userCaps, isAvailable: isModuleAvailable, lastPages: loadLastPages() });
+    if (target !== HOME_PAGE) setActiveModule(target);
+  }, [ready, userCaps, activeModule, isModuleAvailable, setActiveModule]);
+
+  const Page = PAGES[activeModule] ?? Home;
   const isMac = platform === 'darwin';
 
   return (
