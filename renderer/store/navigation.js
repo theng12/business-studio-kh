@@ -18,7 +18,9 @@ import { flushCompanySwitches } from '../lib/companySwitch.js';
 const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'export', 'aistudio', 'overlay',
   'labeltemplates', 'labelgenerate', 'barcodes', 'labeljobs', 'catalogtemplates', 'catalogprojects', 'catalogstudio',
   'socialgrid',
-  'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support'];
+  'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support',
+  // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §5) + the thin staff list.
+  'fueloverview', 'fuelassets', 'fuelfills', 'fueltanks', 'fuelprices', 'fuelreports', 'staff'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the
 // header copy inside the module itself.
@@ -27,6 +29,31 @@ const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'expo
 // even before any company has been created (just shows an empty list).
 const ALWAYS_AVAILABLE = new Set(['dashboard', 'company', 'settings', 'support', 'overlay', 'history']);
 
+/** Unique non-empty string ids, order kept — what a hand-off carries. */
+export function handoffIds(productIds) {
+  const out = [];
+  const seen = new Set();
+  for (const id of Array.isArray(productIds) ? productIds : []) {
+    if (typeof id !== 'string' || !id || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * 0.1.95: "New catalog with these products" lives only on Catalog Templates.
+ * Any navigation to another module drops it, so coming back later does not
+ * still offer last week's Library selection. Done here, in the one helper
+ * every navigation goes through, rather than on the screen's unmount (React
+ * StrictMode unmounts once on mount in development, which would lose it).
+ */
+export function withHandoffScope(patch) {
+  if (!patch || !patch.activeModule || patch.activeModule === 'catalogtemplates') return patch;
+  if (Object.prototype.hasOwnProperty.call(patch, 'pendingCatalogProducts')) return patch;
+  return { ...patch, pendingCatalogProducts: null };
+}
+
 export function createNavigationSlice(set, get) {
   let navigationIntent = 0;
 
@@ -34,7 +61,7 @@ export function createNavigationSlice(set, get) {
     try {
       await flushCompanySwitches();
       if (intent !== navigationIntent || get().activeCompanyId !== companyId) return false;
-      set(patch);
+      set(withHandoffScope(patch));
       return true;
     } catch (error) {
       get().addToast(`Couldn't leave this editor: ${error.message}`, 'error');
@@ -60,6 +87,14 @@ export function createNavigationSlice(set, get) {
     pendingCatalogProjectId: null,
     pendingCatalogTemplateId: null,
     pendingLibraryProductId: null,
+    // 0.1.95: Library "Use in ▾" hand-offs. Each carries the company it was
+    // made in, so a company switch (which also resets them) can never apply
+    // one company's products to another. The receiving screen subscribes, so
+    // it reacts whether it mounts for this or is already open.
+    //   pendingLabelProducts   → Generate & Print preselects these products
+    //   pendingCatalogProducts → Catalog Templates creates the next project with them
+    pendingLabelProducts: null,
+    pendingCatalogProducts: null,
 
     async setActiveModule(name) {
       if (!MODULES.includes(name)) {
@@ -123,6 +158,36 @@ export function createNavigationSlice(set, get) {
     clearPendingCatalogNav() {
       set({ pendingCatalogProjectId: null });
     },
+
+    /* 0.1.95: Library "Use in ▾". */
+    sendProductsToLabels(productIds, companyId = get().activeCompanyId) {
+      const ids = handoffIds(productIds);
+      if (!ids.length || !companyId) return Promise.resolve(false);
+      return navigate({ pendingLabelProducts: { companyId, ids }, activeModule: 'labelgenerate' }, ++navigationIntent, companyId);
+    },
+    clearPendingLabelProducts() { set({ pendingLabelProducts: null }); },
+    startCatalogFromProducts(productIds, companyId = get().activeCompanyId) {
+      const ids = handoffIds(productIds);
+      if (!ids.length || !companyId) return Promise.resolve(false);
+      return navigate({ pendingCatalogProducts: { companyId, ids }, activeModule: 'catalogtemplates' }, ++navigationIntent, companyId);
+    },
+    clearPendingCatalogProducts() { set({ pendingCatalogProducts: null }); },
+    /** Export Center's queue becomes exactly these products. */
+    sendProductsToExport(productIds, companyId = get().activeCompanyId) {
+      const ids = handoffIds(productIds);
+      if (!ids.length || !companyId) return Promise.resolve(false);
+      return navigate({ exportQueueIds: ids, activeModule: 'export' }, ++navigationIntent, companyId);
+    },
+
+    /* Fuel F1: open a fuel screen with something to do there, e.g.
+     * `openFuel('fuelfills', { reviewFillId })` from a flag, or
+     * `{ addFill: true }`. Carries the company so a switch cannot apply it to
+     * another company's records. */
+    fuelIntent: null,
+    openFuel(module, intent = null, companyId = get().activeCompanyId) {
+      return navigate({ fuelIntent: intent ? { ...intent, module, companyId } : null, activeModule: module }, ++navigationIntent, companyId);
+    },
+    clearFuelIntent() { set({ fuelIntent: null }); },
 
     isModuleAvailable(name) {
       if (ALWAYS_AVAILABLE.has(name)) return true;

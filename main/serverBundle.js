@@ -22,6 +22,7 @@
  *   processed/            (if present)
  *   ai-gallery/           (if present)
  *   overlays/             (if present)
+ *   fuel/, hr/            (if present — fuel evidence + staff photos, F1)
  *
  * What does NOT travel + why:
  *   - mode                → new Mac decides whether to be server
@@ -162,7 +163,7 @@ async function exportBundle({ outputPath, onProgress } = {}) {
     //    and files must describe the same moment; regular copied trees
     //    plus the post-copy inventory check reject a moving source.
     onProgress?.('snapshot');
-    const trees = ['assets', 'processed', 'ai-gallery', 'overlays'];
+    const trees = ['assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr'];
     const treeSnapshot = await snapshotDataTrees(dataDir, trees);
     const dbDest = path.join(stagingRoot, 'database.sqlite');
     await snapshotDatabase(dbDest);

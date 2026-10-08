@@ -47,6 +47,8 @@ const labelsDomain     = require('./ipc/labels');
 const catalogStudioDomain = require('./ipc/catalogStudio');
 const socialGridDomain  = require('./ipc/socialGrid');  // v0.1.25: square product-grid posts
 const bulkColumnsDomain = require('./ipc/bulkColumns'); // v0.1.71: saved bulk-table column sets
+const staffDomain       = require('./ipc/staff');        // Fuel F1: thin staff list (seed of HR)
+const fuelDomain        = require('./ipc/fuel');         // Fuel F1: records, rules, reports
 
 function registerIpc(_ctx) {
   const helpers = {
@@ -83,6 +85,8 @@ function registerIpc(_ctx) {
   catalogStudioDomain.register(helpers);
   socialGridDomain.register(helpers);       // v0.1.25
   bulkColumnsDomain.register(helpers);      // v0.1.71
+  staffDomain.register(helpers);            // Fuel F1
+  fuelDomain.register(helpers);             // Fuel F1
 }
 
 module.exports = { registerIpc };

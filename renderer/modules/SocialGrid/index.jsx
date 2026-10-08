@@ -224,6 +224,18 @@ export function socialExportProgress(ev) {
   return { progress: 5 + Math.min(1, done / total) * 90, detail: `Image ${Math.min(done + 1, total)} of ${total}` };
 }
 
+/** 0.1.95: the toast after an export, honest about a cancel — the images
+ *  already written stay in the folder, so say how many there are. */
+export function socialExportMessage(res, folder) {
+  const written = Number(res?.written ?? res?.outputPaths?.length ?? res?.pageCount ?? 0) || 0;
+  const plural = (n) => `${n} image${n === 1 ? '' : 's'}`;
+  if (res?.cancelled) {
+    return { text: written ? `Export cancelled — ${plural(written)} written to ${folder}` : 'Export cancelled — no images written', kind: 'info' };
+  }
+  const n = Number(res?.pageCount ?? written) || 0;
+  return { text: `Saved ${plural(n)} to ${folder}`, kind: 'success' };
+}
+
 export function PresetEditor({ presetId, onBack }) {
   const companyId = useAppStore((s) => s.activeCompanyId);
   const companySwitching = useAppStore((s) => s.companySwitching);
@@ -250,14 +262,18 @@ export function PresetEditor({ presetId, onBack }) {
   const [savedAt, setSavedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
   const exportRunId = useRef('');   // this run's progress id (isOwnSocialProgress)
+  const [cancellingExport, setCancellingExport] = useState(false);
+  // Cancel pressed for this run — read after the pre-export flush, so a
+  // Cancel during that wait never starts the export at all.
+  const cancelRequested = useRef(false);
   const [progress, setProgress] = useState(0);
   const [progressDetail, setProgressDetail] = useState('');
   const [exportFolder, setExportFolder] = useState(() => loadExportFolder(companyId));
   useEffect(() => { setExportFolder(loadExportFolder(companyId)); }, [companyId]);
   // Real progress: the export sends one event per image it writes (kind
   // 'socialGrid'). It used to be a timer that crept to 88% whatever happened.
-  // A client Mac gets no per-image events (the server renders the whole set
-  // in one call), so the bar simply waits at the start until the files land.
+  // 0.1.95: a client Mac now gets them too — its run id travels to the
+  // server's render, which broadcasts per image over the WebSocket.
   useEffect(() => {
     if (!exporting || !window.api?.events?.onProgress) return undefined;
     const off = window.api.events.onProgress((ev) => {
@@ -530,18 +546,26 @@ export function PresetEditor({ presetId, onBack }) {
       saveExportFolder(companyId, folder);
     }
     exportRunId.current = `social-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setCancellingExport(false);
+    cancelRequested.current = false;
     setExporting(true);
     setProgress(5);
     setProgressDetail('');
     try {
       if (dirty.current) await flushPending();
+      if (cancelRequested.current) {
+        const message = socialExportMessage({ cancelled: true, written: 0 }, folder);
+        addToast(message.text, message.kind);
+        return;
+      }
       const generation = editorGeneration.current;
       const committed = latest.current || preset;
       const baselineRevision = acknowledgedRevision.current;
       const res = await window.api.socialGrid.exportImages(committed.config, folder, committed.id, exportRunId.current);
       setProgress(100);
-      const n = res.pageCount ?? res.outputPaths?.length ?? 0;
-      addToast(`Saved ${n} image${n === 1 ? '' : 's'} to ${folder}`, 'success');
+      const message = socialExportMessage(res, folder);
+      addToast(message.text, message.kind);
+      if (res?.cancelled) return;
       const row = await window.api.socialGrid.get(committed.id);
       const ownsBaseline = generation === editorGeneration.current
         && latest.current?.id === committed.id
@@ -569,6 +593,23 @@ export function PresetEditor({ presetId, onBack }) {
       addToast(parseConflictError(e) ? 'This post changed elsewhere. Use Save to review it before exporting.' : e.message, 'error');
     } finally {
       setExporting(false);
+      setCancellingExport(false);
+    }
+  }
+
+  async function cancelExport() {
+    const runId = exportRunId.current;
+    if (!runId || cancellingExport) return;
+    cancelRequested.current = true;
+    setCancellingExport(true);
+    // The main process remembers a Cancel that arrives before the run is
+    // registered (socialGrid.js earlyCancels), so this is safe at any point.
+    if (!window.api?.socialGrid?.cancelExport) return;
+    try {
+      await window.api.socialGrid.cancelExport(runId);
+    } catch (e) {
+      setCancellingExport(false);
+      addToast(e.message, 'error');
     }
   }
 
@@ -639,6 +680,8 @@ export function PresetEditor({ presetId, onBack }) {
         progress={progress}
         phase={progress <= 5 ? 0 : progress >= 95 ? 3 : 2}
         detail={progressDetail ? `${preset.name} · ${progressDetail}` : preset.name}
+        onCancel={cancelExport}
+        cancelling={cancellingExport}
       />
 
       <Modal

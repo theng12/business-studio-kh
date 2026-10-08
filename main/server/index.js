@@ -494,6 +494,33 @@ async function handleRequest(req, res, dataDir) {
     return;
   }
 
+  // Fuel F1: the phone fuel page (docs/PEOPLE_AND_FUEL_PLAN.md §5.3). Public
+  // like `/m` — every call it makes still needs a token with `fuel.record` or
+  // `fuel.manage`. Served from the compiled string in main/fuelWebclientHtml.js
+  // (scripts/build-webclient.js), never a source-tree file (AGENTS.md §21).
+  // Not tied to the `webViewerEnabled` switch: that turns off the catalogue
+  // viewer, and must not silently stop the pump phones recording fuel.
+  if (req.method === 'GET' && (urlPath === '/f' || urlPath === '/f/')) {
+    let html;
+    try { html = require('../fuelWebclientHtml'); } catch (_) { html = ''; }
+    if (!html) { res.writeHead(500); res.end('fuel page unavailable'); return; }
+    let version = '';
+    try { version = require('electron').app.getVersion() || ''; } catch (err) {
+      logSoftFailure('server', 'read app version for /f', err);
+    }
+    sendBody(req, res, 200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, max-age=0, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'X-App-Version': version,
+      // The page needs nothing but itself and this server.
+      'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'Referrer-Policy': 'no-referrer',
+    }, html);
+    return;
+  }
+
   if (isMaintenanceActive()) {
     sendJson(res, 503, { error: 'Media Studio KH is performing maintenance and will restart shortly.' });
     return;

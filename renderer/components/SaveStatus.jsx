@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { formatDateTime, timeAgo } from '../lib/format.js';
+import { useSaveShortcut } from './useSaveShortcut.js';
 
 /**
  * §6 save indicator: the status pill plus the explicit Save button.
@@ -14,7 +15,8 @@ import { formatDateTime, timeAgo } from '../lib/format.js';
  * Props (all optional; the original `state` / `savedAt` / `onSave` API is unchanged):
  *   state     'saved' | 'saving' | 'dirty' | 'error' | 'idle'
  *   savedAt   ms timestamp of the last successful save
- *   onSave    shows the Save button; also the retry when `onRetry` is absent
+ *   onSave    shows the Save button; also the retry when `onRetry` is absent,
+ *             and what ⌘S calls while this is mounted (0.1.95)
  *   onRetry   what clicking the error pill does (defaults to onSave)
  *   error     the actual error message, shown as the error pill's tooltip
  *   status    `{ state, lastSavedAt }`: the shape Image Workspace and Overlay
@@ -52,6 +54,9 @@ export function SaveStatus({ state: stateProp, savedAt: savedAtProp, onSave, onR
   const state = resolveSaveState(stateProp ?? status?.state ?? 'saved', savedAt);
   const retry = onRetry || onSave;
   const busy = state === 'saving';
+  // 0.1.95: an editor with a Save button also saves on ⌘S (renderer/lib/saveShortcut.js).
+  // Clicking Save while a save is in flight is a no-op, and so is ⌘S.
+  useSaveShortcut(() => { if (!busy) onSave?.(); }, Boolean(onSave));
 
   let pill = null;
   if (state === 'error') {

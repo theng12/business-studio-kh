@@ -2,6 +2,21 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.95', date: '2026-10-08',
+    items: [
+      'NEW — Fuel (new FUEL section in the sidebar): your own named tanks and farm stores, vehicles and machines (including your own types), fill-ups, tank dips, deliveries, fuel sent to the farm, stations and pump prices. Everything is per company.',
+      'NEW — Fuel checks: the app compares each tank between dips, each vehicle against its own normal use, cash fills against the pump price, fuel sent to the farm against fuel received, and each pump attendant against the others. Problems appear on Fuel overview in plain words; you answer each one Checked, Theft confirmed or Error corrected.',
+      'NEW — Fuel reports by month: per vehicle, per driver ranked by suspected loss in riel (including cash paid above the pump price), and per tank, with an Excel export.',
+      'NEW — Fuel page for phones (/f), in Khmer with an English switch: the pump attendant records fuel given, tank dips, deliveries and fuel sent to the farm; drivers record fuel bought at a station. Photos are taken with the phone camera, and records wait on the phone and send themselves when the signal drops. Set a phone up by QR code from Settings → Fuel.',
+      'NEW — Staff list (PEOPLE section): Khmer and English names, photo, position, driver and pump-attendant roles, Mark as left. Nobody is ever deleted. Fuel and staff screens need the new Record fuel or Manage fuel permissions, which Editors do not get by default.',
+      'NEW — Library "Use in ▾" sends the selected products to Generate & Print, a Catalog (new or existing) or Export Center.',
+      'NEW — ⌘S saves in every editor. Social Grid export has a Cancel button. A dot on What\'s new shows there is something new.',
+      'NEW — Settings → General: one exchange rate (1 USD = 4,100 KHR by default) used by the Cost Calculator and by sorting the Library by price. It is saved on this Mac.',
+      'FIX — Esc in a dialog opened on top of another closes only the top one.',
+      'Internal — New tables (all additive, no data reset): employees and fuel_* (asset types, assets, meter resets, stock locations, tank calibration, dips, deliveries, transfers, stations, prices, fills, photos, flags, settings). Rules T1–T3, A1–A7, C0–C2, C5, M1–M2, F1, P1, Q1 in main/util/fuelAnomalies.js, recomputed per save over the affected window and in a 12-hour full pass. Photos under <dataDir>/fuel and <dataDir>/hr, in backups, read only through permission-checked channels; 24-month retention via Recently deleted. Phone page webclient/fuel → main/fuelWebclientHtml.js. Capabilities fuel.record / fuel.manage.',
+    ],
+  },
+  {
     version: '0.1.94', date: '2026-10-08',
     items: [
       'FIX — Switching company no longer leaves the previous company\'s product open in the side panel or its products ticked for bulk actions. The product panel\'s Save button is always fully visible, and "Cancel" on a saved product now says Close.',

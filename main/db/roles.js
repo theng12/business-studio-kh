@@ -15,16 +15,18 @@
 
 const crypto = require('node:crypto');
 const { getDb } = require('./index');
-const { CAPABILITIES, CAPABILITY_KEYS } = require('../util/capabilities');
+const { CAPABILITIES, CAPABILITY_KEYS, OPT_IN_CAPABILITIES } = require('../util/capabilities');
 
 // The seeded presets. Caps chosen to match the old isAllowed() logic:
 //   admin        → everything (sentinel '*'), locked
 //   editor       → everything except user/role + system management
 //   photographer → add photos only
 //   viewer       → browse only (baseline reads; no caps)
+// Fuel F1: fuel.record / fuel.manage are opt-in (OPT_IN_CAPABILITIES) — the
+// Editor preset never gets them by default (docs/PEOPLE_AND_FUEL_PLAN.md §2 gap 3).
 const ALL_NON_ADMIN_CAPS = CAPABILITIES
   .map((c) => c.key)
-  .filter((k) => k !== 'users.manage' && k !== 'system.manage');
+  .filter((k) => k !== 'users.manage' && k !== 'system.manage' && !OPT_IN_CAPABILITIES.has(k));
 
 const BUILTIN_ROLES = [
   { key: 'admin',        name: 'Admin',        description: 'Full access to everything. Cannot be edited or deleted.', permissions: ['*'],              isSystem: true,  sort: 0 },

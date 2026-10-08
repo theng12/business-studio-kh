@@ -15,15 +15,26 @@
  */
 
 const auditLog = require('../db/auditLog');
+const { callerCanManage } = require('./fuelAccess');
+
+/**
+ * Fuel F1: staff (`employee`) and `fuel_*` history is shown only to callers
+ * with fuel.manage — history.view alone (an Editor on another Mac) must not
+ * read who filled what, or staff details, through the History page. The
+ * server Mac's own window (no caller) is not gated, as everywhere.
+ */
+function hideFuel() { return !callerCanManage(); }
 
 function register({ expose }) {
   expose('audit:listForEntity', ({ entityType, entityId, limit } = {}) => {
     if (!entityType || !entityId) return [];
+    if (auditLog.isFuelEntityType(entityType) && hideFuel()) return [];
     return auditLog.listForEntity(entityType, entityId, Number(limit) || 200);
   });
 
   expose('audit:countForEntity', ({ entityType, entityId } = {}) => {
     if (!entityType || !entityId) return 0;
+    if (auditLog.isFuelEntityType(entityType) && hideFuel()) return 0;
     return auditLog.countForEntity(entityType, entityId);
   });
 
@@ -36,10 +47,10 @@ function register({ expose }) {
    */
   // v0.1.89: + since / until (epoch ms) and q (text) for the History filters.
   expose('audit:listRecent', ({ limit, offset, entityType, userId, since, until, q } = {}) => {
-    return auditLog.listRecent({ limit, offset, entityType, userId, since, until, q });
+    return auditLog.listRecent({ limit, offset, entityType, userId, since, until, q, hideFuel: hideFuel() });
   });
   expose('audit:countRecent', ({ entityType, userId, since, until, q } = {}) => {
-    return auditLog.countRecent({ entityType, userId, since, until, q });
+    return auditLog.countRecent({ entityType, userId, since, until, q, hideFuel: hideFuel() });
   });
 
   // v0.33.0: history retention. stats() backs the "X events · oldest N

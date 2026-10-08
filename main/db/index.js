@@ -450,6 +450,10 @@ function initDb(dataDir) {
     process.stderr.write(`[asset-recovery] failed: ${err.message}\n`);
   }
 
+  // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §3): staff list + fuel tables.
+  // Additive only — CREATE TABLE IF NOT EXISTS, no SCHEMA_VERSION bump.
+  require('./fuelSchema').ensureFuelSchema(db);
+
   // v0.49.51: seed the built-in roles (admin/editor/photographer/viewer)
   // if missing. Idempotent + non-destructive (won't clobber edited presets).
   // Lazy require to avoid a load-time cycle with ./roles.

@@ -1082,6 +1082,21 @@ const PROXIED_CHANNELS = [
   'pos:addLine','pos:updateLine','pos:removeLine',
   'pos:addComponent','pos:updateComponent','pos:removeComponent',
   'pos:listPayments','pos:addPayment','pos:updatePayment','pos:removePayment',
+  // Fuel F1: the staff list and every fuel record live with the data on the
+  // server — pure DB + the server's own fuel/ folder — so straight RPC. The one
+  // exception is fuel:saveMonthlyWorkbook (handleLocal below: dialog on this Mac).
+  'staff:list','staff:get','staff:create','staff:update','staff:markLeft','staff:reactivate','staff:setPhoto','staff:getPhoto','staff:me',
+  'fuel:getSettings','fuel:updateSettings','fuel:listAssetTypes','fuel:createAssetType','fuel:updateAssetType',
+  'fuel:listAssets','fuel:getAsset','fuel:createAsset','fuel:updateAsset','fuel:setAssetPhoto',
+  'fuel:listLocations','fuel:getLocation','fuel:createLocation','fuel:updateLocation',
+  'fuel:getChart','fuel:setChart','fuel:getDipLitres','fuel:getChartSuggestion',
+  'fuel:listStations','fuel:createStation','fuel:updateStation',
+  'fuel:listPrices','fuel:setPrice','fuel:voidPrice','fuel:listMeterResets','fuel:recordMeterReset',
+  'fuel:recordFill','fuel:recordDip','fuel:recordDelivery','fuel:setDeliveryDips','fuel:recordTransfer','fuel:receiveTransfer',
+  'fuel:addPhoto','fuel:getPhoto','fuel:listFills','fuel:getFill','fuel:listDips','fuel:listDeliveries','fuel:listTransfers',
+  'fuel:listPendingTransfers','fuel:listMyRecent','fuel:reviewFill','fuel:correctFill','fuel:voidRecord','fuel:voidMyRecord',
+  'fuel:listFlags','fuel:reviewFlag','fuel:recomputeFlags','fuel:getOverview',
+  'fuel:getMonthlyReport','fuel:getMonthlyWorkbook','fuel:sweepPhotoRetention',
   // Pure math — could run client-side, but proxying keeps the formula
   // logic centralised + lets us patch it server-side without re-shipping
   // the client.
@@ -1108,6 +1123,8 @@ const PROXIED_CHANNELS = [
   'socialGrid:list','socialGrid:get','socialGrid:create','socialGrid:update',
   'socialGrid:delete','socialGrid:duplicate','socialGrid:preview',
   'socialGrid:markExported',
+  // 0.1.95: Cancel for an export runs where the render runs — on the server.
+  'socialGrid:cancelExport',
   // v0.1.62: the templates and the pre-flight count live with the data, so a
   // client Mac asks the server for them like any other social-grid call.
   // v0.1.63: catalog templates live with the data too.
@@ -1563,6 +1580,21 @@ function registerClientFileHandlers() {
     });
   });
 
+  // Fuel F1: the workbook is built on the server (where the data is) and the
+  // Save dialog opens on THIS Mac, so the bytes come back over RPC.
+  handleLocal('fuel:saveMonthlyWorkbook', async ({ month } = {}) => {
+    const res = await rpc('fuel:getMonthlyWorkbook', { month });
+    const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);
+    const out = await dialog.showSaveDialog({
+      title: 'Save fuel workbook',
+      defaultPath: res?.filename || `fuel-${month}.xlsx`,
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
+    });
+    if (out.canceled || !out.filePath) return null;
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return out.filePath;
+  });
+
   handleLocal('samples:generateProductSheet', async () => {
     // The sample workbook is a constant the renderer doesn't need
     // server data for. Local handler is fine.
@@ -1777,10 +1809,28 @@ function registerClientFileHandlers() {
    * A grid is a SERIES (a brand of 24 products at 3x3 is three images), so
    * unlike the catalog this writes a list of files and reports them all back.
    */
-  handleLocal('socialGrid:export', async ({ config, outputFolder, presetId } = {}) => {
+  handleLocal('socialGrid:export', async ({ config, outputFolder, presetId, runId } = {}) => {
     if (!outputFolder || typeof outputFolder !== 'string') throw new Error('Pick an output folder');
-    const res = await rpc('socialGrid:exportBytes', { config });
+    // 0.1.95: the renderer's run id travels to the server, which registers it
+    // so a proxied `socialGrid:cancelExport` can stop the render between
+    // images (or before the first, if the Cancel got there first); the images
+    // made before the cancel come back and are written. The server's progress
+    // events reach this Mac over the socket — if the socket drops mid-run the
+    // closing event never comes, so it is also sent locally when this ends.
+    const namedRun = typeof runId === 'string' && /^social-[A-Za-z0-9-]{1,64}$/.test(runId);
+    try {
+      return await exportSocialToFolder({ config, outputFolder, presetId, runId });
+    } finally {
+      if (namedRun) require('../events').broadcast('progress:event', { id: runId, complete: true });
+    }
+  });
+  async function exportSocialToFolder({ config, outputFolder, presetId, runId }) {
+    const res = await rpc('socialGrid:exportBytes', { config, runId });
     const files = Array.isArray(res?.files) ? res.files : [];
+    const cancelled = res?.cancelled === true;
+    if (cancelled && !files.length) {
+      return { outputPaths: [], pageCount: res.pageCount ?? 0, productCount: res.productCount ?? 0, written: 0, cancelled: true };
+    }
     if (!files.length) throw new Error('No products match these filters — nothing to export');
     await fsp.mkdir(outputFolder, { recursive: true });
     // v0.1.89: the same never-overwrite rule as the server's own export
@@ -1789,7 +1839,8 @@ function registerClientFileHandlers() {
     // what is already in the folder it picked.
     const { freeSeriesSlug, fileNameFor } = require('../socialGridRenderer');
     const ext = (path.extname(files[0]?.fileName || '') || '.png').slice(1);
-    const pageCount = files.length;
+    // A cancelled set is partial; name it as the full series it was planned as.
+    const pageCount = cancelled ? Math.max(files.length, Number(res.pageCount) || 0) : files.length;
     const served = String(files[0]?.fileName || '');
     const servedBase = pageCount > 1 ? served.replace(/-\d+\.[^.]+$/, '') : served.replace(/\.[^.]+$/, '');
     const base = freeSeriesSlug(servedBase || 'social-grid', pageCount, ext,
@@ -1801,9 +1852,9 @@ function registerClientFileHandlers() {
       outputPaths.push(target);
     }
     // 'Last exported' belongs to the preset, which lives on the server.
-    if (presetId) await rpc('socialGrid:markExported', { id: presetId });
-    return { outputPaths, pageCount: res.pageCount ?? files.length, productCount: res.productCount ?? 0 };
-  });
+    if (presetId && !cancelled) await rpc('socialGrid:markExported', { id: presetId });
+    return { outputPaths, pageCount: res.pageCount ?? files.length, productCount: res.productCount ?? 0, written: outputPaths.length, cancelled };
+  }
 
   /* ─── v0.1.27: overlay-apply bridges ────────────────────────────────
    *
