@@ -91,7 +91,7 @@ const HR_VALIDATORS = {
   /* hr: profiles, PINs, documents */
   'hr:getProfile': idArg('staff id'),
   'hr:updateProfile': idPatch('staff'),
-  'hr:setStatus': obj((a) => first(need(a, 'id'), a.status === 'active' || a.status === 'suspended' ? true : 'status must be active or suspended', strings(a, ['reason'], 500))),
+  'hr:setStatus': obj((a) => first(need(a, 'id'), a.status === 'active' || a.status === 'suspended' ? true : 'status must be active or suspended', strings(a, ['reason'], 500), dates(a, ['fromDate', 'toDate']))),
   'hr:setPin': obj((a) => first(need(a, 'id'), isString(a.pin) && /^\d{4,8}$/.test(a.pin) ? true : 'pin must be 4 to 8 digits')),
   'hr:clearPin': idArg('staff id'),
   'hr:unlockPin': idArg('staff id'),
@@ -112,9 +112,11 @@ const HR_VALIDATORS = {
   'attendance:void': obj((a) => first(need(a, 'id'), need(a, 'reason'))),
   'attendance:listReview': optObj((a) => first(
     a.status == null || ['pending', 'accepted', 'rejected', 'all'].includes(a.status) ? true : 'status must be pending, accepted, rejected or all',
-    a.source == null || a.source === 'phone' || a.source === 'supervisor' ? true : 'source must be phone or supervisor',
+    a.source == null || ['kiosk', 'phone', 'supervisor', 'manual', 'correction'].includes(a.source) ? true : 'source must be kiosk, phone, supervisor, manual or correction',
     strings(a, ['employeeId'], 200), numbers(a, ['from', 'to']), LIST_PAGE(a),
   )),
+  'attendance:listAlerts': optObj((a) => first(a.status == null || ['open', 'seen', 'all'].includes(a.status) ? true : 'status must be open, seen or all', numbers(a, ['limit']))),
+  'attendance:ackAlert': obj((a) => need(a, 'id')),
   'attendance:review': obj((a) => first(need(a, 'id'), a.decision === 'accept' || a.decision === 'reject' ? true : 'decision must be accept or reject', strings(a, ['reason'], 500))),
   'attendance:listCorrections': optObj((a) => first(strings(a, ['status', 'employeeId'], 200), LIST_PAGE(a))),
   'attendance:requestCorrection': obj((a) => first(need(a, 'employeeId'), isString(a.workDate) && DATE_RE.test(a.workDate) ? true : 'workDate must look like 2026-10-08', optHm(a.inTime) && optHm(a.outTime) ? true : 'times must look like 07:30', need(a, 'reason'))),

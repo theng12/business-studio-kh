@@ -116,6 +116,15 @@ function register({ expose }) {
     return res;
   });
   expose('attendance:listReview', (filters = {}) => attendance.listReview(company(), filters || {}));
+  /** Locked PINs and paused kiosks (also returned with attendance:listReview). */
+  expose('attendance:listAlerts', ({ status = 'open', limit } = {}) => attendance.listAlerts(company(), { status, limit }));
+  expose('attendance:ackAlert', ({ id } = {}) => {
+    company();
+    const a = inCompany(attendance.getAlert(id), 'Alert');
+    const next = attendance.ackAlert(id);
+    emitHrChange('alert', 'update', id, a.companyId);
+    return next;
+  });
   expose('attendance:review', ({ id, decision, reason = null } = {}) => {
     company();
     const ev = inCompany(attendance.getEvent(id), 'Attendance entry');

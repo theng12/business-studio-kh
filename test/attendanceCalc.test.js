@@ -130,16 +130,42 @@ test('the night window crosses midnight', () => {
   assert.equal(ms / 60000, 7 * 60); // 22:00–05:00
 });
 
-test('decideKind: in/out from the last event; a day shift never closes yesterday', () => {
+test('decideKind: in/out from the last event; a night shift closes the day it started', () => {
   const today = at('2026-10-08', '17:05');
   const inToday = { kind: 'in', at: at('2026-10-08', '07:00'), workDate: '2026-10-08' };
-  assert.deepEqual(c.decideKind({ lastEvent: inToday, now: today, schedule: DAY }), { kind: 'out', workDate: '2026-10-08' });
-  const inYesterday = { kind: 'in', at: at('2026-10-07', '17:30'), workDate: '2026-10-07' };
-  assert.deepEqual(c.decideKind({ lastEvent: inYesterday, now: at('2026-10-08', '06:55'), schedule: DAY }), { kind: 'in', workDate: '2026-10-08' });
+  assert.deepEqual(c.decideKind({ lastEvent: inToday, now: today, schedule: DAY }), { kind: 'out', workDate: '2026-10-08', flag: null });
   const nightIn = { kind: 'in', at: at('2026-10-07', '21:55'), workDate: '2026-10-07' };
-  assert.deepEqual(c.decideKind({ lastEvent: nightIn, now: at('2026-10-08', '06:05'), schedule: NIGHT }), { kind: 'out', workDate: '2026-10-07' });
-  assert.deepEqual(c.decideKind({ lastEvent: nightIn, now: at('2026-10-08', '15:00'), schedule: NIGHT }), { kind: 'in', workDate: '2026-10-08' }, 'over 16 h');
-  assert.deepEqual(c.decideKind({ lastEvent: null, now: today, schedule: DAY }), { kind: 'in', workDate: '2026-10-08' });
+  assert.deepEqual(c.decideKind({ lastEvent: nightIn, now: at('2026-10-08', '06:05'), schedule: NIGHT }), { kind: 'out', workDate: '2026-10-07', flag: null });
+  assert.deepEqual(c.decideKind({ lastEvent: nightIn, now: at('2026-10-08', '19:00'), schedule: NIGHT }), { kind: 'in', workDate: '2026-10-08', flag: null }, 'over 20 h');
+  assert.deepEqual(c.decideKind({ lastEvent: null, now: today, schedule: DAY }), { kind: 'in', workDate: '2026-10-08', flag: null });
+});
+
+test('decideKind: a day shift past midnight (07:00 → 00:30 → 07:00) does not flip the next day', () => {
+  const in7 = { kind: 'in', at: at('2026-10-07', '07:00'), workDate: '2026-10-07' };
+  const late = c.decideKind({ lastEvent: in7, now: at('2026-10-08', '00:30'), schedule: DAY });
+  assert.deepEqual(late, { kind: 'out', workDate: '2026-10-07', flag: 'late_close' }, '00:30 closes yesterday, flagged for review');
+  const out = { kind: 'out', at: at('2026-10-08', '00:30'), workDate: '2026-10-07' };
+  assert.deepEqual(c.decideKind({ lastEvent: out, now: at('2026-10-08', '07:00'), schedule: DAY }), { kind: 'in', workDate: '2026-10-08', flag: null });
+  // A forgotten clock-out (in 11:00 yesterday) and this morning's tap at 06:55 is today's in.
+  const in11 = { kind: 'in', at: at('2026-10-07', '11:00'), workDate: '2026-10-07' };
+  assert.deepEqual(c.decideKind({ lastEvent: in11, now: at('2026-10-08', '06:55'), schedule: DAY }), { kind: 'in', workDate: '2026-10-08', flag: null });
+  // The day's pairs: 07:00–00:30 → 17.5 h, overtime 17:00–00:30 split at 22:00.
+  const d = c.calcDay({ date: '2026-10-07', schedule: DAY, events: [{ id: 'a', kind: 'in', at: in7.at }, { id: 'b', kind: 'out', at: out.at }], settings: S, now: LATER });
+  assert.deepEqual(d.overtime, { normal: 300, night: 150, restDay: 0, holiday: 0 });
+});
+
+test('overtime on a work day is capped at worked − scheduled minutes (late in + late out is not overtime)', () => {
+  const d = day('2026-10-08', ev('2026-10-08', ['09:00', '19:00'])); // 2 h late, 2 h after the end
+  assert.equal(d.workedMin, 540);
+  assert.deepEqual(d.overtime, { normal: 0, night: 0, restDay: 0, holiday: 0 });
+  assert.equal(day('2026-10-08', ev('2026-10-08', ['07:30', '19:00'])).overtime.normal, 90, '120 after the end, but only 90 over the scheduled 540');
+});
+
+test('a suspended day is never absent or late', () => {
+  const d = day('2026-10-08', [], { suspended: true });
+  assert.equal(d.status, 'suspended');
+  assert.equal(d.absentDays, 0);
+  assert.equal(day('2026-10-08', ev('2026-10-08', ['09:00', '17:00']), { suspended: true }).lateMin, 0);
 });
 
 test('double tap within 2 minutes; queued phone time is capped and never before the last event', () => {
@@ -152,20 +178,27 @@ test('double tap within 2 minutes; queued phone time is capped and never before 
   assert.deepEqual(c.queuedTime({ now, queuedForMs: null }), { at: now, queuedForMs: null });
 });
 
-test('month totals: overtime computed / approved / pending, absences, lateness', () => {
+test('month totals: approved overtime counts only up to what the attendance shows', () => {
   const days = [
-    day('2026-10-07', ev('2026-10-07', ['07:20', '19:00'])),   // late 15, OT 120
+    day('2026-10-07', ev('2026-10-07', ['07:00', '19:00'])),   // OT 120
     day('2026-10-08', []),                                      // absent
     day('2026-10-11', ev('2026-10-11', ['08:00', '12:00'])),   // rest-day OT 240
+    day('2026-10-09', ev('2026-10-09', ['07:20', '17:00'])),   // late 15, no OT
   ];
-  const t = c.summarizeDays(days, { approvedByDate: new Map([['2026-10-07', { normal: 60, night: 0, restDay: 0, holiday: 0 }]]) });
-  assert.equal(t.daysWorked, 2);
+  const approved = new Map([
+    ['2026-10-07', { normal: 60, night: 0, restDay: 0, holiday: 0 }],
+    ['2026-10-09', { normal: 45, night: 0, restDay: 0, holiday: 0, needsReapproval: true }], // attendance changed since
+  ]);
+  const t = c.summarizeDays(days, { approvedByDate: approved });
+  assert.equal(t.daysWorked, 3);
   assert.equal(t.lateDays, 1);
   assert.equal(t.lateMin, 15);
   assert.equal(t.absentDays, 1);
   assert.deepEqual(t.overtimeComputed, { normal: 120, night: 0, restDay: 240, holiday: 0 });
-  assert.deepEqual(t.overtimeApproved, { normal: 60, night: 0, restDay: 0, holiday: 0 });
+  assert.deepEqual(t.overtimeApproved, { normal: 60, night: 0, restDay: 0, holiday: 0 }, 'the 45 approved on the 9th are not there any more');
   assert.deepEqual(t.overtimePending, { normal: 60, night: 0, restDay: 240, holiday: 0 });
+  assert.deepEqual(t.approvalsExceedingAttendance, ['2026-10-09']);
+  assert.deepEqual(t.approvalsNeedingReapproval, ['2026-10-09']);
   assert.deepEqual(t.otRates, { normal: 150, night: 200, restDay: 200, holiday: 200 });
 });
 

@@ -1105,7 +1105,7 @@ const PROXIED_CHANNELS = [
   'hr:setPin','hr:clearPin','hr:unlockPin','hr:listDocuments','hr:addDocument','hr:readDocument','hr:voidDocument',
   'hr:runJobs','hr:getMonthWorkbook',
   'attendance:day','attendance:monthSummary','attendance:listEvents','attendance:getPhoto','attendance:addManual','attendance:void',
-  'attendance:listReview','attendance:review','attendance:listCorrections','attendance:requestCorrection','attendance:decideCorrection',
+  'attendance:listReview','attendance:listAlerts','attendance:ackAlert','attendance:review','attendance:listCorrections','attendance:requestCorrection','attendance:decideCorrection',
   'attendance:listOvertime','attendance:approveOvertime','attendance:revokeOvertime','attendance:listLateness','attendance:confirmLateness',
   'attendance:clockSelf','attendance:mine','attendance:requestCorrectionSelf','attendance:crew','attendance:markCrew',
   'leave:listTypes','leave:createType','leave:updateType','leave:balances','leave:ledger','leave:listRequests',

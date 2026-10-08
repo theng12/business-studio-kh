@@ -191,7 +191,7 @@ const CHANNEL_RULES = [
   [/^attendance:(clockSelf|mine|requestCorrectionSelf)$/, ['attendance.self']],
   [/^leave:(requestSelf|cancelSelf)$/,                    ['attendance.self']],
   [/^attendance:(crew|markCrew)$/,                        ['attendance.supervise']],
-  [/^attendance:(day|monthSummary|listEvents|listReview|listCorrections|listOvertime|listLateness)$/, ['hr.view', 'hr.manage']],
+  [/^attendance:(day|monthSummary|listEvents|listReview|listCorrections|listOvertime|listLateness|listAlerts)$/, ['hr.view', 'hr.manage']],
   [/^leave:(listTypes|balances|ledger|listRequests)$/,    ['hr.view', 'hr.manage']],
   [/^hr:(getSettings|listPositions|listSchedules|listEmployeeSchedules|listHolidays|getProfile|getMonthWorkbook|saveMonthWorkbook)$/, ['hr.view', 'hr.manage']],
   [/^(hr|attendance|leave):/,                             'hr.manage'],

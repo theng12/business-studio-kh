@@ -22,6 +22,8 @@ const HISTORY_TABLES = [
   ['leave_requests', 'leave request'],
   ['leave_ledger', 'leave ledger entry'],
   ['employee_documents', 'staff document'],
+  ['employee_suspensions', 'suspension'],
+  ['attendance_alerts', 'attendance alert'],
 ];
 
 function companyHistoryCounts(companyId) {

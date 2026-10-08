@@ -52,9 +52,9 @@ function ensureHrSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_employees_position ON employees(position_id);
   `);
 
-  // The account ↔ staff link, mirrored on the account (History shows the real
-  // name). employees.user_id (F1, per company) stays the source of truth;
-  // main/db/employees.js keeps this column in step.
+  // Planned as an account → staff mirror. NOT written or read (review fix L4):
+  // the link is employees.user_id, which is per company, while one account can
+  // be staff in two companies. The column stays (additive; harmless).
   addColumnIfMissing(db, 'users', 'employee_id', 'TEXT');
   db.exec('CREATE INDEX IF NOT EXISTS idx_users_employee ON users(employee_id)');
 
@@ -324,6 +324,56 @@ function ensureHrSchema(db) {
       updated_at          INTEGER NOT NULL,
       updated_by_user_id  TEXT
     );
+  `);
+
+  /* Review fixes (2026-10-08), additive on top of the first HR1 tables. */
+  // Escalating PIN locks: the day's lock count; the third lock is manager-only.
+  addColumnIfMissing(db, 'employees', 'pin_lock_count', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'employees', 'pin_lock_day', 'TEXT');
+  addColumnIfMissing(db, 'employees', 'pin_manager_only', 'INTEGER NOT NULL DEFAULT 0');
+  // An approval / confirmation given before the attendance under it changed.
+  for (const t of ['overtime_approvals', 'lateness_confirmations']) {
+    addColumnIfMissing(db, t, 'needs_reapproval', 'INTEGER NOT NULL DEFAULT 0');
+    addColumnIfMissing(db, t, 'needs_reapproval_reason', 'TEXT');
+    addColumnIfMissing(db, t, 'needs_reapproval_at', 'INTEGER');
+  }
+  // No absence before the company started keeping attendance in the app.
+  addColumnIfMissing(db, 'hr_settings', 'attendance_start_date', 'TEXT');
+  db.exec(`
+    /* Dated suspensions: a suspended day is "suspended", never "absent". */
+    CREATE TABLE IF NOT EXISTS employee_suspensions (
+      id                  TEXT PRIMARY KEY,
+      company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE RESTRICT,
+      employee_id         TEXT NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+      from_date           TEXT NOT NULL,
+      to_date             TEXT,
+      reason              TEXT NOT NULL,
+      created_by_user_id  TEXT,
+      created_at          INTEGER NOT NULL,
+      ended_by_user_id    TEXT,
+      ended_at            INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_employee_suspensions_employee ON employee_suspensions(employee_id, from_date);
+    CREATE INDEX IF NOT EXISTS idx_employee_suspensions_company ON employee_suspensions(company_id);
+
+    /* Things a manager should look at that are not clock events: a PIN that
+       locked, a kiosk that paused after many wrong PINs, an approval whose
+       attendance changed. Shown with the review list. */
+    CREATE TABLE IF NOT EXISTS attendance_alerts (
+      id                TEXT PRIMARY KEY,
+      company_id        TEXT NOT NULL REFERENCES companies(id) ON DELETE RESTRICT,
+      employee_id       TEXT REFERENCES employees(id) ON DELETE RESTRICT,
+      kind              TEXT NOT NULL,
+      at                INTEGER NOT NULL,
+      kiosk_user_id     TEXT,
+      message           TEXT NOT NULL,
+      details_json      TEXT,
+      status            TEXT NOT NULL DEFAULT 'open',
+      seen_by_user_id   TEXT,
+      seen_at           INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_attendance_alerts_company ON attendance_alerts(company_id, status, at);
+    CREATE INDEX IF NOT EXISTS idx_attendance_alerts_employee ON attendance_alerts(employee_id);
   `);
 }
 

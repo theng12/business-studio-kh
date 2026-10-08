@@ -39,8 +39,12 @@
  *                                  countEarlyArrival is on); of those, the
  *                                  ones inside the night window are `night`
  *                                  (200 %), the rest `normal` (150 %).
+ *                On a work day the overtime is never more than
+ *                max(0, worked − scheduled minutes) (scheduled = shift length −
+ *                break): arriving late and staying late is not overtime.
  *                A day's overtime under otMinMinutes (15) counts as none; each
  *                category is rounded DOWN to otRoundMinutes (15).
+ *   suspended    a day inside a suspension is `suspended`: never absent, never late.
  *   regular      worked − overtime.
  *
  * Overtime and lateness are only COMPUTED here. Payroll (HR2) pays approved
@@ -60,13 +64,18 @@ const DEFAULT_SETTINGS = Object.freeze({
   countEarlyArrival: false,
   lateCountsFrom: 'grace',
   breakDeductAfterMin: 300,
-  maxShiftHours: 16,
+  maxShiftHours: 20,
+  newShiftWindowMinutes: 120,
   doubleTapMinutes: 2,
   phoneQueueMaxHours: 12,
   queuedReviewMinutes: 15,
   photoRetentionMonths: 24,
   pinMaxTries: 5,
   pinLockMinutes: 10,
+  pinLocksBeforeManager: 3,
+  kioskWrongPinLimit: 10,
+  kioskWrongPinWindowMinutes: 10,
+  kioskCooldownMinutes: 5,
   kioskSessionSeconds: 120,
   kioskSessionMaxMinutes: 10,
 });
@@ -76,12 +85,17 @@ const SETTING_RANGES = {
   otRoundMinutes: [1, 60],
   breakDeductAfterMin: [0, 1440],
   maxShiftHours: [4, 24],
+  newShiftWindowMinutes: [0, 600],
   doubleTapMinutes: [0, 30],
   phoneQueueMaxHours: [0, 48],
   queuedReviewMinutes: [0, 1440],
   photoRetentionMonths: [1, 120],
   pinMaxTries: [3, 20],
   pinLockMinutes: [1, 1440],
+  pinLocksBeforeManager: [1, 10],
+  kioskWrongPinLimit: [3, 100],
+  kioskWrongPinWindowMinutes: [1, 120],
+  kioskCooldownMinutes: [1, 120],
   kioskSessionSeconds: [30, 600],
   kioskSessionMaxMinutes: [1, 60],
 };
@@ -113,6 +127,9 @@ function mergeSettings(stored = {}, patch = null) {
         out[k] = n;
       } else if (k === 'defaultScheduleId') {
         out.defaultScheduleId = v == null ? null : String(v);
+      } else if (k === 'attendanceStartDate') {
+        if (v != null && !isDate(v)) { if (strict) throw new Error('attendanceStartDate must be a real date like 2026-10-01'); continue; }
+        out.attendanceStartDate = v == null ? null : v;
       } else if (strict) {
         throw new Error(`Unknown HR setting: ${k}`);
       }
@@ -242,11 +259,13 @@ function roundDown(min, step) { return step > 1 ? Math.floor(min / step) * step 
  * @param {Array}  p.events              active events whose work_date is this date
  * @param {object|null} p.holiday        { nameEn, nameKm, paid } when a public holiday
  * @param {object|null} p.leave          { half: null|'am'|'pm', typeCode, paid } approved leave covering the date
- * @param {object} [p.employment]        { from: 'YYYY-MM-DD'|null, to: 'YYYY-MM-DD'|null }
+ * @param {object} [p.employment]        { from: 'YYYY-MM-DD'|null, to: 'YYYY-MM-DD'|null } — from = the later
+ *                                       of the hire date and the date attendance started being kept
+ * @param {boolean} [p.suspended]        the person is suspended that day
  * @param {object} [p.settings]          mergeSettings() result
  * @param {number} [p.now]               for "is the day over yet"
  */
-function calcDay({ date, schedule = null, events = [], holiday = null, leave = null, employment = {}, settings = DEFAULT_SETTINGS, now = Date.now() }) {
+function calcDay({ date, schedule = null, events = [], holiday = null, leave = null, employment = {}, suspended = false, settings = DEFAULT_SETTINGS, now = Date.now() }) {
   const s = settings || DEFAULT_SETTINGS;
   const empty = { normal: 0, night: 0, restDay: 0, holiday: 0 };
   const res = {
@@ -309,6 +328,10 @@ function calcDay({ date, schedule = null, events = [], holiday = null, leave = n
       }
       ot.night = minutes(extraNightMs);
       ot.normal = Math.max(0, minutes(extraMs) - ot.night);
+      // Late in + late out is not overtime: never more than worked − scheduled.
+      const scheduledMin = Math.max(0, minutes(win.end - win.start) - (Number(schedule.breakMin) || 0));
+      let over = (ot.normal + ot.night) - Math.max(0, res.workedMin - scheduledMin);
+      if (over > 0) { const cut = Math.min(ot.normal, over); ot.normal -= cut; over -= cut; ot.night = Math.max(0, ot.night - over); }
     }
     const total = ot.normal + ot.night + ot.restDay + ot.holiday;
     if (total < s.otMinMinutes) { ot.normal = 0; ot.night = 0; ot.restDay = 0; ot.holiday = 0; }
@@ -324,7 +347,7 @@ function calcDay({ date, schedule = null, events = [], holiday = null, leave = n
   res.regularMin = Math.max(0, res.workedMin - (ot.normal + ot.night + ot.restDay + ot.holiday));
 
   // Lateness and early leave: scheduled work days only.
-  if (workDay && !holiday && !fullLeave && win) {
+  if (workDay && !holiday && !fullLeave && !suspended && win) {
     const mid = win.start + Math.floor((win.end - win.start) / 2);
     const expectedStart = leave?.half === 'am' ? mid : win.start;
     const expectedEnd = leave?.half === 'pm' ? mid : win.end;
@@ -339,7 +362,9 @@ function calcDay({ date, schedule = null, events = [], holiday = null, leave = n
 
   // Status.
   const anyEvent = events.length > 0;
-  if (!employed) res.status = anyEvent ? 'present' : 'not_employed';
+  // Outside the employment window only a day WITH events is reported (as usual); never absent.
+  if (!employed && !anyEvent) res.status = 'not_employed';
+  else if (suspended && !anyEvent) res.status = 'suspended';
   else if (holiday && !anyEvent) res.status = 'holiday';
   else if (fullLeave && !anyEvent) res.status = 'leave';
   else if (!workDay && !anyEvent) res.status = 'off';
@@ -360,13 +385,17 @@ const zeroOt = () => ({ normal: 0, night: 0, restDay: 0, holiday: 0 });
  * Totals for one person over a list of calcDay results, plus the overtime
  * already approved (per work date) so the pending part is known.
  *   approvedByDate: Map<date, { normal, night, restDay, holiday }>
+ * approved (per category) = Σ over days of min(approved, computed) — never more
+ * than the attendance now shows; days where the approval is larger are listed
+ * in approvalsExceedingAttendance.
  * pending (per category) = Σ over days of max(0, computed − approved).
  */
 function summarizeDays(days, { approvedByDate = new Map(), settings = DEFAULT_SETTINGS } = {}) {
   const t = {
     days: days.length, daysWorked: 0, workedMin: 0, regularMin: 0, lateDays: 0, lateMin: 0,
     earlyLeaveDays: 0, earlyLeaveMin: 0, absentDays: 0, leaveDays: 0, holidays: 0, offDays: 0,
-    missingOutDays: 0, overtimeComputed: zeroOt(), overtimeApproved: zeroOt(), overtimePending: zeroOt(),
+    missingOutDays: 0, suspendedDays: 0, overtimeComputed: zeroOt(), overtimeApproved: zeroOt(), overtimePending: zeroOt(),
+    approvalsExceedingAttendance: [], approvalsNeedingReapproval: [],
     otRates: { ...(settings?.otRates || DEFAULT_SETTINGS.otRates) },
   };
   for (const d of days) {
@@ -379,13 +408,22 @@ function summarizeDays(days, { approvedByDate = new Map(), settings = DEFAULT_SE
     if (d.leave) t.leaveDays += d.leave.half ? 0.5 : 1;
     if (d.holiday) t.holidays += 1;
     if (d.status === 'off') t.offDays += 1;
+    if (d.status === 'suspended') t.suspendedDays += 1;
     if (d.missingOut) t.missingOutDays += 1;
     const ap = approvedByDate.get(d.date) || zeroOt();
+    let exceeds = false;
     for (const k of Object.keys(t.overtimeComputed)) {
-      t.overtimeComputed[k] += d.overtime[k] || 0;
-      t.overtimeApproved[k] += ap[k] || 0;
-      t.overtimePending[k] += Math.max(0, (d.overtime[k] || 0) - (ap[k] || 0));
+      const computed = d.overtime[k] || 0;
+      const approved = ap[k] || 0;
+      // Payroll may only ever use min(approved, computed): an approval given
+      // before the attendance changed cannot pay minutes that are no longer there.
+      if (approved > computed) exceeds = true;
+      t.overtimeComputed[k] += computed;
+      t.overtimeApproved[k] += Math.min(approved, computed);
+      t.overtimePending[k] += Math.max(0, computed - approved);
     }
+    if (exceeds) t.approvalsExceedingAttendance.push(d.date);
+    if (ap.needsReapproval) t.approvalsNeedingReapproval.push(d.date);
   }
   return t;
 }
@@ -395,19 +433,31 @@ function summarizeDays(days, { approvedByDate = new Map(), settings = DEFAULT_SE
 /**
  * Is this tap an `in` or an `out`, and which work day does it belong to?
  *   - the person's last active event is an `in` of TODAY → `out` of today;
- *   - it is an `in` of an earlier day and the schedule is a night shift and it
- *     was less than maxShiftHours ago → `out` of THAT day (a shift past midnight);
- *   - otherwise `in` of today (an `in` left open the day before stays open —
- *     a missing clock-out the manager fixes; it is never closed by a guess).
+ *   - it is an `in` of an earlier day, less than maxShiftHours (20) ago:
+ *       night shift (the schedule crosses midnight) → `out` of THAT day;
+ *       day shift → `out` of that day too, flagged `late_close` for review
+ *       (07:00 in, 00:30 out after a long night) — unless the tap is already
+ *       inside today's new-shift window (newShiftWindowMinutes, 120, before
+ *       today's scheduled start): then it is today's `in` and yesterday's `in`
+ *       stays open as a missing clock-out;
+ *   - otherwise `in` of today. An open `in` is never closed by a guess.
+ * Returns { kind, workDate, flag: null | 'late_close' }.
  */
 function decideKind({ lastEvent = null, now, schedule = null, settings = DEFAULT_SETTINGS }) {
   const today = ppDate(now);
+  const s = settings || DEFAULT_SETTINGS;
   if (lastEvent && lastEvent.kind === 'in') {
-    if (lastEvent.workDate === today) return { kind: 'out', workDate: today };
-    const maxMs = (settings?.maxShiftHours ?? DEFAULT_SETTINGS.maxShiftHours) * 3600 * 1000;
-    if (crossesMidnight(schedule) && now - lastEvent.at <= maxMs) return { kind: 'out', workDate: lastEvent.workDate };
+    if (lastEvent.workDate === today) return { kind: 'out', workDate: today, flag: null };
+    const maxMs = (s.maxShiftHours ?? DEFAULT_SETTINGS.maxShiftHours) * 3600 * 1000;
+    if (now - lastEvent.at <= maxMs) {
+      if (crossesMidnight(schedule)) return { kind: 'out', workDate: lastEvent.workDate, flag: null };
+      const win = schedule ? scheduledWindow(schedule, today) : null;
+      const windowMs = (s.newShiftWindowMinutes ?? DEFAULT_SETTINGS.newShiftWindowMinutes) * MIN_MS;
+      const newShift = win ? now >= win.start - windowMs : false;
+      if (!newShift) return { kind: 'out', workDate: lastEvent.workDate, flag: 'late_close' };
+    }
   }
-  return { kind: 'in', workDate: today };
+  return { kind: 'in', workDate: today, flag: null };
 }
 
 /** A second tap by the same person within doubleTapMinutes returns the first one. */

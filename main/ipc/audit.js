@@ -23,6 +23,7 @@ const { callerCaps } = require('./fuelAccess');
  *   fuel_*            needs fuel.manage                      (Fuel F1)
  *   employee          needs fuel.manage, hr.view or hr.manage (F1 + HR1)
  *   sensitivity 'hr'  needs hr.view or hr.manage              (HR1, §6)
+ *   'hr_private'      needs hr.manage (staff documents)
  *   'payroll'         needs payroll.manage (HR2 — until then admin only)
  * history.view alone (an Editor on another Mac) never reads who filled what,
  * staff details, attendance or leave through the History page.
@@ -35,6 +36,7 @@ function hideSpec() {
     fuel: !any('fuel.manage'),
     employee: !any('fuel.manage', 'hr.view', 'hr.manage'),
     hr: !any('hr.view', 'hr.manage'),
+    hrPrivate: !any('hr.manage'),
     payroll: !any('payroll.manage'),
   };
   return Object.values(hide).some(Boolean) ? hide : null;

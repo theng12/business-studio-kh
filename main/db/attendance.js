@@ -62,11 +62,25 @@ function lastActiveEvent(employeeId, { before = null } = {}) {
 }
 
 /** Active events by employee for work dates in [from, to]. */
+/**
+ * A phone / supervisor entry that waited offline longer than
+ * queuedReviewMinutes is HELD: it stays in the review list and counts for
+ * nothing until a manager accepts it (review fix L5).
+ */
+function heldSql(companyId) {
+  const ms = hr.getSettings(companyId).queuedReviewMinutes * 60 * 1000;
+  return `NOT (e.review_status = 'pending' AND COALESCE(e.queued_for_ms, 0) > ${Math.floor(ms)})`;
+}
+function isHeld(ev, settings) {
+  return ev.reviewStatus === 'pending' && (ev.queuedForMs || 0) > settings.queuedReviewMinutes * 60 * 1000;
+}
+
+/** Active, counted events by employee for work dates in [from, to]. */
 function activeEventsByEmployee(companyId, from, to, employeeIds = null) {
   const params = [companyId, from, to];
   let extra = '';
   if (employeeIds && employeeIds.length) { extra = `AND e.employee_id IN (${employeeIds.map(() => '?').join(',')})`; params.push(...employeeIds); }
-  const rows = getDb().prepare(`SELECT * FROM attendance_events e WHERE e.company_id = ? AND e.work_date >= ? AND e.work_date <= ? ${extra} AND ${ACTIVE_SQL} ORDER BY e.at`).all(...params);
+  const rows = getDb().prepare(`SELECT * FROM attendance_events e WHERE e.company_id = ? AND e.work_date >= ? AND e.work_date <= ? ${extra} AND ${ACTIVE_SQL} AND ${heldSql(companyId)} ORDER BY e.at`).all(...params);
   const out = new Map();
   for (const r of rows) {
     if (!out.has(r.employee_id)) out.set(r.employee_id, new Map());
@@ -94,6 +108,58 @@ function existingForRef(clientRef, hash) {
     throw err;
   }
   return row;
+}
+
+/* ─── approvals that the attendance moved under (review fix M2) ── */
+
+/**
+ * The attendance of (employee, work date) changed. An overtime approval for
+ * that day and a lateness confirmation for that month are NOT voided — they
+ * are marked `needsReapproval` with the reason, and summaries already only use
+ * min(approved, computed) / min(confirmed, computed). Re-approving clears it.
+ */
+function touchDate(employeeId, workDate, reason) {
+  if (!employeeId || !calc.isDate(workDate)) return;
+  const db = getDb();
+  const now = Date.now();
+  const r = str(reason, 300);
+  const a = db.prepare(`UPDATE overtime_approvals SET needs_reapproval = 1, needs_reapproval_reason = ?, needs_reapproval_at = ?
+     WHERE employee_id = ? AND work_date = ? AND voided_at IS NULL`).run(r, now, employeeId, workDate);
+  const b = db.prepare(`UPDATE lateness_confirmations SET needs_reapproval = 1, needs_reapproval_reason = ?, needs_reapproval_at = ?
+     WHERE employee_id = ? AND month = ? AND voided_at IS NULL`).run(r, now, employeeId, workDate.slice(0, 7));
+  if (a.changes || b.changes) hrAudit('attendance', employeeId, 'needs-reapproval', { after: { workDate, reason: r, overtime: a.changes, lateness: b.changes } });
+}
+
+/* ─── alerts (locked PINs, a paused kiosk) ───────────────────── */
+
+function rowToAlert(r) {
+  return {
+    id: r.id, companyId: r.company_id, employeeId: r.employee_id, kind: r.kind, at: r.at, kioskUserId: r.kiosk_user_id, message: r.message,
+    details: r.details_json ? JSON.parse(r.details_json) : null, status: r.status, seenByUserId: r.seen_by_user_id, seenAt: r.seen_at,
+  };
+}
+function addAlert({ companyId, employeeId = null, kind, kioskUserId = null, message, details = null }) {
+  const id = uuid();
+  getDb().prepare('INSERT INTO attendance_alerts (id, company_id, employee_id, kind, at, kiosk_user_id, message, details_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, companyId, employeeId, kind, Date.now(), kioskUserId, str(message, 500), details ? JSON.stringify(details) : null);
+  hrAudit('attendance_alert', id, kind, { after: { employeeId, message: str(message, 500) } });
+  return id;
+}
+function listAlerts(companyId, { status = 'open', limit = 200 } = {}) {
+  const where = ['company_id = ?'];
+  const params = [companyId];
+  if (status && status !== 'all') { where.push('status = ?'); params.push(status); }
+  return getDb().prepare(`SELECT * FROM attendance_alerts WHERE ${where.join(' AND ')} ORDER BY at DESC LIMIT ${Math.min(Math.max(1, Number(limit) || 200), 1000)}`)
+    .all(...params).map(rowToAlert);
+}
+function getAlert(id) { const r = getDb().prepare('SELECT * FROM attendance_alerts WHERE id = ?').get(id); return r ? rowToAlert(r) : null; }
+function ackAlert(id) {
+  const a = getAlert(id);
+  if (!a) throw badRequest('Alert not found');
+  if (a.status === 'seen') return a;
+  getDb().prepare("UPDATE attendance_alerts SET status = 'seen', seen_by_user_id = ?, seen_at = ? WHERE id = ?").run(getCallerUserId(), Date.now(), id);
+  hrAudit('attendance_alert', id, 'seen', {});
+  return getAlert(id);
 }
 
 /* ─── clocking (kiosk, phone, supervisor) ─────────────────────── */
@@ -157,13 +223,16 @@ async function clock({
       const auto = calc.decideKind({ lastEvent: last, now: at, schedule, settings });
       const kind = explicitKind || auto.kind;
       const workDate = kind === auto.kind ? auto.workDate : calc.ppDate(at);
+      // A day shift closed after midnight (07:00 → 00:30) is kept but listed for review.
+      const lateClose = kind === auto.kind && auto.flag === 'late_close';
+      const flagNote = lateClose ? `Closes the shift of ${workDate} after midnight — check it` : null;
       db.prepare(`INSERT INTO attendance_events (id, company_id, employee_id, kind, at, work_date, source, recorded_by_user_id, device_label,
           photo_path, photo_sha256, note, queued_for_ms, client_ref, client_ref_hash, review_status, created_at)
         VALUES (@id, @companyId, @employeeId, @kind, @at, @workDate, @source, @uid, @deviceLabel, @photoPath, @photoSha, @note, @queued, @clientRef, @hash, @review, @now)`)
         .run({
           id, companyId, employeeId: emp.id, kind, at, workDate, source, uid, deviceLabel: str(deviceLabel, 120),
-          photoPath: staged?.relPath ?? null, photoSha: staged?.sha256 ?? null, note: str(note, 500), queued: queued.queuedForMs,
-          clientRef, hash, review: REVIEW_SOURCES.has(source) ? 'pending' : 'none', now,
+          photoPath: staged?.relPath ?? null, photoSha: staged?.sha256 ?? null, note: str([note, flagNote].filter(Boolean).join(' · '), 500), queued: queued.queuedForMs,
+          clientRef, hash, review: REVIEW_SOURCES.has(source) || lateClose ? 'pending' : 'none', now,
         });
       return { event: getEvent(id), duplicate: false, doubleTap: false };
     })();
@@ -176,6 +245,7 @@ async function clock({
     return result.refRepeat ? refRepeat(result.event, uid) : result;
   }
   staged?.commit();
+  if (result.event.workDate !== calc.ppDate(Date.now())) touchDate(emp.id, result.event.workDate, `A ${source} entry was added for ${result.event.workDate}`);
   hrAudit('attendance', result.event.id, 'clock', {
     after: { employeeId: emp.id, kind: result.event.kind, at: result.event.at, workDate: result.event.workDate, source, photo: !!staged, queuedForMs: result.event.queuedForMs },
   });
@@ -206,6 +276,7 @@ function addManual({ companyId, employeeId, kind, at, workDate = null, reason })
   getDb().prepare(`INSERT INTO attendance_events (id, company_id, employee_id, kind, at, work_date, source, recorded_by_user_id, note, review_status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, 'manual', ?, ?, 'none', ?)`).run(id, companyId, emp.id, kind, t, wd, getCallerUserId(), str(reason, 500), Date.now());
   hrAudit('attendance', id, 'manual', { after: { employeeId: emp.id, kind, at: t, workDate: wd, reason: str(reason, 500) } });
+  touchDate(emp.id, wd, `Entry added by hand: ${str(reason, 200)}`);
   return getEvent(id);
 }
 
@@ -216,19 +287,21 @@ function voidEvent(id, reason) {
   if (!str(reason, 500)) throw badRequest('Say why the entry is voided');
   getDb().prepare('UPDATE attendance_events SET voided_at = ?, void_reason = ?, voided_by_user_id = ? WHERE id = ?').run(Date.now(), str(reason, 500), getCallerUserId(), id);
   hrAudit('attendance', id, 'void', { before: { voided: false }, after: { voided: true, reason: str(reason, 500) } });
+  touchDate(e.employeeId, e.workDate, `An entry was voided: ${str(reason, 200)}`);
   return { event: getEvent(id), already: false };
 }
 
 /* ─── review list (phone + supervisor) ────────────────────────── */
 
 function listReview(companyId, { status = 'pending', source = null, employeeId = null, from = null, to = null, limit = 100, offset = 0 } = {}) {
-  const where = ['e.company_id = @companyId', "e.source IN ('phone', 'supervisor')"];
+  // Phone and supervisor entries, and any other entry flagged for review (a day shift closed after midnight).
+  const where = ['e.company_id = @companyId', "e.review_status <> 'none'"];
   const params = { companyId };
   if (status && status !== 'all') {
     if (!['pending', 'accepted', 'rejected'].includes(status)) throw badRequest('status must be pending, accepted, rejected or all');
     where.push('e.review_status = @status'); params.status = status;
   }
-  if (source) { where.push('e.source = @source'); params.source = source; }
+  if (source) { if (!SOURCES.includes(source)) throw badRequest('source must be kiosk, phone, supervisor, manual or correction'); where.push('e.source = @source'); params.source = source; }
   if (employeeId) { where.push('e.employee_id = @employeeId'); params.employeeId = employeeId; }
   if (from != null) { where.push('e.at >= @from'); params.from = Number(from); }
   if (to != null) { where.push('e.at < @to'); params.to = Number(to); }
@@ -237,18 +310,31 @@ function listReview(companyId, { status = 'pending', source = null, employeeId =
   const db = getDb();
   const total = db.prepare(`SELECT COUNT(*) AS n FROM attendance_events e WHERE ${where.join(' AND ')}`).get(params).n;
   // Like fuel's Q1: an entry that waited on the phone longer than queuedReviewMinutes
-  // is pointed out to the reviewer (its time is "arrival − wait", capped).
-  const longMs = hr.getSettings(companyId).queuedReviewMinutes * 60 * 1000;
+  // is pointed out — and, while pending, HELD out of every figure (review fix L5).
+  const settings = hr.getSettings(companyId);
+  const longMs = settings.queuedReviewMinutes * 60 * 1000;
   const items = db.prepare(`SELECT * FROM attendance_events e WHERE ${where.join(' AND ')} ORDER BY e.at ${status === 'pending' ? 'ASC' : 'DESC'} LIMIT ${lim} OFFSET ${off}`)
-    .all(params).map(rowToEvent).map((ev) => ({ ...ev, queuedLong: ev.queuedForMs != null && ev.queuedForMs > longMs }));
-  return { items, total };
+    .all(params).map(rowToEvent).map((ev) => {
+      const queuedLong = ev.queuedForMs != null && ev.queuedForMs > longMs;
+      const held = isHeld(ev, settings);
+      const mins = Math.round((ev.queuedForMs || 0) / 60000);
+      const waited = mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`;
+      const explanation = held
+        ? `Sent ${waited} after it was taken (the phone had no signal). The time is the arrival time minus that wait. It is not counted until you accept it.`
+        : ev.source === 'phone' ? 'Clocked on the person\'s own phone with a selfie. Counted; check the photo.'
+          : ev.source === 'supervisor' ? 'Marked by the supervisor away from the shop. Counted; check it.'
+            : ev.note || 'Flagged for a check. Counted.';
+      return { ...ev, queuedLong, held, explanation };
+    });
+  // Alerts that are not clock entries (a PIN that locked, a kiosk that paused) come with the list.
+  return { items, total, alerts: status === 'pending' || status == null ? listAlerts(companyId, { status: 'open', limit: 100 }) : [] };
 }
 
 function review(id, { decision, reason = null } = {}) {
   const e = getEvent(id);
   if (!e) throw badRequest('Attendance entry not found');
-  if (!REVIEW_SOURCES.has(e.source)) throw badRequest('Only phone and supervisor entries are reviewed');
   if (!['accept', 'reject'].includes(decision)) throw badRequest('decision must be accept or reject');
+  if (e.reviewStatus === 'none') throw badRequest('This entry is not waiting for review');
   if (e.reviewStatus !== 'pending') throw badRequest(`This entry was already ${e.reviewStatus}`);
   const now = Date.now();
   const uid = getCallerUserId();
@@ -261,6 +347,8 @@ function review(id, { decision, reason = null } = {}) {
     getDb().prepare(`UPDATE attendance_events SET review_status = 'accepted', reviewed_by_user_id = ?, reviewed_at = ?, review_note = ? WHERE id = ?`)
       .run(uid, now, str(reason, 500), id);
   }
+  // Rejecting removes it from the figures; accepting a HELD entry adds it.
+  if (decision === 'reject' || isHeld(e, hr.getSettings(e.companyId))) touchDate(e.employeeId, e.workDate, `A ${e.source} entry was ${decision}ed on review`);
   hrAudit('attendance', id, `review:${decision}`, { before: { reviewStatus: 'pending' }, after: { reviewStatus: decision === 'accept' ? 'accepted' : 'rejected', reason: str(reason, 500) } });
   return getEvent(id);
 }
@@ -295,14 +383,28 @@ function rowToCorrection(r) {
 }
 function getCorrection(id) { return rowToCorrection(getDb().prepare('SELECT * FROM attendance_corrections WHERE id = ?').get(id)); }
 
-function proposedTimes(workDate, inTime, outTime) {
+/**
+ * 'HH:MM' on a work date → ms. An out time is placed AFTER the day's in: the
+ * proposed in, else `anchorIn` (the work date's active in, or the scheduled
+ * start of a shift that crosses midnight) — so "out 06:10" for a night shift
+ * that began at 22:00 lands the next morning (review fix M3).
+ */
+function proposedTimes(workDate, inTime, outTime, { anchorIn = null } = {}) {
   const inAt = inTime ? calc.timeOnDate(workDate, inTime) : null;
   if (inTime && inAt == null) throw badRequest('inTime must be a time like 07:30');
-  const outAt = outTime ? calc.timeOnDate(workDate, outTime, { after: inAt }) : null;
+  const outAt = outTime ? calc.timeOnDate(workDate, outTime, { after: inAt ?? anchorIn }) : null;
   if (outTime && outAt == null) throw badRequest('outTime must be a time like 17:05');
   if (inAt == null && outAt == null) throw badRequest('Give the time you came in, the time you left, or both');
   if (Math.max(inAt ?? 0, outAt ?? 0) > Date.now() + FUTURE_SLACK_MS) throw badRequest('That time is in the future');
   return { inAt, outAt };
+}
+
+/** The in an out-only correction follows: the work date's active in, else a night shift's scheduled start. */
+function anchorInFor(companyId, employeeId, workDate) {
+  const row = getDb().prepare(`SELECT at FROM attendance_events e WHERE e.employee_id = ? AND e.work_date = ? AND e.kind = 'in' AND ${ACTIVE_SQL} ORDER BY e.at LIMIT 1`).get(employeeId, workDate);
+  if (row) return row.at;
+  const schedule = hr.scheduleResolver(companyId)(employeeId, workDate);
+  return calc.crossesMidnight(schedule) ? calc.scheduledWindow(schedule, workDate).start : null;
 }
 
 /**
@@ -315,7 +417,7 @@ function requestCorrection({ companyId, employeeId, workDate, inTime = null, out
   if (!calc.isDate(workDate)) throw badRequest('workDate must be a real date like 2026-10-08');
   if (workDate > calc.ppDate(Date.now())) throw badRequest('That day has not happened yet');
   if (!str(reason, 500)) throw badRequest('Say what needs correcting');
-  const { inAt, outAt } = proposedTimes(workDate, inTime, outTime);
+  const { inAt, outAt } = proposedTimes(workDate, inTime, outTime, { anchorIn: anchorInFor(companyId, employeeId, workDate) });
   const db = getDb();
   if (db.prepare("SELECT 1 FROM attendance_corrections WHERE employee_id = ? AND work_date = ? AND status = 'pending'").get(employeeId, workDate)) {
     throw badRequest('There is already a correction waiting for that day');
@@ -345,9 +447,12 @@ function decideCorrection(id, { decision, note = null, inTime, outTime } = {}) {
   // A manager may adjust the proposed times while approving.
   let { proposedInAt: inAt, proposedOutAt: outAt } = c;
   if (inTime !== undefined || outTime !== undefined) {
-    const t = proposedTimes(c.workDate, inTime === undefined ? null : inTime, outTime === undefined ? null : outTime);
+    const newIn = inTime === undefined ? inAt : (inTime ? calc.timeOnDate(c.workDate, inTime) : null);
+    const t = proposedTimes(c.workDate, inTime === undefined ? null : inTime, outTime === undefined ? null : outTime,
+      { anchorIn: newIn ?? anchorInFor(c.companyId, c.employeeId, c.workDate) });
     inAt = inTime === undefined ? inAt : t.inAt;
     outAt = outTime === undefined ? outAt : t.outAt;
+    if (inAt != null && outAt != null && outAt <= inAt) throw badRequest('The out time must be after the in time');
   }
   const events = [];
   db.transaction(() => {
@@ -365,6 +470,7 @@ function decideCorrection(id, { decision, note = null, inTime, outTime } = {}) {
     db.prepare(`UPDATE attendance_corrections SET status = 'approved', decided_by_user_id = ?, decided_at = ?, decision_note = ?, resulting_in_event_id = ?, resulting_out_event_id = ?,
         proposed_in_at = ?, proposed_out_at = ? WHERE id = ?`).run(uid, now, str(note, 500), inId, outId, inAt, outAt, id);
   })();
+  touchDate(c.employeeId, c.workDate, 'A correction was approved');
   hrAudit('attendance_correction', id, 'approve', {
     before: { status: 'pending', proposedInAt: c.proposedInAt, proposedOutAt: c.proposedOutAt },
     after: { status: 'approved', inAt, outAt, events: events.map((e) => ({ id: e.id, kind: e.kind, supersedes: e.supersedesEventId })) },
@@ -387,7 +493,18 @@ function listCorrections(companyId, { status = null, employeeId = null, limit = 
 
 /* ─── computed days and months ────────────────────────────────── */
 
-function employedWindow(e) { return { from: e.hireDate || null, to: e.endDate || e.leftOn || null }; }
+/**
+ * The days a person can be counted (absent, late…): from the later of the hire
+ * date and the date the company started keeping attendance in the app
+ * (attendanceStartDate — before that the attendance is on paper, so no day
+ * there is "absent"), to the end date / leaving day.
+ */
+function employedWindow(e, attendanceStartDate = null) {
+  const hire = e.hireDate || null;
+  const from = hire && attendanceStartDate ? (hire > attendanceStartDate ? hire : attendanceStartDate) : (hire || attendanceStartDate || null);
+  return { from, to: e.endDate || e.leftOn || null };
+}
+function suspendedOn(ranges, date) { return !!ranges && ranges.some((r) => r.from <= date && (!r.to || date <= r.to)); }
 
 /** Staff to include for a date range: not left before it starts, not hired after it ends. */
 function staffForRange(companyId, from, to, employeeId = null) {
@@ -411,6 +528,7 @@ function computeDays(companyId, { from, to, employeeId = null, now = Date.now() 
   const staff = staffForRange(companyId, from, to, employeeId);
   const events = activeEventsByEmployee(companyId, from, to, employeeId ? [employeeId] : null);
   const leave = require('./leave').approvedLeaveByDate(companyId, from, to);
+  const suspensions = employees.suspensionsByEmployee(companyId);
   const out = new Map();
   const dates = [];
   for (let d = from; d <= to && dates.length < 400; d = calc.addDays(d, 1)) dates.push(d);
@@ -422,7 +540,8 @@ function computeDays(companyId, { from, to, employeeId = null, now = Date.now() 
       return calc.calcDay({
         date, schedule: resolve(e.id, date), events: evs.get(date) || [],
         holiday: h ? { nameEn: h.nameEn, nameKm: h.nameKm, paid: h.paid } : null,
-        leave: lv.get(date) || null, employment: employedWindow(e), settings, now,
+        leave: lv.get(date) || null, employment: employedWindow(e, settings.attendanceStartDate),
+        suspended: suspendedOn(suspensions.get(e.id), date), settings, now,
       });
     });
     out.set(e.id, { employee: e, days });
@@ -436,7 +555,7 @@ function approvalsByEmployee(companyId, from, to) {
   const out = new Map();
   for (const r of getDb().prepare('SELECT * FROM overtime_approvals WHERE company_id = ? AND work_date >= ? AND work_date <= ? AND voided_at IS NULL').all(companyId, from, to)) {
     if (!out.has(r.employee_id)) out.set(r.employee_id, new Map());
-    out.get(r.employee_id).set(r.work_date, { normal: r.normal_min, night: r.night_min, restDay: r.rest_day_min, holiday: r.holiday_min, id: r.id });
+    out.get(r.employee_id).set(r.work_date, { normal: r.normal_min, night: r.night_min, restDay: r.rest_day_min, holiday: r.holiday_min, id: r.id, needsReapproval: !!r.needs_reapproval });
   }
   return out;
 }
@@ -463,9 +582,17 @@ function monthSummary(companyId, month, { employeeId = null, withDays = false, n
   const rows = [];
   for (const [id, { employee, days }] of computed) {
     const totals = calc.summarizeDays(days, { approvedByDate: approvals.get(id) || new Map(), settings });
+    const conf = lateness.get(id) || null;
+    // Payroll may deduct only min(confirmed, computed now): a confirmation never outgrows the attendance.
+    const late = conf ? {
+      ...conf,
+      deductibleLateMin: Math.min(conf.confirmedLateMin, totals.lateMin),
+      deductibleEarlyLeaveMin: Math.min(conf.confirmedEarlyLeaveMin, totals.earlyLeaveMin),
+      exceedsAttendance: conf.confirmedLateMin > totals.lateMin || conf.confirmedEarlyLeaveMin > totals.earlyLeaveMin,
+    } : null;
     rows.push({
       employeeId: id, staffCode: employee.staffCode, nameEn: employee.nameEn, nameKm: employee.nameKm, status: employee.status,
-      totals, lateness: lateness.get(id) || null, ...(withDays || employeeId ? { days } : {}),
+      totals, lateness: late, ...(withDays || employeeId ? { days } : {}),
     });
   }
   rows.sort((a, b) => String(a.nameEn || a.nameKm || a.staffCode).localeCompare(String(b.nameEn || b.nameKm || b.staffCode)));
@@ -493,6 +620,7 @@ function rowToOvertime(r) {
     id: r.id, companyId: r.company_id, employeeId: r.employee_id, workDate: r.work_date,
     minutes: { normal: r.normal_min, night: r.night_min, restDay: r.rest_day_min, holiday: r.holiday_min },
     note: r.note, approvedByUserId: r.approved_by_user_id, approvedAt: r.approved_at, voided: !!r.voided_at, voidReason: r.void_reason,
+    needsReapproval: !!r.needs_reapproval, needsReapprovalReason: r.needs_reapproval_reason ?? null, needsReapprovalAt: r.needs_reapproval_at ?? null,
   };
 }
 
@@ -562,6 +690,7 @@ function rowToLateness(r) {
     computedLateMin: r.computed_late_min, confirmedLateMin: r.confirmed_late_min,
     computedEarlyLeaveMin: r.computed_early_min, confirmedEarlyLeaveMin: r.confirmed_early_min,
     note: r.note, confirmedByUserId: r.confirmed_by_user_id, confirmedAt: r.confirmed_at, voided: !!r.voided_at, voidReason: r.void_reason,
+    needsReapproval: !!r.needs_reapproval, needsReapprovalReason: r.needs_reapproval_reason ?? null, needsReapprovalAt: r.needs_reapproval_at ?? null,
   };
 }
 
@@ -611,7 +740,8 @@ function listLateness(companyId, { month = null, employeeId = null } = {}) {
 }
 
 module.exports = {
-  SOURCES, rowToEvent, getEvent, getEventRow, lastActiveEvent, activeEventsByEmployee,
+  SOURCES, rowToEvent, getEvent, getEventRow, lastActiveEvent, activeEventsByEmployee, touchDate,
+  addAlert, listAlerts, getAlert, ackAlert,
   clock, addManual, voidEvent, listReview, review, listEvents,
   getCorrection, requestCorrection, decideCorrection, listCorrections,
   computeDays, monthSummary, daySheet,

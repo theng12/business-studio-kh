@@ -3,10 +3,13 @@
  * documents, and the short-lived kiosk sessions
  * (docs/PEOPLE_AND_FUEL_PLAN.md §3.1, §5.2, §6).
  *
- * PIN: scrypt with a per-employee salt (main/util/kioskPin.js); 5 wrong tries
- * lock that person's PIN for 10 minutes (settings pinMaxTries /
- * pinLockMinutes). Neither the PIN nor its hash ever leaves this module or
- * enters History.
+ * PIN: async scrypt with a per-employee salt (main/util/kioskPin.js). 5 wrong
+ * tries lock that person's PIN for 10 minutes, doubling with each lock the
+ * same day; the 3rd lock in a day is manager-only (hr:unlockPin). One kiosk
+ * account gets 10 wrong PINs across all staff per 10 minutes, then pauses PIN
+ * entry for 5 minutes. Every lock and pause is an alert in the manager's
+ * review list. Neither the PIN nor its hash ever leaves this module or enters
+ * History.
  *
  * Kiosk sessions (in memory on the server Mac): a correct PIN gives the kiosk
  * a random token bound to (kiosk account, employee, company), valid
@@ -27,13 +30,14 @@ function hrAudit(entityType, entityId, action, payload) { hr.hrAudit(entityType,
 
 /* ─── PIN ─────────────────────────────────────────────────────── */
 
-function setPin(employeeId, pin) {
+async function setPin(employeeId, pin) {
   const e = employees.get(employeeId);
   if (!e) throw badRequest('Staff member not found');
   const problem = pinUtil.pinProblem(pin);
   if (problem) throw badRequest(problem);
-  const { hash, salt } = pinUtil.hashPin(pin);
-  getDb().prepare('UPDATE employees SET kiosk_pin_hash = ?, pin_salt = ?, pin_failed_count = 0, pin_locked_until = NULL, pin_set_at = ? WHERE id = ?')
+  const { hash, salt } = await pinUtil.hashPin(pin);
+  getDb().prepare(`UPDATE employees SET kiosk_pin_hash = ?, pin_salt = ?, pin_failed_count = 0, pin_locked_until = NULL, pin_manager_only = 0,
+      pin_lock_count = 0, pin_lock_day = NULL, pin_set_at = ? WHERE id = ?`)
     .run(hash, salt, Date.now(), employeeId);
   hrAudit('employee', employeeId, 'pin:set', { after: { pin: '(set)' } });
   return employees.get(employeeId);
@@ -42,45 +46,87 @@ function setPin(employeeId, pin) {
 function clearPin(employeeId) {
   const e = employees.get(employeeId);
   if (!e) throw badRequest('Staff member not found');
-  getDb().prepare('UPDATE employees SET kiosk_pin_hash = NULL, pin_salt = NULL, pin_failed_count = 0, pin_locked_until = NULL, pin_set_at = NULL WHERE id = ?').run(employeeId);
+  getDb().prepare('UPDATE employees SET kiosk_pin_hash = NULL, pin_salt = NULL, pin_failed_count = 0, pin_locked_until = NULL, pin_manager_only = 0, pin_set_at = NULL WHERE id = ?').run(employeeId);
   hrAudit('employee', employeeId, 'pin:clear', { after: { pin: null } });
   return employees.get(employeeId);
 }
 
+/** A manager lifts a lock (the only way out of a manager-only lock). The day's lock count stays. */
 function unlockPin(employeeId) {
-  getDb().prepare('UPDATE employees SET pin_failed_count = 0, pin_locked_until = NULL WHERE id = ?').run(employeeId);
+  getDb().prepare('UPDATE employees SET pin_failed_count = 0, pin_locked_until = NULL, pin_manager_only = 0 WHERE id = ?').run(employeeId);
   hrAudit('employee', employeeId, 'pin:unlock', {});
   return employees.get(employeeId);
 }
 
+/* Wrong PINs per kiosk account across all staff (in memory; a restart forgets — the per-person locks are in the DB). */
+const kioskState = new Map(); // kioskUserId|'local' → { failures: [ms], cooldownUntil }
+function _clearKioskState() { kioskState.clear(); }
+
+function pinError(message, code, extra = {}) {
+  const err = new Error(message);
+  err.code = code;
+  Object.assign(err, extra);
+  return err;
+}
+
 /**
  * Check a PIN and update the counters. Throws a plain sentence when the PIN
- * is wrong or locked (the kiosk shows it), returns the employee when right.
+ * is wrong or locked or the kiosk is paused (the kiosk shows it), returns the
+ * employee when right. Async: scrypt runs off the main thread, and the
+ * counters are updated in one synchronous step after it, re-read so two
+ * attempts at once cannot lose a count.
  */
-function checkPin(employeeId, pin, { companyId, now = Date.now() } = {}) {
+async function checkPin(employeeId, pin, { companyId, kioskUserId = null, now = Date.now() } = {}) {
+  const settings = hr.getSettings(companyId);
+  const kioskKey = kioskUserId || 'local';
+  const cool = pinUtil.kioskCooldown(kioskState.get(kioskKey), now);
+  if (cool.cooling) throw pinError(`Too many wrong PINs on this kiosk. PIN entry is paused for ${Math.ceil(cool.retryInSeconds / 60)} min — ask a manager.`, 'KIOSK_PAUSED');
   const row = employees.getRow(employeeId);
   if (!row || row.company_id !== companyId) throw badRequest('That person is not on this company\'s staff list');
   if (!row.kiosk_pin_hash) throw badRequest('No PIN is set for this person yet — ask a manager');
-  const settings = hr.getSettings(companyId);
-  const lock = pinUtil.lockState({ lockedUntil: row.pin_locked_until, now });
+  const lock = pinUtil.lockState({ lockedUntil: row.pin_locked_until, managerOnly: !!row.pin_manager_only, now });
   if (lock.locked) {
-    const err = new Error(`Too many wrong PINs. Try again in ${Math.ceil(lock.retryInSeconds / 60)} min.`);
-    err.code = 'PIN_LOCKED';
-    err.retryAt = lock.retryAt;
-    throw err;
+    throw pinError(lock.managerOnly ? 'This PIN is locked. Only a manager can unlock it.' : `Too many wrong PINs. Try again in ${Math.ceil(lock.retryInSeconds / 60)} min.`, 'PIN_LOCKED', { retryAt: lock.retryAt });
   }
-  const correct = pinUtil.verifyPin(pin, row.kiosk_pin_hash, row.pin_salt);
-  const next = pinUtil.afterAttempt({ correct, failedCount: row.pin_failed_count, now, maxTries: settings.pinMaxTries, lockMinutes: settings.pinLockMinutes });
-  getDb().prepare('UPDATE employees SET pin_failed_count = ?, pin_locked_until = ? WHERE id = ?').run(next.failedCount, next.lockedUntil, employeeId);
-  if (!correct) {
-    if (next.locked) hrAudit('employee', employeeId, 'pin:locked', { after: { lockedUntil: next.lockedUntil } });
-    const err = new Error(next.locked
-      ? `Wrong PIN. Locked for ${settings.pinLockMinutes} min — ask a manager.`
-      : `Wrong PIN. ${next.triesLeft} ${next.triesLeft === 1 ? 'try' : 'tries'} left.`);
-    err.code = next.locked ? 'PIN_LOCKED' : 'PIN_WRONG';
-    throw err;
+  const correct = await pinUtil.verifyPin(pin, row.kiosk_pin_hash, row.pin_salt);
+  const db = getDb();
+  const today = require('../util/attendanceCalc').ppDate(now);
+  let next;
+  db.transaction(() => {
+    const cur = employees.getRow(employeeId);
+    next = pinUtil.afterAttempt({
+      correct, failedCount: cur.pin_failed_count, now, maxTries: settings.pinMaxTries, lockMinutes: settings.pinLockMinutes,
+      today, lockDay: cur.pin_lock_day, locksToday: cur.pin_lock_count, locksBeforeManager: settings.pinLocksBeforeManager,
+    });
+    db.prepare('UPDATE employees SET pin_failed_count = ?, pin_locked_until = ?, pin_manager_only = ?, pin_lock_count = ?, pin_lock_day = ? WHERE id = ?')
+      .run(next.failedCount, next.lockedUntil, next.managerOnly ? 1 : 0, next.locksToday, next.lockDay, employeeId);
+  })();
+  if (correct) return employees.get(employeeId);
+
+  const att = require('./attendance');
+  const name = row.name_en || row.name_km || row.staff_code;
+  if (next.locked) {
+    hrAudit('employee', employeeId, 'pin:locked', { after: { lockedUntil: next.lockedUntil, managerOnly: next.managerOnly, locksToday: next.locksToday } });
+    att.addAlert({
+      companyId, employeeId, kind: 'pin_locked', kioskUserId,
+      message: next.managerOnly
+        ? `${name}'s PIN locked ${next.locksToday} times today — only a manager can unlock it now. Someone may be trying to clock in for them.`
+        : `${name}'s PIN locked for ${next.lockMinutes} min after ${settings.pinMaxTries} wrong tries.`,
+      details: { locksToday: next.locksToday, managerOnly: next.managerOnly },
+    });
   }
-  return employees.get(employeeId);
+  const k = pinUtil.kioskFailure(kioskState.get(kioskKey), {
+    now, limit: settings.kioskWrongPinLimit, windowMinutes: settings.kioskWrongPinWindowMinutes, cooldownMinutes: settings.kioskCooldownMinutes,
+  });
+  kioskState.set(kioskKey, k.state);
+  if (k.cooldownStarted) {
+    att.addAlert({ companyId, kind: 'kiosk_paused', kioskUserId, message: `${settings.kioskWrongPinLimit} wrong PINs in ${settings.kioskWrongPinWindowMinutes} min on one kiosk — PIN entry paused for ${settings.kioskCooldownMinutes} min.` });
+    hrAudit('attendance_alert', kioskKey, 'kiosk:paused', { after: { limit: settings.kioskWrongPinLimit } });
+  }
+  if (next.locked) {
+    throw pinError(next.managerOnly ? 'Wrong PIN. This PIN is now locked — only a manager can unlock it.' : `Wrong PIN. Locked for ${next.lockMinutes} min — ask a manager.`, 'PIN_LOCKED');
+  }
+  throw pinError(`Wrong PIN. ${next.triesLeft} ${next.triesLeft === 1 ? 'try' : 'tries'} left.`, 'PIN_WRONG');
 }
 
 /** A manager for the kiosk: linked to an app account whose role has hr.manage (or admin). */
@@ -170,7 +216,8 @@ async function addDocument({ companyId, employeeId, kind, title = null, bytes })
     throw err;
   }
   staged.commit();
-  hrAudit('hr_document', id, 'add', { after: { employeeId, kind, title: str(title, 200), mime: staged.mime, sha256: staged.sha256 } });
+  // 'hr_private': only hr.manage sees document rows in History (a title can say what the document is).
+  require('./_fuelUtil').audit('hr_document', id, 'add', { after: { employeeId, kind, title: str(title, 200), mime: staged.mime, sha256: staged.sha256 }, sensitivity: 'hr_private' });
   return rowToDocument(getDocumentRow(id));
 }
 
@@ -180,12 +227,12 @@ function voidDocument(id, reason) {
   if (r.voided_at) return rowToDocument(r);
   if (!str(reason, 500)) throw badRequest('Say why the document is voided');
   getDb().prepare('UPDATE employee_documents SET voided_at = ?, void_reason = ?, voided_by_user_id = ? WHERE id = ?').run(Date.now(), str(reason, 500), getCallerUserId(), id);
-  hrAudit('hr_document', id, 'void', { after: { reason: str(reason, 500) } });
+  require('./_fuelUtil').audit('hr_document', id, 'void', { after: { reason: str(reason, 500) }, sensitivity: 'hr_private' });
   return rowToDocument(getDocumentRow(id));
 }
 
 module.exports = {
   setPin, clearPin, unlockPin, checkPin, isManagerEmployee,
-  createSession, useSession, endSession, _clearSessions,
+  createSession, useSession, endSession, _clearSessions, _clearKioskState,
   listDocuments, getDocumentRow, addDocument, voidDocument, rowToDocument,
 };
