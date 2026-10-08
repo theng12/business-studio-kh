@@ -943,7 +943,7 @@ function attendantComparison({ intervals = [], now, settings = DEFAULT_SETTINGS,
         measured: row.median, expected: row.othersMedian, threshold: row.othersMedian * (1 + s.attendantAmberPct / 100), unit: '× normal',
         explanation: `${who}: in the ${s.attendantWindowDays} days to ${phnomPenhDate(end)}, vehicles filled by ${who} used ${fmtNum(row.diffPct, 1)}% more fuel `
           + `per km or hour before their next full fill than the same vehicles filled by the other attendants (${mine.length} fills vs ${others.length}). `
-          + 'A pattern like this is what short-filling looks like (less fuel goes in than is written down); check his fills against the pump meter.',
+          + 'A pattern like this is what short-filling looks like (less fuel goes in than is written down); check their fills against the pump meter.',
         details: { window: { from: end - span, to: end }, n: mine.length, nOthers: others.length, medianRel: round(row.median, 4), othersMedianRel: round(row.othersMedian, 4), diffPct: round(row.diffPct, 2) },
       }));
     }
