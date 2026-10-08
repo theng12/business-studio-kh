@@ -16,6 +16,7 @@ import { DeletedItemsPanel } from './DeletedItemsPanel.jsx';
 import { PriceGroupsPanel } from './PriceGroupsPanel.jsx';
 import { RolesPanel } from './RolesPanel.jsx';
 import { ExchangeRateControl } from './ExchangeRateControl.jsx';
+import { KioskModePanel } from '../Kiosk/KioskModeSettings.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
 // Fuel F1: Settings → Fuel. Lazy so the fuel screens stay out of the boot bundle.
 const FuelSettingsPanel = lazy(() => import('../Fuel/FuelSettingsPanel.jsx').then((m) => ({ default: m.FuelSettingsPanel })));
@@ -23,6 +24,8 @@ const FuelSettingsPanel = lazy(() => import('../Fuel/FuelSettingsPanel.jsx').the
 // Settings → Branches. Lazy for the same reason.
 const AssetSettingsPanel = lazy(() => import('../Assets/AssetSettingsPanel.jsx').then((m) => ({ default: m.AssetSettingsPanel })));
 const BranchesPanel = lazy(() => import('../Assets/BranchesPanel.jsx').then((m) => ({ default: m.BranchesPanel })));
+// HR1: Settings → People (schedules, holidays, leave types, attendance rules). Lazy, like Fuel.
+const PeopleSettingsPanel = lazy(() => import('../People/PeopleSettingsPanel.jsx').then((m) => ({ default: m.PeopleSettingsPanel })));
 
 // v0.22.13: Settings is now tabbed. SETTINGS_TABS is the source of
 // truth for both the left rail (label + key) and the conditional
@@ -51,6 +54,8 @@ const SETTINGS_TABS = [
   // Fuel F1: thresholds, photo retention, vehicle types, phone set-up.
   // Offered on a client Mac only to a user with fuel.manage (tab filter below).
   { key: 'fuel',        label: 'Fuel' },
+  // HR1: offered on a client Mac only to a user with hr.manage (tab filter below).
+  { key: 'people',      label: 'People' },
   // Fixed Assets: offered on a client Mac only to who can use it (tab filter below).
   { key: 'assets',      label: 'Assets' },
   { key: 'branches',    label: 'Branches' },
@@ -281,6 +286,7 @@ export function Settings() {
               if (t.key === 'fuel') return hasCap(caps, 'fuel.manage');
               if (t.key === 'assets') return hasCap(caps, 'assets.manage') || canManageSystem;
               if (t.key === 'branches') return canManageSystem || hasCap(caps, 'assets.manage') || hasCap(caps, 'assets.view');
+              if (t.key === 'people') return hasCap(caps, 'hr.manage');
               // v0.1.86: the recycle bin is a data-folder operation like
               // backups — a client Mac may restore or purge, the server holds
               // the files. Same capability gate, for the same reason.
@@ -336,6 +342,10 @@ export function Settings() {
             <ClientModePanel config={config} patch={patch} />
           </div>
         )}
+
+        {/* HR1: this Mac as the shop's clock-in kiosk (renderer/modules/Kiosk). */}
+        <h2 className="section-title">Attendance kiosk</h2>
+        <KioskModePanel config={config} addToast={addToast} />
 
         {/* v0.26.32: migration section — applies in all three modes.
             Standalone Macs may want to move to a new machine; Server
@@ -685,6 +695,12 @@ export function Settings() {
         {tab === 'branches' && (!isClient || canManageSystem || hasCap(caps, 'assets.manage') || hasCap(caps, 'assets.view')) && (
           <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
             <BranchesPanel />
+          </Suspense>
+        )}
+
+        {tab === 'people' && (!isClient || hasCap(caps, 'hr.manage')) && (
+          <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
+            <PeopleSettingsPanel />
           </Suspense>
         )}
 

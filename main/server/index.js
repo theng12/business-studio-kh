@@ -612,8 +612,11 @@ async function handleRequest(req, res, dataDir) {
       );
       sendJson(res, 200, { result: serializeResultForWire(result) }, req);
     } catch (err) {
-      // Surface the error message but not the stack trace by default.
-      sendJson(res, 500, { error: err?.message || String(err) });
+      // Surface the error message but not the stack trace by default. A refusal
+      // a handler threw on purpose (main/util/userError.js) is 422, so a client
+      // can tell "the server said no" (do not retry) from "the server failed".
+      const { isUserFacing, USER_ERROR_STATUS } = require('../util/userError');
+      sendJson(res, isUserFacing(err) ? USER_ERROR_STATUS : 500, { error: err?.message || String(err) });
     }
     return;
   }

@@ -99,6 +99,16 @@ const AssetRegister = lazy(() => import('./modules/Assets/AssetRegister.jsx').th
 const AssetDepreciation = lazy(() => import('./modules/Assets/AssetDepreciation.jsx').then((m) => ({ default: m.AssetDepreciation })));
 const AssetTaxYear = lazy(() => import('./modules/Assets/AssetTaxYear.jsx').then((m) => ({ default: m.AssetTaxYear })));
 const AssetReports = lazy(() => import('./modules/Assets/AssetReports.jsx').then((m) => ({ default: m.AssetReports })));
+// HR1: People → attendance, review, corrections, overtime, lateness, leave.
+const Attendance = lazy(() => import('./modules/People/Attendance.jsx').then((m) => ({ default: m.Attendance })));
+const AttReview = lazy(() => import('./modules/People/Review.jsx').then((m) => ({ default: m.Review })));
+const AttCorrections = lazy(() => import('./modules/People/Corrections.jsx').then((m) => ({ default: m.Corrections })));
+const Overtime = lazy(() => import('./modules/People/Overtime.jsx').then((m) => ({ default: m.Overtime })));
+const Lateness = lazy(() => import('./modules/People/Lateness.jsx').then((m) => ({ default: m.Lateness })));
+const Leave = lazy(() => import('./modules/People/Leave.jsx').then((m) => ({ default: m.Leave })));
+// HR1: the attendance kiosk screen, previewed inside the app (hidden page; the
+// real kiosk is its own window — renderer/main.jsx #kiosk).
+const KioskPreview = lazy(() => import('./modules/Kiosk/KioskPreview.jsx').then((m) => ({ default: m.KioskPreview })));
 
 const PAGES = {
   home:      Home,
@@ -132,6 +142,13 @@ const PAGES = {
   assetdepreciation: AssetDepreciation,
   assettax: AssetTaxYear,
   assetreports: AssetReports,
+  attendance: Attendance,
+  attreview: AttReview,
+  attcorrections: AttCorrections,
+  overtime: Overtime,
+  lateness: Lateness,
+  leave: Leave,
+  kiosk: KioskPreview,
   history:   History,
   settings:  Settings,
   support:   Support,

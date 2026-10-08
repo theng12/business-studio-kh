@@ -15,6 +15,11 @@
  * purchase entered late into a closed month; ./assets-truth.json holds the independent model and the
  * check of the app's figures against it. `--assets --products 0` builds only that.
  * ./fuel-truth.json also holds the phone accounts' tokens (test accounts, like ./users.json).
+ * --hr (implies --fuel) adds HR1 on top of those staff (see seedHr below): schedules, PINs, ~3 months
+ * (`--hr-days N`, default 92) of kiosk, phone and supervisor clock-ins through the real /api/rpc server
+ * with a kiosk-only account, lateness, overtime (normal, night, day off, holiday), leave requests, a
+ * forgotten clock-out fixed by a correction, a buddy-punch attempt and a rejected supervisor mark;
+ * ./hr-truth.json lists them. `--hr --products 0` ≈ 1–2 min.
  *
  * Why: the UI crawl's test companies are nearly empty, so layout and speed problems that only show
  * with a real catalogue (≈2,500 products, ≈9,000 photos, Khmer names) slip through — 0.1.89 shipped a
@@ -56,10 +61,12 @@ const argVal = (name, dflt) => { const i = argv.indexOf(name); return i >= 0 ? N
 const N_PRODUCTS = argVal('--products', 2500);
 const IMG_SCALE = argVal('--images-scale', 1);
 const CONCURRENCY = argVal('--concurrency', 4);
-const FUEL = argv.includes('--fuel');
+const HR = argv.includes('--hr');
+const FUEL = argv.includes('--fuel') || HR; // --hr builds on the fuel dataset's 26 staff
 const FUEL_DAYS = argVal('--fuel-days', 183);
 const ASSETS = argv.includes('--assets');
 const ASSETS_START = (() => { const i = argv.indexOf('--assets-start'); return i >= 0 ? argv[i + 1] : '2025-01-01'; })();
+const HR_DAYS = argVal('--hr-days', 92);
 
 // ---- safety: never write outside this folder, never touch the owner's data ----
 function assertSafe(p) {
@@ -627,6 +634,11 @@ async function main() {
     t = realNow();
     report.counts.fuel = await seedFuel({ kt, report });
     mark('fuel', t);
+  }
+  if (HR) {
+    t = realNow();
+    report.counts.hr = await seedHr({ kt, report });
+    mark('hr', t);
   }
 
   // ---------------- fixed assets (opt-in) ----------------
@@ -1493,6 +1505,451 @@ async function seedFuel({ kt, report: seedReport }) {
   log(`fuel: ${stats.fills} fills, ${stats.dips} dips, ${stats.deliveries} deliveries, ${stats.transfers} transfers; full pass ${Math.round(fullPassMs)} ms`);
   seedReport.fuelTruth = 'fuel-truth.json';
   const { phoneAccounts: _p, managerToken: _m, ...forReport } = summary;
+  return forReport;
+}
+
+// ====================================================================================
+// HR1 (opt-in: --hr, implies --fuel)
+// ====================================================================================
+//
+// The fuel dataset's 26 staff, now with full profiles, four schedules (standard day,
+// shop, early farm shift, night guard past midnight), kiosk PINs, an opening leave
+// balance, and HR_DAYS days of attendance ending today — entered the way it would be:
+//   - the shop Mac's KIOSK account (attendance.kiosk only) over /api/rpc: tap tile → PIN
+//     → photo → clock, for everyone who works at the warehouse / shop;
+//   - drivers with phones and the farm manager clock THEMSELVES on their phones
+//     (attendance.self, a selfie, sometimes sent late after being offline);
+//   - the farm manager marks his crew in and out (attendance.supervise);
+//   - the office (this Mac's window = manager) reviews phone/supervisor entries every
+//     Monday, approves overtime and confirms lateness at each month start, decides leave
+//     and corrections, and runs the accrual job.
+// Planted (hr-truth.json): a forgotten clock-out fixed by a kiosk correction request;
+// a buddy-punch attempt (Touch Vuthy tries Vann Sokha's tile — PIN locks); a supervisor
+// marking a crew member who was not there (rejected on review); a supervisor trying to
+// mark someone outside his crew (refused); habitual lateness (Ly Visal); container
+// nights (night overtime), Sunday work (day-off overtime) and holiday work.
+
+async function seedHr({ kt }) {
+  const http = require('node:http');
+  const PP = 7 * 3600000;
+  const DAYMS = 86400000;
+  const hr = mulberry32((SEED ^ 0x0badc0de) >>> 0);
+  const hi = (a, b) => a + Math.floor(hr() * (b - a + 1));
+  const hchance = (p) => hr() < p;
+  const ppDate = (ms) => new Date(ms + PP).toISOString().slice(0, 10);
+  const ppMidnight = (ms) => Math.floor((ms + PP) / DAYMS) * DAYMS - PP;
+  const calc = require(path.join(REPO, 'main/util/attendanceCalc'));
+  const pinOk = require(path.join(REPO, 'main/util/kioskPin')).pinProblem;
+
+  // ---------- simulated clock (the server's clock decides every clock-in) ----------
+  let SIM = null;
+  Date.now = () => (SIM == null ? realNow() : SIM);
+  const NOW_REAL = realNow();
+  const LAST_DAY = ppMidnight(NOW_REAL);
+  const DAY0 = LAST_DAY - (HR_DAYS - 1) * DAYMS;
+  const STOP_AT = NOW_REAL - 10 * 60000;
+  const at = (d, hh, mm = 0) => DAY0 + d * DAYMS + (hh * 60 + mm) * 60000;
+  const dateOf = (d) => ppDate(DAY0 + d * DAYMS + 12 * 3600000);
+
+  // ---------- the app's handlers: local (Mac) and RPC (kiosk + phones) ----------
+  const ipcHandlers = new Map();
+  const electronPath = require.resolve('electron', { paths: [REPO] });
+  const prevElectron = require.cache[electronPath];
+  require.cache[electronPath] = {
+    id: electronPath, filename: electronPath, loaded: true,
+    exports: {
+      app: { getVersion: () => JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8')).version, getPath: () => USERDATA, isPackaged: false },
+      ipcMain: { handle: (ch, fn) => ipcHandlers.set(ch, fn), on() {}, removeHandler() {} },
+      BrowserWindow: { getAllWindows: () => [] },
+    },
+  };
+  // The fuel seed loaded the IPC helpers against its own electron stand-in; load them afresh.
+  const helpersPath = require.resolve(path.join(REPO, 'main/ipc/helpers'));
+  delete require.cache[helpersPath];
+  const helpers = require(helpersPath);
+  for (const m of ['staff', 'hr', 'attendance', 'kiosk', 'audit']) require(path.join(REPO, `main/ipc/${m}`)).register(helpers);
+  const server = require(path.join(REPO, 'main/server'));
+  const db = dbIndex.getDb();
+  const local = async (channel, args) => {
+    const fn = ipcHandlers.get(channel);
+    if (!fn) throw new Error(`no local handler ${channel}`);
+    return fn({}, args);
+  };
+  const port = await new Promise((resolve) => { const s = http.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+  await server.bootServer({ port, dataDir: DATA, wsHeartbeatMs: 60000 });
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  const enc = (v) => {
+    if (Buffer.isBuffer(v)) return { __bin: true, b64: v.toString('base64') };
+    if (Array.isArray(v)) return v.map(enc);
+    if (v && typeof v === 'object') { const o = {}; for (const k of Object.keys(v)) o[k] = enc(v[k]); return o; }
+    return v;
+  };
+  const rpc = (token, channel, args) => new Promise((resolve, reject) => {
+    const body = JSON.stringify({ channel, args: enc(args) });
+    const req = http.request({ host: '127.0.0.1', port, path: '/api/rpc', method: 'POST', agent,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        let j = null;
+        try { j = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (_) { /* below */ }
+        if (res.statusCode !== 200) reject(new Error(`${channel} → ${res.statusCode}: ${j?.error || 'no body'}`));
+        else resolve(j.result);
+      });
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+
+  // ---------- event queue on the simulated clock ----------
+  const queue = [];
+  let seq = 0;
+  const schedule = (t, fn, label = '') => {
+    const ev = { t, s: seq++, fn, label };
+    let lo = 0; let hiI = queue.length;
+    while (lo < hiI) { const m = (lo + hiI) >> 1; const q = queue[m]; if (q.t < t || (q.t === t && q.s < ev.s)) lo = m + 1; else hiI = m; }
+    queue.splice(lo, 0, ev);
+  };
+  const failures = [];
+  const expected = [];
+  const stats = { kiosk: 0, phone: 0, phoneQueued: 0, supervisor: 0, corrections: 0, leaveRequests: 0, leaveApproved: 0, leaveRejected: 0,
+    otApprovals: 0, latenessConfirmed: 0, reviewsAccepted: 0, reviewsRejected: 0, accrualRuns: 0 };
+  const truth = { generatedAt: new Date(NOW_REAL).toISOString(), days: HR_DAYS, from: dateOf(0), to: dateOf(HR_DAYS - 1), planted: {}, leave: [], accounts: {} };
+
+  // ---------- set-up on the Mac (two days before the first record) ----------
+  SIM = at(0, 5, 0) - 2 * DAYMS;
+  const companyId = kt.id;
+  const staff = await local('staff:list', {});
+  const E = Object.fromEntries(staff.map((e) => [e.staffCode, e]));
+  const allRoles = roles.list();
+  const phoneRole = allRoles.find((r) => r.name === 'Fuel phone');
+  const mgrRole = allRoles.find((r) => r.name === 'Fuel manager');
+  if (!phoneRole || !mgrRole) throw new Error('--hr needs the fuel dataset (its phone and manager roles)');
+  roles.update(phoneRole.key, { permissions: [...new Set([...phoneRole.permissions, 'attendance.self', 'attendance.supervise'])] });
+  roles.update(mgrRole.key, { permissions: [...new Set([...mgrRole.permissions, 'hr.manage', 'history.view'])] });
+  const kioskRole = roles.create({ name: 'Shop kiosk', description: 'The clock-in kiosk on the shop Mac (attendance.kiosk only)', permissions: ['attendance.kiosk'] });
+  const kioskUser = users.create({ name: 'Shop kiosk Mac', role: kioskRole.key });
+  const viewerRole = roles.create({ name: 'HR viewer', description: 'Attendance and leave, no ID / bank / photos', permissions: ['hr.view', 'history.view'] });
+  const viewerUser = users.create({ name: 'Meas Channary (accountant)', role: viewerRole.key });
+  await local('staff:update', { id: E.S024.id, patch: { userId: viewerUser.id } });
+  const userById = new Map(users.list().map((u) => [u.id, u]));
+  const tokenOf = (code) => (E[code]?.userId ? userById.get(E[code].userId)?.token : null);
+  truth.accounts = { kiosk: kioskUser.token, viewer: viewerUser.token, manager: tokenOf('S021') };
+
+  const settings = await local('hr:getSettings', {});
+  await local('hr:updateSettings', { accrualFromMonth: dateOf(0).slice(0, 7) });
+  const holidays = new Map((await local('hr:listHolidays', { from: dateOf(-1), to: dateOf(HR_DAYS + 1) })).map((h) => [h.date, h]));
+
+  // Positions + profiles.
+  const posByName = {};
+  for (const p of [...new Set(staff.map((e) => e.position).filter(Boolean))]) {
+    posByName[p] = await local('hr:createPosition', { nameEn: p, department: /Farm|Tractor/.test(p) ? 'Farm' : /Sales|Cashier|Office|Accountant/.test(p) ? 'Office & shop' : 'Warehouse & transport' });
+  }
+  const FEMALE = new Set(['S008', 'S012', 'S016', 'S018', 'S020', 'S021', 'S024', 'S026']);
+  for (const e of staff) {
+    const hireDate = e.staffCode === 'S009' ? ppDate(e.createdAt) : `${hi(2018, 2025)}-${String(hi(1, 12)).padStart(2, '0')}-${String(hi(1, 28)).padStart(2, '0')}`;
+    await local('hr:updateProfile', { id: e.id, patch: {
+      gender: FEMALE.has(e.staffCode) ? 'female' : 'male',
+      dob: `${hi(1975, 2004)}-${String(hi(1, 12)).padStart(2, '0')}-${String(hi(1, 28)).padStart(2, '0')}`,
+      address: `${hi(1, 300)} St. ${hi(100, 600)}, ${['Chbar Ampov', 'Meanchey', 'Sen Sok', 'Dangkao', 'Takhmao'][hi(0, 4)]}`,
+      nationalIdNo: String(hi(100000000, 999999999)), nssfNo: `NSSF-${hi(1000000, 9999999)}`,
+      bankName: 'ABA Bank', bankAccountName: (e.nameEn || '').toUpperCase(), bankAccountNo: `${hi(100, 999)} ${hi(100, 999)} ${hi(100, 999)}`,
+      positionId: e.position ? posByName[e.position].id : null, hireDate: e.leftOn && hireDate > e.leftOn ? '2020-01-06' : hireDate,
+      employmentType: ['S016', 'S017'].includes(e.staffCode) ? 'daily' : 'monthly',
+      supervisorEmployeeId: ['S014', 'S015', 'S016', 'S017'].includes(e.staffCode) ? E.S013.id : null,
+    } });
+  }
+
+  // Schedules.
+  const SCH = {
+    standard: settings.defaultScheduleId,
+    shop: (await local('hr:createSchedule', { name: 'Shop 08:00–17:30', startTime: '08:00', endTime: '17:30', breakMin: 60, workDays: '1111110', graceMin: 10 })).id,
+    farm: (await local('hr:createSchedule', { name: 'Farm early 06:00–15:00', startTime: '06:00', endTime: '15:00', breakMin: 60, workDays: '1111110', graceMin: 10 })).id,
+    night: (await local('hr:createSchedule', { name: 'Night guard 18:00–06:00', startTime: '18:00', endTime: '06:00', breakMin: 0, workDays: '1111111', graceMin: 10 })).id,
+  };
+  const schedOf = (code) => (['S018', 'S019', 'S020', 'S021', 'S024'].includes(code) ? 'shop' : ['S013', 'S014', 'S015', 'S016', 'S017'].includes(code) ? 'farm' : code === 'S025' ? 'night' : 'standard');
+  const schedules = Object.fromEntries((await local('hr:listSchedules', {})).map((s) => [s.id, s]));
+  for (const e of staff) {
+    if (e.status === 'left') continue;
+    await local('hr:assignSchedule', { employeeId: e.id, scheduleId: SCH[schedOf(e.staffCode)], effectiveFrom: dateOf(0) });
+  }
+
+  // Kiosk PINs and an opening annual-leave balance from the paper file.
+  const types = await local('leave:listTypes', {});
+  const T = Object.fromEntries(types.map((x) => [x.code, x.id]));
+  const PIN = {};
+  for (const e of staff) {
+    if (e.status === 'left') continue;
+    let pin;
+    do { pin = String(hi(1000, 9999)); } while (pinOk(pin));
+    PIN[e.staffCode] = pin;
+    await local('hr:setPin', { id: e.id, pin });
+    await local('leave:adjust', { employeeId: e.id, leaveTypeId: T.annual, days: hi(3, 9), note: 'Opening balance from the paper file' });
+  }
+
+  // Small photos: each person's face for the kiosk and a selfie.
+  const face = {};
+  for (const e of staff) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="150"><rect width="200" height="150" fill="#${hi(0x334455, 0xccbbaa).toString(16)}"/>`
+      + `<circle cx="100" cy="62" r="34" fill="#e7c9a9"/><text x="100" y="138" font-family="Helvetica" font-size="16" text-anchor="middle" fill="#fff">${e.staffCode}</text></svg>`;
+    face[e.staffCode] = await sharp(Buffer.from(svg)).jpeg({ quality: 70 }).toBuffer();
+  }
+
+  // ---------- who clocks how ----------
+  const PHONE = new Set(['S001', 'S002', 'S005', 'S006', 'S007', 'S013']);
+  const CREW = new Set(['S014', 'S015', 'S016', 'S017']);
+  const active = (code, date) => E[code] && (E[code].status !== 'left' || (E[code].leftOn && date <= E[code].leftOn));
+  const ref = (code) => `${code}-hr:${(seq + 1).toString(36)}-${hi(100000, 999999)}`;
+
+  async function kioskClock(code) {
+    const s = await rpc(kioskUser.token, 'kiosk:signIn', { employeeId: E[code].id, pin: PIN[code] });
+    const r = await rpc(kioskUser.token, 'kiosk:clock', { sessionToken: s.sessionToken, photo: face[code] });
+    await rpc(kioskUser.token, 'kiosk:signOut', { sessionToken: s.sessionToken });
+    stats.kiosk += 1;
+    return r;
+  }
+  async function phoneClock(code, queuedMs = 0) {
+    const r = await rpc(tokenOf(code), 'attendance:clockSelf', { photo: face[code], clientRef: ref(code), ...(queuedMs ? { queuedForMs: queuedMs } : {}) });
+    stats.phone += 1;
+    if (queuedMs) stats.phoneQueued += 1;
+    return r;
+  }
+  async function crewMark(code, withPhoto) {
+    const r = await rpc(tokenOf('S013'), 'attendance:markCrew', { employeeId: E[code].id, ...(withPhoto ? { photo: face[code] } : {}), clientRef: ref('S013') });
+    stats.supervisor += 1;
+    return r;
+  }
+  const clockFn = (code) => (PHONE.has(code) ? () => phoneClock(code) : CREW.has(code) ? () => crewMark(code, hchance(0.5)) : () => kioskClock(code));
+
+  // ---------- the plan ----------
+  const P = {
+    forgot: { code: 'S026', day: Math.round(HR_DAYS * 0.4) },
+    buddy: { victim: 'S010', by: 'S011', day: Math.round(HR_DAYS * 0.55) },
+    ghost: { code: 'S017', day: Math.round(HR_DAYS * 0.7) },
+    notCrew: { code: 'S012', day: Math.round(HR_DAYS * 0.3) },
+  };
+  const workDayOf = (code, d) => calc.isWorkDay(schedules[SCH[schedOf(code)]], dateOf(d)) && !holidays.has(dateOf(d));
+  const nextWorkDay = (code, d) => { let x = d; while (!workDayOf(code, x)) x += 1; return x; };
+  const LEAVE = [
+    { code: 'S020', type: 'annual', day: nextWorkDay('S020', 40), days: 3, askDay: 30, via: 'kiosk', approve: true },
+    { code: 'S002', type: 'sick', day: nextWorkDay('S002', 25), days: 1, askDay: 0, via: 'phone', approve: true },
+    { code: 'S018', type: 'annual', day: nextWorkDay('S018', 55), days: 1, half: 'am', askDay: 50, via: 'kiosk', approve: true },
+    { code: 'S022', type: 'annual', day: nextWorkDay('S022', 70), days: 2, askDay: 62, via: 'kiosk', approve: false },
+    { code: 'S016', type: 'annual', day: nextWorkDay('S016', 33), days: 1, askDay: 31, via: 'paper', approve: true },
+  ].filter((l) => l.day < HR_DAYS - 2);
+  const onLeave = new Map(); // `${code}:${d}` → 'full' | 'am'
+
+  for (const l of LEAVE) {
+    const fromDate = dateOf(l.day);
+    let toDate = fromDate;
+    for (let n = 1, x = l.day; n < l.days; ) { x += 1; if (workDayOf(l.code, x)) { n += 1; toDate = dateOf(x); } }
+    if (l.approve) for (let x = l.day; dateOf(x) <= toDate; x += 1) onLeave.set(`${l.code}:${x}`, l.half || 'full');
+    const askAt = l.askDay ? at(l.askDay, 12, 10) : at(l.day, 6, 30);
+    schedule(askAt, async () => {
+      const args = { leaveTypeId: T[l.type], fromDate, toDate, halfDay: l.half || null, reason: l.type === 'sick' ? 'Fever' : 'Family matter' };
+      let req;
+      if (l.via === 'kiosk') {
+        const s = await rpc(kioskUser.token, 'kiosk:signIn', { employeeId: E[l.code].id, pin: PIN[l.code] });
+        req = await rpc(kioskUser.token, 'kiosk:requestLeave', { sessionToken: s.sessionToken, ...args });
+        await rpc(kioskUser.token, 'kiosk:signOut', { sessionToken: s.sessionToken });
+      } else if (l.via === 'phone') {
+        req = await rpc(tokenOf(l.code), 'leave:requestSelf', args);
+      } else {
+        req = await local('leave:request', { employeeId: E[l.code].id, ...args });
+      }
+      stats.leaveRequests += 1;
+      schedule(Date.now() + (l.type === 'sick' ? 2.5 : 20) * 3600000, async () => {
+        await local('leave:decide', { id: req.id, decision: l.approve ? 'approve' : 'reject', note: l.approve ? null : 'Container week — please pick another week' });
+        if (l.approve) stats.leaveApproved += 1; else stats.leaveRejected += 1;
+      }, 'leave decision');
+      truth.leave.push({ code: l.code, type: l.type, fromDate, toDate, half: l.half || null, via: l.via, approved: l.approve, requestId: req.id });
+    }, 'leave request');
+  }
+
+  for (let d = 0; d < HR_DAYS; d += 1) {
+    const date = dateOf(d);
+    const dow = calc.weekdayMon0(date);
+    const holiday = holidays.get(date);
+    for (const e of staff) {
+      const code = e.staffCode;
+      if (!active(code, date) || !PIN[code]) continue;
+      const sch = schedules[SCH[schedOf(code)]];
+      const [sh, sm] = sch.startTime.split(':').map(Number);
+      const [eh, em] = sch.endTime.split(':').map(Number);
+      const startT = at(d, sh, sm);
+      let endT = at(d, eh, em);
+      if (endT <= startT) endT += DAYMS;
+      const lv = onLeave.get(`${code}:${d}`);
+      if (lv === 'full') continue;
+      let inT; let outT;
+      const warehouse = ['S012', 'S022', 'S026'].includes(code);
+      if (code === 'S025') {
+        inT = startT - hi(2, 12) * 60000; outT = endT + hi(0, 10) * 60000;            // every night, holidays too
+      } else if (holiday) {
+        if (!warehouse) continue;
+        inT = at(d, 8, hi(0, 10)); outT = at(d, 12, hi(0, 30));                      // holiday work → holiday OT
+      } else if (dow === 6) {
+        if (!(warehouse && Math.floor(d / 7) % 3 === 0)) continue;              // every third Sunday
+        inT = at(d, 8, hi(0, 10)); outT = at(d, 12, 30 + hi(0, 20));                 // a Sunday → day-off OT
+      } else if (!calc.isWorkDay(sch, date)) {
+        continue;
+      } else {
+        if (hchance(0.015) && !(P.ghost.code === code && P.ghost.day === d)) continue; // plain absence
+        const lateP = code === 'S019' ? 0.35 : 0.06;
+        inT = hchance(lateP) ? startT + hi(sch.graceMin + 3, 45) * 60000 : startT - hi(0, 15) * 60000;
+        if (lv === 'am') inT = at(d, 12, hi(0, 25));
+        outT = endT + hi(0, 12) * 60000;
+        if (hchance(0.03)) outT = endT - hi(15, 60) * 60000;                            // left early
+        if ((warehouse || /^S00\d$/.test(code)) && hchance(0.12)) outT = endT + hi(60, 180) * 60000; // overtime
+        if (warehouse && d % 30 === 12) outT = at(d, 22, 30 + hi(0, 20));                // container night
+      }
+      if (P.ghost.code === code && P.ghost.day === d) {
+        // Planted: the farm manager marks Nov Rotha present; he was not there.
+        schedule(inT, () => crewMark(code, false).then((r) => { truth.planted.ghost = { code, date, inEventId: r.event.id }; }), 'ghost in');
+        schedule(outT, () => crewMark(code, false).then((r) => { truth.planted.ghost.outEventId = r.event.id; }), 'ghost out');
+        continue;
+      }
+      if (P.buddy.victim === code && P.buddy.day === d) {
+        // Planted: Touch Vuthy tries his colleague's tile with guessed PINs (buddy punching) — the PIN locks.
+        schedule(startT - 8 * 60000, async () => {
+          const tries = [];
+          for (let i = 0; i < 5; i += 1) {
+            try { await rpc(kioskUser.token, 'kiosk:signIn', { employeeId: E[code].id, pin: String(1000 + hi(0, 8999)) }); tries.push('accepted?!'); } catch (err) { tries.push(err.message.replace(/^.*: /, '')); }
+          }
+          let blocked = null;
+          try { await kioskClock(code); } catch (err) { blocked = err.message.replace(/^.*: /, ''); }
+          expected.push({ what: 'buddy punch', date, tries, ownPinWhileLocked: blocked });
+          truth.planted.buddyPunch = { victim: code, by: P.buddy.by, date, tries, ownPinWhileLocked: blocked };
+        }, 'buddy punch');
+        schedule(startT + 15 * 60000, () => local('hr:unlockPin', E[code].id), 'manager unlocks');
+        schedule(startT + 18 * 60000, () => kioskClock(code), 'victim clocks in late');
+        schedule(outT, clockFn(code), 'out');
+        continue;
+      }
+      if (PHONE.has(code) && hchance(0.06)) {
+        const wait = hi(5, 50) * 60000; // no signal: the phone sends it later
+        schedule(inT + wait, () => phoneClock(code, wait), 'phone in (queued)');
+      } else {
+        schedule(inT, clockFn(code), 'in');
+      }
+      if (P.forgot.code === code && P.forgot.day === d) {
+        // Planted: forgets to clock out; next morning asks at the kiosk.
+        const nd = nextWorkDay(code, d + 1);
+        schedule(at(nd, 7, 30), async () => {
+          const s = await rpc(kioskUser.token, 'kiosk:signIn', { employeeId: E[code].id, pin: PIN[code] });
+          const c = await rpc(kioskUser.token, 'kiosk:requestCorrection', { sessionToken: s.sessionToken, workDate: date, outTime: '17:10', reason: 'I forgot to clock out' });
+          await rpc(kioskUser.token, 'kiosk:signOut', { sessionToken: s.sessionToken });
+          truth.planted.forgotClockOut = { code, date, correctionId: c.id };
+        }, 'forgot: request');
+        schedule(at(nd, 9, 40), async () => {
+          const res = await local('attendance:decideCorrection', { id: truth.planted.forgotClockOut.correctionId, decision: 'approve', note: 'Seen on the CCTV leaving at 17:10' });
+          truth.planted.forgotClockOut.eventId = res.events[0]?.id;
+          stats.corrections += 1;
+        }, 'forgot: approve');
+        continue;
+      }
+      schedule(outT, clockFn(code), 'out');
+    }
+
+    // Planted: the farm manager tries to mark someone who is not in his crew.
+    if (d === P.notCrew.day) {
+      schedule(at(d, 6, 20), async () => {
+        try { await crewMark(P.notCrew.code, false); expected.push({ what: 'not crew', error: 'accepted?!' }); } catch (err) {
+          expected.push({ what: 'not crew', date, error: err.message.replace(/^.*: /, '') });
+        }
+      }, 'not crew');
+    }
+
+    // Every Monday: the office reviews phone and supervisor entries.
+    if (dow === 0 && d > 0) {
+      schedule(at(d, 10, 0), async () => {
+        const list = await local('attendance:listReview', { status: 'pending', limit: 500 });
+        for (const ev of list.items) {
+          const ghost = truth.planted.ghost && [truth.planted.ghost.inEventId, truth.planted.ghost.outEventId].includes(ev.id);
+          await local('attendance:review', ghost
+            ? { id: ev.id, decision: 'reject', reason: 'Nov Rotha was not at the farm that day (seen at the market)' }
+            : { id: ev.id, decision: 'accept' });
+          if (ghost) stats.reviewsRejected += 1; else stats.reviewsAccepted += 1;
+        }
+      }, 'weekly review');
+    }
+
+    // The 2nd of the month: accrual job, overtime approvals and lateness for last month.
+    if (date.endsWith('-02')) {
+      schedule(at(d, 9, 0), async () => {
+        await local('hr:runJobs', {});
+        stats.accrualRuns += 1;
+        const month = calc.prevMonth(date.slice(0, 7));
+        const sum = await local('attendance:monthSummary', { month, withDays: true });
+        for (const row of sum.rows) {
+          for (const day of row.days || []) {
+            const ot = day.overtime;
+            if (!(ot.normal + ot.night + ot.restDay + ot.holiday)) continue;
+            const part = hchance(0.15);
+            const minutes = part ? { ...ot, normal: Math.floor(ot.normal / 30) * 15 } : ot;
+            await local('attendance:approveOvertime', { employeeId: row.employeeId, workDate: day.date, minutes, note: part ? 'Only part was asked for' : null });
+            stats.otApprovals += 1;
+          }
+          if (row.totals.lateMin > 0 || row.totals.earlyLeaveMin > 0) {
+            await local('attendance:confirmLateness', { employeeId: row.employeeId, month });
+            stats.latenessConfirmed += 1;
+          }
+        }
+      }, 'month start');
+    }
+
+    // Run the day (the night guard's 06:00 clock-out of this night runs with tomorrow).
+    const dayEnd = at(d + 1, 0, 0);
+    while (queue.length && queue[0].t < dayEnd) {
+      const ev = queue.shift();
+      if (ev.t > STOP_AT) { queue.length = 0; break; }
+      SIM = Math.max(SIM, ev.t);
+      try { await ev.fn(); } catch (err) { failures.push({ what: ev.label, at: ppDate(SIM), error: err.message }); }
+    }
+    if (SIM > STOP_AT) break;
+    if (d % 30 === 29) log(`hr: day ${d + 1}/${HR_DAYS} (${date}) — ${stats.kiosk} kiosk, ${stats.phone} phone, ${stats.supervisor} supervisor`);
+  }
+  while (queue.length && queue[0].t <= STOP_AT) {
+    const ev = queue.shift();
+    SIM = Math.max(SIM, ev.t);
+    try { await ev.fn(); } catch (err) { failures.push({ what: ev.label, at: ppDate(SIM), error: err.message }); }
+  }
+
+  // ---------- back to the real clock ----------
+  SIM = null;
+  Date.now = realNow;
+  await local('hr:runJobs', {});
+  const thisMonth = calc.ppMonth(realNow());
+  const q = (sql, ...a) => db.prepare(sql).all(...a);
+  const summary = {
+    from: truth.from, to: truth.to, ...stats,
+    eventsBySource: q('SELECT source, COUNT(*) n, SUM(voided_at IS NOT NULL) voided FROM attendance_events WHERE company_id = ? GROUP BY source', companyId),
+    reviewStatus: q("SELECT review_status, COUNT(*) n FROM attendance_events WHERE company_id = ? AND source IN ('phone', 'supervisor') GROUP BY review_status", companyId),
+    photos: db.prepare('SELECT COUNT(*) n FROM attendance_events WHERE company_id = ? AND photo_path IS NOT NULL').get(companyId).n,
+    leaveRequests: q('SELECT status, COUNT(*) n FROM leave_requests WHERE company_id = ? GROUP BY status', companyId),
+    ledger: q('SELECT kind, COUNT(*) n, ROUND(SUM(days), 2) days FROM leave_ledger WHERE company_id = ? GROUP BY kind', companyId),
+    overtimeApprovals: db.prepare('SELECT COUNT(*) n FROM overtime_approvals WHERE company_id = ? AND voided_at IS NULL').get(companyId).n,
+    latenessConfirmations: db.prepare('SELECT COUNT(*) n FROM lateness_confirmations WHERE company_id = ? AND voided_at IS NULL').get(companyId).n,
+    hrAuditRows: db.prepare("SELECT COUNT(*) n FROM audit_log WHERE sensitivity = 'hr'").get().n,
+    failures: failures.length,
+    expectedRefusals: expected,
+  };
+  const t0 = performance.now();
+  const lastMonthSum = await local('attendance:monthSummary', { month: calc.prevMonth(thisMonth) });
+  summary.monthSummaryMs = Math.round(performance.now() - t0);
+  summary.lastMonth = lastMonthSum.rows.map((r) => ({ code: r.staffCode, worked: r.totals.daysWorked, lateMin: r.totals.lateMin, absent: r.totals.absentDays,
+    ot: r.totals.overtimeComputed, otPending: r.totals.overtimePending, leave: r.totals.leaveDays, missingOut: r.totals.missingOutDays }));
+  truth.summary = summary;
+  truth.failures = failures.slice(0, 50);
+  truth.pins = PIN;
+  fs.writeFileSync(path.join(ROOT, 'hr-truth.json'), JSON.stringify(truth, null, 2));
+
+  await server.stopServer();
+  agent.destroy();
+  if (prevElectron) require.cache[electronPath] = prevElectron; else delete require.cache[electronPath];
+  if (failures.length) log(`hr: ${failures.length} call(s) refused — first: ${JSON.stringify(failures[0])}`);
+  log(`hr: ${stats.kiosk} kiosk, ${stats.phone} phone (${stats.phoneQueued} sent late), ${stats.supervisor} supervisor clock-ins; ${stats.otApprovals} OT approvals; month summary ${summary.monthSummaryMs} ms`);
+  const { lastMonth: _l, expectedRefusals: _e, ...forReport } = summary;
   return forReport;
 }
 

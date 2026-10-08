@@ -167,6 +167,10 @@ test('backend gaps the screens needed: filtered totals, staff tiles for asset ro
     assert.equal(allowedByCaps(new Set([cap]), 'staff:create'), false);
   }
   assert.equal(allowedByCaps(new Set(['assets.count']), 'staff:list'), false);
-  assert.match(read('main/ipc/staff.js'), /if \(callerCanManage\(\)\) return employees\.list/, 'only fuel.manage gets full records');
+  // HR1 narrows by level (main/ipc/hrAccess.js staffLevel): an assets.* caller is neither
+  // fuel.manage nor hr.*, so it gets tiles.
+  assert.match(read('main/ipc/staff.js'), /const level = staffLevel\(\);\s*if \(level !== 'tile'\) return employees\.list/, 'only fuel.manage / hr.* get more than tiles');
+  const levelFn = read('main/ipc/hrAccess.js').match(/function staffLevel\(\) \{[\s\S]*?\n\}/)[0];
+  assert.ok(!/assets\./.test(levelFn), 'asset roles never get a fuller level');
   assert.match(read('main/assetScheduler.js'), /emitAssetChange\('run', 'post', period, companyId\)/);
 });

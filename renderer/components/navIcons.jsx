@@ -404,6 +404,71 @@ function IconAssetReport({ className }) {
   );
 }
 
+// HR1 — Attendance: a clock face.
+function IconAttendance({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <circle cx="9" cy="9" r="6.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 5.2V9l2.6 1.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// HR1 — Review: a photo with a tick (compare and accept).
+function IconAttReview({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <rect x="2.5" y="3" width="10" height="9" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="7.5" cy="6.6" r="1.6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M4.6 12c.5-1.5 1.6-2.3 2.9-2.3s2.4.8 2.9 2.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M11.2 13.6l1.6 1.6 3-3.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// HR1 — Corrections: a pencil over a line.
+function IconAttCorrection({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M11.8 3.4l2.8 2.8-7.6 7.6-3.4.6.6-3.4 7.6-7.6z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M10.4 4.8l2.8 2.8" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2.5 15.5h13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// HR1 — Overtime: a clock with a plus.
+function IconOvertime({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M14.9 8.2A6 6 0 1 0 9.6 15" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M8.5 5v3.8l2.2 1.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M14 11.2v4.6M11.7 13.5h4.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// HR1 — Lateness: an hourglass.
+function IconLateness({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M4.5 2.5h9M4.5 15.5h9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M5.5 2.5c0 3 3.5 4.2 3.5 6.5S5.5 12.5 5.5 15.5M12.5 2.5c0 3-3.5 4.2-3.5 6.5s3.5 3.5 3.5 6.5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// HR1 — Leave: a calendar with one day marked.
+function IconLeave({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <rect x="2.5" y="3.5" width="13" height="12" rx="1.8" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2.5 7h13M6 2v3M12 2v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M8 9.8h2.6v2.6H8z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export const NAV_ICONS = {
   home: IconHome,
   products: IconProducts,
@@ -439,6 +504,12 @@ export const NAV_ICONS = {
   taxyear: IconTaxYear,
   assetreport: IconAssetReport,
   staff: IconStaff,
+  attendance: IconAttendance,
+  attreview: IconAttReview,
+  attcorrection: IconAttCorrection,
+  overtime: IconOvertime,
+  lateness: IconLateness,
+  leave: IconLeave,
   history: IconHistory,
   settings: IconSettings,
 };

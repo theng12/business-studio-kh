@@ -167,10 +167,12 @@ export const APP_MODULES = [
     icon: 'assets',
     badge: {
       caps: ['assets.view', 'assets.manage'],
-      // Drafts still without a cost + depreciation months due (ended, not posted).
+      // Drafts flagged as needing a cost (the backend `needs_cost` flag — the
+      // same definition as the register's "Needs a cost" filter) + depreciation
+      // months due (ended, not posted). Only the counts are needed, so one row.
       async load(api) {
-        const [drafts, runs] = await Promise.all([api.assets.list({ recordState: 'draft', limit: 500 }), api.assets.listRuns()]);
-        return assetsBadge({ needsCost: draftsWithoutCost(drafts) }, runs);
+        const [list, runs] = await Promise.all([api.assets.list({ limit: 1 }), api.assets.listRuns()]);
+        return assetsBadge(list?.counts, runs);
       },
       label: (n) => `${n} to do`,
       tone: 'amber',
@@ -187,15 +189,45 @@ export const APP_MODULES = [
     ],
   },
   {
-    // The thin staff list F1 needs; HR1 adds its pages to this module.
+    // HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §5.1, §10). Staff stays open to
+    // fuel.manage (the F1 list: no notes, no HR fields); everything else is
+    // hr.view (read) / hr.manage (act). The badge counts what waits for a
+    // manager: clock-ins to review + alerts, correction requests, leave requests.
     id: 'people',
     name: 'People',
-    description: 'Your staff list.',
+    description: 'Staff, attendance, overtime and leave.',
     icon: 'staff',
+    badge: {
+      caps: ['hr.view', 'hr.manage'],
+      async load(api) {
+        const [review, corrections, leave] = await Promise.all([
+          api.attendance.listReview({ status: 'pending', limit: 1 }),
+          api.attendance.listCorrections({ status: 'pending', limit: 1 }),
+          api.leave.listRequests({ status: 'pending', limit: 1 }),
+        ]);
+        const n = (v) => (Number.isFinite(v) ? v : 0);
+        return n(review?.total) + n(review?.alerts?.length) + n(corrections?.total) + n(leave?.total);
+      },
+      label: (n) => `${n} waiting`,
+      tone: 'amber',
+    },
     sections: [
       {
         pages: [
-          { id: 'staff', name: 'Staff', icon: 'staff', caps: ['fuel.manage'] },
+          { id: 'staff', name: 'Staff', icon: 'staff', caps: ['fuel.manage', 'hr.view', 'hr.manage'] },
+          { id: 'leave', name: 'Leave', icon: 'leave', caps: ['hr.view', 'hr.manage'] },
+          // HR1: the kiosk screen previewed in the app — reached from Settings → Multi-Mac.
+          { id: 'kiosk', name: 'Kiosk preview', icon: 'staff', caps: ['attendance.kiosk', 'hr.manage'], hidden: true },
+        ],
+      },
+      {
+        label: 'Attendance',
+        pages: [
+          { id: 'attendance', name: 'Attendance', icon: 'attendance', caps: ['hr.view', 'hr.manage'] },
+          { id: 'attreview', name: 'Review', icon: 'attreview', caps: ['hr.view', 'hr.manage'] },
+          { id: 'attcorrections', name: 'Corrections', icon: 'attcorrection', caps: ['hr.view', 'hr.manage'] },
+          { id: 'overtime', name: 'Overtime', icon: 'overtime', caps: ['hr.view', 'hr.manage'] },
+          { id: 'lateness', name: 'Lateness', icon: 'lateness', caps: ['hr.view', 'hr.manage'] },
         ],
       },
     ],
@@ -388,16 +420,8 @@ export function noCompanyReason(companyCount) {
 
 /* ── tile badges ──────────────────────────────────────────────────────── */
 
-/** Drafts with no cost yet (a vehicle that came from Fuel, a draft saved before the invoice was found). */
-export function draftsWithoutCost(list) {
-  const items = Array.isArray(list?.items) ? list.items : [];
-  const counted = items.filter((a) => a.recordState === 'draft' && a.costMinor == null).length;
-  // More drafts than one page: the flagged ones are at least a floor.
-  return (list?.total || 0) > items.length ? Math.max(counted, Number(list?.counts?.needsCost) || 0) : counted;
-}
-
 /**
- * The Assets tile's count and words: drafts still needing a cost, plus months
+ * The Assets tile's count and words: drafts flagged as needing a cost, plus months
  * whose depreciation is due (ended, not posted yet). `counts` is
  * `assets:list`'s counts, `runs` is `assets:listRuns`. Zero → null.
  */
