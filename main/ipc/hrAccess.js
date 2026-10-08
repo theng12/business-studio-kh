@@ -6,9 +6,14 @@
  *
  *   level 'full'       hr.manage, admin, or this Mac's own window (no caller —
  *                      not gated, as everywhere): every field.
- *   level 'directory'  hr.view or fuel.manage: the staff directory WITHOUT ID /
- *                      NSSF numbers, bank details, date of birth and address;
- *                      attendance without clock-in photos; no documents.
+ *   level 'directory'  hr.view: the staff directory WITHOUT ID / NSSF numbers,
+ *                      bank details, date of birth and address; attendance
+ *                      without clock-in photos; no documents.
+ *   level 'fuel'       fuel.manage without an HR capability: the F1 staff
+ *                      record only — no notes, no status reason, no HR field
+ *                      (review fix L2). staff:update ignores the notes from
+ *                      such a caller (it cannot see them, so it must not
+ *                      overwrite them).
  *   level 'tile'       anyone else allowed on the channel (fuel.record, the
  *                      kiosk): code, names, photo flag, position, status.
  */
@@ -25,8 +30,18 @@ function canViewHr() { return has(callerCaps(), 'hr.view', 'hr.manage'); }
 function staffLevel() {
   const caps = callerCaps();
   if (has(caps, 'hr.manage')) return 'full';
-  if (has(caps, 'hr.view', 'fuel.manage')) return 'directory';
+  if (has(caps, 'hr.view')) return 'directory';
+  if (has(caps, 'fuel.manage')) return 'fuel';
   return 'tile';
+}
+
+/** The F1 fields (fuel.manage's view), without notes. */
+const FUEL_FIELDS = ['id', 'companyId', 'staffCode', 'nameEn', 'nameKm', 'phone', 'hasPhoto', 'photoSha256', 'position', 'isDriver',
+  'isFuelAttendant', 'status', 'leftOn', 'leftReason', 'userId', 'createdAt', 'updatedAt', 'updatedByUserId'];
+function fuelView(e) {
+  const out = {};
+  for (const k of FUEL_FIELDS) if (k in e) out[k] = e[k];
+  return out;
 }
 
 /** What a recorder / kiosk needs for a tile — no phone number, notes, account link or HR fields. */
@@ -48,6 +63,7 @@ function forLevel(e, level = staffLevel()) {
   if (!e) return e;
   if (level === 'full') return e;
   if (level === 'directory') return directory(e);
+  if (level === 'fuel') return fuelView(e);
   return tile(e);
 }
 
@@ -71,4 +87,4 @@ function emitHrChange(kind, op, id, companyId) {
   } catch (_) { /* best effort */ }
 }
 
-module.exports = { canManageHr, canViewHr, staffLevel, tile, directory, forLevel, callerEmployee, emitHrChange };
+module.exports = { canManageHr, canViewHr, staffLevel, tile, directory, fuelView, forLevel, callerEmployee, emitHrChange, FUEL_FIELDS };

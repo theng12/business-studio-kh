@@ -50,31 +50,55 @@ test('year end: only the excess over the carry-over limit lapses', () => {
   assert.equal(L.sumLedger([{ days: 1.5 }, { days: 1.5 }, { days: -2 }, { days: 0.5 }]), 1.5);
 });
 
-test('kiosk PIN: weak PINs refused, scrypt round trip, 5 wrong tries lock for 10 minutes', () => {
+test('kiosk PIN: weak PINs refused, async scrypt round trip', async () => {
   assert.match(P.pinProblem('12'), /4 to 8 digits/);
   assert.match(P.pinProblem('1111'), /repeated/);
   assert.match(P.pinProblem('1234'), /straight run/);
   assert.match(P.pinProblem('9876'), /straight run/);
   assert.equal(P.pinProblem('4071'), null);
-  const { hash, salt } = P.hashPin('4071');
+  const pending = P.hashPin('4071');
+  assert.ok(pending instanceof Promise, 'hashing does not block the main thread');
+  const { hash, salt } = await pending;
   assert.notEqual(hash, '4071');
-  assert.equal(P.verifyPin('4071', hash, salt), true);
-  assert.equal(P.verifyPin('4072', hash, salt), false);
-  assert.notEqual(P.hashPin('4071').salt, salt, 'a new salt each time');
+  assert.equal(await P.verifyPin('4071', hash, salt), true);
+  assert.equal(await P.verifyPin('4072', hash, salt), false);
+  assert.notEqual((await P.hashPin('4071')).salt, salt, 'a new salt each time');
+});
 
+test('kiosk PIN: 5 wrong tries lock; locks double the same day; the third lock needs a manager', () => {
   const now = 1_000_000;
-  let s = { failedCount: 0 };
-  for (let i = 1; i <= 4; i += 1) {
-    s = P.afterAttempt({ correct: false, failedCount: s.failedCount, now });
-    assert.equal(s.locked, false);
-    assert.equal(s.triesLeft, 5 - i);
-  }
-  s = P.afterAttempt({ correct: false, failedCount: s.failedCount, now });
-  assert.equal(s.locked, true);
-  assert.equal(s.lockedUntil, now + 10 * 60 * 1000);
+  const base = { now, today: '2026-10-08', maxTries: 5, lockMinutes: 10, locksBeforeManager: 3 };
+  let s = { failedCount: 0, lockDay: null, locksToday: 0 };
+  const fail5 = () => {
+    for (let i = 1; i <= 5; i += 1) {
+      s = P.afterAttempt({ ...base, correct: false, failedCount: s.failedCount, lockDay: s.lockDay, locksToday: s.locksToday });
+      if (i < 5) assert.equal(s.triesLeft, 5 - i);
+    }
+    return s;
+  };
+  assert.equal(fail5().lockedUntil, now + 10 * 60 * 1000);
   assert.equal(P.lockState({ lockedUntil: s.lockedUntil, now: now + 60_000 }).locked, true);
   assert.equal(P.lockState({ lockedUntil: s.lockedUntil, now: now + 10 * 60 * 1000 + 1 }).locked, false);
-  assert.deepEqual(P.afterAttempt({ correct: true, failedCount: 3, now }), { failedCount: 0, lockedUntil: null, locked: false, triesLeft: 5 });
+  assert.equal(fail5().lockedUntil, now + 20 * 60 * 1000, 'second lock of the day: 20 min');
+  const third = fail5();
+  assert.equal(third.managerOnly, true);
+  assert.equal(P.lockState({ managerOnly: true, now: now + 365 * 86400e3 }).locked, true, 'only a manager unlocks it');
+  // A new day starts the escalation again; a correct PIN keeps the day's count.
+  assert.equal(P.afterAttempt({ ...base, today: '2026-10-09', correct: false, failedCount: 4, lockDay: '2026-10-08', locksToday: 2 }).lockedUntil, now + 10 * 60 * 1000);
+  assert.deepEqual(P.afterAttempt({ ...base, correct: true, failedCount: 3, lockDay: '2026-10-08', locksToday: 1 }).locksToday, 1);
+});
+
+test('kiosk-wide limit: 10 wrong PINs across staff in 10 min pause the kiosk', () => {
+  let st = { failures: [] };
+  let now = 0;
+  for (let i = 0; i < 9; i += 1) { const r = P.kioskFailure(st, { now: now += 30_000 }); st = r.state; assert.equal(r.cooldownStarted, false); }
+  const r = P.kioskFailure(st, { now: now += 30_000 });
+  assert.equal(r.cooldownStarted, true);
+  assert.equal(P.kioskCooldown(r.state, now + 60_000).cooling, true);
+  assert.equal(P.kioskCooldown(r.state, now + 5 * 60_000 + 1).cooling, false);
+  // Failures older than the window do not count.
+  let slow = { failures: [] };
+  for (let i = 0; i < 20; i += 1) { const x = P.kioskFailure(slow, { now: i * 120_000 }); slow = x.state; assert.equal(x.cooldownStarted, false); }
 });
 
 test('holiday prefill: 21 dates for 2026 from Sub-Decree 167; 2027 only fixed dates, no lunar ones', () => {

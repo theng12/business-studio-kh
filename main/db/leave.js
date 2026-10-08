@@ -182,9 +182,66 @@ function adjust({ companyId, employeeId, leaveTypeId, days, date = null, note })
   if (!str(note, 500)) throw badRequest('Say why the balance is adjusted');
   const d = date || calc.ppDate(Date.now());
   if (!calc.isDate(d)) throw badRequest('date must be a real date');
-  insertLedger(getDb(), { companyId, employeeId, leaveTypeId, date: d, kind: 'adjustment', days: Math.round(n * 100) / 100, note: str(note, 500) });
+  const db = getDb();
+  db.transaction(() => {
+    insertLedger(db, { companyId, employeeId, leaveTypeId, date: d, kind: 'adjustment', days: Math.round(n * 100) / 100, note: str(note, 500) });
+    afterLedgerChange(db, { companyId, employeeId, leaveTypeId, date: d });
+  })();
   hrAudit('leave_ledger', employeeId, 'adjust', { after: { leaveType: t.code, days: n, date: d, note: str(note, 500) } });
   return { balance: balanceOf(employeeId, leaveTypeId) };
+}
+
+/* ─── year-end expiry, kept true (review fix M1) ──────────────── */
+
+const FIX_PERIOD = (y) => `${y}-expiry-fix`;
+
+/**
+ * Make every ENDED year's expiry match the ledger as it is now. A row dated on
+ * or before 31 Dec Y that is written after Y's expiry (December leave approved
+ * in January, a cancellation, a back-dated adjustment, a late accrual) changes
+ * what should have lapsed. The original expiry row is never edited: the
+ * difference is written as an `adjustment` with period 'Y-expiry-fix', dated
+ * 31 Dec Y. Effective expiry = expiry row + its fixes; desired = max(0,
+ * balance before the expiry − carryOverMax). Idempotent; years in order,
+ * because one year's lapse changes the next year's starting balance.
+ * Returns the number of rows written.
+ */
+function reconcileExpiries(db, { companyId, employeeId, type, fromYear, thisYear }) {
+  if (!type.tracksBalance || type.carryOverMax == null) return 0;
+  let written = 0;
+  for (let y = Number(fromYear); y < Number(thisYear); y += 1) {
+    const period = String(y);
+    const before = db.prepare(`SELECT COALESCE(SUM(days), 0) AS b FROM leave_ledger WHERE employee_id = ? AND leave_type_id = ? AND date <= ?
+       AND NOT (kind = 'expiry' AND COALESCE(period, '') = ?) AND NOT (kind = 'adjustment' AND COALESCE(period, '') = ?)`).get(employeeId, type.id, `${y}-12-31`, period, FIX_PERIOD(y)).b;
+    const desired = -leaveCalc.expiryAtYearEnd({ balance: Math.round(before * 100) / 100, carryOverMax: type.carryOverMax });
+    const expiryRow = db.prepare("SELECT days FROM leave_ledger WHERE employee_id = ? AND leave_type_id = ? AND kind = 'expiry' AND period = ?").get(employeeId, type.id, period);
+    if (!expiryRow) {
+      if (desired < 0 && insertLedger(db, { companyId, employeeId, leaveTypeId: type.id, date: `${y}-12-31`, kind: 'expiry', days: desired, period, note: `Over the carry-over limit of ${type.carryOverMax} day(s)`, by: null })) written += 1;
+      continue;
+    }
+    const fixes = db.prepare("SELECT COALESCE(SUM(days), 0) AS d FROM leave_ledger WHERE employee_id = ? AND leave_type_id = ? AND kind = 'adjustment' AND period = ?").get(employeeId, type.id, FIX_PERIOD(y)).d;
+    const delta = Math.round((desired - (expiryRow.days + fixes)) * 100) / 100;
+    if (Math.abs(delta) >= 0.01) {
+      insertLedger(db, { companyId, employeeId, leaveTypeId: type.id, date: `${y}-12-31`, kind: 'adjustment', days: delta, period: FIX_PERIOD(y),
+        note: `Year-end ${y} expiry recalculated after a later change dated in ${y}`, by: null });
+      written += 1;
+    }
+  }
+  return written;
+}
+
+/** After a ledger row dated `date` changed for one person + type: fix the ended years from that year on. */
+function afterLedgerChange(db, { companyId, employeeId, leaveTypeId, date }) {
+  const t = getType(leaveTypeId);
+  if (!t || !date) return 0;
+  return reconcileExpiries(db, { companyId, employeeId, type: t, fromYear: date.slice(0, 4), thisYear: calc.ppDate(Date.now()).slice(0, 4) });
+}
+
+/** The attendance of the leave's past dates changed (absence, lateness) — see attendance.touchDate. */
+function touchLeaveDates(r, why) {
+  const today = calc.ppDate(Date.now());
+  const att = require('./attendance');
+  for (let d = r.fromDate; d <= r.toDate && d <= today; d = calc.addDays(d, 1)) att.touchDate(r.employeeId, d, why);
 }
 
 /* ─── requests ────────────────────────────────────────────────── */
@@ -259,10 +316,12 @@ function decide(id, { decision, note = null, allowNegative = false } = {}) {
         if (bal - days < -1e-9) throw badRequest(`Not enough ${t.nameEn || t.code}: balance ${bal} day(s), request ${days}. Approve anyway with allowNegative if agreed.`);
       }
       insertLedger(db, { companyId: r.companyId, employeeId: r.employeeId, leaveTypeId: t.id, date: r.fromDate, kind: 'taken', days: -days, requestId: id, note: `${r.fromDate}${r.toDate !== r.fromDate ? ` – ${r.toDate}` : ''}` });
+      afterLedgerChange(db, { companyId: r.companyId, employeeId: r.employeeId, leaveTypeId: t.id, date: r.fromDate });
     }
     db.prepare('UPDATE leave_requests SET status = ?, days = ?, decided_by_user_id = ?, decided_at = ?, decision_note = ?, updated_at = ? WHERE id = ?')
       .run(decision === 'approve' ? 'approved' : 'rejected', days, getCallerUserId(), now, str(note, 1000), now, id);
   })();
+  if (decision === 'approve') touchLeaveDates(r, 'Leave was approved for this day');
   hrAudit('leave_request', id, decision, { before: { status: 'pending' }, after: { status: decision === 'approve' ? 'approved' : 'rejected', days, note: str(note, 1000) } });
   return getRequest(id);
 }
@@ -278,10 +337,14 @@ function cancel(id, { reason = null, onlyPending = false } = {}) {
   const now = Date.now();
   db.transaction(() => {
     if (r.status === 'approved') {
-      insertLedger(db, { companyId: r.companyId, employeeId: r.employeeId, leaveTypeId: r.leaveTypeId, date: calc.ppDate(now), kind: 'adjustment', days: r.days, requestId: id, note: `Cancelled: ${str(reason, 400)}` });
+      // Dated like the `taken` row it reverses, so a year's balance (and its
+      // year-end expiry) sees the leave as never taken.
+      insertLedger(db, { companyId: r.companyId, employeeId: r.employeeId, leaveTypeId: r.leaveTypeId, date: r.fromDate, kind: 'adjustment', days: r.days, requestId: id, note: `Cancelled: ${str(reason, 400)}` });
+      afterLedgerChange(db, { companyId: r.companyId, employeeId: r.employeeId, leaveTypeId: r.leaveTypeId, date: r.fromDate });
     }
     db.prepare("UPDATE leave_requests SET status = 'cancelled', cancelled_at = ?, cancel_reason = ?, updated_at = ? WHERE id = ?").run(now, str(reason, 500), now, id);
   })();
+  if (r.status === 'approved') touchLeaveDates(r, 'Approved leave was cancelled');
   hrAudit('leave_request', id, 'cancel', { before: { status: r.status }, after: { status: 'cancelled', reason: str(reason, 500) } });
   return getRequest(id);
 }
@@ -348,15 +411,9 @@ function runAccruals(companyId, { now = Date.now() } = {}) {
             if (insertLedger(db, { companyId, employeeId: e.id, leaveTypeId: t.id, date: row.date, kind: 'accrual', days: row.days, period: row.period, note: `Yearly allowance ${row.period}`, by: null })) res.granted += 1;
           }
         }
-        if (t.tracksBalance && t.carryOverMax != null) {
-          for (let y = Number(fromMonth.slice(0, 4)); y < Number(thisYear); y += 1) {
-            const period = String(y);
-            if (db.prepare("SELECT 1 FROM leave_ledger WHERE employee_id = ? AND leave_type_id = ? AND kind = 'expiry' AND period = ?").get(e.id, t.id, period)) continue;
-            const bal = balanceOf(e.id, t.id, { asOf: `${y}-12-31` });
-            const lapse = leaveCalc.expiryAtYearEnd({ balance: bal, carryOverMax: t.carryOverMax });
-            if (lapse > 0 && insertLedger(db, { companyId, employeeId: e.id, leaveTypeId: t.id, date: `${y}-12-31`, kind: 'expiry', days: -lapse, period, note: `Over the carry-over limit of ${t.carryOverMax} day(s)`, by: null })) res.expired += 1;
-          }
-        }
+        // Year-end expiry for every ended year — written once, then kept true
+        // (a later change dated in that year writes a compensating adjustment).
+        res.expired += reconcileExpiries(db, { companyId, employeeId: e.id, type: t, fromYear: fromMonth.slice(0, 4), thisYear });
       }
     }
   })();
@@ -369,5 +426,5 @@ module.exports = {
   ensureDefaultTypes, listTypes, getType, createType, updateType,
   listLedger, balanceOf, balances, adjust,
   getRequest, createRequest, decide, cancel, listRequests, approvedLeaveByDate, countDays,
-  runAccruals,
+  runAccruals, reconcileExpiries,
 };

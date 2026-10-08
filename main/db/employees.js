@@ -136,16 +136,10 @@ function checkUser(userId, companyId = null, employeeId = null) {
   return userId;
 }
 
-/** HR1: keep users.employee_id in step with employees.user_id (the source of truth). */
-function syncUserLink(employeeId, previousUserId, nextUserId) {
-  const db = getDb();
-  try {
-    if (previousUserId && previousUserId !== nextUserId) {
-      db.prepare('UPDATE users SET employee_id = NULL WHERE id = ? AND employee_id = ?').run(previousUserId, employeeId);
-    }
-    if (nextUserId) db.prepare('UPDATE users SET employee_id = ? WHERE id = ?').run(employeeId, nextUserId);
-  } catch (_) { /* the mirror is informational; employees.user_id decides */ }
-}
+/*
+ * users.employee_id (added by main/db/hrSchema.js) is deliberately NOT kept in step: the link is
+ * employees.user_id, per company, and one account may be staff in two companies (review fix L4).
+ */
 
 function create(input = {}) {
   const companyId = input.companyId;
@@ -177,7 +171,6 @@ function create(input = {}) {
     now,
     by: getCallerUserId(),
   });
-  syncUserLink(id, null, input.userId ?? null);
   const created = get(id);
   audit('employee', id, 'create', { after: redact(created) });
   return created;
@@ -222,7 +215,6 @@ function update(id, rawPatch = {}) {
   params.updatedAt = nextUpdatedAt(existing.updatedAt);
   params.by = getCallerUserId();
   getDb().prepare(`UPDATE employees SET ${sets.join(', ')} WHERE id = @id`).run(params);
-  if ('userId' in changed) syncUserLink(id, existing.userId, changed.userId);
   const diff = require('./auditLog').diffPatch(existing, changed);
   if (diff) audit('employee', id, 'update', { before: redact(diff.before), after: redact(diff.after) });
   return get(id);
@@ -303,20 +295,60 @@ function updateHrProfile(id, rawPatch = {}) {
   return get(id);
 }
 
-/** Suspend or bring back from suspension (left is markLeft / reactivate). */
-function setStatus(id, status, reason = null) {
+/**
+ * Suspend (from a date, today by default, optionally to a date) or bring back
+ * from suspension. Each suspension is a dated row in employee_suspensions, so a
+ * suspended day reads "suspended" in attendance, never "absent" (left is
+ * markLeft / reactivate).
+ */
+function setStatus(id, status, reason = null, { fromDate = null, toDate = null } = {}) {
   const existing = get(id);
   if (!existing) throw badRequest('Staff member not found');
   if (!['active', 'suspended'].includes(status)) throw badRequest('Status must be active or suspended (use Mark as left for someone leaving)');
   if (existing.status === 'left') throw badRequest('This person has left — reactivate them first');
   if (existing.status === status) return existing;
-  if (status === 'suspended' && !str(reason, 500)) throw badRequest('Say why the person is suspended');
-  getDb().prepare('UPDATE employees SET status = ?, status_reason = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ?')
-    .run(status, status === 'suspended' ? str(reason, 500) : null, nextUpdatedAt(existing.updatedAt), getCallerUserId(), id);
+  const today = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 10);
+  for (const [label, v] of [['fromDate', fromDate], ['toDate', toDate]]) {
+    if (v != null && !isCalendarDate(v)) throw badRequest(`${label} must be a real date like 2026-10-08`);
+  }
+  const db = getDb();
+  const by = getCallerUserId();
+  const now = Date.now();
+  db.transaction(() => {
+    if (status === 'suspended') {
+      if (!str(reason, 500)) throw badRequest('Say why the person is suspended');
+      const from = fromDate || today;
+      if (toDate && toDate < from) throw badRequest('The suspension cannot end before it starts');
+      db.prepare('INSERT INTO employee_suspensions (id, company_id, employee_id, from_date, to_date, reason, created_by_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(uuid(), existing.companyId, id, from, toDate, str(reason, 500), by, now);
+    } else {
+      // Back from today (or the day after `toDate`): the open suspension ends the day before.
+      const end = toDate || new Date(Date.now() + 7 * 3600e3 - 86400e3).toISOString().slice(0, 10);
+      db.prepare('UPDATE employee_suspensions SET to_date = ?, ended_by_user_id = ?, ended_at = ? WHERE employee_id = ? AND to_date IS NULL')
+        .run(end, by, now, id);
+    }
+    db.prepare('UPDATE employees SET status = ?, status_reason = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ?')
+      .run(status, status === 'suspended' ? str(reason, 500) : null, nextUpdatedAt(existing.updatedAt), by, id);
+  })();
   audit('employee', id, status === 'suspended' ? 'suspend' : 'unsuspend', {
-    before: { status: existing.status }, after: { status, reason: str(reason, 500) }, sensitivity: 'hr',
+    before: { status: existing.status }, after: { status, reason: str(reason, 500), fromDate, toDate }, sensitivity: 'hr',
   });
   return get(id);
+}
+
+/** Suspension ranges per employee: Map<employeeId, [{ from, to|null }]>. */
+function suspensionsByEmployee(companyId) {
+  const out = new Map();
+  for (const r of getDb().prepare('SELECT employee_id, from_date, to_date FROM employee_suspensions WHERE company_id = ? ORDER BY from_date').all(companyId)) {
+    if (!out.has(r.employee_id)) out.set(r.employee_id, []);
+    out.get(r.employee_id).push({ from: r.from_date, to: r.to_date });
+  }
+  return out;
+}
+
+function listSuspensions(employeeId) {
+  return getDb().prepare('SELECT * FROM employee_suspensions WHERE employee_id = ? ORDER BY from_date DESC').all(employeeId)
+    .map((r) => ({ id: r.id, fromDate: r.from_date, toDate: r.to_date, reason: r.reason, createdByUserId: r.created_by_user_id, createdAt: r.created_at, endedAt: r.ended_at }));
 }
 
 /** Mark someone as having left. Never deletes; their records keep their name. */
@@ -340,6 +372,8 @@ function reactivate(id) {
   getDb().prepare(`UPDATE employees SET status = 'active', left_on = NULL, left_reason = NULL,
       end_date = CASE WHEN end_date = ? THEN NULL ELSE end_date END, status_reason = NULL, updated_at = ?, updated_by_user_id = ? WHERE id = ?`)
     .run(existing.leftOn, nextUpdatedAt(existing.updatedAt), getCallerUserId(), id);
+  getDb().prepare('UPDATE employee_suspensions SET to_date = ?, ended_by_user_id = ?, ended_at = ? WHERE employee_id = ? AND to_date IS NULL')
+    .run(new Date(Date.now() + 7 * 3600e3 - 86400e3).toISOString().slice(0, 10), getCallerUserId(), Date.now(), id);
   audit('employee', id, 'reactivate', { before: { status: existing.status, leftOn: existing.leftOn }, after: { status: 'active' } });
   return get(id);
 }
@@ -354,6 +388,6 @@ function setPhoto(id, { relPath, sha256 }) {
 }
 
 module.exports = {
-  list, get, getRow, getByUserId, create, update, updateHrProfile, setStatus, markLeft, reactivate, setPhoto, rowToEmployee,
+  list, get, getRow, getByUserId, create, update, updateHrProfile, setStatus, suspensionsByEmployee, listSuspensions, markLeft, reactivate, setPhoto, rowToEmployee,
   STATUSES, GENDERS, EMPLOYMENT_TYPES, SENSITIVE_FIELDS, HR_EDITABLE,
 };

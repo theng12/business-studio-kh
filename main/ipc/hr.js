@@ -126,6 +126,7 @@ function register({ expose, exposeLocal }) {
       position: e.positionId ? hr.getPosition(e.positionId) : null,
       positionText: e.position,
       schedules: hr.listEmployeeSchedules(id),
+      suspensions: level === 'tile' ? undefined : employees.listSuspensions(id).map((x) => (level === 'full' ? x : { fromDate: x.fromDate, toDate: x.toDate })),
       documents: level === 'full' ? people.listDocuments(id).length : undefined,
     };
   });
@@ -136,19 +137,19 @@ function register({ expose, exposeLocal }) {
     emitHrChange('staff', 'update', id, e.companyId);
     return next;
   });
-  expose('hr:setStatus', ({ id, status, reason = null } = {}) => {
+  expose('hr:setStatus', ({ id, status, reason = null, fromDate = null, toDate = null } = {}) => {
     company();
     const e = staffMember(id);
-    const next = employees.setStatus(id, status, reason);
+    const next = employees.setStatus(id, status, reason, { fromDate, toDate });
     emitHrChange('staff', 'update', id, e.companyId);
     return next;
   });
 
   /* ─── kiosk PINs (managers) ─── */
-  expose('hr:setPin', ({ id, pin } = {}) => {
+  expose('hr:setPin', async ({ id, pin } = {}) => {
     company();
     const e = staffMember(id);
-    const next = people.setPin(id, pin);
+    const next = await people.setPin(id, pin);
     emitHrChange('staff', 'update', id, e.companyId);
     return { id, hasPin: next.hasPin };
   });
@@ -185,7 +186,7 @@ function register({ expose, exposeLocal }) {
     if (!row) throw new Error('Document not found');
     activeCompanyId(row.company_id);
     const out = await require('../hrPhotos').readHrFile(row.file_path, { thumb: thumb === true && row.mime !== 'application/pdf', expectedSha256: row.sha256, mime: row.mime });
-    require('../db/hr').hrAudit('hr_document', id, 'read', {});
+    require('../db/_fuelUtil').audit('hr_document', id, 'read', { sensitivity: 'hr_private' });
     return { bytes: out.bytes, mime: out.mime, sha256: row.sha256, intact: out.intact, kind: row.kind, title: row.title, voided: !!row.voided_at };
   });
   expose('hr:voidDocument', ({ id, reason } = {}) => {

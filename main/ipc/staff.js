@@ -7,15 +7,30 @@
  *   staff:me                                   the same, or attendance.self / attendance.supervise
  *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage or hr.manage
  * HR1: what comes back depends on the caller (main/ipc/hrAccess.js): hr.manage
- * the full record, hr.view / fuel.manage the directory (no ID / NSSF / bank /
- * date of birth / address), a recorder the tile. The HR profile fields
+ * the full record, hr.view the directory (no ID / NSSF / bank / date of birth /
+ * address), fuel.manage the F1 record without notes, a recorder the tile. Only
+ * hr.manage may link a record to an app account (userId). The HR profile fields
  * themselves are edited through hr:updateProfile (hr.manage).
  */
 
 const employees = require('../db/employees');
 const fuelPhotos = require('../fuelPhotos');
 const { activeCompanyId, inCompany, emitFuelChange, getCallerUserId } = require('./fuelAccess');
-const { tile, forLevel, staffLevel } = require('./hrAccess');
+const { tile, forLevel, staffLevel, canManageHr, canViewHr } = require('./hrAccess');
+
+/**
+ * Review fixes M5 / L2: linking a staff record to an app account decides who
+ * a phone clocks in as, so only hr.manage may set or change `userId`; a caller
+ * who cannot see the notes (fuel.manage alone) cannot overwrite them either.
+ */
+function guardStaffInput(input, existing = null) {
+  const out = { ...(input || {}) };
+  if ('userId' in out && (out.userId ?? null) !== (existing?.userId ?? null) && !canManageHr()) {
+    throw new Error('Only someone who manages HR (hr.manage) can link a staff record to an app account');
+  }
+  if ('notes' in out && !canViewHr()) delete out.notes;
+  return out;
+}
 
 function register({ expose }) {
   expose('staff:list', (filters = {}) => {
@@ -45,14 +60,14 @@ function register({ expose }) {
 
   expose('staff:create', (input = {}) => {
     const companyId = activeCompanyId(input.companyId);
-    const created = employees.create({ ...input, companyId });
+    const created = employees.create({ ...guardStaffInput(input), companyId });
     emitFuelChange('staff', 'create', created.id, companyId);
     return forLevel(created);
   });
 
   expose('staff:update', ({ id, patch } = {}) => {
     const e = inCompany(employees.get(id), 'Staff member');
-    const next = employees.update(id, patch || {});
+    const next = employees.update(id, guardStaffInput(patch, e));
     emitFuelChange('staff', 'update', id, e.companyId);
     return forLevel(next);
   });

@@ -144,15 +144,28 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   await fails(manager.token, 'hr:setPin', { id: B.id, pin: '1234' }, 500, /straight run/);
   const tiles = await ok(kioskUser.token, 'kiosk:tiles');
   const tileA = tiles.find((x) => x.id === A.id);
-  assert.deepEqual(Object.keys(tileA).sort(), ['hasPhoto', 'hasPin', 'id', 'isManager', 'nameEn', 'nameKm', 'photoSha256']);
-  assert.equal(tiles.find((x) => x.id === M.id).isManager, true);
-  assert.equal(tileA.isManager, false);
+  assert.deepEqual(Object.keys(tileA).sort(), ['hasPhoto', 'hasPin', 'id', 'nameEn', 'nameKm', 'photoSha256'], 'tiles never say who is a manager');
   assert.equal(await ok(kioskUser.token, 'kiosk:tilePhoto', { id: A.id }), null);
 
   // Buddy-punch attempt: someone tries C's tile with guessed PINs → locked after 5.
   for (let i = 0; i < 4; i += 1) await fails(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '0000' }, 500, /Wrong PIN/);
   await fails(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '0000' }, 500, /Locked for 10 min/);
   await fails(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '3958' }, 500, /Too many wrong PINs/);
+  await ok(manager.token, 'hr:unlockPin', C.id);
+  await ok(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '3958' });
+  // Locks escalate the same day: the 2nd lock is 20 min, the 3rd needs a manager.
+  for (let i = 0; i < 4; i += 1) await fails(kiosk2.token, 'kiosk:signIn', { employeeId: C.id, pin: '0001' }, 500, /Wrong PIN/);
+  await fails(kiosk2.token, 'kiosk:signIn', { employeeId: C.id, pin: '0001' }, 500, /Locked for 20 min/);
+  await ok(manager.token, 'hr:unlockPin', C.id);
+  for (let i = 0; i < 4; i += 1) await fails(kiosk2.token, 'kiosk:signIn', { employeeId: C.id, pin: '0002' }, 500, /Wrong PIN/);
+  await fails(kiosk2.token, 'kiosk:signIn', { employeeId: C.id, pin: '0002' }, 500, /only a manager can unlock/);
+  // …and that was kiosk2's 10th wrong PIN in 10 minutes across staff: the kiosk pauses PIN entry.
+  await fails(kiosk2.token, 'kiosk:signIn', { employeeId: A.id, pin: '4071' }, 500, /paused/);
+  await fails(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '3958' }, 500, /Only a manager can unlock/);
+  const alertList = (await ok(manager.token, 'attendance:listReview', {})).alerts;
+  assert.equal(alertList.filter((a) => a.kind === 'pin_locked' && a.employeeId === C.id).length, 3);
+  assert.equal(alertList.filter((a) => a.kind === 'kiosk_paused').length, 1);
+  assert.equal((await ok(manager.token, 'attendance:ackAlert', { id: alertList[0].id })).status, 'seen');
   await ok(manager.token, 'hr:unlockPin', C.id);
   await ok(kioskUser.token, 'kiosk:signIn', { employeeId: C.id, pin: '3958' });
 
@@ -211,7 +224,15 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   assert.ok(queued.duplicate || queued.event.at > selfIn.event.at, 'never at or before the last event');
   const outNow = await ok(phoneUser.token, 'attendance:clockSelf', { photo, clientRef: 'phone-dara:0003' });
   assert.equal(outNow.duplicate, false);
-  assert.equal(db.getDb().prepare('SELECT employee_id FROM users WHERE id = ?').get(phoneUser.id).employee_id, P.id, 'users.employee_id mirrors the link');
+  // A record that waited > 15 min is HELD: listed, explained, not counted until accepted.
+  const dayP = async () => (await ok(manager.token, 'attendance:day', { date: selfIn.event.workDate })).rows.find((r) => r.employeeId === P.id);
+  assert.notEqual((await dayP()).firstIn, selfIn.event.at, 'held — not counted');
+  const heldItem = (await ok(manager.token, 'attendance:listReview', { employeeId: P.id })).items.find((x) => x.id === selfIn.event.id);
+  assert.equal(heldItem.held, true);
+  assert.match(heldItem.explanation, /not counted until you accept it/);
+  await ok(manager.token, 'attendance:review', { id: selfIn.event.id, decision: 'accept' });
+  assert.equal((await dayP()).firstIn, selfIn.event.at, 'counted once accepted');
+  assert.equal(db.getDb().prepare('SELECT employee_id FROM users WHERE id = ?').get(phoneUser.id).employee_id, null, 'users.employee_id is not written (the link is employees.user_id, per company)');
   await assert.rejects(async () => employees.create({ companyId: company.id, staffCode: 'X9', nameEn: 'Twin', userId: phoneUser.id }), /already linked/);
   const mine = await ok(phoneUser.token, 'attendance:mine');
   assert.equal(mine.employee.id, P.id);
@@ -232,9 +253,9 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
 
   /* ─── review list ─── */
   const queue = await ok(viewer.token, 'attendance:listReview', {});
-  assert.equal(queue.items.find((x) => x.id === selfIn.event.id).queuedLong, true, 'a 12 h offline wait is pointed out to the reviewer');
   assert.equal(queue.items.find((x) => x.id === marked.event.id).queuedLong, false);
-  assert.equal(queue.total, 4 + (queued.duplicate ? 0 : 1)); // phone + 2 supervisor
+  assert.equal(queue.items.find((x) => x.id === marked.event.id).held, false);
+  assert.equal(queue.total, 3 + (queued.duplicate ? 0 : 1)); // phone out + 2 supervisor (the held one was accepted)
   await fails(viewer.token, 'attendance:review', { id: marked.event.id, decision: 'accept' }, 403);
   await fails(manager.token, 'attendance:review', { id: markedC.event.id, decision: 'reject' }, 500, /Say why/);
   assert.equal((await ok(manager.token, 'attendance:review', { id: marked.event.id, decision: 'accept' })).reviewStatus, 'accepted');
@@ -255,6 +276,17 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const profileViewer = await ok(viewer.token, 'hr:getProfile', A.id);
   assert.equal(profileViewer.nationalIdNo, undefined);
   assert.equal(profileViewer.documents, undefined);
+  // fuel.manage alone: the F1 record — no notes, status reason or HR field — and it cannot relink accounts.
+  const fuelMgr = users.create({ name: 'Fuel office', role: role('Fuel manager', ['fuel.manage']).key });
+  users.setActiveCompany(fuelMgr.id, company.id);
+  await ok(manager.token, 'staff:update', { id: A.id, patch: { notes: 'Private HR note' } });
+  const asFuel = await ok(fuelMgr.token, 'staff:get', A.id);
+  for (const k of ['notes', 'hireDate', 'statusReason', 'nationalIdNo', 'supervisorEmployeeId', 'hasPin']) assert.equal(asFuel[k], undefined, k);
+  assert.equal(asFuel.staffCode, 'A1');
+  await fails(fuelMgr.token, 'staff:update', { id: A.id, patch: { userId: phoneUser.id } }, 500, /hr.manage/);
+  await fails(fuelMgr.token, 'staff:create', { staffCode: 'Z9', nameEn: 'Linked', userId: unlinked.id }, 500, /hr.manage/);
+  await ok(fuelMgr.token, 'staff:update', { id: A.id, patch: { notes: null, phone: '012 345 678' } });
+  assert.equal(employees.get(A.id).notes, 'Private HR note', 'a caller who cannot see the notes cannot wipe them');
   const asRecorder = await ok(recorder.token, 'staff:get', A.id);
   assert.equal(asRecorder.hireDate, undefined);
   assert.equal(asRecorder.phone, undefined);
@@ -278,7 +310,25 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   // A work day (Mon–Sat) of last month that is not a holiday.
   const holidaySet = new Set(holidays.map((h) => h.date));
   const workDays = calc.monthDates(lastMonth).filter((d) => calc.weekdayMon0(d) < 6 && !holidaySet.has(d));
-  const [d1, d2] = workDays;
+  const [d1, d2, d3] = workDays;
+
+  /* ─── no absence before attendance was kept in the app; dated suspensions ─── */
+  // F is an F1-era record: no hire date. By default attendance starts the day HR was first used.
+  const F = emp('F1', 'Prak Sophea');
+  const sumF = async () => (await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: F.id })).rows[0];
+  assert.equal((await sumF()).totals.absentDays, 0, 'nobody is absent before the app kept attendance');
+  assert.equal((await ok(manager.token, 'hr:getSettings')).attendanceStartDate, calc.ppDate(Date.now()));
+  await ok(manager.token, 'hr:updateSettings', { attendanceStartDate: `${lastMonth}-01` });
+  const allAbsent = (await sumF()).totals.absentDays;
+  assert.equal(allAbsent, workDays.length);
+  const [s0, s1] = [workDays[3], workDays[6]];
+  await ok(manager.token, 'hr:setStatus', { id: F.id, status: 'suspended', reason: 'Investigation', fromDate: s0 });
+  await ok(manager.token, 'hr:setStatus', { id: F.id, status: 'active', toDate: s1 });
+  const fRow = await sumF();
+  const suspendedDays = fRow.days.filter((d) => d.date >= s0 && d.date <= s1);
+  assert.ok(suspendedDays.every((d) => d.status === 'suspended' || d.status === 'off'));
+  assert.equal(fRow.totals.absentDays, allAbsent - workDays.filter((d) => d >= s0 && d <= s1).length);
+  assert.equal((await ok(manager.token, 'hr:getProfile', F.id)).suspensions.length, 1);
   await fails(viewer.token, 'attendance:addManual', { employeeId: B.id, kind: 'in', at: calc.timeOnDate(d1, '07:20'), reason: 'paper sheet' }, 403);
   await ok(manager.token, 'attendance:addManual', { employeeId: B.id, kind: 'in', at: calc.timeOnDate(d1, '07:20'), reason: 'paper sheet' });
   await ok(manager.token, 'attendance:addManual', { employeeId: B.id, kind: 'out', at: calc.timeOnDate(d1, '19:10'), reason: 'paper sheet' });
@@ -286,7 +336,7 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   let sum = await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: B.id });
   const dayB1 = sum.rows[0].days.find((d) => d.date === d1);
   assert.equal(dayB1.lateMin, 15);
-  assert.equal(dayB1.overtime.normal, 120);
+  assert.equal(dayB1.overtime.normal, 105, '130 after the end, but late in: capped at worked − scheduled (110) → 105');
   const dayB2 = sum.rows[0].days.find((d) => d.date === d2);
   assert.equal(dayB2.status, 'incomplete');
   assert.equal(dayB2.missingOut, true);
@@ -298,19 +348,52 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   sum = await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: B.id });
   assert.equal(sum.rows[0].days.find((d) => d.date === d2).status, 'present');
   // Overtime: approve part, never more than the attendance shows.
-  await fails(manager.token, 'attendance:approveOvertime', { employeeId: B.id, workDate: d1, minutes: { normal: 180 } }, 500, /Only 120 min/);
+  await fails(manager.token, 'attendance:approveOvertime', { employeeId: B.id, workDate: d1, minutes: { normal: 180 } }, 500, /Only 105 min/);
   await ok(manager.token, 'attendance:approveOvertime', { employeeId: B.id, workDate: d1, minutes: { normal: 60 }, note: 'Unloading the container' });
   const again2 = await ok(manager.token, 'attendance:approveOvertime', { employeeId: B.id, workDate: d1, minutes: { normal: 90 } });
   assert.equal(again2.minutes.normal, 90);
   assert.equal((await ok(viewer.token, 'attendance:listOvertime', { month: lastMonth })).length, 1, 'a re-approval replaces the earlier one');
   sum = await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: B.id });
   assert.equal(sum.rows[0].totals.overtimeApproved.normal, 90);
-  assert.equal(sum.rows[0].totals.overtimePending.normal, 30);
+  assert.equal(sum.rows[0].totals.overtimePending.normal, 15);
   // Lateness: confirm the month (a waiver needs a note).
   await fails(manager.token, 'attendance:confirmLateness', { employeeId: B.id, month: lastMonth, lateMinutes: 5 }, 500, /Say why/);
   const conf = await ok(manager.token, 'attendance:confirmLateness', { employeeId: B.id, month: lastMonth });
   assert.equal(conf.confirmedLateMin, sum.rows[0].totals.lateMin);
   await fails(manager.token, 'attendance:confirmLateness', { employeeId: B.id, month: calc.ppMonth(Date.now()) }, 500, /after it has ended/);
+
+  /* ─── approvals do not outlive the attendance under them ─── */
+  const outEvent = (await ok(manager.token, 'attendance:listEvents', { employeeId: B.id, from: d1, to: d1 })).items.find((e) => e.kind === 'out');
+  await ok(manager.token, 'attendance:void', { id: outEvent.id, reason: 'Wrong time on the sheet' });
+  await ok(manager.token, 'attendance:addManual', { employeeId: B.id, kind: 'out', at: calc.timeOnDate(d1, '17:40'), reason: 'Corrected sheet' });
+  const ot = (await ok(viewer.token, 'attendance:listOvertime', { month: lastMonth }))[0];
+  assert.equal(ot.needsReapproval, true);
+  assert.match(ot.needsReapprovalReason, /Corrected sheet|voided/);
+  sum = await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: B.id });
+  assert.equal(sum.rows[0].days.find((d) => d.date === d1).overtime.normal, 15);
+  assert.equal(sum.rows[0].totals.overtimeApproved.normal, 15, 'only min(approved 90, computed 15) is counted');
+  assert.deepEqual(sum.rows[0].totals.approvalsExceedingAttendance, [d1]);
+  // The in time was wrong too: a correction makes him on time — the confirmed lateness can no longer be deducted.
+  const fixIn = await ok(manager.token, 'attendance:requestCorrection', { employeeId: B.id, workDate: d1, inTime: '07:00', reason: 'Was on time' });
+  await ok(manager.token, 'attendance:decideCorrection', { id: fixIn.id, decision: 'approve' });
+  sum = await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: B.id });
+  assert.equal(sum.rows[0].lateness.needsReapproval, true);
+  assert.equal(sum.rows[0].lateness.deductibleLateMin, 0);
+  assert.equal(sum.rows[0].lateness.exceedsAttendance, true);
+  const reconf = await ok(manager.token, 'attendance:approveOvertime', { employeeId: B.id, workDate: d1, minutes: { normal: 30 } });
+  assert.equal(reconf.needsReapproval, false, 're-approving clears the mark');
+
+  /* ─── a night shift's forgotten clock-out: the out lands the next morning ─── */
+  const nightSch = await ok(manager.token, 'hr:createSchedule', { name: 'Night', startTime: '22:00', endTime: '06:00', breakMin: 0, workDays: '1111111', graceMin: 5 });
+  await ok(manager.token, 'hr:assignSchedule', { employeeId: C.id, scheduleId: nightSch.id, effectiveFrom: d3 });
+  await ok(manager.token, 'attendance:addManual', { employeeId: C.id, kind: 'in', at: calc.timeOnDate(d3, '21:55'), reason: 'paper sheet' });
+  const nightFix = await ok(manager.token, 'attendance:requestCorrection', { employeeId: C.id, workDate: d3, outTime: '06:05', reason: 'Forgot to clock out' });
+  assert.equal(nightFix.proposedOutAt, calc.timeOnDate(calc.addDays(d3, 1), '06:05'), 'after the in, i.e. the next morning');
+  const nightDone = await ok(manager.token, 'attendance:decideCorrection', { id: nightFix.id, decision: 'approve', outTime: '06:15' });
+  assert.equal(nightDone.events[0].at, calc.timeOnDate(calc.addDays(d3, 1), '06:15'));
+  const cDay = (await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: C.id })).rows[0].days.find((d) => d.date === d3);
+  assert.equal(cDay.status, 'present');
+  assert.equal(cDay.workedMin, 500);
 
   /* ─── leave: balances, requests, the accrual job ─── */
   await ok(manager.token, 'hr:updateProfile', { id: B.id, patch: { hireDate: '2024-03-01' } });
@@ -337,6 +420,20 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const big = await ok(manager.token, 'leave:request', { employeeId: D.id, leaveTypeId: annual.id, fromDate: nextMon, toDate: calc.addDays(nextMon, 2) });
   await fails(manager.token, 'leave:decide', { id: big.id, decision: 'approve' }, 500, /Not enough/);
 
+  /* ─── year-end expiry stays true when December leave is decided in January ─── */
+  const bal2025 = () => db.getDb().prepare("SELECT ROUND(SUM(days), 2) b FROM leave_ledger WHERE employee_id = ? AND leave_type_id = ? AND date <= '2025-12-31'").get(B.id, annual.id).b;
+  await ok(manager.token, 'leave:adjust', { employeeId: B.id, leaveTypeId: annual.id, days: 20, date: '2025-11-01', note: 'Opening balance from the paper file' });
+  assert.equal(bal2025(), 18, 'over the 18-day carry-over: the excess lapses at the end of 2025');
+  const dec = await ok(manager.token, 'leave:request', { employeeId: B.id, leaveTypeId: annual.id, fromDate: '2025-12-22', toDate: '2025-12-23', reason: 'Approved late, on paper' });
+  await ok(manager.token, 'leave:decide', { id: dec.id, decision: 'approve' });
+  assert.equal(bal2025(), 18, 'December leave approved later: 2 fewer days lapse, 18 are still carried');
+  const ledger2025 = await ok(viewer.token, 'leave:ledger', { employeeId: B.id, leaveTypeId: annual.id });
+  assert.ok(ledger2025.some((r) => r.kind === 'adjustment' && r.period === '2025-expiry-fix' && r.days === 2));
+  await ok(manager.token, 'leave:cancel', { id: dec.id, reason: 'Did not take it after all' });
+  assert.equal(bal2025(), 18);
+  await ok(manager.token, 'hr:runJobs');
+  assert.equal(bal2025(), 18, 'the job agrees (idempotent)');
+
   /* ─── History: HR rows hidden without hr.view; clearHistory keeps them ─── */
   const feedAuditor = await ok(auditor.token, 'audit:listRecent', { limit: 500 });
   assert.ok(feedAuditor.every((r) => r.sensitivity !== 'hr' && r.entityType !== 'employee'), 'history.view alone sees no HR or staff rows');
@@ -344,6 +441,8 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const feedViewer = await ok(viewer.token, 'audit:listRecent', { limit: 500 });
   assert.ok(feedViewer.some((r) => r.sensitivity === 'hr' && r.entityType === 'attendance'));
   assert.ok(!JSON.stringify(feedViewer).includes('010203040'), 'an ID number never enters History');
+  assert.ok(!feedViewer.some((r) => r.entityType === 'hr_document'), 'document rows are hr.manage only');
+  assert.ok((await ok(manager.token, 'audit:listRecent', { limit: 500 })).some((r) => r.entityType === 'hr_document'));
   const hrRows = db.getDb().prepare("SELECT COUNT(*) n FROM audit_log WHERE sensitivity = 'hr'").get().n;
   assert.ok(hrRows > 10);
   const cleared = await local('audit:clearHistory', { days: 0 });
@@ -365,6 +464,7 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const deletedItems = require('../main/deletedItems');
   const held = deletedItems.list({ companyId: company.id }).find((i) => i.kind === 'hr-photo');
   assert.ok(held && !/Sok Dara/.test(held.label), 'the bin entry never names the person');
+  assert.equal(held.label, `Clock-in photo ${calc.ppDate(Date.now() - 70 * 86400e3)}`, 'dated in Phnom Penh time');
   deletedItems.restore(held.id);
   assert.ok(fs.existsSync(path.join(dataDir, row.photo_path)));
   assert.equal((await ok(manager.token, 'attendance:getPhoto', { eventId: clocked.event.id })).intact, true);

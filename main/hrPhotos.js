@@ -28,7 +28,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { getDb } = require('./db/index');
 const fuelPhotos = require('./fuelPhotos');
-const { ppMonth } = require('./util/attendanceCalc');
+const { ppMonth, ppDate } = require('./util/attendanceCalc');
 
 const CLOCK_EDGE = 1280;
 const DOC_EDGE = 2400;
@@ -119,7 +119,7 @@ function sweepRetention({ companyId = null, now = Date.now() } = {}) {
       const exists = fs.existsSync(fuelPhotos.absPath(row.photo_path));
       let holdId = null;
       if (exists) {
-        holdId = deletedItems.holdHrPhoto({ eventId: row.id, relPath: row.photo_path, sha256: row.photo_sha256, companyId: cid, label: `Clock-in photo ${new Date(row.at).toISOString().slice(0, 10)}` });
+        holdId = deletedItems.holdHrPhoto({ eventId: row.id, relPath: row.photo_path, sha256: row.photo_sha256, companyId: cid, label: `Clock-in photo ${ppDate(row.at)}` });
       } else {
         missing += 1;
       }

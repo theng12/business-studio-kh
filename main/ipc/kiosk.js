@@ -5,7 +5,7 @@
  * holding only `attendance.kiosk`, so the server refuses everything but these
  * channels even if the kiosk screen is escaped. All `expose()`d.
  *
- *   kiosk:tiles             who can clock in: photo flag + names only
+ *   kiosk:tiles             who can clock in: photo flag + names only (not who is a manager)
  *   kiosk:tilePhoto         a tile's photo (small)
  *   kiosk:signIn            tile + PIN → a session token (2 min after last use)
  *   kiosk:clock             session + webcam photo → in or out, server time
@@ -49,9 +49,10 @@ function kioskLabel() {
 function register({ expose }) {
   expose('kiosk:tiles', () => {
     const companyId = company();
+    // Who is a manager is not shown: the screen offers every tile for "leave
+    // kiosk mode" and the server decides (kiosk:verifyManagerPin).
     return employees.list(companyId, { status: 'active' }).map((e) => ({
-      id: e.id, nameEn: e.nameEn, nameKm: e.nameKm, hasPhoto: e.hasPhoto, photoSha256: e.photoSha256,
-      hasPin: e.hasPin, isManager: people.isManagerEmployee(e),
+      id: e.id, nameEn: e.nameEn, nameKm: e.nameKm, hasPhoto: e.hasPhoto, photoSha256: e.photoSha256, hasPin: e.hasPin,
     }));
   });
 
@@ -65,11 +66,11 @@ function register({ expose }) {
     return { bytes: out.bytes, mime: out.mime, sha256: row.photo_sha256 };
   });
 
-  expose('kiosk:signIn', ({ employeeId, pin } = {}) => {
+  expose('kiosk:signIn', async ({ employeeId, pin } = {}) => {
     const companyId = company();
     const e = inCompany(employees.get(employeeId), 'Staff member');
     if (e.status !== 'active') throw new Error('This person cannot clock in — ask a manager');
-    people.checkPin(employeeId, pin, { companyId });
+    await people.checkPin(employeeId, pin, { companyId, kioskUserId: getCallerUserId() });
     const token = people.createSession({ kioskUserId: getCallerUserId(), employeeId, companyId });
     const last = attendance.lastActiveEvent(employeeId);
     const settings = hr.getSettings(companyId);
@@ -78,7 +79,7 @@ function register({ expose }) {
     return {
       sessionToken: token, expiresInSeconds: settings.kioskSessionSeconds,
       employee: { id: e.id, nameEn: e.nameEn, nameKm: e.nameKm, hasPhoto: e.hasPhoto },
-      nextKind: next.kind, lastEvent: last ? { kind: last.kind, at: last.at } : null,
+      nextKind: next.kind, nextNeedsCheck: next.flag === 'late_close', lastEvent: last ? { kind: last.kind, at: last.at } : null,
     };
   });
 
@@ -119,11 +120,13 @@ function register({ expose }) {
    * with hr.manage (or admin) and their own PIN. Wrong tries count against
    * that manager's PIN lock like any other.
    */
-  expose('kiosk:verifyManagerPin', ({ employeeId, pin } = {}) => {
+  expose('kiosk:verifyManagerPin', async ({ employeeId, pin } = {}) => {
     const companyId = company();
     const e = inCompany(employees.get(employeeId), 'Staff member');
+    // The PIN is checked first (same per-person and per-kiosk limits), so the
+    // answer does not reveal who is a manager to someone without the PIN.
+    await people.checkPin(employeeId, pin, { companyId, kioskUserId: getCallerUserId() });
     if (!people.isManagerEmployee(e)) throw new Error('Only a manager can leave kiosk mode');
-    people.checkPin(employeeId, pin, { companyId });
     require('../db/hr').hrAudit('employee', employeeId, 'kiosk:manager-exit', { after: { kiosk: kioskLabel() } });
     return { ok: true, managerId: e.id };
   });

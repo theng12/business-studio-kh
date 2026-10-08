@@ -60,8 +60,9 @@ function ensurePrefilled(companyId) {
     require('./leave').ensureDefaultTypes(companyId, now);
     const stored = JSON.parse(settingsRow(companyId)?.settings_json || '{}');
     if (!stored.defaultScheduleId) stored.defaultScheduleId = scheduleId;
-    db.prepare('UPDATE hr_settings SET settings_json = ?, prefilled_at = ?, accrual_from_month = COALESCE(accrual_from_month, ?), updated_at = ? WHERE company_id = ?')
-      .run(JSON.stringify(stored), now, calc.ppMonth(now), now, companyId);
+    db.prepare(`UPDATE hr_settings SET settings_json = ?, prefilled_at = ?, accrual_from_month = COALESCE(accrual_from_month, ?),
+        attendance_start_date = COALESCE(attendance_start_date, ?), updated_at = ? WHERE company_id = ?`)
+      .run(JSON.stringify(stored), now, calc.ppMonth(now), calc.ppDate(now), now, companyId);
   })();
   hrAudit('hr_settings', companyId, 'prefill', { after: { holidays: 'Cambodia 2026 (+ fixed 2027 dates)', schedule: 'Standard day 07:00–17:00', leaveTypes: 'Labour Law defaults' } });
   return true;
@@ -72,22 +73,33 @@ function getSettings(companyId) {
   const row = settingsRow(companyId);
   let stored;
   try { stored = JSON.parse(row?.settings_json || '{}'); } catch (_) { stored = {}; }
-  return { ...calc.mergeSettings(stored), defaultScheduleId: stored.defaultScheduleId ?? null, accrualFromMonth: row?.accrual_from_month ?? null };
+  const { attendanceStartDate: _ignored, ...rest } = stored;
+  return {
+    ...calc.mergeSettings(rest), defaultScheduleId: stored.defaultScheduleId ?? null, accrualFromMonth: row?.accrual_from_month ?? null,
+    // No day before this is ever "absent" (the paper era). Default: the day HR was first used.
+    attendanceStartDate: row?.attendance_start_date || (row?.prefilled_at ? calc.ppDate(row.prefilled_at) : null),
+  };
 }
 
 function updateSettings(companyId, patch = {}) {
   const before = getSettings(companyId);
-  const { accrualFromMonth, ...rest } = patch || {};
+  const { accrualFromMonth, attendanceStartDate, ...rest } = patch || {};
   if ('defaultScheduleId' in rest && rest.defaultScheduleId != null) {
     const s = getSchedule(rest.defaultScheduleId);
     if (!s || s.companyId !== companyId) throw badRequest('That schedule is not in this company');
   }
-  const merged = calc.mergeSettings(before, rest); // throws on a bad value
-  const stored = { ...merged, defaultScheduleId: 'defaultScheduleId' in rest ? rest.defaultScheduleId : before.defaultScheduleId };
+  const { attendanceStartDate: _a, accrualFromMonth: _m, ...beforeStored } = before;
+  const merged = calc.mergeSettings(beforeStored, rest); // throws on a bad value
+  const { attendanceStartDate: _x, ...mergedStored } = merged;
+  const stored = { ...mergedStored, defaultScheduleId: 'defaultScheduleId' in rest ? rest.defaultScheduleId : before.defaultScheduleId };
   const db = getDb();
   if (accrualFromMonth !== undefined) {
     if (accrualFromMonth != null && !calc.isMonth(accrualFromMonth)) throw badRequest('accrualFromMonth must look like 2026-10');
     db.prepare('UPDATE hr_settings SET accrual_from_month = ? WHERE company_id = ?').run(accrualFromMonth, companyId);
+  }
+  if (attendanceStartDate !== undefined) {
+    if (attendanceStartDate != null && !calc.isDate(attendanceStartDate)) throw badRequest('attendanceStartDate must be a real date like 2026-10-01');
+    db.prepare('UPDATE hr_settings SET attendance_start_date = ? WHERE company_id = ?').run(attendanceStartDate, companyId);
   }
   db.prepare('UPDATE hr_settings SET settings_json = ?, updated_at = ?, updated_by_user_id = ? WHERE company_id = ?')
     .run(JSON.stringify(stored), Date.now(), getCallerUserId(), companyId);

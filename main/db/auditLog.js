@@ -258,7 +258,7 @@ const FUEL_ENTITY_SQL = "entity_type <> 'employee' AND substr(entity_type, 1, 5)
 function isFuelEntityType(t) { return t === 'employee' || (typeof t === 'string' && t.startsWith('fuel_')); }
 
 /** HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §6): how sensitive a row is. */
-const SENSITIVITIES = ['normal', 'hr', 'payroll'];
+const SENSITIVITIES = ['normal', 'hr', 'hr_private', 'payroll'];
 
 /**
  * Which rows a caller may not see (main/ipc/audit.js builds it from the
@@ -267,6 +267,7 @@ const SENSITIVITIES = ['normal', 'hr', 'payroll'];
  *   fuel      fuel_* rows                         (needs fuel.manage)
  *   employee  employee rows                       (fuel.manage, hr.view or hr.manage)
  *   hr        rows with sensitivity 'hr'          (hr.view or hr.manage)
+ *   hrPrivate rows with sensitivity 'hr_private'  (hr.manage — staff documents)
  *   payroll   rows with sensitivity 'payroll'     (payroll.manage — HR2)
  * `hideFuel: true` (the F1 call shape) means { fuel, employee }.
  */
@@ -276,6 +277,7 @@ function hideClauses(hide) {
   if (hide.fuel) out.push("substr(entity_type, 1, 5) <> 'fuel_'");
   if (hide.employee) out.push("entity_type <> 'employee'");
   if (hide.hr) out.push("sensitivity <> 'hr'");
+  if (hide.hrPrivate || hide.hr) out.push("sensitivity <> 'hr_private'");
   if (hide.payroll) out.push("sensitivity <> 'payroll'");
   return out;
 }

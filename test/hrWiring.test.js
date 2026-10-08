@@ -135,7 +135,9 @@ test('HR files are never under assets/ and never served by /assets/ or app-image
 test('History hiding: sensitivity and entity clauses', () => {
   assert.deepEqual(hideClauses(null), []);
   const all = hideClauses({ fuel: true, employee: true, hr: true, payroll: true });
-  assert.equal(all.length, 4);
+  assert.equal(all.length, 5);
+  assert.ok(all.some((c) => c.includes("sensitivity <> 'hr_private'")), 'documents: hr.manage only');
+  assert.deepEqual(hideClauses({ hrPrivate: true }), ["sensitivity <> 'hr_private'"]);
   assert.ok(all.some((c) => c.includes("sensitivity <> 'hr'")));
   assert.ok(all.some((c) => c.includes("entity_type <> 'employee'")));
   const src = read('main/db/auditLog.js');
