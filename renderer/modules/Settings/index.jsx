@@ -19,6 +19,10 @@ import { ExchangeRateControl } from './ExchangeRateControl.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
 // Fuel F1: Settings → Fuel. Lazy so the fuel screens stay out of the boot bundle.
 const FuelSettingsPanel = lazy(() => import('../Fuel/FuelSettingsPanel.jsx').then((m) => ({ default: m.FuelSettingsPanel })));
+// Fixed Assets: Settings → Assets (register, categories, rates, closed months) and
+// Settings → Branches. Lazy for the same reason.
+const AssetSettingsPanel = lazy(() => import('../Assets/AssetSettingsPanel.jsx').then((m) => ({ default: m.AssetSettingsPanel })));
+const BranchesPanel = lazy(() => import('../Assets/BranchesPanel.jsx').then((m) => ({ default: m.BranchesPanel })));
 
 // v0.22.13: Settings is now tabbed. SETTINGS_TABS is the source of
 // truth for both the left rail (label + key) and the conditional
@@ -47,6 +51,9 @@ const SETTINGS_TABS = [
   // Fuel F1: thresholds, photo retention, vehicle types, phone set-up.
   // Offered on a client Mac only to a user with fuel.manage (tab filter below).
   { key: 'fuel',        label: 'Fuel' },
+  // Fixed Assets: offered on a client Mac only to who can use it (tab filter below).
+  { key: 'assets',      label: 'Assets' },
+  { key: 'branches',    label: 'Branches' },
   // v0.49.51: custom roles + permission matrix.
   { key: 'roles',       label: 'Roles & permissions' },
   { key: 'about',       label: 'About' },
@@ -272,6 +279,8 @@ export function Settings() {
               if (!isClient) return true;                       // the host Mac owns everything
               if (t.key === 'roles') return canManageUsers;
               if (t.key === 'fuel') return hasCap(caps, 'fuel.manage');
+              if (t.key === 'assets') return hasCap(caps, 'assets.manage') || canManageSystem;
+              if (t.key === 'branches') return canManageSystem || hasCap(caps, 'assets.manage') || hasCap(caps, 'assets.view');
               // v0.1.86: the recycle bin is a data-folder operation like
               // backups — a client Mac may restore or purge, the server holds
               // the files. Same capability gate, for the same reason.
@@ -664,6 +673,18 @@ export function Settings() {
         {tab === 'fuel' && (!isClient || hasCap(caps, 'fuel.manage')) && (
           <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
             <FuelSettingsPanel />
+          </Suspense>
+        )}
+
+        {tab === 'assets' && (!isClient || hasCap(caps, 'assets.manage') || canManageSystem) && (
+          <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
+            <AssetSettingsPanel />
+          </Suspense>
+        )}
+
+        {tab === 'branches' && (!isClient || canManageSystem || hasCap(caps, 'assets.manage') || hasCap(caps, 'assets.view')) && (
+          <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
+            <BranchesPanel />
           </Suspense>
         )}
 

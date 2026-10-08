@@ -196,6 +196,10 @@ const CHANNEL_RULES = [
   //   fuel:setDeliveryDips is manage-only: the phone links a delivery's dips
   //   when it records the delivery (dipBeforeId / dipAfterId), so re-linking an
   //   existing delivery afterwards is a manager's correction.
+  // Fixed Assets: picking an asset's custodian needs the staff names, so the
+  // list and one record are open to the asset roles too — as TILES (code, name,
+  // position), because main/ipc/staff.js gives the full record only to fuel.manage.
+  [/^staff:(list|get)$/,                                ['fuel.record', 'fuel.manage', 'assets.view', 'assets.manage']],
   [/^staff:(list|get|getPhoto|me)$/,                       ['fuel.record', 'fuel.manage']],
   [/^fuel:(getSettings|listAssetTypes|listAssets|getAsset|listLocations|getLocation|getChart|getDipLitres|listStations|listPrices|recordFill|recordDip|recordDelivery|recordTransfer|receiveTransfer|addPhoto|getPhoto|listMyRecent|listPendingTransfers|voidMyRecord)$/, ['fuel.record', 'fuel.manage']],
   [/^staff:/,                                           'fuel.manage'],

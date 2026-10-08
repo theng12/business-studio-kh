@@ -69,7 +69,7 @@ listing every page is replaced by two levels (verified 2026-10-08):
 **One source of truth: `renderer/lib/modules.js` (`APP_MODULES`).** The tiles, the sidebar, the
 ⌘1–9 / ⌘, map (`shortcutMap`), the shortcuts sheet (`NAV`) and ⌘K's "Go to …" rows (`searchNav`)
 are all derived from it. Current modules: Products, Media Studio, Labels & Catalogs, Purchasing,
-Fuel, People, System.
+Fuel, Assets, People, System.
 
 - **Add a page:** one `{ id, name, icon, caps?, shortcut? }` line in its module's section, plus the
   route in `PAGES` (`renderer/App.jsx`) and the id in `MODULES` (`renderer/store/navigation.js`),

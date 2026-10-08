@@ -19,8 +19,10 @@
  *   revalue         land and buildings only ("use with your accountant").
  *                   Elimination method (IAS 16.35(b)): accumulated depreciation
  *                   and impairment are eliminated against cost, then cost moves
- *                   to the new value — up: Cr Revaluation surplus 3300; down:
- *                   against this asset's surplus first, then Dr Impairment loss.
+ *                   to the new value — up: first reverses this asset's earlier
+ *                   revaluation losses through P&L (IAS 16.39), the rest Cr
+ *                   Revaluation surplus 3300; down: against this asset's surplus
+ *                   first, then Dr Impairment loss 6510 (IAS 16.40).
  *
  * Every entry carries the asset and its branch on each line. A linked Fuel
  * vehicle is retired in Fuel in the same transaction when it is disposed of
@@ -56,14 +58,20 @@ function settleLines(a, category, lastPeriod, dims) {
   const computed = lastPeriod && lastPeriod >= spec.startPeriod ? book.chargedThrough({ ...spec, endPeriod: lastPeriod }, lastPeriod) : 0;
   const due = computed - fixedAssets.postedDepreciation(a.id);
   if (!due) return { lines: [], due: 0 };
-  return {
-    due,
-    lines: due > 0
-      ? [{ accountId: category.glExpenseAccountId, debitMinor: due, lineRole: 'dep_expense', memo: `${a.tagCode} depreciation to ${lastPeriod}`, ...dims },
-        { accountId: category.glAccumAccountId, creditMinor: due, lineRole: 'accum_dep', ...dims }]
-      : [{ accountId: category.glAccumAccountId, debitMinor: -due, lineRole: 'accum_dep', ...dims },
+  if (due < 0) {
+    return {
+      due,
+      lines: [{ accountId: category.glAccumAccountId, debitMinor: -due, lineRole: 'accum_dep', ...dims },
         { accountId: category.glExpenseAccountId, creditMinor: -due, lineRole: 'dep_catch_up', memo: `${a.tagCode} depreciation posted beyond ${lastPeriod || 'the disposal'} taken back`, ...dims }],
-  };
+    };
+  }
+  // The last month's own amount is that month's charge; anything more is catch-up (review 2, LOW).
+  const monthPart = Math.min(due, lastPeriod ? book.amountFor({ ...spec, endPeriod: lastPeriod }, lastPeriod) : 0);
+  const lines = [];
+  if (monthPart > 0) lines.push({ accountId: category.glExpenseAccountId, debitMinor: monthPart, lineRole: 'dep_expense', memo: `${a.tagCode} depreciation ${lastPeriod}`, ...dims });
+  if (due - monthPart > 0) lines.push({ accountId: category.glExpenseAccountId, debitMinor: due - monthPart, lineRole: 'dep_catch_up', memo: `${a.tagCode} catch-up to ${lastPeriod}`, ...dims });
+  lines.push({ accountId: category.glAccumAccountId, creditMinor: due, lineRole: 'accum_dep', ...dims });
+  return { due, lines };
 }
 
 function proceedsInUsd(a, amountMinor, currency, date, fx) {
@@ -93,14 +101,21 @@ function planDisposal({ id, date, kind = 'sale', proceedsMinor = 0, currency = '
   const lost = kind === 'lost';
   if (!lost && !DISPOSAL_KINDS.includes(kind)) throw badRequest('Disposal must be a sale, scrap or donation');
   const d = fixedAssets.eventDateFor(a, date);
+  fixedAssets.assertNoLaterMove(a, d);
   const settings = config.getSettings(a.companyId);
   const lastPeriod = book.lastPeriod(d, settings.convention);
   const p = lost || kind !== 'sale' ? { amount: 0, currency: 'USD', usd: 0, rate: null } : proceedsInUsd(a, proceedsMinor, currency, d, fxKhrPerUsd);
+  // Review 2 (MEDIUM 3): a disposal dated in a month already posted (or closed)
+  // is booked on the first day after the last posted / closed month, with a
+  // memo naming its real date — the same rule as assertAfterPosted. The
+  // event keeps the real date; the settle line takes back what was posted beyond it.
+  const lateAfter = [fixedAssets.lastDepreciationPeriod(a.companyId), ledger.closedThrough(a.companyId)].filter((x) => x && x >= d.slice(0, 7)).sort().pop() || null;
+  const entryDate = lateAfter ? `${book.addMonths(lateAfter, 1)}-01` : d;
   if (a.accountingTreatment === 'tracked_only') {
     return { asset: a, date: d, kind, lastPeriod, proceeds: p, entry: null, nbvMinor: null, gainMinor: null };
   }
   const category = categoryOf(a);
-  const dims = { assetId: a.id, branchId: a.branchId };
+  const dims = { assetId: a.id, branchId: fixedAssets.branchAt(a, d) };
   const settle = settleLines(a, category, lastPeriod, dims);
   const t = ledger.assetLedgerTotals(a.id);
   const accum = t.accumDepMinor + settle.due;
@@ -116,10 +131,11 @@ function planDisposal({ id, date, kind = 'sale', proceedsMinor = 0, currency = '
   if (gain < 0) lines.push({ accountKey: 'fa.loss', debitMinor: -gain, lineRole: 'loss', ...dims });
   const label = lost ? 'Written off (lost)' : kind === 'sale' ? 'Sold' : kind === 'scrap' ? 'Scrapped' : 'Donated';
   return {
-    asset: a, date: d, kind, lastPeriod, proceeds: p, nbvMinor: nbv, gainMinor: gain, depreciationDueMinor: settle.due,
+    asset: a, date: d, kind, lastPeriod, proceeds: p, nbvMinor: nbv, gainMinor: gain, depreciationDueMinor: settle.due, entryDate,
     entry: lines.length >= 2 ? {
-      companyId: a.companyId, entryDate: d, sourceKind: lost ? 'asset_lost' : 'asset_dispose', sourceId: a.id,
-      memo: `${label}: ${a.tagCode} ${a.name}`, fxKhrPerUsd: p.currency === 'KHR' ? p.rate : undefined, lines,
+      companyId: a.companyId, entryDate, sourceKind: lost ? 'asset_lost' : 'asset_dispose', sourceId: a.id,
+      memo: `${lateAfter ? `Late ${lost ? 'write-off' : 'disposal'} for ${d} (${ledger.humanMonth(lateAfter)} already posted) — ` : ''}${label}: ${a.tagCode} ${a.name}`,
+      fxKhrPerUsd: p.currency === 'KHR' ? p.rate : undefined, lines,
     } : null,
   };
 }
@@ -128,7 +144,7 @@ function previewDisposal(args) {
   const p = planDisposal(args);
   return {
     assetId: p.asset.id, date: p.date, kind: p.kind, lastPeriod: p.lastPeriod, proceedsUsdMinor: p.proceeds.usd,
-    nbvMinor: p.nbvMinor, gainMinor: p.gainMinor, depreciationDueMinor: p.depreciationDueMinor ?? 0, posts: !!p.entry,
+    nbvMinor: p.nbvMinor, gainMinor: p.gainMinor, depreciationDueMinor: p.depreciationDueMinor ?? 0, posts: !!p.entry, entryDate: p.entryDate ?? p.date,
     lines: p.entry ? p.entry.lines.map((l) => ({ account: l.accountKey || l.accountId, debitMinor: l.debitMinor || 0, creditMinor: l.creditMinor || 0, lineRole: l.lineRole })) : [],
   };
 }
@@ -155,6 +171,7 @@ function recordDisposal(args, eventKind) {
     });
     fixedAssets.touch(a.id, ['status = @s', 'disposed_on = @d', 'disposal_event_id = @e', 'accum_minor = 0', 'nbv_minor = 0'],
       { s: eventKind === 'lost' ? 'lost' : 'disposed', d: plan.date, e: eventId });
+    require('./assetDepreciation').refreshSnapshot(a.id);
   })();
   audit('asset_event', eventId, eventKind === 'lost' ? 'lost' : 'dispose', { after: {
     assetId: plan.asset.id, date: plan.date, kind: plan.kind, proceedsUsdMinor: plan.proceeds.usd, nbvMinor: plan.nbvMinor, gainMinor: plan.gainMinor, entryNo: entry?.entryNo ?? null,
@@ -216,7 +233,7 @@ function partialDispose({ id, date, qty, kind = 'sale', proceedsMinor = 0, curre
     const share = (v) => Math.round((v * n) / a.quantity);
     if (a.accountingTreatment !== 'tracked_only') {
       const category = categoryOf(a);
-      const dims = { assetId: a.id, branchId: a.branchId };
+      const dims = { assetId: a.id, branchId: fixedAssets.branchAt(a, d) };
       const settle = settleLines(a, category, lastPeriod, dims);
       const t = ledger.assetLedgerTotals(a.id);
       const accum = t.accumDepMinor + settle.due;
@@ -272,7 +289,7 @@ function impair({ id, date, amountMinor, reason } = {}) {
   const eventId = uuid();
   let entry;
   db.transaction(() => {
-    const dims = { assetId: a.id, branchId: a.branchId };
+    const dims = { assetId: a.id, branchId: fixedAssets.branchAt(a, d) };
     entry = ledger.post({ companyId: a.companyId, entryDate: d, sourceKind: 'asset_impair', sourceId: a.id, idempotencyKey: `evt:${eventId}`,
       memo: `Impairment: ${a.tagCode} ${a.name} — ${why}`,
       lines: [{ accountKey: 'fa.impairment_loss', debitMinor: amount, lineRole: 'loss', ...dims }, { accountKey: 'fa.impairment', creditMinor: amount, lineRole: 'impairment', ...dims }] });
@@ -306,7 +323,7 @@ function revalue({ id, date, newValueMinor, reason } = {}) {
   let entry = null;
   let detail;
   db.transaction(() => {
-    const dims = { assetId: a.id, branchId: a.branchId };
+    const dims = { assetId: a.id, branchId: fixedAssets.branchAt(a, d) };
     const settle = settleLines(a, category, book.addMonths(period, -1), dims);
     const t = ledger.assetLedgerTotals(a.id);
     const accum = t.accumDepMinor + settle.due;
@@ -318,17 +335,24 @@ function revalue({ id, date, newValueMinor, reason } = {}) {
     const costNet = value - t.costMinor;
     if (costNet > 0) lines.push({ accountId: category.glCostAccountId, debitMinor: costNet, lineRole: 'cost', ...dims });
     if (costNet < 0) lines.push({ accountId: category.glCostAccountId, creditMinor: -costNet, lineRole: 'cost', ...dims });
+    // IAS 16.39 / 16.40 (review 2): an increase first reverses this asset's
+    // earlier revaluation losses through profit and loss, the rest goes to the
+    // surplus; a decrease first uses this asset's surplus, the rest is a loss.
+    const plLoss = Math.max(0, getDb().prepare(`SELECT COALESCE(SUM(debit_minor - credit_minor), 0) AS n FROM journal_lines WHERE asset_id = ? AND line_role = 'reval_pl'`).get(a.id).n);
     let toSurplus = 0;
     let toLoss = 0;
     if (diff > 0) {
-      toSurplus = diff;
-      lines.push({ accountKey: 'equity.revaluation', creditMinor: diff, lineRole: 'revaluation', ...dims });
+      const reversal = Math.min(diff, plLoss);
+      toLoss = -reversal;
+      toSurplus = diff - reversal;
+      if (reversal) lines.push({ accountKey: 'fa.impairment_loss', creditMinor: reversal, lineRole: 'reval_pl', memo: 'Reverses earlier revaluation losses (IAS 16.39)', ...dims });
+      if (toSurplus) lines.push({ accountKey: 'equity.revaluation', creditMinor: toSurplus, lineRole: 'revaluation', ...dims });
     } else if (diff < 0) {
       const surplus = Math.max(0, t.revaluationSurplusMinor);
       toSurplus = -Math.min(surplus, -diff);
       toLoss = -diff + toSurplus;
-      if (toSurplus) lines.push({ accountKey: 'equity.revaluation', debitMinor: -toSurplus, lineRole: 'revaluation', ...dims });
-      if (toLoss) lines.push({ accountKey: 'fa.impairment_loss', debitMinor: toLoss, lineRole: 'loss', ...dims });
+      if (toSurplus) lines.push({ accountKey: 'equity.revaluation', debitMinor: -toSurplus, lineRole: 'revaluation', memo: 'Against the surplus first (IAS 16.40)', ...dims });
+      if (toLoss) lines.push({ accountKey: 'fa.impairment_loss', debitMinor: toLoss, lineRole: 'reval_pl', ...dims });
     }
     if (lines.length >= 2) {
       entry = ledger.post({ companyId: a.companyId, entryDate: d, sourceKind: 'asset_revalue', sourceId: a.id, idempotencyKey: `evt:${eventId}`,

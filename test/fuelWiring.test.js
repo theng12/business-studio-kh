@@ -55,7 +55,10 @@ test('every fuel/staff channel maps to a fuel capability (none fall through to l
   for (const ch of [...ALL_EXPOSED, ...FUEL.local]) {
     const cap = channelCapability(ch);
     const list = Array.isArray(cap) ? cap : [cap];
-    assert.ok(list.every((c) => c === 'fuel.record' || c === 'fuel.manage'), `${ch} → ${JSON.stringify(cap)}`);
+    // Fixed Assets: an asset's custodian picker reads the staff list and one record (as tiles),
+    // so staff:list / staff:get are also open to the asset roles — and to nothing else.
+    const allowed = ['fuel.record', 'fuel.manage', ...(/^staff:(list|get)$/.test(ch) ? ['assets.view', 'assets.manage'] : [])];
+    assert.ok(list.some((c) => c === 'fuel.record' || c === 'fuel.manage') && list.every((c) => allowed.includes(c)), `${ch} → ${JSON.stringify(cap)}`);
   }
 });
 

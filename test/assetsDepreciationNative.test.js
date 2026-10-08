@@ -109,7 +109,7 @@ test('disposal (§5.4): depreciation to the disposal, then cost and accumulated 
   assert.equal(preview.gainMinor, -412_500);
   const r = disp.dispose({ id: truck.id, date: '2026-08-20', kind: 'sale', proceedsMinor: 900_000, buyer: 'Mr Dara' });
   assert.deepEqual(lines(r.entry), [
-    ['fa.dep_expense', 'dep_expense', 67_500, 0], ['fa.accum.vehicle', 'accum_dep', 0, 67_500],
+    ['fa.dep_expense', 'dep_expense', 22_500, 0], ['fa.dep_expense', 'dep_catch_up', 45_000, 0], ['fa.accum.vehicle', 'accum_dep', 0, 67_500],
     ['fa.accum.vehicle', 'accum_disposal', 1_687_500, 0], ['fa.clearing.sale', 'clearing', 900_000, 0],
     ['fa.cost.vehicle', 'cost', 0, 3_000_000], ['fa.loss', 'loss', 412_500, 0],
   ]);
@@ -162,10 +162,11 @@ test('partial disposal of a group asset; lost and found; impairment', { skip: sk
   assert.equal(lines(lost.entry).find((l) => l[1] === 'loss')[2], 240_000 - 6 * 10_000);
   runThrough('2026-08');
   assert.equal(assets.postedDepreciation(mac.id), 6 * 10_000);
-  const found = disp.markFound({ id: mac.id, reason: 'Was in the car' });
+  const found = disp.markFound({ id: mac.id, date: '2026-09-01', reason: 'Was in the car' });
   assert.equal(found.asset.status, 'in_use');
   runThrough('2026-09');
-  assert.equal(assets.postedDepreciation(mac.id), 9 * 10_000, 'the missed months are caught up');
+  assert.equal(assets.postedDepreciation(mac.id, { throughPeriod: '2026-09' }), 9 * 10_000, 'the missed months are caught up');
+  assert.equal(assets.postedDepreciation(mac.id), 9 * 10_000, 'found on 1 September: September\'s run evens the reversal');
   assert.equal(dep.checkIntegrity(C).ok, true);
 
   assert.throws(() => disp.impair({ id: mac.id, date: '2026-10-01', amountMinor: 999_999, reason: 'x' }), /more than the book value/);
@@ -187,12 +188,18 @@ test('revaluation: land and buildings only, up to the surplus, down against it f
   const up = disp.revalue({ id: land.id, date: '2026-05-01', newValueMinor: 6_000_000, reason: 'Valuer report' });
   assert.deepEqual(lines(up.entry), [['fa.cost.land', 'cost', 1_000_000, 0], ['equity.revaluation', 'revaluation', 0, 1_000_000]]);
   const down = disp.revalue({ id: land.id, date: '2026-06-01', newValueMinor: 4_500_000, reason: 'Market fell' });
-  assert.deepEqual(lines(down.entry), [['fa.cost.land', 'cost', 0, 1_500_000], ['equity.revaluation', 'revaluation', 1_000_000, 0], ['fa.impairment_loss', 'loss', 500_000, 0]]);
+  assert.deepEqual(lines(down.entry), [['fa.cost.land', 'cost', 0, 1_500_000], ['equity.revaluation', 'revaluation', 1_000_000, 0], ['fa.impairment_loss', 'reval_pl', 500_000, 0]]);
+  // IAS 16.39: back up again — the earlier 5,000 loss is reversed through P&L first, the rest to the surplus.
+  const upAgain = disp.revalue({ id: land.id, date: '2026-07-01', newValueMinor: 5_200_000, reason: 'Market recovered' });
+  assert.deepEqual(lines(upAgain.entry), [['fa.cost.land', 'cost', 700_000, 0], ['fa.impairment_loss', 'reval_pl', 0, 500_000], ['equity.revaluation', 'revaluation', 0, 200_000]]);
+  disp.revalue({ id: land.id, date: '2026-07-02', newValueMinor: 4_500_000, reason: 'Down again' });
+  assert.equal(ledger.assetLedgerTotals(land.id).revaluationSurplusMinor, 0, 'IAS 16.40: the 2,000 surplus is used first, then 5,000 loss');
   assert.equal(ledger.assetLedgerTotals(land.id).costMinor, 4_500_000);
+  assert.equal(require('../main/db/index').getDb().prepare("SELECT SUM(debit_minor - credit_minor) AS n FROM journal_lines WHERE asset_id = ? AND line_role = 'reval_pl'").get(land.id).n, 500_000);
   // A building: accumulated depreciation is eliminated, then the cost moves.
   const shop = assets.activate(assets.create({ companyId: C, categoryId: cat('building'), name: 'Shop', acquisitionKind: 'opening', costBasis: 'deemed', costMinor: 10_000_000, usefulLifeMonths: 200 }).id).asset;
   for (const p of dep.dueMonths(C, '2026-06')) dep.runDepreciation(C, p);
-  const rv = disp.revalue({ id: shop.id, date: '2026-07-01', newValueMinor: 12_000_000, reason: 'Valuer' });
+  const rv = disp.revalue({ id: shop.id, date: '2026-07-03', newValueMinor: 12_000_000, reason: 'Valuer' });
   assert.deepEqual(lines(rv.entry), [['fa.accum.building', 'accum_reval', 300_000, 0], ['fa.cost.building', 'cost', 2_000_000, 0], ['equity.revaluation', 'revaluation', 0, 2_300_000]]);
   // From July: $120,000 over the 194 months left.
   assert.equal(assets.getSchedule(shop.id).rows.filter((r) => r.period >= '2026-07').reduce((t, r) => t + r.amountMinor, 0), 12_000_000);
@@ -201,19 +208,21 @@ test('revaluation: land and buildings only, up to the surplus, down against it f
 });
 
 test('the tax year: pools in riel with an estimated opening, per-asset Class 1, filing and "changed since filing"', { skip: skipReason }, () => {
-  const { C, cat, assets, disp, taxv, fx, oldTruck, runThrough } = fixture();
+  const { C, cat, assets, disp, taxv, fx, config, runThrough } = fixture();
+  config.updateSettings(C, { registerStartDate: '2025-01-01' }); // so a whole year (2025) has ended
   fx.setRate({ companyId: C, rateDate: '2020-01-01', khrPerUsd: 4050, source: 'official' });
-  oldTruck(); // 2020, $30,000 → 121,500,000 ៛ into the estimate
-  const truck = assets.activate(assets.create({ companyId: C, categoryId: cat('truck'), name: 'New truck', purchaseDate: '2026-03-12', inServiceDate: '2026-03-12', costMinor: 2_400_000, usefulLifeMonths: 96 }).id).asset;
-  assets.activate(assets.create({ companyId: C, categoryId: cat('building'), name: 'Shop', purchaseDate: '2026-02-01', inServiceDate: '2026-02-01', costMinor: 10_000_000, usefulLifeMonths: 240 }).id);
-  runThrough('2026-09');
-  const t = taxv.getTaxYear(C, 2026);
+  assets.activate(assets.create({ companyId: C, categoryId: cat('truck'), name: '2020 truck', acquisitionKind: 'opening',
+    purchaseDate: '2020-06-01', costMinor: 3_000_000, usefulLifeMonths: 120, salvageMinor: 300_000 }).id); // 121,500,000 ៛ into the estimate
+  const truck = assets.activate(assets.create({ companyId: C, categoryId: cat('truck'), name: 'New truck', purchaseDate: '2025-03-12', inServiceDate: '2025-03-12', costMinor: 2_400_000, usefulLifeMonths: 96 }).id).asset;
+  assets.activate(assets.create({ companyId: C, categoryId: cat('building'), name: 'Shop', purchaseDate: '2025-02-01', inServiceDate: '2025-02-01', costMinor: 10_000_000, usefulLifeMonths: 240 }).id);
+  runThrough('2025-12');
+  const t = taxv.getTaxYear(C, 2025);
   const p3 = t.pools['3'];
   assert.equal(p3.openingSource, 'estimate');
   assert.equal(p3.openingLabel, 'estimate — confirm with an accountant');
-  // 121.5M through 2020–2025 at 25 %: × 0.75^6, rounded each year.
+  // 121.5M through 2020–2024 at 25 %: × 0.75^5, rounded each year.
   let est = 121_500_000;
-  for (let y = 2020; y <= 2025; y += 1) est -= Math.round(est * 0.25);
+  for (let y = 2020; y <= 2024; y += 1) est -= Math.round(est * 0.25);
   assert.equal(p3.openingWdvKhr, est);
   assert.equal(p3.additionsKhr, 2_400_000 * 40.5);
   assert.equal(p3.depreciationKhr, Math.round((est + 97_200_000) * 0.25));
@@ -224,23 +233,26 @@ test('the tax year: pools in riel with an estimated opening, per-asset Class 1, 
   assert.ok(bvt.bookUsdMinor > 0 && bvt.taxKhr === p3.depreciationKhr);
   assert.equal(bvt.differenceKhr, bvt.taxKhr - bvt.bookKhr);
 
-  assert.throws(() => taxv.markTaxYearFiled(C, 2026), /estimate — confirm with an accountant/);
-  assert.throws(() => taxv.setPoolOpening(C, { year: 2027, taxClass: '3', openingWdvKhrMinor: 1 }), /entered for 2026/);
-  taxv.setPoolOpening(C, { year: 2026, taxClass: '3', openingWdvKhrMinor: 40_000_000, sourceNote: 'From the 2025 return' });
-  assert.equal(taxv.getTaxYear(C, 2026).pools['3'].openingWdvKhr, 40_000_000);
-  const filed = taxv.markTaxYearFiled(C, 2026);
+  assert.throws(() => taxv.markTaxYearFiled(C, 2026), /2026 has not ended yet/, 'review 2: only ended years');
+  assert.throws(() => taxv.markTaxYearFiled(C, 2025), /estimate — confirm with an accountant/);
+  assert.throws(() => taxv.setPoolOpening(C, { year: 2026, taxClass: '3', openingWdvKhrMinor: 1 }), /entered for 2025/);
+  taxv.setPoolOpening(C, { year: 2025, taxClass: '3', openingWdvKhrMinor: 40_000_000, sourceNote: 'From the 2024 return' });
+  assert.equal(taxv.getTaxYear(C, 2025).pools['3'].openingWdvKhr, 40_000_000);
+  const filed = taxv.markTaxYearFiled(C, 2025);
   assert.ok(filed.filed);
   assert.deepEqual(filed.changedSinceFiling, []);
-  // A fact changes after filing: the snapshot stays, the difference shows.
-  disp.dispose({ id: truck.id, date: '2026-09-25', proceedsMinor: 2_000_000 });
-  const after = taxv.getTaxYear(C, 2026);
+  // A fact changes after filing (a sale dated in the filed year, booked late): the snapshot stays, the difference shows.
+  disp.dispose({ id: truck.id, date: '2025-12-20', proceedsMinor: 2_000_000 });
+  const after = taxv.getTaxYear(C, 2025);
   assert.ok(after.changedSinceFiling.some((c) => c.taxClass === '3' && c.field === 'proceedsKhr' && c.differenceKhr === 2_000_000 * 40.5));
   assert.equal(after.filedSnapshot.pools['3'].proceedsKhr, 0);
-  assert.throws(() => taxv.setPoolOpening(C, { year: 2026, taxClass: '3', openingWdvKhrMinor: 1 }), /filed/);
-  taxv.unfileTaxYear(C, 2026, 'Correction');
-  assert.equal(taxv.getTaxYear(C, 2026).filed, null);
-  // 2027 opens with 2026's closing.
-  assert.equal(taxv.getTaxYear(C, 2027).pools['3'].openingWdvKhr, taxv.getTaxYear(C, 2026).pools['3'].closingWdvKhr);
+  assert.throws(() => taxv.setPoolOpening(C, { year: 2025, taxClass: '3', openingWdvKhrMinor: 1 }), /filed/);
+  // 2026 opens with 2025 AS FILED.
+  assert.equal(taxv.getTaxYear(C, 2026).pools['3'].openingWdvKhr, after.filedSnapshot.pools['3'].closingWdvKhr);
+  assert.equal(taxv.getTaxYear(C, 2026).pools['3'].openingSource, 'filed');
+  taxv.unfileTaxYear(C, 2025, 'Correction');
+  assert.equal(taxv.getTaxYear(C, 2025).filed, null);
+  assert.equal(taxv.getTaxYear(C, 2026).pools['3'].openingWdvKhr, taxv.getTaxYear(C, 2025).pools['3'].closingWdvKhr);
 });
 
 test('reports agree with the ledger; the workbook has its seven sheets; the background pass posts what is due', { skip: skipReason }, async () => {
@@ -251,13 +263,19 @@ test('reports agree with the ledger; the workbook has its seven sheets; the back
   const sched = await require('../main/assetScheduler').runOnce();
   assert.equal(sched.posted.length, dep.listRuns(C).months.filter((m) => m.status === 'posted').length);
   assert.deepEqual(dep.dueMonths(C), []);
-  disp.dispose({ id: pc.id, date: '2026-06-20', proceedsMinor: 50_000 });
-  const reg = reports.getReport(C, { kind: 'register', asOf: '2026-09-30' });
+  // Dated in June, after September's run: booked on 1 October as a late disposal (review 2, MEDIUM 3).
+  const late = disp.dispose({ id: pc.id, date: '2026-06-20', proceedsMinor: 50_000 });
+  assert.equal(late.entry.entryDate, '2026-10-01');
+  assert.match(late.entry.memo, /^Late disposal for 2026-06-20 \(September 2026 already posted\)/);
+  assert.equal(late.event.eventDate, '2026-06-20');
+  assert.ok(reports.getReport(C, { kind: 'register', asOf: '2026-09-30' }).rows.some((r) => r.assetId === pc.id), 'still on the books at 30 Sep');
+  const reg = reports.getReport(C, { kind: 'register', asOf: '2026-10-31' });
+  assert.ok(!reg.rows.some((r) => r.assetId === pc.id));
   const chk = dep.checkIntegrity(C);
   assert.equal(chk.ok, true);
   assert.equal(reg.totals.nbvMinor, chk.totals.glNetMinor);
   assert.equal(reg.totals.trackedOnly, 1);
-  const mv = reports.getReport(C, { kind: 'movements', from: '2026-01-01', to: '2026-09-30' });
+  const mv = reports.getReport(C, { kind: 'movements', from: '2026-01-01', to: '2026-10-31' });
   assert.equal(mv.totals.costOpening + mv.totals.costAdditions + mv.totals.costDisposals + mv.totals.costRevaluation, mv.totals.costClosing);
   assert.equal(mv.totals.costOpening, 3_000_000);
   assert.equal(mv.totals.costAdditions, 120_000);
@@ -273,4 +291,36 @@ test('reports agree with the ledger; the workbook has its seven sheets; the back
   const wb = reports.getWorkbook(C, { year: 2026 });
   const XLSX = require('xlsx');
   assert.deepEqual(XLSX.read(wb.bytes).SheetNames, ['Register', 'Movements', 'Book schedule', 'Tax pools', 'Book vs tax', 'Additions & disposals', 'Notes']);
+});
+
+test('the register list carries posted totals for the WHOLE filtered set (the screen\'s totals row) and each item\'s book cost', { skip: skipReason }, () => {
+  const { C, cat, assets, disp, reports, runThrough, oldTruck } = fixture();
+  const truck = oldTruck();
+  const imac = assets.activate(assets.create({ companyId: C, categoryId: cat('computer'), name: 'iMac', purchaseDate: '2026-02-10', inServiceDate: '2026-02-10', costMinor: 360_000, usefulLifeMonths: 36 }).id).asset;
+  const chair = assets.activate(assets.create({ companyId: C, categoryId: cat('furniture'), name: 'Chair', purchaseDate: '2026-02-10', costMinor: 9_000 }).id).asset;
+  assert.equal(chair.accountingTreatment, 'tracked_only');
+  const sold = assets.activate(assets.create({ companyId: C, categoryId: cat('computer'), name: 'Old laptop', purchaseDate: '2026-01-05', inServiceDate: '2026-01-05', costMinor: 120_000, usefulLifeMonths: 12 }).id).asset;
+  assets.create({ companyId: C, categoryId: cat('computer'), name: 'Draft printer' });
+  runThrough('2026-04');
+  disp.dispose({ id: sold.id, date: '2026-05-20', kind: 'sale', proceedsMinor: 50_000 });
+
+  const all = assets.list(C, { limit: 2 });
+  const rep = reports.getReport(C, { kind: 'register' });
+  assert.equal(all.total, 5);
+  assert.equal(all.items.length, 2, 'the page is two items…');
+  assert.deepEqual(
+    [all.totals.costMinor, all.totals.accumMinor, all.totals.impairmentMinor, all.totals.nbvMinor],
+    [rep.totals.costMinor, rep.totals.accumMinor, rep.totals.impairmentMinor, rep.totals.nbvMinor],
+    '…the totals are every matching asset, equal to the register report',
+  );
+  assert.equal(all.totals.nbvMinor, truck.costUsdMinor + imac.costUsdMinor - all.totals.accumMinor);
+  assert.deepEqual([all.totals.onBooks, all.totals.trackedOnly, all.totals.drafts, all.totals.trackedCostMinor], [2, 1, 1, 9_000]);
+  const byId = new Map(assets.list(C, { limit: 50 }).items.map((a) => [a.id, a]));
+  assert.equal(byId.get(truck.id).bookCostMinor, 3_000_000);
+  assert.equal(byId.get(sold.id).bookCostMinor, 0, 'a disposed asset has nothing left on the books');
+  assert.equal(byId.get(chair.id).bookCostMinor, null, 'nothing posted for a tracked-only item');
+  const computers = assets.list(C, { categoryId: cat('computer') });
+  assert.equal(computers.totals.costMinor, 360_000);
+  assert.equal(computers.totals.nbvMinor, byId.get(imac.id).nbvMinor);
+  assert.deepEqual(assets.list(C, { q: 'nothing like this' }).totals.nbvMinor, 0);
 });

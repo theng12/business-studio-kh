@@ -252,6 +252,8 @@ function setPoolOpening(companyId, { year: y, taxClass, openingWdvKhrMinor, sour
 function markTaxYearFiled(companyId, y) {
   const n = int(y);
   if (filedSnapshot(companyId, n)) throw badRequest(`${n} is already marked filed`);
+  // Only a year that has ended can be filed (review 2).
+  if (n >= Number(require('./_assetUtil').todayPhnomPenh().slice(0, 4))) throw badRequest(`${n} has not ended yet — it can be marked filed from 1 January ${n + 1}`);
   const view = computeYear(companyId, n);
   if (n === view.firstYear) {
     const open = Object.entries(view.pools).filter(([, p]) => p.openingWdvKhr && p.openingSource === 'estimate' && !p.confirmedByAccountant);

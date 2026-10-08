@@ -4,6 +4,8 @@
  * All `expose()`d: they act on the shared data, and the phone page needs the
  * driver / attendant tiles. Capabilities (main/util/capabilities.js):
  *   staff:list / staff:get / staff:getPhoto / staff:me   fuel.record or fuel.manage
+ *   staff:list / staff:get also assets.view / assets.manage (an asset's custodian
+ *                                    picker) — as tiles, like a recorder
  *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage
  * HR1 will move the edits under hr.manage.
  */

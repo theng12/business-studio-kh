@@ -339,7 +339,7 @@ Class 1 / 1b / intangible — per asset:
 1. **It always balances.** Sum of debits = sum of credits in USD cents, or the post throws. The riel figures are computed per line (`round(usd_cents × rate / 100)`), and any rounding difference goes to the largest line, so riel balances too. A nightly integrity pass (§7) re-checks every entry and logs any that fail.
 2. **Posted means permanent.** `CREATE TRIGGER IF NOT EXISTS` makes SQLite refuse any `UPDATE` or `DELETE` on `journal_lines`, and on `journal_entries` except setting `reversed_by_entry_id`. This is additive, and protects against a future bug as well as a future agent.
 3. **Locked months are refused.** An entry dated in a locked month is posted on the **first day of the first open month** instead, with the memo "Late entry for 14 Mar 2027 (March 2027 is locked)". The original date stays on the source event (and on the entry as `intended_date`).
-   - **A lock means "closed through" (decided at review, 2026-10-08).** Locking a month closes the books for it **and every month before it**, whether or not those months have a row of their own. `post()` redirects any date at or before the latest locked month to the 1st of the month after it. Only a month that has **ended** can be locked; locking an earlier month than the latest lock is a no-op. **Only the latest locked month can be unlocked** (admin), which moves "closed through" back to the previous month that was itself locked.
+   - **A lock means "closed through" (decided at review, 2026-10-08).** Locking a month closes the books for it **and every month before it**, whether or not those months have a row of their own. `post()` redirects any date at or before the latest locked month to the 1st of the month after it. Only a month that has **ended** can be locked, and **never while its depreciation is still to be posted** ("Depreciation for March 2026 is not posted yet — post the months up to June 2026 before locking it"); locking an earlier month than the latest lock is a no-op. **Only the latest locked month can be unlocked** (admin), which moves "closed through" back to the previous month that was itself locked.
 4. **Idempotent.** `idempotency_key` (for example `dep:2027-03`, `evt:<eventId>`, `rev:<entryId>`) is UNIQUE, so a retried run or a double click never posts twice.
 5. **Reversal, not delete.** `ledger.reverse(entryId, reason)` posts the mirror entry in the current open month and links the two.
 
@@ -759,7 +759,7 @@ updatedAt }`.
 ### The register
 | Channel | Args | Returns | Cap |
 |---|---|---|---|
-| `assets:list` | `{ q?, branchId? ('none' = no branch), categoryId?, status?, recordState? ('all' includes cancelled), custodianEmployeeId?, attention? ('drafts'\|'needs_cost'\|'no_photo'\|'tags_not_printed'\|'warranty_ending'\|'insurance_due'\|'road_tax_due'), fuelLinked?, limit? (50, ≤500), offset? }` | `{ items: Asset[], total, limit, offset, counts: { drafts, active, cancelled, needsCost, fromFuelNeedsCost } }` | V |
+| `assets:list` | `{ q?, branchId? ('none' = no branch), categoryId?, status?, recordState? ('all' includes cancelled), custodianEmployeeId?, attention? ('drafts'\|'needs_cost'\|'no_photo'\|'tags_not_printed'\|'warranty_ending'\|'insurance_due'\|'road_tax_due'), fuelLinked?, limit? (50, ≤500), offset? }` | `{ items: (Asset & { bookCostMinor })[], total, limit, offset, counts: { drafts, active, cancelled, needsCost, fromFuelNeedsCost }, totals: { assets, onBooks, trackedOnly, trackedCostMinor, drafts, costMinor, accumMinor, impairmentMinor, nbvMinor } }` — `totals` cover the WHOLE filtered set (not the page) from the posted ledger, so they equal the register report; `bookCostMinor` is an item's posted cost (null while nothing is posted) | V |
 | `assets:get` | `id` | `Asset & { files: File[], events: Event[] (latest 100), ledger: { costMinor, accumDepMinor, impairmentMinor }, fuel: { id, name, typeName, status, fuelType, meterUnit } \| null }` | V |
 | `assets:create` | `{ categoryId, name, tagCode? (a pre-printed code; else one is allocated), nameKm?, quantity?, serialNo?, makeModel?, plateNo?, registrationNo?, insuranceUntil?, roadTaxUntil?, branchId?, locationNote?, custodianEmployeeId?, status?, acquisitionKind?, purchaseDate?, inServiceDate?, supplierId?, purchaseOrderId?, invoiceNo?, costMinor?, costCurrency?, costFxKhrPerUsd?, vatMinor?, warrantyUntil?, warrantyNote?, costBasis?, usefulLifeMonths? (default: the category's), salvageMinor? (default at activation: category %), depreciateOverride?, taxClass?, taxClassReason?, notes? }` | `Asset` (a **draft**) | M |
 | `assets:update` | `{ id, patch }` — draft: any field above; active: identity/paperwork only (name, nameKm, serialNo, makeModel, plateNo, registrationNo, insuranceUntil, roadTaxUntil, locationNote, warrantyUntil, warrantyNote, invoiceNo, notes) plus `inServiceDate` once if it had none. Unchanged values in a whole-form save are ignored. `{ retag: true, retagReason }` replaces a damaged tag (old code kept, never reused). `expectedUpdatedAt` optional | `Asset` | M |
@@ -797,13 +797,13 @@ updatedAt }`.
 | `assets:previewDepreciation` | `{ period }` | `{ period, canPost, reason, nextDuePeriod, rows: [{ assetId, tagCode, name, categoryId, categoryName, branchId, monthMinor, catchUpMinor, dueMinor, computedMinor, postedBeforeMinor }], totalMinor, monthMinor, catchUpMinor, byCategory, byBranch }` — writes nothing | V |
 | `assets:runDepreciation` | `{ period }` (the next month due, ended) | `{ run, entry, totalMinor, monthMinor, catchUpMinor, byCategory, byBranch }` | M |
 | `assets:listRuns` | — | `{ nextDuePeriod, lastEndedPeriod, months: [{ period, status ('posted'\|'due'\|'locked'\|'open'), locked, isNext, run, history }] }` | V |
-| `assets:reverseRun` | `{ period, reason }` (the latest run, month open) | `{ run, entry }` | M |
-| `assets:checkIntegrity` | — | `{ ok, checked, unbalanced, assets, accounts, totals: { registerNbvMinor, glNetMinor, matches } }` | V |
+| `assets:reverseRun` | `{ period, reason }` (the latest run, month open, no asset in it since disposed / written off / returned to draft) | `{ run, entry }` | M |
+| `assets:checkIntegrity` | — | `{ ok, checked, unbalanced, assets, accounts, schedule, pendingAtNextRun, lastRun, totals: { registerNbvMinor, glNetMinor, matches } }` | V |
 
 ### A2: disposals and value changes
 | Channel | Args | Returns | Cap |
 |---|---|---|---|
-| `assets:previewDisposal` | `{ id, date?, kind? ('sale'\|'scrap'\|'donation'), proceedsMinor?, currency?, fxKhrPerUsd? }` | `{ lastPeriod, proceedsUsdMinor, nbvMinor, gainMinor, depreciationDueMinor, posts, lines }` — writes nothing | M |
+| `assets:previewDisposal` | `{ id, date?, kind? ('sale'\|'scrap'\|'donation'\|'lost'), proceedsMinor?, currency?, fxKhrPerUsd? }` | `{ lastPeriod, entryDate (later than the date for a late disposal), proceedsUsdMinor, nbvMinor, gainMinor, depreciationDueMinor, posts, lines }` — writes nothing | M |
 | `assets:dispose` | same + `buyer?`, `reason?` | `{ asset, event, entry }` | M |
 | `assets:partialDispose` | `{ id, qty, date?, kind?, proceedsMinor?, currency?, buyer?, reason? }` | `{ asset, event (detail: costShareMinor, accumShareMinor, nbvShareMinor, gainMinor), entry }` | M |
 | `assets:markLost` | `{ id, reason, date?, stocktakeResultId? }` | `{ asset, event, entry }` | M |
@@ -820,7 +820,7 @@ write-off is undone with `assets:markFound`.
 |---|---|---|---|
 | `assets:getTaxYear` | `{ year }` | `{ year, firstYear, pools: { 2\|3\|4: { openingWdvKhr, openingSource ('entered'\|'estimate'\|'computed'\|'filed'), openingLabel, confirmedByAccountant, estimateKhr, additionsKhr, proceedsKhr, baseKhr, rateBp, depreciationKhr, gainKhr, lossKhr, closingWdvKhr } }, perAsset: [{ tagCode, taxClass, costKhr, depreciationKhr, wdvKhr, proceedsKhr, gainLossKhr }], bookVsTax: [{ taxClass, bookUsdMinor, bookKhr, taxKhr, differenceKhr }], totals, notes, filed, filedSnapshot, changedSinceFiling }` | V |
 | `assets:setPoolOpening` | `{ year (the first year), taxClass ('2'\|'3'\|'4'), openingWdvKhrMinor, sourceNote?, confirmedByAccountant?, isEstimate? }` | the stored opening | M |
-| `assets:markTaxYearFiled` | `{ year }` | the year with its snapshot | A |
+| `assets:markTaxYearFiled` | `{ year }` (a year that has ended) | the year with its snapshot | A |
 | `assets:unfileTaxYear` | `{ year, reason }` | the year | A |
 
 ### A2: reports
@@ -889,7 +889,7 @@ branch / custodian / status become events with the reason "Import".
 | `ledger:entriesForAsset` | `assetId` | `Entry[]` (oldest first) | V |
 | `ledger:listPeriods` | — | `[{ period, status ('open'\|'locked'), entryCount, totalMinor, lockedAt, lockedByUserId, lockNote }]` | V |
 | `ledger:checkIntegrity` | — | `{ checked, unbalanced: [...] }` (USD and riel) | V |
-| `ledger:lockPeriod` | `{ period, note? }` (a month that has ended) | `{ period, status: 'locked', closedThrough }` — closes the books through that month | A |
+| `ledger:lockPeriod` | `{ period, note? }` (a month that has ended, its depreciation posted) | `{ period, status: 'locked', closedThrough }` — closes the books through that month | A |
 | `ledger:unlockPeriod` | `{ period, note? }` (the latest locked month only) | `{ period, status: 'open', closedThrough }` | A |
 
 ### Posting rules as built (§5.2, §5.4)
@@ -946,30 +946,50 @@ branch / custodian / status become events with the reason "Import".
 ### A2: depreciation, disposals, tax and reports (built 2026-10-08)
 
 **The monthly run** (`main/db/assetDepreciation.js`, §5.5). For each active, capitalised, in-service
-asset: due = depreciation charged by its schedule through the month − depreciation already posted
-(`accum_dep` lines, the opening and its reversal excluded). The month's own amount goes on
+asset — disposed and lost ones included — due = depreciation charged by its schedule through the month
+− depreciation posted **in or before that month** (`accum_dep` lines, the opening and its reversal
+excluded; review 2). An entry dated later — a disposal, partial disposal or revaluation that settled
+months ahead of lagging runs — does not count, so every month-end equals the schedule, and the run for
+the event's own month takes back what was settled twice. A disposed asset's schedule ends at its
+disposal, so runs for months before it still post them. The month's own amount goes on
 `dep_expense`, anything more on `dep_catch_up` (memo "catch-up January 2026–February 2026"), a negative
 due back on `dep_catch_up` the other way. One entry per company and month dated its last day, key
 `dep:<period>` (then `#2`, `#3` after reversals) and a `depreciation_runs` row. **Runs are sequential**:
 only the next month due can be posted — after the latest run, after the register start's month, and
 after the month the books are closed through (closed months without a run are caught up in the first
 open month). A month that has not ended cannot be posted (preview it). Only the latest run can be
-reversed, while its month is open. Each line carries the branch the asset was in on the month's last day.
+reversed, while its month is open — and **not while an asset in it has since been disposed of, written
+off or returned to draft** ("Undo the disposal of KT-00013 first"; review 2): reversing it would leave a
+balance on that asset for good. Each line carries the branch the asset was in on the month's last day.
 `assetScheduler.js` posts every due month up to last month, 60 s after start and every 12 h, yields
-between months, never runs on a client Mac, and logs the integrity check.
+between months, re-checks each month just before posting it (and stops quietly at one that cannot be
+posted), leaves a month whose run was **reversed by hand** alone until someone posts it again (the
+reversed run row is the flag), never runs on a client Mac, and logs the integrity check. Each month it
+posts sends `assets:changed { kind: 'run', op: 'post' }`, so open screens and the Home badge refresh.
 
 **Integrity** (`assets:checkIntegrity`): every entry balances in USD and riel; every asset's snapshot =
 its ledger; every fixed-asset account's GL balance = its asset-tagged lines; the register's NBV = the GL's
-net fixed-asset balance.
+net fixed-asset balance; and **depreciation posted = the schedule** for every asset — through the last
+run month (a gone asset: to its end). An asset changed after the last run (activated late, found again,
+given an in-service date) is listed as `pendingAtNextRun`, not as an error.
 
 **Disposals and value changes** (`main/db/assetDisposals.js`, §5.4): sale / scrap / donation (gain or
-loss after posting the depreciation still due to the disposal, or taking back what was posted beyond it);
+loss after posting the depreciation still due to the disposal — the last month as `dep_expense`, earlier
+months as `dep_catch_up` — or taking back what was posted beyond it). A disposal or write-off dated in a
+month already posted or closed is **booked on the 1st of the month after the last posted / closed
+month** with the memo "Late disposal for 2026-03-10 (June 2026 already posted)" (review 2, MEDIUM 3;
+the same rule as `assertAfterPosted`); the event keeps its real date, and the register follows the
+ledger, so it equals the GL at every month-end. A disposal cannot be dated before a move or status
+change already recorded for the asset, and every money entry's lines carry the branch the asset was in
+on the event's date;
 partial disposal of a group asset (qty ÷ quantity of cost, accumulated depreciation and impairment; the
 rest runs on from the next month); write-off as lost (Dr Loss) and found (the write-off reversed on the
 day found); impairment (Dr 6510 / Cr 1590, the schedule re-runs on the lower value); revaluation of land
 and buildings only, **elimination method** (IAS 16.35(b): accumulated depreciation and impairment are
-eliminated against cost, which then moves to the new value; up → Cr 3300 surplus; down → against this
-asset's surplus first, then Dr 6510). A linked Fuel vehicle is retired in Fuel when disposed of or lost
+eliminated against cost, which then moves to the new value). An increase first reverses this asset's
+earlier revaluation losses through P&L (IAS 16.39, Cr 6510), the rest Cr 3300 surplus; a decrease first
+uses this asset's surplus (IAS 16.40), the rest Dr 6510. The P&L side carries line role `reval_pl` so
+the running net is a plain SUM. A linked Fuel vehicle is retired in Fuel when disposed of or lost
 (and made active again when found or the sale is reversed). New line roles: `accum_disposal`,
 `accum_reval` (kept apart from `accum_dep`).
 
@@ -978,7 +998,7 @@ intangible per asset (full year in, none out), land gain/loss on sale. The first
 start's) opens with the pools entered (`assets:setPoolOpening`) or, when none are, an estimate from the
 purchase history of the assets already owned (deemed values go in as they are), labelled **"estimate —
 confirm with an accountant"**. Later years open with the year before's closing (or its filed snapshot).
-Marking a year filed (admin) needs every non-empty estimated opening ticked "confirmed by accountant";
+Marking a year filed (admin; **only a year that has ended**) needs every non-empty estimated opening ticked "confirmed by accountant";
 it freezes a snapshot and the view then lists "changed since filing" per class. Book versus tax per
 class (USD and riel, as posted) is in the same view.
 
@@ -991,7 +1011,28 @@ Tax pools, Book vs tax, Additions & disposals, Notes.
 **Realistic data**: `ELECTRON_RUN_AS_NODE=1 npx electron scripts/seed-realistic.js --out <dir> --products 0
 --assets [--fuel] [--assets-start 2025-01-01]` builds ≈300 assets over 5 branches with ≈21 months of
 events and runs, two period closes and a purchase entered late into a closed month, keeps its own
-independent model, and writes `assets-truth.json` with the check of the app's register (per asset and per
-category), depreciation charged, disposal gain/loss, late-entry catch-up and integrity against it.
+independent model, and writes `assets-truth.json`. Checked: the plan's worked examples (§4.1, §4.2,
+§5.4) in hand-computed cents; at **every month-end**, depreciation posted per asset = the model and the
+register = the GL; at the end, per asset and per category, depreciation charged, disposal gain/loss,
+revaluation P&L / surplus, the late entry and late disposal, the first tax year's pool additions and
+proceeds (from the script's own riel rates), and integrity. The last four months are a **lag and
+reversal phase** (runs behind, a backdated disposal into a closed and posted month, a sale paid in riel,
+land revalued down then up, an impairment made and reversed, the latest run reversed and posted again).
 
 Stock-takes, tags and the `/a` phone page are A3 and not built yet.
+
+### Desktop screens (A1 + A2, built 2026-10-08)
+
+`renderer/modules/Assets/` — an **Assets** tile on Home (pages need `assets.view` or `assets.manage`;
+`assets.count` alone has no desktop page until A3's stock-take). Pages: **Register** (filters, paginated
+table, totals row from `assets:list` `totals`, + New asset, Import wizard, Excel workbook; a row opens the
+**asset page**: header actions, Details form with autosave + Save, the "Depreciate this item" tick in
+words, the Fuel link, Photos & documents through `assets:getFile` (⌘V paste), Schedule (book / tax),
+History (void / reverse), Journal), **Depreciation** (months, preview → post, reverse latest, catch-up
+words, "Check the books"), **Tax year** (pools, per-asset Class 1, book vs tax, set opening, admin
+filing; "estimate — confirm with an accountant" shown prominently), **Reports** (the eight). Settings →
+**Assets** (register settings, categories with inline Khmer names, exchange rates, closed months — admin)
+and Settings → **Branches** (`system.manage`; suggestions from Fuel). The Home badge counts drafts with
+no cost plus months due. `staff:list` / `staff:get` are open to `assets.view` / `assets.manage` as
+tiles, for the custodian picker. View model: `assetsModel.js` (tests: `test/assetsUiModel.test.js`,
+`test/assetsUiWiring.test.js`).

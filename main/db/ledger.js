@@ -33,7 +33,9 @@ const SOURCE_KINDS = ['asset_acquire', 'asset_open', 'asset_depreciation', 'asse
 // accum_disposal / accum_reval (A2): accumulated depreciation taken off on a
 // disposal or eliminated on a revaluation — kept apart from accum_dep so
 // "depreciation charged to date" stays a plain SUM of accum_dep.
-const LINE_ROLES = ['cost', 'accum_dep', 'accum_disposal', 'accum_reval', 'dep_expense', 'dep_catch_up', 'gain', 'loss', 'clearing', 'equity', 'impairment', 'revaluation'];
+// reval_pl: the profit-and-loss side of a revaluation (IAS 16.39 / 16.40), kept
+// apart so a later increase knows how much earlier loss it reverses first.
+const LINE_ROLES = ['cost', 'accum_dep', 'accum_disposal', 'accum_reval', 'dep_expense', 'dep_catch_up', 'gain', 'loss', 'clearing', 'equity', 'impairment', 'revaluation', 'reval_pl'];
 
 /** §5.3 — the seeded chart. The accountant may renumber or rename; the app posts by system_key. */
 const SEED_ACCOUNTS = [
@@ -190,6 +192,9 @@ function lockPeriod(companyId, period, note) {
   if (period >= todayPhnomPenh().slice(0, 7)) throw badRequest(`${humanMonth(period)} has not ended yet — it cannot be locked`);
   const before = closedThrough(companyId);
   if (before && period <= before) return { period, status: 'locked', closedThrough: before };
+  // Review 2: never close a month whose depreciation is still to be posted.
+  const due = require('./assetDepreciation').dueThrough(companyId, period);
+  if (due) throw badRequest(`Depreciation for ${humanMonth(due)} is not posted yet — post the months up to ${humanMonth(period)} before locking it`);
   writePeriod(companyId, period, 'locked', note);
   audit('ledger_period', `${companyId}:${period}`, 'lock', { before: { closedThrough: before }, after: { closedThrough: period, note: str(note, 500) } });
   return { period, status: 'locked', closedThrough: period };

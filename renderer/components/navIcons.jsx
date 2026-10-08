@@ -348,6 +348,62 @@ function IconSocialGrid({ className }) {
   );
 }
 
+// Assets module: a tag on a building block — the things the business owns.
+function IconAssets({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M2.5 15.5V7.2L9 3l6.5 4.2v8.3" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M2 15.5h14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="6.3" y="9" width="5.4" height="6.5" rx=".8" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="9" cy="6.6" r=".9" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Asset register: a list with a tag on each row.
+function IconAssetRegister({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2.5" y="2.5" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8 6h5M8 9h5M8 12h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M5 6h.5M5 9h.5M5 12h.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Depreciation: a value line stepping down month by month.
+function IconDepreciation({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M2.5 2.5v13h13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 5.5h2.5v2.5H10v2.5h2.5V13H15" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// Tax year: a calendar page with a percent sign.
+function IconTaxYear({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2.5" y="3.5" width="13" height="12" rx="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2.5 7h13M6 2v3M12 2v3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M6.5 13.5l5-4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="7" cy="9.6" r=".9" fill="currentColor" />
+      <circle cx="11" cy="12.9" r=".9" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Asset reports: a sheet with a small bar chart.
+function IconAssetReport({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M4.5 2.5h6l3 3v10h-9z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M7 13.2v-2.4M9 13.2V8.8M11 13.2v-3.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export const NAV_ICONS = {
   home: IconHome,
   products: IconProducts,
@@ -377,6 +433,11 @@ export const NAV_ICONS = {
   tank: IconTank,
   fuelprice: IconFuelPrice,
   fuelreport: IconFuelReport,
+  assets: IconAssets,
+  assetregister: IconAssetRegister,
+  depreciation: IconDepreciation,
+  taxyear: IconTaxYear,
+  assetreport: IconAssetReport,
   staff: IconStaff,
   history: IconHistory,
   settings: IconSettings,

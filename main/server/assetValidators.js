@@ -146,7 +146,8 @@ const ASSET_VALIDATORS = {
   'assets:checkIntegrity': () => true,
 
   /* A2: disposals and value changes */
-  'assets:previewDisposal': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL(a))),
+  // 'lost' previews a write-off (review 2).
+  'assets:previewDisposal': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL({ ...a, kind: a.kind === 'lost' ? null : a.kind }))),
   'assets:dispose': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL(a), strings(a, ['reason', 'buyer'], 1000))),
   'assets:partialDispose': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL(a), optNumLike(a.qty) && a.qty != null ? true : 'qty is required', strings(a, ['reason', 'buyer'], 1000))),
   'assets:markLost': obj((a) => first(req(a, 'id'), dates(a, ['date']), reason(a), strings(a, ['stocktakeResultId'], 200))),

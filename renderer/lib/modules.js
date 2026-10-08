@@ -18,7 +18,7 @@
  * section below, plus the usual two lines (PAGES in App.jsx, MODULES in
  * store/navigation.js). test/launcher.test.js fails until all three agree.
  *
- * ADDING A MODULE (Assets, Finance, …): add one entry to APP_MODULES. The tile,
+ * ADDING A MODULE (Finance, …): add one entry to APP_MODULES. The tile,
  * its sidebar and ⌘K follow. Do not add a tile for a module with no built page.
  *
  * Pure data + pure functions: no React, no store, no window — so the tests can
@@ -152,6 +152,36 @@ export const APP_MODULES = [
           { id: 'fueltanks', name: 'Tanks & dips', icon: 'tank', caps: ['fuel.record', 'fuel.manage'] },
           { id: 'fuelprices', name: 'Prices', icon: 'fuelprice', caps: ['fuel.record', 'fuel.manage'] },
           { id: 'fuelreports', name: 'Reports', icon: 'fuelreport', caps: ['fuel.manage'] },
+        ],
+      },
+    ],
+  },
+  {
+    // Fixed Assets A1 + A2 (docs/ASSETS_AND_BRANCHES_PLAN.md §8, §9). Every
+    // page needs assets.view or assets.manage; assets.count alone (the phone
+    // stock-take, stage A3) has no desktop page yet, so it gets no tile.
+    // Branches and the asset settings live in Settings (Branches / Assets).
+    id: 'assets',
+    name: 'Assets',
+    description: 'Fixed-asset register, depreciation and tax.',
+    icon: 'assets',
+    badge: {
+      caps: ['assets.view', 'assets.manage'],
+      // Drafts still without a cost + depreciation months due (ended, not posted).
+      async load(api) {
+        const [drafts, runs] = await Promise.all([api.assets.list({ recordState: 'draft', limit: 500 }), api.assets.listRuns()]);
+        return assetsBadge({ needsCost: draftsWithoutCost(drafts) }, runs);
+      },
+      label: (n) => `${n} to do`,
+      tone: 'amber',
+    },
+    sections: [
+      {
+        pages: [
+          { id: 'assetregister', name: 'Register', icon: 'assetregister', caps: ['assets.view', 'assets.manage'] },
+          { id: 'assetdepreciation', name: 'Depreciation', icon: 'depreciation', caps: ['assets.view', 'assets.manage'] },
+          { id: 'assettax', name: 'Tax year', icon: 'taxyear', caps: ['assets.view', 'assets.manage'] },
+          { id: 'assetreports', name: 'Reports', icon: 'assetreport', caps: ['assets.view', 'assets.manage'] },
         ],
       },
     ],
@@ -358,6 +388,30 @@ export function noCompanyReason(companyCount) {
 
 /* ── tile badges ──────────────────────────────────────────────────────── */
 
+/** Drafts with no cost yet (a vehicle that came from Fuel, a draft saved before the invoice was found). */
+export function draftsWithoutCost(list) {
+  const items = Array.isArray(list?.items) ? list.items : [];
+  const counted = items.filter((a) => a.recordState === 'draft' && a.costMinor == null).length;
+  // More drafts than one page: the flagged ones are at least a floor.
+  return (list?.total || 0) > items.length ? Math.max(counted, Number(list?.counts?.needsCost) || 0) : counted;
+}
+
+/**
+ * The Assets tile's count and words: drafts still needing a cost, plus months
+ * whose depreciation is due (ended, not posted yet). `counts` is
+ * `assets:list`'s counts, `runs` is `assets:listRuns`. Zero → null.
+ */
+export function assetsBadge(counts, runs) {
+  const needsCost = Number(counts?.needsCost) || 0;
+  const due = (Array.isArray(runs?.months) ? runs.months : []).filter((m) => m.status === 'due').length;
+  const count = needsCost + due;
+  if (!count) return null;
+  const parts = [];
+  if (needsCost) parts.push(`${needsCost} need${needsCost === 1 ? 's' : ''} a cost`);
+  if (due) parts.push(`${due} month${due === 1 ? '' : 's'} to post`);
+  return { count, label: parts.join(' · ') };
+}
+
 const BADGE_TTL_MS = 60_000;
 const badgeCache = new Map();
 
@@ -373,10 +427,16 @@ export async function loadBadge(mod, { api, caps, companyId, now = Date.now() } 
   const key = `${mod.id}|${companyId}`;
   const hit = badgeCache.get(key);
   if (hit && now - hit.at < BADGE_TTL_MS) return hit.value;
+  // `load` returns a number, or `{ count, label }` when the words need more
+  // than the count (Assets: "3 need a cost · 1 month to post"); null = nothing.
   let n;
-  try { n = Number(await badge.load(api, companyId)); } catch { return null; }
+  let words = null;
+  try {
+    const got = await badge.load(api, companyId);
+    if (got && typeof got === 'object') { n = Number(got.count); words = got.label || null; } else n = got == null ? 0 : Number(got);
+  } catch { return null; }
   if (!Number.isFinite(n)) return null;
-  const value = n > 0 ? { count: n, label: badge.label(n), tone: badge.tone || 'slate' } : null;
+  const value = n > 0 ? { count: n, label: words || badge.label(n), tone: badge.tone || 'slate' } : null;
   badgeCache.set(key, { at: now, value });
   return value;
 }
