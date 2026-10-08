@@ -16,7 +16,7 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { LoadError, ReasonModal, StaffAvatar } from '../Fuel/FuelShared.jsx';
 import { fmtShort } from '../Fuel/fuelModel.js';
-import { useHrCaps, useHrLookups, useHrTick, usePager } from './hrHooks.js';
+import { primeAttendanceThumbs, useHrCaps, useHrLookups, useHrTick, usePager } from './hrHooks.js';
 import { AttendancePhotoModal, AttendancePhotoThumb, HrPermissionNote, PersonCell, clampServerPage } from './HrShared.jsx';
 import { alertKindLabel, errText, eventBadges, fmtHmOn, fmtWorkDate, personName, sourceLabel } from './hrModel.js';
 
@@ -25,6 +25,13 @@ const STATUS_VIEWS = [
   { value: 'accepted', label: 'Accepted' },
   { value: 'rejected', label: 'Rejected' },
   { value: 'all', label: 'All' },
+];
+// Default: held + flagged entries first, then newest (verification 2026-10-08 —
+// oldest-first left a fresh held entry on page 2).
+const ORDERS = [
+  { value: 'attention', label: 'Needs a look first' },
+  { value: 'newest', label: 'Newest first' },
+  { value: 'oldest', label: 'Oldest first' },
 ];
 const SOURCE_FILTERS = [
   { value: '', label: 'Every source' },
@@ -41,6 +48,7 @@ export function Review() {
   const tick = useHrTick(['attendance', 'alert', 'staff']);
   const [status, setStatus] = useState('pending');
   const [source, setSource] = useState('');
+  const [order, setOrder] = useState('attention');
   const [data, setData] = useState({ items: [], total: 0, alerts: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -48,16 +56,18 @@ export function Review() {
   const [rejecting, setRejecting] = useState(null);
   const [viewing, setViewing] = useState(null);
   const [busyId, setBusyId] = useState(null);
-  const pager = usePager([status, source, activeCompanyId]);
+  const pager = usePager([status, source, order, activeCompanyId]);
 
   useEffect(() => { setData({ items: [], total: 0, alerts: [] }); setError(null); }, [activeCompanyId]);
   useEffect(() => {
     if (!activeCompanyId || !canView) { setLoading(false); return undefined; }
     let alive = true;
     setLoading(true);
-    window.api.attendance.listReview({ status, source: source || undefined, limit: pager.pageSize, offset: pager.offset })
+    window.api.attendance.listReview({ status, source: source || undefined, order, limit: pager.pageSize, offset: pager.offset })
       .then((res) => {
         if (!alive) return;
+        // One call for the whole page of thumbnails, before they render (hr.manage only).
+        if (canManage) primeAttendanceThumbs(res?.items);
         setData({ items: res?.items || [], total: res?.total || 0, alerts: res?.alerts || [] });
         setError(null);
         clampServerPage(res?.total, pager.page, pager.pageSize, pager.setPage);
@@ -65,7 +75,7 @@ export function Review() {
       .catch((err) => { if (alive) setError(errText(err)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [activeCompanyId, canView, status, source, pager.page, pager.pageSize, pager.offset, tick, retry]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeCompanyId, canView, canManage, status, source, order, pager.page, pager.pageSize, pager.offset, tick, retry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const person = (id) => lookups.maps.staff.get(id) || null;
   const refresh = () => setRetry((n) => n + 1);
@@ -135,6 +145,9 @@ export function Review() {
       <div className="toolbar">
         <select className="input input--select" aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)}>
           {SOURCE_FILTERS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+        </select>
+        <select className="input input--select" aria-label="Order" value={order} onChange={(e) => setOrder(e.target.value)}>
+          {ORDERS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
         <span className="toolbar__count">{total} {total === 1 ? 'entry' : 'entries'}</span>
         <div className="toolbar__spacer" />

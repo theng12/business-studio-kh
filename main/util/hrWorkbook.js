@@ -23,25 +23,32 @@ function buildAttendanceWorkbook(summary, extra = {}) {
   const rates = summary.settings?.otRates || {};
   const head = [
     'Staff code', 'Name (English)', 'Name (Khmer)', 'Status', 'Days worked', 'Hours worked', 'Regular hours',
-    'Late days', 'Late min', 'Late min confirmed', 'Early-leave min', 'Early-leave min confirmed', 'Absent days', 'Missing clock-outs',
-    `OT normal ${rates.normal ?? 150}% (min) computed`, 'approved', 'pending',
-    `OT night ${rates.night ?? 200}% (min) computed`, 'approved', 'pending',
-    `OT day off ${rates.restDay ?? 200}% (min) computed`, 'approved', 'pending',
-    `OT holiday ${rates.holiday ?? 200}% (min) computed`, 'approved', 'pending',
+    'Late days', 'Late min', 'Late min after review', 'Early-leave min', 'Early-leave min after review', 'Absent days', 'Missing clock-outs',
+    // Computed / pending minutes are shown with TODAY's rate (labelled); approved minutes carry
+    // the rate stored on each approval — see "Approved OT at approval rates".
+    `OT normal computed (min, current rate ${rates.normal ?? 150}%)`, 'approved', 'pending',
+    `OT night computed (min, current rate ${rates.night ?? 200}%)`, 'approved', 'pending',
+    `OT day off computed (min, current rate ${rates.restDay ?? 200}%)`, 'approved', 'pending',
+    `OT holiday computed (min, current rate ${rates.holiday ?? 200}%)`, 'approved', 'pending',
+    'Approved OT at approval rates', 'Approved OT, rate-weighted min',
     'Leave days', ...codes.map((c) => `Leave: ${c}`), 'Public holidays',
   ];
+  const LABEL = { normal: 'normal', night: 'night', restDay: 'day off', holiday: 'holiday' };
+  const byRate = (t) => Object.entries(t.overtimeApprovedByRate || {})
+    .flatMap(([k, m]) => Object.entries(m).map(([rate, min]) => `${LABEL[k]} ${min} min @ ${rate}%`)).join('; ');
   const rows = [head];
   for (const r of summary.rows) {
     const t = r.totals;
     const lt = extra.leaveTaken?.get(r.employeeId) || {};
     rows.push([
       r.staffCode, r.nameEn ?? '', r.nameKm ?? '', r.status, t.daysWorked, h(t.workedMin), h(t.regularMin),
-      t.lateDays, t.lateMin, r.lateness ? r.lateness.confirmedLateMin : 'not confirmed', t.earlyLeaveMin,
-      r.lateness ? r.lateness.confirmedEarlyLeaveMin : 'not confirmed', t.absentDays, t.missingOutDays,
+      t.lateDays, t.lateMin, r.lateness ? (r.lateness.deductibleLateMin ?? r.lateness.confirmedLateMin) : 'not confirmed', t.earlyLeaveMin,
+      r.lateness ? (r.lateness.deductibleEarlyLeaveMin ?? r.lateness.confirmedEarlyLeaveMin) : 'not confirmed', t.absentDays, t.missingOutDays,
       t.overtimeComputed.normal, t.overtimeApproved.normal, t.overtimePending.normal,
       t.overtimeComputed.night, t.overtimeApproved.night, t.overtimePending.night,
       t.overtimeComputed.restDay, t.overtimeApproved.restDay, t.overtimePending.restDay,
       t.overtimeComputed.holiday, t.overtimeApproved.holiday, t.overtimePending.holiday,
+      byRate(t), t.overtimeApprovedWeightedMin ?? '',
       t.leaveDays, ...codes.map((c) => lt[c] || 0), t.holidays,
     ]);
   }
@@ -68,7 +75,8 @@ function buildAttendanceWorkbook(summary, extra = {}) {
     ['Late', summary.settings?.lateCountsFrom === 'start' ? 'Minutes after the scheduled start, once the grace period is passed.' : 'Minutes after the scheduled start plus the grace period.'],
     ['Overtime', 'Work days: minutes after the scheduled end (night window = night rate). Weekly day off and public holidays: every minute worked. Payroll pays APPROVED minutes only.'],
     ['Lateness', 'Payroll deducts only a confirmed month ("not confirmed" = not deducted yet).'],
-    ['Rates', 'Labour Law defaults, editable in Settings — confirm with the accountant.'],
+    ['Rates', 'Labour Law defaults, editable in Settings — confirm with the accountant. Approved overtime keeps the rate in force when it was approved; the computed / pending columns are labelled with today\'s rate.'],
+    ['After review', 'Late / early-leave minutes payroll may deduct: the confirmed figure, never more than the attendance shows now.'],
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(notes), 'Notes');
   const bytes = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });

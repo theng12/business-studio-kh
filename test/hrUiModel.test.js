@@ -150,12 +150,17 @@ test('overtime rows: one per person per day with overtime or an approval, with i
 
 test('adjusting overtime never goes above what the attendance shows', () => {
   const computed = { normal: 60, night: 30, restDay: 0, holiday: 0 };
-  const ok = M.validateOvertimeAdjust({ normal: '45', night: '30', restDay: '', holiday: '0' }, computed);
+  const ok = M.validateOvertimeAdjust({ normal: '0:45', night: '30', restDay: '', holiday: '0:00' }, computed);
   assert.deepEqual(ok.errors, {});
   assert.deepEqual(ok.minutes, { normal: 45, night: 30, restDay: 0, holiday: 0 });
   const bad = M.validateOvertimeAdjust({ normal: '90', night: '-1', restDay: '1.5', holiday: '0' }, computed);
-  assert.match(bad.errors.normal, /At most 60 min/);
+  assert.match(bad.errors.normal, /At most 1:00/);
   assert.ok(bad.errors.night && bad.errors.restDay);
+  // h:mm like the table, or plain minutes (verification 2026-10-08).
+  assert.equal(M.parseDuration('1:30'), 90);
+  assert.equal(M.parseDuration('90'), 90);
+  assert.equal(M.parseDuration(' '), 0);
+  for (const bad2 of ['1:75', '1.5', '-5', 'abc', '1:5']) assert.ok(Number.isNaN(M.parseDuration(bad2)), bad2);
 });
 
 test('lateness: state of a month, and a waiver needs a note', () => {
@@ -326,10 +331,10 @@ test('L2: an emptied correction time is sent as null (remove), an untouched empt
 test('L3: Adjust starts at min(approved, computed) and never locks a field holding a value', () => {
   const row = { computed: { normal: 30, night: 0, restDay: 0, holiday: 0 }, approved: { normal: 90, night: 15, restDay: 0, holiday: 0 }, approval: { note: 'x' } };
   const f = M.overtimeAdjustForm(row);
-  assert.deepEqual([f.normal, f.night, f.restDay, f.holiday, f.note], ['30', '0', '0', '0', 'x'], 'an approval that outgrew the day starts at what can still be approved');
-  assert.deepEqual(M.overtimeAdjustForm({ computed: { normal: 45, night: 15, restDay: 0, holiday: 0 } }).night, '15', 'no approval yet: the computed minutes');
-  assert.equal(M.overtimeFieldLocked({ night: '0' }, row.computed, 'night'), true, 'nothing to approve and empty: locked');
-  assert.equal(M.overtimeFieldLocked({ night: '15' }, row.computed, 'night'), false, 'a value is never locked away');
+  assert.deepEqual([f.normal, f.night, f.restDay, f.holiday, f.note], ['0:30', '0:00', '0:00', '0:00', 'x'], 'an approval that outgrew the day starts at what can still be approved');
+  assert.deepEqual(M.overtimeAdjustForm({ computed: { normal: 45, night: 15, restDay: 0, holiday: 0 } }).night, '0:15', 'no approval yet: the computed minutes');
+  assert.equal(M.overtimeFieldLocked({ night: '0:00' }, row.computed, 'night'), true, 'nothing to approve and empty: locked');
+  assert.equal(M.overtimeFieldLocked({ night: '0:15' }, row.computed, 'night'), false, 'a value is never locked away');
   assert.equal(M.overtimeFieldLocked({ normal: '0' }, row.computed, 'normal'), false);
 });
 
@@ -344,4 +349,65 @@ test('L8: re-confirming a month keeps the earlier waiver as minutes waived', () 
   assert.deepEqual(waived, { args: { lateMinutes: 40, earlyLeaveMinutes: 5, note: 'Flat tyre on the 12th' }, waived: { late: 15, early: 0 } });
   const shrunk = M.reconfirmLateness({ totals: { lateMin: 10, earlyLeaveMin: 0 }, lateness: { computedLateMin: 40, confirmedLateMin: 25, note: 'x' } });
   assert.equal(shrunk.args.lateMinutes, 0, 'never below zero');
+});
+
+test('verification fixes: date ranges keep their month, payable overtime, ledger dates', () => {
+  const r = M.fmtDateRange('2026-10-26', '2026-10-30');
+  assert.doesNotMatch(r, /^26 – /, 'the first day is never left without its month');
+  assert.match(r, /Oct/);
+  assert.match(r, /26/);
+  assert.match(r, /30/);
+  assert.match(M.fmtDateRange('2026-10-26', '2026-11-03'), /Oct[^–]*–[^–]*Nov|Nov[^–]*–/, 'two months: both named');
+  assert.match(M.fmtDateRange('2026-12-30', '2027-01-02'), /2026[\s\S]*2027/, 'two years: both named');
+  assert.equal(M.fmtDateRange('2026-10-08', '2026-10-08'), M.fmtDateRange('2026-10-08'));
+  assert.equal(M.fmtDateRange(''), '—');
+  // en-US, as the tests run: the exact strings.
+  if (new Intl.DateTimeFormat().resolvedOptions().locale.startsWith('en-US')) {
+    const plain = (x) => x.replace(/\s+/g, ' '); // Intl uses thin / no-break spaces around the dash
+    assert.equal(plain(r), 'Oct 26 – 30, 2026');
+    assert.equal(plain(M.fmtDateRange('2026-10-26', '2026-11-03')), 'Oct 26 – Nov 3, 2026');
+  }
+  assert.equal(M.payableOvertime({ computed: { normal: 30 } }), null);
+  assert.deepEqual(M.payableOvertime({ computed: { normal: 30, night: 15 }, approved: { normal: 90, night: 15, restDay: 0, holiday: 0 } }), { payable: 45, raw: 105 });
+});
+
+test('lookup cache: one load per company, reused across pages, dropped on a change or a switch', async () => {
+  const { createLookupCache, LOOKUP_KINDS } = load('renderer/modules/People/lookupCache.js');
+  let calls = 0;
+  let fail = false;
+  const cache = createLookupCache(async (key) => { calls += 1; if (fail) throw new Error('offline'); return { key, n: calls }; });
+  const [a, b] = await Promise.all([cache.get('co1|m'), cache.get('co1|m')]);
+  assert.equal(calls, 1, 'two pages asking at once share one load');
+  assert.equal(a, b);
+  assert.equal(cache.peek('co1|m'), a, 'the next page starts from the cache, no refetch');
+  await cache.get('co1|m');
+  assert.equal(calls, 1);
+  let told = 0;
+  const off = cache.subscribe(() => { told += 1; });
+  cache.invalidate('co2');
+  assert.equal(told, 0, 'another company\'s change leaves this one');
+  cache.invalidate('co1');
+  assert.equal(told, 1);
+  assert.equal(cache.peek('co1|m'), null);
+  await cache.get('co1|m');
+  assert.equal(calls, 2);
+  await cache.get('co2|m');
+  assert.equal(cache.peek('co1|m'), null, 'a company switch replaces the entry');
+  // A load that lands after its entry was dropped is not cached.
+  let release;
+  const slow = createLookupCache(() => new Promise((r) => { release = r; }));
+  const pending = slow.get('k');
+  slow.invalidate();
+  await new Promise((r) => setImmediate(r)); // the fetcher starts on the next tick
+  release({ stale: true });
+  await pending;
+  assert.equal(slow.peek('k'), null);
+  fail = true;
+  cache.invalidate();
+  await assert.rejects(cache.get('co1|m'), /offline/);
+  fail = false;
+  assert.ok(await cache.get('co1|m'), 'a failure is not cached');
+  off();
+  for (const k of ['staff', 'position', 'schedule', 'leaveType', 'settings']) assert.ok(LOOKUP_KINDS.has(k));
+  assert.ok(!LOOKUP_KINDS.has('attendance'), 'a clock-in does not reload the lookups');
 });

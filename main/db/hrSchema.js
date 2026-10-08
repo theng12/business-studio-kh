@@ -337,6 +337,8 @@ function ensureHrSchema(db) {
     addColumnIfMissing(db, t, 'needs_reapproval_reason', 'TEXT');
     addColumnIfMissing(db, t, 'needs_reapproval_at', 'INTEGER');
   }
+  // Overtime rates are dated by the approval: the % in force when it was approved.
+  for (const c of ['rate_normal', 'rate_night', 'rate_rest_day', 'rate_holiday']) addColumnIfMissing(db, 'overtime_approvals', c, 'REAL');
   // No absence before the company started keeping attendance in the app.
   addColumnIfMissing(db, 'hr_settings', 'attendance_start_date', 'TEXT');
   // Phone requests ("I forgot", leave) go through the phone's offline outbox:

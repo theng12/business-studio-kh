@@ -212,7 +212,8 @@
       last_month: 'ខែមុន',
       m_days: 'ថ្ងៃធ្វើការ',
       m_late: 'មកយឺត',
-      late_value: '{min} នាទី ({days} ថ្ងៃ)',
+      late_reviewed: '{min} នាទី ({after} នាទី ក្រោយការពិនិត្យ)',
+      late_unreviewed: '{min} នាទី (មិនទាន់ពិនិត្យ)',
       m_missing: 'ភ្លេចចុះម៉ោងចេញ',
       m_absent: 'ថ្ងៃអវត្តមាន',
       m_leave: 'ថ្ងៃឈប់សម្រាក',
@@ -453,7 +454,8 @@
       last_month: 'Last month',
       m_days: 'Days worked',
       m_late: 'Late',
-      late_value: '{min} min ({days} days)',
+      late_reviewed: '{min} min ({after} min after review)',
+      late_unreviewed: '{min} min (not reviewed yet)',
       m_missing: 'Missing clock-outs',
       m_absent: 'Absent days',
       m_leave: 'Leave days',
@@ -1065,6 +1067,17 @@
     return { key: 'st_none', time: '' };
   }
 
+  /**
+   * "Late" on My attendance: the minutes computed, and what the office kept
+   * after reviewing the month (`lateness` from attendance:mine; the confirmed
+   * figure is what payroll may deduct). { key, vars } for t().
+   */
+  function lateLine(lateness, totals) {
+    var min = lateness && lateness.lateMin != null ? lateness.lateMin : (totals && totals.lateMin) || 0;
+    if (lateness && lateness.reviewed && lateness.lateAfterReviewMin != null) return { key: 'late_reviewed', vars: { min: min, after: lateness.lateAfterReviewMin } };
+    return { key: 'late_unreviewed', vars: { min: min } };
+  }
+
   /** Time keypad: up to 4 digits (`752` → 07:52, `1705` → 17:05, `7` → 07:00). */
   function timePress(text, key) {
     var s = String(text || '');
@@ -1136,6 +1149,7 @@
     isHeld: isHeld,
     nextClockKind: nextClockKind,
     dayState: dayState,
+    lateLine: lateLine,
     timePress: timePress,
     parseHm: parseHm,
   };

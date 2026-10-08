@@ -15,6 +15,7 @@
  * to review (attendance:listReview / attendance:review).
  */
 
+const { userError } = require('../util/userError');
 const attendance = require('../db/attendance');
 const leave = require('../db/leave');
 const hr = require('../db/hr');
@@ -67,7 +68,19 @@ function ownView(companyId, employeeId, { now = Date.now() } = {}) {
   const prev = attendance.monthSummary(companyId, lastMonth, { employeeId, now }).rows[0] || null;
   const today = cur?.days?.find((d) => d.date === calc.ppDate(now)) || null;
   const last = attendance.lastActiveEvent(employeeId);
-  const pick = (r, month) => (r ? { month, totals: r.totals, days: r.days, latenessConfirmed: !!r.lateness } : { month, totals: null, days: [] });
+  // Late / early-leave minutes as computed AND after the office's review (the
+  // confirmed figure, never more than computed). Screens say e.g. "late 45 min
+  // (30 min after review)"; afterReviewMin is null until the month is confirmed.
+  const lateSummary = (r) => (r ? {
+    lateMin: r.totals.lateMin,
+    lateAfterReviewMin: r.lateness ? r.lateness.deductibleLateMin : null,
+    earlyLeaveMin: r.totals.earlyLeaveMin,
+    earlyLeaveAfterReviewMin: r.lateness ? r.lateness.deductibleEarlyLeaveMin : null,
+    reviewed: !!r.lateness,
+  } : null);
+  const pick = (r, month) => (r
+    ? { month, totals: r.totals, days: r.days, latenessConfirmed: !!r.lateness, lateness: lateSummary(r) }
+    : { month, totals: null, days: [], latenessConfirmed: false, lateness: null });
   return {
     employee: tile(e),
     today,
@@ -104,7 +117,7 @@ function register({ expose }) {
   expose('attendance:getPhoto', async ({ eventId, thumb = false } = {}) => {
     company();
     const row = attendance.getEventRow(eventId);
-    if (!row) throw new Error('Attendance entry not found');
+    if (!row) throw userError('Attendance entry not found');
     activeCompanyId(row.company_id);
     if (!row.photo_path) return null;
     if (row.photo_retired_at) {
@@ -114,6 +127,40 @@ function register({ expose }) {
     }
     const out = await require('../hrPhotos').readHrFile(row.photo_path, { thumb: thumb === true, expectedSha256: row.photo_sha256 });
     return { bytes: out.bytes, mime: out.mime, sha256: row.photo_sha256, intact: out.intact, at: row.at, kind: row.kind, source: row.source };
+  });
+
+  /**
+   * Many clock-in photos at once, as small JPEG thumbnails, for the review list
+   * (one call per page instead of one per photo). hr.manage only, like getPhoto.
+   * `size`: 'thumb' (≤ 320 px, default) or 'small' (≤ 160 px). At most 60 ids.
+   * Returns one entry per id, in order: { eventId, bytes, mime, sha256, intact }
+   * or { eventId, missing: true } / { eventId, retired: true } / { eventId, none: true }.
+   */
+  expose('attendance:getPhotos', async ({ eventIds, size = 'thumb' } = {}) => {
+    const companyId = company();
+    const edge = size === 'small' ? 160 : 320;
+    const sharp = require('sharp');
+    const fs = require('node:fs');
+    const crypto = require('node:crypto');
+    const { absPath } = require('../fuelPhotos');
+    const one = async (eventId) => {
+      const row = attendance.getEventRow(eventId);
+      if (!row || row.company_id !== companyId) return { eventId, missing: true };
+      if (!row.photo_path) return { eventId, none: true };
+      if (row.photo_retired_at) return { eventId, retired: true };
+      let buf;
+      try { buf = fs.readFileSync(absPath(row.photo_path)); } catch (_) { return { eventId, missing: true }; }
+      const intact = crypto.createHash('sha256').update(buf).digest('hex') === row.photo_sha256;
+      const bytes = await sharp(buf).resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 65 }).toBuffer();
+      return { eventId, bytes, mime: 'image/jpeg', sha256: row.photo_sha256, intact };
+    };
+    const ids = [...new Set(eventIds)];
+    const out = new Map();
+    for (let i = 0; i < ids.length; i += 4) { // a few at a time: sharp works off the main thread
+      const part = await Promise.all(ids.slice(i, i + 4).map(one));
+      for (const r of part) out.set(r.eventId, r);
+    }
+    return eventIds.map((id) => out.get(id));
   });
 
   /* ─── manager: entries, review ─── */
@@ -230,8 +277,8 @@ function register({ expose }) {
   expose('attendance:markCrew', async ({ employeeId, kind = null, photo = null, note = null, clientRef = null, queuedForMs = null } = {}) => {
     const companyId = company();
     const me = callerEmployee(companyId);
-    if (employeeId === me.id) throw new Error('Clock yourself in with "Clock me in", not as your own crew');
-    if (!crewOf(companyId, me).some((e) => e.id === employeeId)) throw new Error('That person is not in your crew');
+    if (employeeId === me.id) throw userError('Clock yourself in with "Clock me in", not as your own crew');
+    if (!crewOf(companyId, me).some((e) => e.id === employeeId)) throw userError('That person is not in your crew');
     const res = await attendance.clock({
       companyId, employeeId, source: 'supervisor', photoBytes: photo, requirePhoto: false, deviceLabel: deviceLabel(),
       clientRef, queuedForMs, note, kind,
@@ -321,7 +368,7 @@ function register({ expose }) {
     const companyId = company();
     const me = callerEmployee(companyId);
     const r = inCompany(leave.getRequest(id), 'Leave request');
-    if (r.employeeId !== me.id) throw new Error('You can only withdraw your own requests');
+    if (r.employeeId !== me.id) throw userError('You can only withdraw your own requests');
     const next = leave.cancel(id, { reason, onlyPending: true });
     emitHrChange('leave', 'update', id, companyId);
     return next;

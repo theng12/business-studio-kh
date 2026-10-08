@@ -1104,7 +1104,7 @@ const PROXIED_CHANNELS = [
   'hr:listHolidays','hr:createHoliday','hr:updateHoliday','hr:getProfile','hr:updateProfile','hr:setStatus',
   'hr:setPin','hr:clearPin','hr:unlockPin','hr:listDocuments','hr:addDocument','hr:readDocument','hr:voidDocument',
   'hr:runJobs','hr:getMonthWorkbook',
-  'attendance:day','attendance:monthSummary','attendance:listEvents','attendance:getPhoto','attendance:addManual','attendance:void',
+  'attendance:day','attendance:monthSummary','attendance:listEvents','attendance:getPhoto','attendance:getPhotos','attendance:addManual','attendance:void',
   'attendance:listReview','attendance:listAlerts','attendance:ackAlert','attendance:review','attendance:listCorrections','attendance:requestCorrection','attendance:decideCorrection',
   'attendance:listOvertime','attendance:approveOvertime','attendance:revokeOvertime','attendance:listLateness','attendance:confirmLateness',
   'attendance:clockSelf','attendance:mine','attendance:requestCorrectionSelf','attendance:crew','attendance:markCrew',
@@ -1651,11 +1651,14 @@ function registerClientFileHandlers() {
   handleLocal('hr:saveMonthWorkbook', async ({ month } = {}) => {
     const res = await rpc('hr:getMonthWorkbook', { month });
     const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);
-    const out = await dialog.showSaveDialog({
+    // Parented to the window the user is in (a sheet on that window, not a loose dialog).
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
+    const opts = {
       title: 'Save attendance workbook',
       defaultPath: res?.filename || `attendance-${month || 'month'}.xlsx`,
       filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
-    });
+    };
+    const out = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (out.canceled || !out.filePath) return null;
     require('node:fs').writeFileSync(out.filePath, bytes);
     return out.filePath;

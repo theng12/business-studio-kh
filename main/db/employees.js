@@ -37,7 +37,8 @@ const PRIVATE_FIELDS = ['phone', 'notes', ...SENSITIVE_FIELDS];
 function redact(obj) {
   if (!obj || typeof obj !== 'object') return obj;
   const out = { ...obj };
-  for (const k of PRIVATE_FIELDS) if (k in out) out[k] = out[k] == null ? null : '(set)';
+  // "(empty)" / "(set)" — never the value, and never "(set)" for a field that had nothing in it.
+  for (const k of PRIVATE_FIELDS) if (k in out) out[k] = out[k] == null || String(out[k]).trim() === '' ? '(empty)' : '(set)';
   return out;
 }
 

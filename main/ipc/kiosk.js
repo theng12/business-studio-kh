@@ -20,6 +20,7 @@
  * to the kiosk ACCOUNT that signed in, so another device cannot use it.
  */
 
+const { userError } = require('../util/userError');
 const attendance = require('../db/attendance');
 const leave = require('../db/leave');
 const hr = require('../db/hr');
@@ -55,17 +56,17 @@ function nameOf(e) { return e?.nameEn || e?.nameKm || e?.staffCode || 'staff mem
  */
 function assertPreviewAllowed() {
   const caps = callerCaps(); // null = this Mac's own window
-  if (caps && !(caps.has('*') || caps.has('hr.manage'))) throw new Error('The kiosk preview is only for HR managers');
+  if (caps && !(caps.has('*') || caps.has('hr.manage'))) throw userError('The kiosk preview is only for HR managers');
 }
 
 /** A PIN check that writes nothing (preview): a lock is still reported, a wrong PIN is not counted. */
 async function checkPinDry(employeeId, pin, companyId) {
   const row = employees.getRow(employeeId);
-  if (!row || row.company_id !== companyId) throw new Error('That person is not on this company\'s staff list');
-  if (!row.kiosk_pin_hash) throw new Error('No PIN is set for this person yet — ask a manager');
+  if (!row || row.company_id !== companyId) throw userError('That person is not on this company\'s staff list');
+  if (!row.kiosk_pin_hash) throw userError('No PIN is set for this person yet — ask a manager');
   const lock = pinUtil.lockState({ lockedUntil: row.pin_locked_until, managerOnly: !!row.pin_manager_only, now: Date.now() });
-  if (lock.locked) throw new Error(lock.managerOnly ? 'This PIN is locked. Only a manager can unlock it.' : `Too many wrong PINs. Try again in ${Math.ceil(lock.retryInSeconds / 60)} min.`);
-  if (!(await pinUtil.verifyPin(pin, row.kiosk_pin_hash, row.pin_salt))) throw new Error('Wrong PIN.');
+  if (lock.locked) throw userError(lock.managerOnly ? 'This PIN is locked. Only a manager can unlock it.' : `Too many wrong PINs. Try again in ${Math.ceil(lock.retryInSeconds / 60)} min.`);
+  if (!(await pinUtil.verifyPin(pin, row.kiosk_pin_hash, row.pin_salt))) throw userError('Wrong PIN.');
 }
 
 function nextFor(companyId, employeeId, now = Date.now()) {
@@ -94,7 +95,7 @@ function register({ expose }) {
   expose('kiosk:tilePhoto', async ({ id } = {}) => {
     company();
     const e = inCompany(employees.get(id), 'Staff member');
-    if (e.status !== 'active') throw new Error('Staff member not found');
+    if (e.status !== 'active') throw userError('Staff member not found');
     const row = employees.getRow(id);
     if (!row.photo_path) return null;
     const out = await require('../fuelPhotos').readPhotoFile(row.photo_path, { thumb: true, expectedSha256: row.photo_sha256 });
@@ -106,7 +107,7 @@ function register({ expose }) {
     const companyId = company();
     if (preview) assertPreviewAllowed();
     const e = inCompany(employees.get(employeeId), 'Staff member');
-    if (e.status !== 'active') throw new Error('This person cannot clock in — ask a manager');
+    if (e.status !== 'active') throw userError('This person cannot clock in — ask a manager');
     if (preview) await checkPinDry(employeeId, pin, companyId);
     else await people.checkPin(employeeId, pin, { companyId, kioskUserId: getCallerUserId() });
     const token = people.createSession({ kioskUserId: getCallerUserId(), employeeId, companyId });
@@ -132,7 +133,7 @@ function register({ expose }) {
     const companyId = company();
     const s = session(sessionToken, companyId);
     const allowed = noPhoto === true && s.noPhotoBy && Date.now() - s.noPhotoBy.at <= NO_PHOTO_MS ? s.noPhotoBy : null;
-    if (!photo && !allowed) throw new Error('A photo is needed to clock in or out');
+    if (!photo && !allowed) throw userError('A photo is needed to clock in or out');
     if (s.preview) {
       // Dry run: what would happen, nothing written.
       const { next } = nextFor(companyId, s.employeeId);
@@ -174,7 +175,7 @@ function register({ expose }) {
     const s = session(sessionToken, companyId);
     if (s.preview) {
       const t = leave.getType(leaveTypeId);
-      if (!t || t.companyId !== companyId) throw new Error('Leave type not found');
+      if (!t || t.companyId !== companyId) throw userError('Leave type not found');
       return { id: null, preview: true, status: 'pending', leaveTypeId, fromDate, toDate: toDate || fromDate, halfDay, days: null };
     }
     const r = leave.createRequest({ companyId, employeeId: s.employeeId, leaveTypeId, fromDate, toDate, halfDay, reason, via: 'kiosk' });
@@ -213,15 +214,15 @@ async function verifyManagerPin({ employeeId, pin, purpose = 'leave', sessionTok
   // 'no-photo' is for the person signed in on this kiosk session — never the manager themself.
   let s = null;
   if (noPhoto) {
-    if (!sessionToken) throw new Error('Clocking without a photo needs the person signed in first');
+    if (!sessionToken) throw userError('Clocking without a photo needs the person signed in first');
     s = session(sessionToken, companyId);
-    if (s.employeeId === e.id) throw new Error('A manager cannot allow their own clock-in without a photo — another manager must');
+    if (s.employeeId === e.id) throw userError('A manager cannot allow their own clock-in without a photo — another manager must');
   }
   // The PIN is checked first (same per-person and per-kiosk limits), so the
   // answer does not reveal who is a manager to someone without the PIN.
   if (preview || s?.preview) await checkPinDry(employeeId, pin, companyId);
   else await people.checkPin(employeeId, pin, { companyId, kioskUserId: getCallerUserId() });
-  if (!people.isManagerEmployee(e)) throw new Error(noPhoto ? 'Only a manager can allow this' : 'Only a manager can leave kiosk mode');
+  if (!people.isManagerEmployee(e)) throw userError(noPhoto ? 'Only a manager can allow this' : 'Only a manager can leave kiosk mode');
   if (noPhoto) s.noPhotoBy = { managerId: e.id, managerName: nameOf(e), at: Date.now() };
   if (!preview && !s?.preview) {
     const person = s ? employees.get(s.employeeId) : null;

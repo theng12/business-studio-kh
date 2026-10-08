@@ -428,6 +428,7 @@ contextBridge.exposeInMainWorld('api', {
     monthSummary:          (args)                     => invoke('attendance:monthSummary', args),
     listEvents:            (filters)                  => invoke('attendance:listEvents', filters),
     getPhoto:              (eventId, thumb)           => invoke('attendance:getPhoto', { eventId, thumb }),
+    getPhotos:             (eventIds, size)           => invoke('attendance:getPhotos', { eventIds, size }),
     addManual:             (input)                    => invoke('attendance:addManual', input),
     voidEvent:             (id, reason)               => invoke('attendance:void', { id, reason }),
     listReview:            (filters)                  => invoke('attendance:listReview', filters),

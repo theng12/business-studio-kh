@@ -219,7 +219,8 @@ function hrRpc(channel, args, json, req, res) {
       const last = state.events[state.events.length - 1] || null;
       return ok({
         employee: { id: 'emp9', nameEn: 'Sophal' }, today: null, lastEvent: last && { kind: last.kind, at: last.at, source: 'phone' },
-        thisMonth: { month: '2026-10', totals: totals(12), days: [] }, lastMonth: { month: '2026-09', totals: totals(24), days: [] },
+        thisMonth: { month: '2026-10', totals: totals(12), days: [], lateness: { lateMin: 25, lateAfterReviewMin: null, earlyLeaveMin: 0, earlyLeaveAfterReviewMin: null, reviewed: false } },
+        lastMonth: { month: '2026-09', totals: totals(24), days: [], lateness: { lateMin: 25, lateAfterReviewMin: 10, earlyLeaveMin: 0, earlyLeaveAfterReviewMin: 0, reviewed: true } },
         leave: [
           { leaveTypeId: 'lt1', code: 'annual', nameEn: 'Annual leave', nameKm: 'ច្បាប់ប្រចាំឆ្នាំ', paid: true, tracksBalance: true, balance: 7.5, takenThisYear: 3, pendingDays: 0 },
           { leaveTypeId: 'lt2', code: 'sick', nameEn: 'Sick leave', nameKm: 'ច្បាប់ឈឺ', paid: true, tracksBalance: false, balance: null, takenThisYear: 2, pendingDays: 0 },
@@ -559,9 +560,10 @@ app.whenReady().then(async () => {
   await waitFor(() => exists('[data-flow="mine"]'), 'home (mine)');
   await click('[data-flow="mine"]');
   await waitFor(() => exists('[data-month="this_month"]'), 'my attendance');
-  const mineText = await js(`({ month: document.querySelector('[data-month="this_month"]').textContent, leave: document.querySelector('[data-leave]').textContent })`);
+  const mineText = await js(`({ month: document.querySelector('[data-month="this_month"]').textContent, last: document.querySelector('[data-month="last_month"]').textContent, leave: document.querySelector('[data-leave]').textContent })`);
   assert.match(mineText.month, /Days worked12/);
-  assert.match(mineText.month, /Late25 min \(2 days\)/);
+  assert.match(mineText.month, /Late25 min \(not reviewed yet\)/);
+  assert.match(mineText.last, /Late25 min \(10 min after review\)/);
   assert.match(mineText.month, /Missing clock-outs1/);
   assert.match(mineText.leave, /Annual leave7\.5 days left/);
   assert.match(mineText.leave, /Sick leave2 days taken this year/);

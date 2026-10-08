@@ -216,3 +216,31 @@ test('settings: Labour Law defaults, strict validation of a patch', () => {
   assert.throws(() => c.mergeSettings({}, { bogus: 1 }), /Unknown HR setting/);
   assert.equal(c.mergeSettings({ otMinMinutes: 9999 }).otMinMinutes, 15, 'a bad stored value falls back to the default');
 });
+
+test('only odd entries (an out with no in) is incomplete, not present', () => {
+  const d = day('2026-10-08', [{ id: 'o', kind: 'out', at: at('2026-10-08', '17:00') }]);
+  assert.equal(d.status, 'incomplete');
+  assert.equal(d.oddEntries, true);
+  assert.equal(d.workedMin, 0);
+  assert.equal(day('2026-10-08', ev('2026-10-08', ['07:00', '17:00'])).oddEntries, false);
+});
+
+test('clock entries on a suspended day are counted and the day is marked', () => {
+  const d = day('2026-10-08', ev('2026-10-08', ['07:00', '17:00']), { suspended: true });
+  assert.equal(d.status, 'suspended_with_events');
+  assert.equal(d.workedMin, 540);
+  assert.ok(d.flags.some((f) => f.code === 'suspended_with_events'));
+});
+
+test('approved overtime is counted at the rate stored on the approval', () => {
+  const days = [day('2026-10-07', ev('2026-10-07', ['07:00', '19:00']))]; // 120 normal
+  const t = c.summarizeDays(days, {
+    approvedByDate: new Map([['2026-10-07', { normal: 90, night: 0, restDay: 0, holiday: 0, rates: { normal: 150, night: 200, restDay: 200, holiday: 200 } }]]),
+    settings: c.mergeSettings({}, { otRates: { normal: 175 } }),
+  });
+  assert.deepEqual(t.overtimeApprovedByRate.normal, { 150: 90 });
+  assert.equal(t.overtimeApprovedWeightedMin, 135);
+  assert.equal(t.otRates.normal, 175, 'computed / pending are labelled with the current rate');
+  const legacy = c.summarizeDays(days, { approvedByDate: new Map([['2026-10-07', { normal: 60, night: 0, restDay: 0, holiday: 0 }]]) });
+  assert.deepEqual(legacy.overtimeApprovedByRate.normal, { 150: 60 }, 'an approval without stored rates falls back to the current rate');
+});

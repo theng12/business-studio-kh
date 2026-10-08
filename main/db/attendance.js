@@ -324,7 +324,14 @@ function voidEvent(id, reason) {
 
 /* ─── review list (phone + supervisor) ────────────────────────── */
 
-function listReview(companyId, { status = 'pending', source = null, employeeId = null, from = null, to = null, limit = 100, offset = 0 } = {}) {
+/**
+ * `order` (verification, 2026-10-08): 'oldest' / 'newest', or 'attention' —
+ * held entries first, then entries flagged for a check (not a phone or
+ * supervisor mark, e.g. a day shift closed after midnight), then newest
+ * first, so a fresh held entry is never on page 2. Default as before: pending
+ * oldest first, anything else newest first.
+ */
+function listReview(companyId, { status = 'pending', source = null, employeeId = null, from = null, to = null, limit = 100, offset = 0, order = null } = {}) {
   // Phone and supervisor entries, and any other entry flagged for review (a day shift closed after midnight).
   const where = ['e.company_id = @companyId', "e.review_status <> 'none'"];
   const params = { companyId };
@@ -344,7 +351,11 @@ function listReview(companyId, { status = 'pending', source = null, employeeId =
   // is pointed out — and, while pending, HELD out of every figure (review fix L5).
   const settings = hr.getSettings(companyId);
   const longMs = settings.queuedReviewMinutes * 60 * 1000;
-  const items = db.prepare(`SELECT * FROM attendance_events e WHERE ${where.join(' AND ')} ORDER BY e.at ${status === 'pending' ? 'ASC' : 'DESC'} LIMIT ${lim} OFFSET ${off}`)
+  if (order != null && !['attention', 'oldest', 'newest'].includes(order)) throw badRequest('order must be attention, oldest or newest');
+  const orderSql = order === 'attention'
+    ? `(e.review_status = 'pending' AND COALESCE(e.queued_for_ms, 0) > ${Math.floor(longMs)}) DESC, (e.source NOT IN ('phone', 'supervisor')) DESC, e.at DESC`
+    : `e.at ${(order || (status === 'pending' ? 'oldest' : 'newest')) === 'oldest' ? 'ASC' : 'DESC'}`;
+  const items = db.prepare(`SELECT * FROM attendance_events e WHERE ${where.join(' AND ')} ORDER BY ${orderSql} LIMIT ${lim} OFFSET ${off}`)
     .all(params).map(rowToEvent).map((ev) => {
       const queuedLong = ev.queuedForMs != null && ev.queuedForMs > longMs;
       const held = isHeld(ev, settings);
@@ -430,9 +441,10 @@ function proposedTimes(workDate, inTime, outTime, { anchorIn = null } = {}) {
   return { inAt, outAt };
 }
 
-/** The in an out-only correction follows: the work date's active in, else a night shift's scheduled start. */
+/** The in an out-only correction follows: the work date's latest active in, else a night shift's scheduled start. */
 function anchorInFor(companyId, employeeId, workDate) {
-  const row = getDb().prepare(`SELECT at FROM attendance_events e WHERE e.employee_id = ? AND e.work_date = ? AND e.kind = 'in' AND ${ACTIVE_SQL} ORDER BY e.at LIMIT 1`).get(employeeId, workDate);
+  // The open (latest) in: with a closed pair and a later open in, the missing out follows that one.
+  const row = getDb().prepare(`SELECT at FROM attendance_events e WHERE e.employee_id = ? AND e.work_date = ? AND e.kind = 'in' AND ${ACTIVE_SQL} ORDER BY e.at DESC LIMIT 1`).get(employeeId, workDate);
   if (row) return row.at;
   const schedule = hr.scheduleResolver(companyId)(employeeId, workDate);
   return calc.crossesMidnight(schedule) ? calc.scheduledWindow(schedule, workDate).start : null;
@@ -502,8 +514,16 @@ function decideCorrection(id, { decision, note = null, inTime, outTime } = {}) {
   const events = [];
   db.transaction(() => {
     const existing = db.prepare(`SELECT * FROM attendance_events e WHERE e.employee_id = ? AND e.work_date = ? AND ${ACTIVE_SQL} ORDER BY e.at`).all(c.employeeId, c.workDate);
+    // Supersede only an entry the correction really replaces: an `out` replaces
+    // the day's last entry when that is an out (a wrong clock-out time); when
+    // the last entry is an `in` (forgotten clock-out) the out is ADDED — never
+    // replacing an earlier pair's out. Mirror for `in`: replace the first entry
+    // only when it is an in; before a leading orphan out it is added.
+    const first = existing[0] || null;
+    const last = existing[existing.length - 1] || null;
+    const replaces = { in: first && first.kind === 'in' ? first : null, out: last && last.kind === 'out' ? last : null };
     const add = (kind, at) => {
-      const replaced = kind === 'in' ? existing.find((e) => e.kind === 'in') : [...existing].reverse().find((e) => e.kind === 'out');
+      const replaced = replaces[kind];
       const evId = uuid();
       db.prepare(`INSERT INTO attendance_events (id, company_id, employee_id, kind, at, work_date, source, recorded_by_user_id, supersedes_event_id, correction_id, note, review_status, created_at)
         VALUES (?, ?, ?, ?, ?, ?, 'correction', ?, ?, ?, ?, 'none', ?)`).run(evId, c.companyId, c.employeeId, kind, at, c.workDate, uid, replaced?.id ?? null, id, c.reason, now);
@@ -600,7 +620,8 @@ function approvalsByEmployee(companyId, from, to) {
   const out = new Map();
   for (const r of getDb().prepare('SELECT * FROM overtime_approvals WHERE company_id = ? AND work_date >= ? AND work_date <= ? AND voided_at IS NULL').all(companyId, from, to)) {
     if (!out.has(r.employee_id)) out.set(r.employee_id, new Map());
-    out.get(r.employee_id).set(r.work_date, { normal: r.normal_min, night: r.night_min, restDay: r.rest_day_min, holiday: r.holiday_min, id: r.id, needsReapproval: !!r.needs_reapproval });
+    out.get(r.employee_id).set(r.work_date, { normal: r.normal_min, night: r.night_min, restDay: r.rest_day_min, holiday: r.holiday_min, id: r.id, needsReapproval: !!r.needs_reapproval,
+      rates: r.rate_normal == null ? null : { normal: r.rate_normal, night: r.rate_night, restDay: r.rate_rest_day, holiday: r.rate_holiday } });
   }
   return out;
 }
@@ -666,6 +687,7 @@ function rowToOvertime(r) {
     minutes: { normal: r.normal_min, night: r.night_min, restDay: r.rest_day_min, holiday: r.holiday_min },
     note: r.note, approvedByUserId: r.approved_by_user_id, approvedAt: r.approved_at, voided: !!r.voided_at, voidReason: r.void_reason,
     needsReapproval: !!r.needs_reapproval, needsReapprovalReason: r.needs_reapproval_reason ?? null, needsReapprovalAt: r.needs_reapproval_at ?? null,
+    rates: r.rate_normal == null ? null : { normal: r.rate_normal, night: r.rate_night, restDay: r.rate_rest_day, holiday: r.rate_holiday },
   };
 }
 
@@ -698,8 +720,12 @@ function approveOvertime({ companyId, employeeId, workDate, minutes = {}, note =
   db.transaction(() => {
     previous = db.prepare('SELECT * FROM overtime_approvals WHERE employee_id = ? AND work_date = ? AND voided_at IS NULL').get(employeeId, workDate);
     if (previous) db.prepare('UPDATE overtime_approvals SET voided_at = ?, void_reason = ?, voided_by_user_id = ? WHERE id = ?').run(now, 'Replaced by a new approval', uid, previous.id);
-    db.prepare(`INSERT INTO overtime_approvals (id, company_id, employee_id, work_date, normal_min, night_min, rest_day_min, holiday_min, note, approved_by_user_id, approved_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, companyId, employeeId, workDate, m.normal, m.night, m.restDay, m.holiday, str(note, 500), uid, now);
+    // The rates in force now are stored with the approval (payroll pays it at these).
+    const rates = hr.getSettings(companyId).otRates;
+    db.prepare(`INSERT INTO overtime_approvals (id, company_id, employee_id, work_date, normal_min, night_min, rest_day_min, holiday_min, note, approved_by_user_id, approved_at,
+        rate_normal, rate_night, rate_rest_day, rate_holiday)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(id, companyId, employeeId, workDate, m.normal, m.night, m.restDay, m.holiday, str(note, 500), uid, now,
+      rates.normal, rates.night, rates.restDay, rates.holiday);
   })();
   hrAudit('overtime', id, 'approve', { before: previous ? rowToOvertime(previous).minutes : null, after: { employeeId, workDate, minutes: m, computed: ot } });
   return rowToOvertime(db.prepare('SELECT * FROM overtime_approvals WHERE id = ?').get(id));

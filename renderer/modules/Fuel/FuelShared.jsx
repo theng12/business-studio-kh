@@ -201,7 +201,7 @@ export async function photosPayload(list) {
 /* ─── dialogs ─────────────────────────────────────────────────────────── */
 
 /** Ask for a reason (void, correction…). `onConfirm(reason)` may be async; a throw keeps it open. */
-export function ReasonModal({ open, title, message, label = 'Reason', confirmLabel = 'Confirm', danger = false, onCancel, onConfirm, placeholder }) {
+export function ReasonModal({ open, title, message, label = 'Reason', confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false, onCancel, onConfirm, placeholder }) {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -221,7 +221,7 @@ export function ReasonModal({ open, title, message, label = 'Reason', confirmLab
       closeOnBackdrop={!danger}
       footer={(
         <>
-          <Button onClick={onCancel} disabled={busy}>Cancel</Button>
+          <Button onClick={onCancel} disabled={busy}>{cancelLabel}</Button>
           <Button variant={danger ? 'danger' : 'primary'} onClick={submit} disabled={busy}>{busy ? 'Saving…' : confirmLabel}</Button>
         </>
       )}

@@ -12,7 +12,7 @@ import { useAppStore } from '../../store/index.js';
 import { Badge, Button, Field, Input, Modal, Select, Textarea } from '../../components/ui.jsx';
 import { StaffAvatar, ReasonModal } from '../Fuel/FuelShared.jsx';
 import { recentMonths } from '../Fuel/fuelModel.js';
-import { useAttendancePhotoUrl, useHrTick } from './hrHooks.js';
+import { primeAttendanceThumbs, useAttendancePhotoUrl, useHrTick } from './hrHooks.js';
 import {
   EMPTY_DAY_LOAD, OT_CATEGORIES, dayStatusOf, errText, eventBadges, fmtHmOn, fmtMinutes, fmtWorkDate, hmToMs, isHm, loadedFor, otTotal,
   personName, ppDateKey, sortDayEvents, sourceLabel,
@@ -146,6 +146,7 @@ export function DayDetailModal({ open, employee, date, day: dayProp = null, canM
     ]).then(([evs, summary]) => {
       if (!alive) return;
       const found = summary?.rows?.[0]?.days?.find((d) => d.date === date) || null;
+      if (canManage) primeAttendanceThumbs(evs?.items); // one call for the day's photos
       setLoaded({ key, events: evs?.items || [], day: found, error: null });
     }).catch((err) => { if (alive) setLoaded({ key, events: [], day: null, error: errText(err) }); });
     return () => { alive = false; };

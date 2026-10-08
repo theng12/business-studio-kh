@@ -11,6 +11,7 @@
  * is refused.
  */
 
+const { userError } = require('../util/userError');
 const hr = require('../db/hr');
 const people = require('../db/hrPeople');
 const employees = require('../db/employees');
@@ -194,7 +195,7 @@ function register({ expose, exposeLocal }) {
   expose('hr:readDocument', async ({ id, thumb = false } = {}) => {
     company();
     const row = people.getDocumentRow(id);
-    if (!row) throw new Error('Document not found');
+    if (!row) throw userError('Document not found');
     activeCompanyId(row.company_id);
     const out = await require('../hrPhotos').readHrFile(row.file_path, { thumb: thumb === true && row.mime !== 'application/pdf', expectedSha256: row.sha256, mime: row.mime });
     require('../db/_fuelUtil').audit('hr_document', id, 'read', { sensitivity: 'hr_private' });
@@ -203,7 +204,7 @@ function register({ expose, exposeLocal }) {
   expose('hr:voidDocument', ({ id, reason } = {}) => {
     company();
     const row = people.getDocumentRow(id);
-    if (!row) throw new Error('Document not found');
+    if (!row) throw userError('Document not found');
     activeCompanyId(row.company_id);
     const doc = people.voidDocument(id, reason);
     emitHrChange('document', 'void', id, row.company_id);
@@ -221,9 +222,12 @@ function register({ expose, exposeLocal }) {
   });
   expose('hr:getMonthWorkbook', ({ month } = {}) => monthWorkbook(company(), month));
   exposeLocal('hr:saveMonthWorkbook', async ({ month } = {}) => {
-    const { dialog } = require('electron');
+    const { dialog, BrowserWindow } = require('electron');
     const { filename, bytes } = monthWorkbook(company(), month);
-    const res = await dialog.showSaveDialog({ title: 'Save attendance workbook', defaultPath: filename, filters: [{ name: 'Workbook', extensions: ['xlsx'] }] });
+    // Parented to the window the user is in (a sheet on that window, not a loose dialog).
+    const win = BrowserWindow?.getFocusedWindow?.() || BrowserWindow?.getAllWindows?.()[0] || null;
+    const opts = { title: 'Save attendance workbook', defaultPath: filename, filters: [{ name: 'Workbook', extensions: ['xlsx'] }] };
+    const res = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (res.canceled || !res.filePath) return null;
     require('node:fs').writeFileSync(res.filePath, bytes);
     return res.filePath;

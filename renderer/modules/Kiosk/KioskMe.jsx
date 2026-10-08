@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  t, displayName, monthRows, formatDays, daysText, ppTime, ppDate,
+  t, displayName, monthRows, lateMinutesText, formatDays, daysText, ppTime, ppDate,
   leaveFormErrors, buildLeaveArgs, correctionFormErrors, buildCorrectionArgs, defaultCorrectionDate,
   errorText, classifyError, REASON_MAX, CORRECTION_REASON_MAX,
 } from './kioskLogic.js';
@@ -53,10 +53,10 @@ export function KioskMe({ lang, view, status, error, notice, onDone, onLeave, on
             <h3 className="kiosk-h3">{t(lang, key)} <span className="kiosk-muted">{month?.month}</span></h3>
             {month?.totals ? (
               <dl className="kiosk-stats">
-                {monthRows(month.totals).map((r) => (
+                {monthRows(month.totals, month.lateness).map((r) => (
                   <div key={r.key} className="kiosk-stats__row">
                     <dt>{t(lang, r.key)}</dt>
-                    <dd>{r.key === 'late_minutes' ? r.value : formatDays(r.value)}</dd>
+                    <dd>{r.key === 'late_minutes' ? lateMinutesText(lang, r) : formatDays(r.value)}</dd>
                   </div>
                 ))}
               </dl>

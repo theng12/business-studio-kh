@@ -34,6 +34,7 @@ function int(v) {
 function badRequest(message) {
   const err = new Error(message);
   err.code = 'BAD_REQUEST';
+  err.userFacing = true; // HTTP 422 over /api/rpc (main/util/userError.js)
   return err;
 }
 

@@ -593,7 +593,11 @@ Backups and server bundles carry and restore `fuel/` and `hr/`.
 For the Mac screens (Staff, Attendance, Leave, Settings → People), the shop-Mac kiosk and the phone
 page. Same conventions as §9: every channel is `expose()`d (this Mac, a client Mac, `/api/rpc` with a
 token) unless marked **local**; everything acts on the caller's **active company** and refuses an id
-from another one; errors are plain sentences, bad arguments `Bad request: <reason>`. Renderer:
+from another one; errors are plain sentences, bad arguments `Bad request: <reason>` (HTTP 400). Over
+`/api/rpc` a refusal a handler throws on purpose ("That time is in the future", "Wrong PIN", "not in
+your crew" — `badRequest`, `userError` or a known refusal code, `main/util/userError.js`) is **HTTP 422**;
+only something that actually broke is 500. The phone outbox treats 422 as "needs a person" (never
+retried by itself); the desktop client shows the message and never retries it. Renderer:
 `window.api.hr.*`, `.attendance.*`, `.leave.*`, `.kiosk.*` (main/preload.js); live updates:
 `window.api.hr.onChanged(cb)` receives `hr:changed { kind, op, id, companyId, originUserId }` (ids only).
 Code: schema `main/db/hrSchema.js`; data `main/db/{hr,hrPeople,attendance,leave,employees}.js`; channels
@@ -700,10 +704,11 @@ record per company. `users.employee_id` exists but is **not written or read** �
 ### Attendance (manager / viewer)
 | Channel | Args | Returns | Cap |
 |---|---|---|---|
-| `attendance:day` | `{ date? }` (default today) | `{ date, rows: [{ employeeId, staffCode, names, status ('present'\|'late'\|'incomplete'\|'absent'\|'leave'\|'holiday'\|'off'\|'future'), firstIn, lastOut, workedMin, lateMin, earlyLeaveMin, overtime, missingOut, holiday, leave, flags }] }` | V |
-| `attendance:monthSummary` | `{ month?, employeeId?, withDays? }` | `{ month, settings: { otRates, lateCountsFrom }, rows: [{ employeeId, …, totals: { daysWorked, workedMin, regularMin, lateDays, lateMin, earlyLeaveDays, earlyLeaveMin, absentDays, leaveDays, holidays, missingOutDays, overtimeComputed, overtimeApproved, overtimePending, otRates }, lateness, days? }] }` (days always when one person is asked) | V |
+| `attendance:day` | `{ date? }` (default today) | `{ date, rows: [{ employeeId, staffCode, names, status ('present'\|'late'\|'incomplete'\|'absent'\|'leave'\|'holiday'\|'off'\|'future'\|'suspended'\|'suspended_with_events'\|'not_employed'), firstIn, lastOut, workedMin, lateMin, earlyLeaveMin, overtime, missingOut, oddEntries, holiday, leave, flags }] }` — `incomplete` = an open in, or only entries that pair with nothing (`oddEntries`: an out with no in, a second in); `suspended_with_events` = clock entries on a suspended day, counted and flagged | V |
+| `attendance:monthSummary` | `{ month?, employeeId?, withDays? }` | `{ month, settings: { otRates, lateCountsFrom }, rows: [{ employeeId, …, totals: { daysWorked, workedMin, regularMin, lateDays, lateMin, earlyLeaveDays, earlyLeaveMin, absentDays, leaveDays, holidays, missingOutDays, overtimeComputed, overtimeApproved, overtimePending, otRates (TODAY's rates — for computed / pending), overtimeApprovedByRate ({ category: { ratePct: minutes } } — approved minutes at the rate stored on each approval), overtimeApprovedWeightedMin, approvalsExceedingAttendance, approvalsNeedingReapproval, suspendedDays, suspendedWithEventsDays }, lateness, days? }] }` (days always when one person is asked) | V |
 | `attendance:listEvents` | `{ employeeId?, from?, to? (work dates), includeVoided?, limit?, offset? }` | `{ items: Event[] (+ supersededById), total }` | V |
 | `attendance:getPhoto` | `{ eventId, thumb? }` | `{ bytes, mime, sha256, intact, at, kind, source }` or `null`; a photo past retention → "in Recently deleted" | **M** |
+| `attendance:getPhotos` | `{ eventIds: [1–60], size?: 'thumb' (≤ 320 px, default) \| 'small' (≤ 160 px) }` — the review list's photos in one call | one entry per id, in order: `{ eventId, bytes, mime, sha256, intact }` or `{ eventId, none \| retired \| missing: true }` | **M** |
 | `attendance:addManual` | `{ employeeId, kind: 'in'\|'out', at, workDate?, reason }` | `Event` (`source: 'manual'`) | M |
 | `attendance:void` | `{ id, reason }` | `{ event, already }` | M |
 | `attendance:listReview` | `{ status?: 'pending' (default) \| 'accepted' \| 'rejected' \| 'all', source?, employeeId?, from?, to? (ms), limit?, offset? }` — phone and supervisor entries plus any entry flagged for a check (`late_close`) | `{ items: Event & { queuedLong, held, explanation }[], total, alerts: Alert[] (open) }` | V |
@@ -712,9 +717,9 @@ record per company. `users.employee_id` exists but is **not written or read** �
 | `attendance:ackAlert` | `{ id }` | `Alert` (seen) | M |
 | `attendance:listCorrections` | `{ status?, employeeId?, limit?, offset? }` | `{ items: Correction[], total }` | V |
 | `attendance:requestCorrection` | `{ employeeId, workDate, inTime?: 'HH:MM', outTime?: 'HH:MM', reason }` — an out time is placed after the day's in (the proposed in, else that day's active in, else a night shift's scheduled start), so a night shift's "out 06:10" is the next morning | `Correction` (pending — no event yet) | M |
-| `attendance:decideCorrection` | `{ id, decision: 'approve'\|'reject', note?, inTime?, outTime? }` (approve may adjust the times; each time becomes a `correction` event superseding that day's first in / last out) | `{ correction, events }` | M |
+| `attendance:decideCorrection` | `{ id, decision: 'approve'\|'reject', note?, inTime?, outTime? }` (approve may adjust the times; each time becomes a `correction` event; an `out` supersedes the day's last entry only when that entry is an out (a wrong clock-out time) — after an open in it is ADDED, so an earlier pair's out is never replaced; an `in` supersedes the first entry only when that is an in; an out-only request is anchored after the day's latest in) | `{ correction, events }` | M |
 | `attendance:listOvertime` | `{ month?, employeeId?, includeVoided? }` | `Overtime[]` `{ id, employeeId, workDate, minutes: { normal, night, restDay, holiday }, note, approvedAt, voided, needsReapproval, needsReapprovalReason }` | V |
-| `attendance:approveOvertime` | `{ employeeId, workDate, minutes: { normal?, night?, restDay?, holiday? }, note? }` (never more than the day shows; re-approving replaces) | `Overtime` | M |
+| `attendance:approveOvertime` | `{ employeeId, workDate, minutes: { normal?, night?, restDay?, holiday? }, note? }` (never more than the day shows; re-approving replaces; the overtime rates in force are stored on the approval — `rates` — and payroll pays it at those) | `Overtime` | M |
 | `attendance:revokeOvertime` | `{ id, reason }` | `Overtime` | M |
 | `attendance:listLateness` | `{ month?, employeeId? }` | `Lateness[]` | V |
 | `attendance:confirmLateness` | `{ employeeId, month, lateMinutes?, earlyLeaveMinutes?, note? }` (a month that has ended; default = computed; lower = a waiver, note required) | `Lateness` `{ computedLateMin, confirmedLateMin, computedEarlyLeaveMin, confirmedEarlyLeaveMin, needsReapproval, … }`; in `monthSummary` also `deductibleLateMin` / `deductibleEarlyLeaveMin` (= min(confirmed, computed now)) and `exceedsAttendance` | M |
@@ -748,8 +753,11 @@ used for a different request"). Columns `client_ref` (unique when set) / `client
 are online-only and take no `clientRef`.
 
 `OwnView = { employee (tile), today (day result), lastEvent, thisMonth: { month, totals, days,
-latenessConfirmed }, lastMonth: { … }, leave: Balance[], requests: { leave: pending[], corrections:
-pending[] } }` — no photos, nobody else's data.
+latenessConfirmed, lateness: { lateMin, lateAfterReviewMin, earlyLeaveMin, earlyLeaveAfterReviewMin,
+reviewed } }, lastMonth: { … }, leave: Balance[], requests: { leave: pending[], corrections: pending[] } }`
+— no photos, nobody else's data. `lateAfterReviewMin` is what payroll may deduct (the confirmed figure,
+never more than computed), `null` until the office reviews the month; screens say e.g. "late 45 min
+(30 min after review)".
 
 ### Leave
 | Channel | Args | Returns | Cap |
@@ -859,7 +867,7 @@ already in `BACKUP_DATA_ENTRIES` and `ARCHIVE_TOP_LEVEL_DIRS`; neither is reacha
 or `app-image://`.
 
 **History.** Every HR write is audited with `audit_log.sensitivity = 'hr'` (sensitive values are written
-as "(set)"; PINs never); staff-document rows are `'hr_private'` and only `hr.manage` sees them. History
+as "(set)", or "(empty)" when there was nothing; PINs never); staff-document rows are `'hr_private'` and only `hr.manage` sees them. History
 hides `hr` rows from callers without `hr.view`/`hr.manage`, `employee`
 rows from callers without `fuel.manage`/`hr.view`/`hr.manage`, `fuel_*` rows from callers without
 `fuel.manage`, and `payroll` rows (HR2) from everyone but admins. `audit:clearHistory` never removes

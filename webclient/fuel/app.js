@@ -1540,6 +1540,7 @@
     refreshMine().then(function () { if (screen.name === 'mine') render(); }, function (err) { toast(err.message); goHome(); });
   }
 
+  function lateText(m) { var l = L.lateLine(m.lateness, m.totals); return tr(l.key, l.vars); }
   function monthCard(titleKey, m) {
     var t = m && m.totals;
     var v = function (x) { return t ? String(x == null ? 0 : x) : '—'; };
@@ -1547,7 +1548,7 @@
       h('b', { text: tr(titleKey) }),
       factsList([
         ['m_days', v(t && t.daysWorked)],
-        ['m_late', t ? tr('late_value', { min: t.lateMin || 0, days: t.lateDays || 0 }) : '—'],
+        ['m_late', t ? lateText(m) : '—'],
         ['m_missing', v(t && t.missingOutDays)],
         ['m_absent', v(t && t.absentDays)],
         ['m_leave', v(t && t.leaveDays)],

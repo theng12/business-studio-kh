@@ -130,13 +130,22 @@ export function fmtWorkDate(date, { year = false } = {}) {
   });
 }
 
-/** "8 – 10 Oct 2026" / "8 Oct 2026" for a leave range. */
+/**
+ * A leave range, e.g. "Oct 26 – 30, 2026", "Oct 26 – Nov 3, 2026", "Oct 8, 2026"
+ * (en-US; other locales in their own order). Intl's formatRange keeps the
+ * month with the day it belongs to — hand-joining two halves printed
+ * "26 – Oct 30, 2026" (verification, 2026-10-08). UTC, because the parts are
+ * calendar dates, not moments.
+ */
+const RANGE_FMT = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 export function fmtDateRange(from, to) {
   if (!from) return '—';
-  const one = (d, opts) => new Date(Date.parse(`${d}T00:00:00Z`)).toLocaleDateString(undefined, { ...opts, timeZone: 'UTC' });
-  if (!to || to === from) return one(from, { day: 'numeric', month: 'short', year: 'numeric' });
-  if (from.slice(0, 7) === to.slice(0, 7)) return `${one(from, { day: 'numeric' })} – ${one(to, { day: 'numeric', month: 'short', year: 'numeric' })}`;
-  return `${one(from, { day: 'numeric', month: 'short' })} – ${one(to, { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  const a = Date.parse(`${from}T00:00:00Z`);
+  const b = to ? Date.parse(`${to}T00:00:00Z`) : a;
+  if (Number.isNaN(a)) return String(from);
+  if (Number.isNaN(b) || b <= a) return RANGE_FMT.format(a);
+  if (typeof RANGE_FMT.formatRange === 'function') return RANGE_FMT.formatRange(a, b);
+  return `${RANGE_FMT.format(a)} – ${RANGE_FMT.format(b)}`;
 }
 
 /** The month before 'YYYY-MM'. */
@@ -163,6 +172,8 @@ export const DAY_STATUS = {
   holiday: { label: 'Holiday', tone: 'slate', letter: 'H' },
   off: { label: 'Day off', tone: 'slate', letter: '·' },
   suspended: { label: 'Suspended', tone: 'rose', letter: 'S' },
+  // Clock entries on a suspended day: kept and counted, but flagged (backend, 2026-10-08).
+  suspended_with_events: { label: 'Worked while suspended', tone: 'rose', letter: 'S!' },
   future: { label: 'Not yet', tone: 'slate', letter: '' },
   not_employed: { label: 'Not employed', tone: 'slate', letter: '' },
 };
@@ -172,7 +183,7 @@ export function dayStatusOf(status) {
 }
 
 /** The legend under the month grid, in reading order. */
-export const GRID_LEGEND = ['present', 'late', 'incomplete', 'absent', 'leave', 'holiday', 'suspended', 'off', 'not_employed'];
+export const GRID_LEGEND = ['present', 'late', 'incomplete', 'absent', 'leave', 'holiday', 'suspended', 'suspended_with_events', 'off', 'not_employed'];
 
 /** Total overtime minutes of a day result or a totals object. */
 export function otTotal(ot) {
@@ -233,6 +244,7 @@ export function sortDayEvents(events) {
 export const ALERT_KINDS = {
   pin_locked: 'PIN locked',
   kiosk_paused: 'Kiosk paused',
+  kiosk_no_photo: 'Clocked without photo',
 };
 export const alertKindLabel = (k) => ALERT_KINDS[k] || k || 'Alert';
 
@@ -355,6 +367,18 @@ export function overtimeState(computed, approval) {
   return 'approved';
 }
 
+/**
+ * What payroll will pay for a day: per category min(approved, computed now)
+ * (verification 2026-10-08 — the Approved column showed the raw approval
+ * even where the attendance had since shrunk). `raw` is the approval as given.
+ */
+export function payableOvertime(row) {
+  if (!row?.approved) return null;
+  let payable = 0;
+  for (const c of OT_CATEGORIES) payable += Math.min(row.approved[c.key] || 0, row.computed?.[c.key] || 0);
+  return { payable, raw: otTotal(row.approved) };
+}
+
 export const OT_STATE = {
   pending: { label: 'Waiting', tone: 'amber' },
   approved: { label: 'Approved', tone: 'emerald' },
@@ -379,26 +403,38 @@ export function overtimeAdjustForm(row) {
   const form = { note: row?.approval?.note || '' };
   for (const c of OT_CATEGORIES) {
     const computed = row?.computed?.[c.key] || 0;
-    form[c.key] = String(row?.approved ? Math.min(row.approved[c.key] || 0, computed) : computed);
+    // h:mm, like the table (verification 2026-10-08).
+    form[c.key] = fmtHours(row?.approved ? Math.min(row.approved[c.key] || 0, computed) : computed);
   }
   return form;
 }
 
-/** A category field is locked only when there is nothing to approve AND it holds nothing. */
-export function overtimeFieldLocked(form, computed, key) {
-  return !(computed?.[key] > 0) && !(Number(form?.[key]) > 0);
+/**
+ * A typed duration → whole minutes: "1:30" (h:mm), "90" (minutes), "" → 0.
+ * NaN for anything else ("1:75", "1.5", "-5").
+ */
+export function parseDuration(text) {
+  const s = String(text ?? '').trim();
+  if (!s) return 0;
+  const hm = /^(\d{1,2}):([0-5]\d)$/.exec(s);
+  if (hm) return Number(hm[1]) * 60 + Number(hm[2]);
+  return /^\d{1,4}$/.test(s) ? Number(s) : NaN;
 }
 
-/** Adjust form → minutes, checked never above the computed figure. */
+/** A category field is locked only when there is nothing to approve AND it holds nothing. */
+export function overtimeFieldLocked(form, computed, key) {
+  return !(computed?.[key] > 0) && !(parseDuration(form?.[key]) > 0);
+}
+
+/** Adjust form → minutes (each field h:mm or minutes), checked never above the computed figure. */
 export function validateOvertimeAdjust(form, computed) {
   const errors = {};
   const minutes = {};
   for (const c of OT_CATEGORIES) {
-    const raw = String(form?.[c.key] ?? '').trim();
-    const n = raw === '' ? 0 : Number(raw);
-    if (!Number.isInteger(n) || n < 0) { errors[c.key] = 'Whole minutes, 0 or more'; continue; }
+    const n = parseDuration(form?.[c.key]);
+    if (!Number.isInteger(n) || n < 0) { errors[c.key] = 'Type h:mm (1:30) or minutes (90)'; continue; }
     const max = computed?.[c.key] || 0;
-    if (n > max) { errors[c.key] = `At most ${max} min — that is what the attendance shows`; continue; }
+    if (n > max) { errors[c.key] = `At most ${fmtHours(max)} — that is what the attendance shows`; continue; }
     minutes[c.key] = n;
   }
   return { errors, minutes };
@@ -621,7 +657,7 @@ export function pinStatus(e, now = Date.now()) {
 /* ─── staff status ────────────────────────────────────────────────────── */
 
 export function staffStatus(e) {
-  if (e?.status === 'left') return { label: `Left${e.leftOn ? ` ${e.leftOn}` : ''}`, tone: 'slate' };
+  if (e?.status === 'left') return { label: `Left${e.leftOn ? ` ${fmtWorkDate(e.leftOn, { year: true })}` : ''}`, tone: 'slate' };
   if (e?.status === 'suspended') return { label: 'Suspended', tone: 'rose' };
   return { label: 'Working', tone: 'emerald' };
 }

@@ -24,6 +24,7 @@ import { useUserCaps } from '../../components/Sidebar.jsx';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { createPhotoCache, indexById, toUint8 } from '../Fuel/fuelModel.js';
 import { hrCapsOf } from './hrModel.js';
+import { LOOKUP_KINDS, createLookupCache } from './lookupCache.js';
 
 export function useHrCaps() {
   const caps = useUserCaps();
@@ -73,38 +74,57 @@ export function useStaffTick() {
 
 const EMPTY = Object.freeze({ staff: [], positions: [], schedules: [], leaveTypes: [], settings: null, loaded: false, error: null });
 
+// One cache for every People page (verification 2026-10-08: each page switch
+// fetched all five lists again). Keyed on company + what the account may see.
+const lookups = createLookupCache(async (key) => {
+  const [staff, positions, schedules, leaveTypes, settings] = await Promise.all([
+    window.api.staff.list({}),
+    window.api.hr.listPositions({ includeArchived: true }),
+    window.api.hr.listSchedules({ includeArchived: true }),
+    window.api.leave.listTypes({ includeArchived: true }),
+    window.api.hr.getSettings(),
+  ]);
+  void key;
+  return { staff: staff || [], positions: positions || [], schedules: schedules || [], leaveTypes: leaveTypes || [], settings, loaded: true, error: null };
+});
+let lookupsWired = false;
+/** Drop the cache on a lookup change, whether or not a People page is open (wired once). */
+function wireLookupInvalidation() {
+  if (lookupsWired || typeof window === 'undefined' || !window.api) return;
+  lookupsWired = true;
+  window.api.hr?.onChanged?.((evt) => { if (LOOKUP_KINDS.has(evt?.kind)) lookups.invalidate(evt?.companyId || null); });
+  window.api.fuel?.onChanged?.((evt) => { if (evt?.kind === 'staff') lookups.invalidate(evt?.companyId || null); });
+}
+
 /**
  * Names for ids: every staff member (incl. left), positions, schedules,
  * leave types and the HR settings of the active company. hr.view or better.
+ * Served from the shared cache; a change event or a company switch reloads.
  */
 export function useHrLookups() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
-  const { canView } = useHrCaps();
-  const staffTick = useStaffTick();
-  const tick = useHrTick(['position', 'schedule', 'leaveType', 'settings']);
-  const [state, setState] = useState(EMPTY);
-  const req = useRef(0);
-  const companyRef = useRef(activeCompanyId);
-  const [manual, setManual] = useState(0);
+  const { canView, canManage } = useHrCaps();
+  const key = activeCompanyId && canView ? `${activeCompanyId}|${canManage ? 'm' : 'v'}` : null;
+  const [state, setState] = useState(() => (key && lookups.peek(key)) || EMPTY);
+  const [version, setVersion] = useState(0);
+  const keyRef = useRef(key);
+  useEffect(() => {
+    wireLookupInvalidation();
+    let timer = null;
+    // Debounced: a burst of changes is one reload.
+    const off = lookups.subscribe(() => { clearTimeout(timer); timer = setTimeout(() => setVersion((v) => v + 1), 250); });
+    return () => { clearTimeout(timer); off(); };
+  }, []);
   useEffect(() => {
     // Another company's names must never show while this one loads.
-    if (companyRef.current !== activeCompanyId) { companyRef.current = activeCompanyId; setState(EMPTY); }
-    const r = ++req.current;
-    if (!activeCompanyId || !canView || !window.api?.hr) return;
-    Promise.all([
-      window.api.staff.list({}),
-      window.api.hr.listPositions({ includeArchived: true }),
-      window.api.hr.listSchedules({ includeArchived: true }),
-      window.api.leave.listTypes({ includeArchived: true }),
-      window.api.hr.getSettings(),
-    ]).then(([staff, positions, schedules, leaveTypes, settings]) => {
-      if (r !== req.current) return;
-      setState({ staff: staff || [], positions: positions || [], schedules: schedules || [], leaveTypes: leaveTypes || [], settings, loaded: true, error: null });
-    }).catch((err) => {
-      if (r !== req.current) return;
-      setState((s) => ({ ...s, loaded: true, error: err?.message || String(err) }));
+    if (keyRef.current !== key) { keyRef.current = key; setState((key && lookups.peek(key)) || EMPTY); }
+    if (!key || !window.api?.hr) return undefined;
+    let alive = true;
+    lookups.get(key).then((value) => { if (alive && keyRef.current === key) setState(value); }).catch((err) => {
+      if (alive && keyRef.current === key) setState((s) => ({ ...s, loaded: true, error: err?.message || String(err) }));
     });
-  }, [activeCompanyId, canView, staffTick, tick, manual]);
+    return () => { alive = false; };
+  }, [key, version]);
   return useMemo(() => ({
     ...state,
     maps: {
@@ -113,7 +133,7 @@ export function useHrLookups() {
       schedules: indexById(state.schedules),
       leaveTypes: indexById(state.leaveTypes),
     },
-    reload: () => setManual((n) => n + 1),
+    reload: () => { lookups.invalidate(); setVersion((v) => v + 1); },
   }), [state]);
 }
 
@@ -147,6 +167,28 @@ function useBlob(key, fetcher) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   return state;
+}
+
+/**
+ * Load a page of clock-in thumbnails in ONE call (`attendance:getPhotos`,
+ * verification 2026-10-08) and put each into the shared cache under the key
+ * the thumbnails ask for — call it before the list renders and no thumbnail
+ * makes its own request. Photos already cached are skipped; if the batch call
+ * fails, each photo falls back to its own `attendance:getPhoto`. hr.manage only.
+ */
+export function primeAttendanceThumbs(events) {
+  const ids = (events || []).filter((e) => e?.id && e.hasPhoto && !cache.has(`att:${e.id}:t`)).map((e) => e.id);
+  for (let i = 0; i < ids.length; i += 60) {
+    const chunk = ids.slice(i, i + 60);
+    const batch = window.api.attendance.getPhotos(chunk, 'thumb')
+      .then((list) => new Map((list || []).filter(Boolean).map((r) => [r.eventId, r])));
+    for (const id of chunk) {
+      cache.load(`att:${id}:t`, () => batch
+        .then((byId) => { const r = byId.get(id); return r && r.bytes ? r : null; })
+        .catch(() => window.api.attendance.getPhoto(id, true))
+        .then(toBlobResult));
+    }
+  }
 }
 
 /** A clock-in photo (hr.manage only — pass `enabled: false` otherwise and nothing is asked). */

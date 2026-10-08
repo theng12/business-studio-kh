@@ -105,15 +105,15 @@ test('kiosk: no-photo clock is server-checked; preview writes nothing', { skip: 
 
   /* ─── M4: no photo ─── */
   const tokenA = (await ok(K, 'kiosk:signIn', { employeeId: A.id, pin: '4071' })).sessionToken;
-  await fails(K, 'kiosk:clock', { sessionToken: tokenA, noPhoto: true }, 500, /photo is needed/);
+  await fails(K, 'kiosk:clock', { sessionToken: tokenA, noPhoto: true }, 422, /photo is needed/);
   await fails(K, 'kiosk:verifyManagerPin', { employeeId: M.id, pin: '5820', purpose: 'no-photo' }, 400, /sessionToken is required/);
   // A manager cannot allow their own clock-in without a photo.
   const tokenM = (await ok(K, 'kiosk:signIn', { employeeId: M.id, pin: '5820' })).sessionToken;
-  await fails(K, 'kiosk:verifyManagerPin', { employeeId: M.id, pin: '5820', purpose: 'no-photo', sessionToken: tokenM }, 500, /cannot allow their own/);
-  await fails(K, 'kiosk:clock', { sessionToken: tokenM, noPhoto: true }, 500, /photo is needed/);
+  await fails(K, 'kiosk:verifyManagerPin', { employeeId: M.id, pin: '5820', purpose: 'no-photo', sessionToken: tokenM }, 422, /cannot allow their own/);
+  await fails(K, 'kiosk:clock', { sessionToken: tokenM, noPhoto: true }, 422, /photo is needed/);
   // Not a manager.
-  await fails(K, 'kiosk:verifyManagerPin', { employeeId: B.id, pin: '6284', purpose: 'no-photo', sessionToken: tokenA }, 500, /Only a manager can allow this/);
-  await fails(K, 'kiosk:clock', { sessionToken: tokenA, noPhoto: true }, 500, /photo is needed/);
+  await fails(K, 'kiosk:verifyManagerPin', { employeeId: B.id, pin: '6284', purpose: 'no-photo', sessionToken: tokenA }, 422, /Only a manager can allow this/);
+  await fails(K, 'kiosk:clock', { sessionToken: tokenA, noPhoto: true }, 422, /photo is needed/);
   // A manager allows it for A.
   assert.deepEqual(await ok(K, 'kiosk:verifyManagerPin', { employeeId: M.id, pin: '5820', purpose: 'no-photo', sessionToken: tokenA }), { ok: true, managerId: M.id });
   const clocked = await ok(K, 'kiosk:clock', { sessionToken: tokenA, noPhoto: true });
@@ -143,22 +143,22 @@ test('kiosk: no-photo clock is server-checked; preview writes nothing', { skip: 
   const [pinUse] = sql("SELECT * FROM audit_log WHERE action = 'kiosk:manager-no-photo' ORDER BY id DESC LIMIT 1");
   assert.equal(JSON.parse(pinUse.after_json).forEmployee, 'Sok Dara');
   // The mark is used once.
-  await fails(K, 'kiosk:clock', { sessionToken: tokenA, noPhoto: true }, 500, /photo is needed/);
+  await fails(K, 'kiosk:clock', { sessionToken: tokenA, noPhoto: true }, 422, /photo is needed/);
   // The mark is bound to the session: another person's session is not marked.
   const tokenB = (await ok(K, 'kiosk:signIn', { employeeId: B.id, pin: '6284' })).sessionToken;
-  await fails(K, 'kiosk:clock', { sessionToken: tokenB, noPhoto: true }, 500, /photo is needed/);
+  await fails(K, 'kiosk:clock', { sessionToken: tokenB, noPhoto: true }, 422, /photo is needed/);
   // A second manager can allow a manager's own clock-in.
   await ok(K, 'kiosk:verifyManagerPin', { employeeId: M2.id, pin: '7391', purpose: 'no-photo', sessionToken: tokenM });
   assert.equal((await ok(K, 'kiosk:clock', { sessionToken: tokenM, noPhoto: true })).event.hasPhoto, false);
 
   /* ─── M5: preview is a dry run, for HR managers only ─── */
-  await fails(K, 'kiosk:signIn', { employeeId: B.id, pin: '6284', preview: true }, 500, /only for HR managers/);
+  await fails(K, 'kiosk:signIn', { employeeId: B.id, pin: '6284', preview: true }, 422, /only for HR managers/);
   const events0 = count('attendance_events');
   const leave0 = count('leave_requests');
   const corr0 = count('attendance_corrections');
   const audit0 = count('audit_log');
   // A wrong PIN in preview is not counted.
-  for (let i = 0; i < 6; i++) await fails(manager.token, 'kiosk:signIn', { employeeId: B.id, pin: '0000', preview: true }, 500, /^Wrong PIN\.$/);
+  for (let i = 0; i < 6; i++) await fails(manager.token, 'kiosk:signIn', { employeeId: B.id, pin: '0000', preview: true }, 422, /^Wrong PIN\.$/);
   const rowB = employees.getRow(B.id);
   assert.equal(rowB.pin_failed_count || 0, 0);
   assert.ok(!rowB.pin_locked_until);

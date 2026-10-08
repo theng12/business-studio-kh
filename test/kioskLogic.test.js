@@ -210,7 +210,7 @@ test('no camera: a manager PIN lets the person clock without a photo, and the se
 
 const SERVER_MESSAGES = [
   ['Wrong PIN. 3 tries left.', 'wrongPin', 'Wrong PIN. 3 tries left.'],
-  ['Wrong PIN. 1 try left.', 'wrongPin', 'Wrong PIN. 1 tries left.'],
+  ['Wrong PIN. 1 try left.', 'wrongPin', 'Wrong PIN. 1 try left.'], // singular in English (verification 2026-10-08)
   ['Wrong PIN. Locked for 10 min — ask a manager.', 'locked', 'This PIN is locked. Try again in 10 min, or ask a manager.'],
   ['Wrong PIN. This PIN is now locked — only a manager can unlock it.', 'lockedManager', 'This PIN is locked. Only a manager can unlock it.'],
   ['Too many wrong PINs. Try again in 7 min.', 'locked', 'This PIN is locked. Try again in 7 min, or ask a manager.'],
@@ -310,6 +310,14 @@ test('month figures in a fixed order; missing totals show nothing', () => {
   assert.deepEqual(rows.map((r) => r.key), ['days_worked', 'late_days', 'late_minutes', 'absent_days', 'missing_out_days', 'leave_days']);
   assert.equal(rows[2].value, 17);
   assert.deepEqual(L.monthRows(null), []);
+  // Once the month is confirmed, the figure after review sits beside the computed one.
+  assert.equal(rows[2].afterReview, null, 'not reviewed yet');
+  assert.equal(L.lateMinutesText('en', rows[2]), '17');
+  const reviewed = L.monthRows({ lateMin: 45 }, { reviewed: true, lateAfterReviewMin: 30 })[2];
+  assert.equal(L.lateMinutesText('en', reviewed), '45 (30 after review)');
+  assert.match(L.lateMinutesText('km', reviewed), /^45 \(30 /);
+  assert.equal(L.lateMinutesText('en', L.monthRows({ lateMin: 45 }, { reviewed: true, lateAfterReviewMin: 45 })[2]), '45', 'no waiver: one number');
+  assert.equal(L.monthRows({ lateMin: 45 }, { reviewed: false, lateAfterReviewMin: null })[2].afterReview, null);
   assert.equal(L.formatDays(1.5), '1.5');
   assert.equal(L.formatDays(2), '2');
   assert.equal(L.daysText('en', 1), '1 day');
@@ -405,6 +413,7 @@ test('recovery: typed code is grouped as XXXX-XXXX-XXXX', () => {
 test('recovery: every message main sends reads plainly in both languages', () => {
   const cases = [
     ['Wrong recovery code. 3 tries left.', 'recoveryWrong', 'Wrong code. 3 tries left.'],
+    ['Wrong recovery code. 1 try left.', 'recoveryWrong', 'Wrong code. 1 try left.'],
     ['Wrong recovery code. Too many wrong recovery codes: try again in 15 min.', 'recoveryLocked', 'Too many wrong codes. Try again in 15 min.'],
     ['Too many wrong recovery codes. Try again in 30 min.', 'recoveryLocked', 'Too many wrong codes. Try again in 30 min.'],
     ['The office Mac can be reached, so the recovery code is not needed: a manager uses their PIN instead.', 'recoveryReachable', null],
