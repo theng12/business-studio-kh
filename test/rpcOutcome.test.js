@@ -100,12 +100,16 @@ test('the production RPC client reports unknown while a delayed HTTP mutation co
     Module._load = originalLoad;
   }
 
+  // Event-driven (no timing races under load): the handler signals that it
+  // has ENTERED, the client's deadline is aborted only then, and the handler
+  // commits only after it is released.
   let committed = 0;
-  let entered = false;
+  const entered = deferred();
+  const release = deferred();
   const completed = deferred();
   server.registerHandler('products:update', async () => {
-    entered = true;
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    entered.resolve();
+    await release.promise;
     committed += 1;
     completed.resolve();
     return { committed: true };
@@ -129,22 +133,19 @@ test('the production RPC client reports unknown while a delayed HTTP mutation co
   }
 
   const nativeTimeout = AbortSignal.timeout;
-  // The timeout must be long enough that the request reliably reaches the
-  // server even when the full suite is running many files in parallel. The
-  // test asserts ordering (timeout, then commit), not the absolute duration.
-  AbortSignal.timeout = () => nativeTimeout(750);
+  const deadline = new AbortController();
+  AbortSignal.timeout = () => deadline.signal;
   try {
-    await assert.rejects(
-      client.rpc('products:update', { id: 'synthetic-product', patch: {} }),
-      (err) => err?.code === 'RPC_OUTCOME_UNKNOWN' && err?.channel === 'products:update',
-    );
-    assert.equal(entered, true, 'the production HTTP dispatcher should enter the mutation before timeout');
-    await Promise.race([
-      completed.promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('delayed mutation did not finish within 8 seconds')), 8000)),
-    ]);
+    const call = client.rpc('products:update', { id: 'synthetic-product', patch: {} });
+    await entered.promise; // the production HTTP dispatcher entered the mutation…
+    deadline.abort(new DOMException('synthetic deadline', 'TimeoutError')); // …and only then does the client time out
+    await assert.rejects(call, (err) => err?.code === 'RPC_OUTCOME_UNKNOWN' && err?.channel === 'products:update');
+    assert.equal(committed, 0, 'the timeout came before the commit');
+    release.resolve();
+    await completed.promise;
     assert.equal(committed, 1);
   } finally {
+    release.resolve();
     AbortSignal.timeout = nativeTimeout;
     await server.stopServer();
     if (previousUsers) require.cache[usersPath] = previousUsers;
@@ -153,28 +154,46 @@ test('the production RPC client reports unknown while a delayed HTTP mutation co
 });
 
 test('overlay reconciliation bounds hanging HTTP status reads by the remaining budget', async (t) => {
+  // Event-driven (review 2, flake fix): no global setTimeout patching and no
+  // real-time abort timers. The reconciliation loop runs on an injected clock
+  // ({ now, sleep }); every client deadline is an AbortController the SERVER
+  // aborts at the moment the scenario calls for (status read received, body
+  // half-written…), moving the fake clock by that deadline's length.
   const originalLoad = Module._load;
   const clientPath = require.resolve('../main/client');
   const previousClient = require.cache[clientPath];
   const nativeTimeout = AbortSignal.timeout;
   const nativeSetTimeout = global.setTimeout;
-  const nativeNow = Date.now;
   const nativeFetch = global.fetch;
   const handlers = new Map();
   const timeoutDelays = [];
-  let clock = nativeNow();
-  let abortTimer;
+  let clock = 1_000_000;
+  let current = null; // the latest client deadline: { controller, delay }
   let mutationSignal;
   let mode;
   let mutations;
   let statusReads;
   let budgetStarted;
   let committedOperationId;
-  const httpServer = http.createServer(async (req, res) => {
+  const expire = (deadline) => {
+    if (!deadline || deadline.controller.signal.aborted) return;
+    clock += deadline.delay;
+    deadline.controller.abort(new DOMException('synthetic deadline', 'TimeoutError'));
+  };
+  // The pause between status reads waits for the previous response's socket to
+  // close (an event), so the next read never lands on a closing connection.
+  // Each scenario gets a server of its own, so no pooled socket from the one
+  // before can be reused. The initial-body scenarios expire the client's
+  // deadline once the client HAS the response headers (seen by a fetch wrapper).
+  let socketClosed = Promise.resolve();
+  let expireAfterHeaders = null;
+  const handler = async (req, res) => {
     res.setHeader('Connection', 'close');
+    socketClosed = new Promise((resolve) => req.socket.once('close', resolve));
     let body = '';
     for await (const chunk of req) body += chunk;
     const { channel, args } = JSON.parse(body);
+    const mine = current;
     if (mode?.startsWith('initial-body')) {
       if (channel === 'templates:getApplyOutcome') {
         statusReads += 1;
@@ -187,7 +206,8 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
         if (channel !== 'products:list') mutations += 1;
         committedOperationId = args.operationId;
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.write('{"result":'); // The write committed; only its response stalls.
+        expireAfterHeaders = mine; // The write committed; its response stalls — and the client's deadline passes.
+        res.write('{"result":');
       }
       return;
     }
@@ -204,15 +224,28 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
       res.end(JSON.stringify({ result: { status: 'pending' } }));
     } else if (mode === 'body') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.write('{"result":'); // Headers arrive, but the body never finishes.
+      res.write('{"result":', () => expire(mine)); // Headers arrive, but the body never finishes.
     } else if (mode === 'rate-limit') {
       res.writeHead(429, { 'Retry-After': '60' });
-      res.end(JSON.stringify({ error: 'synthetic rate limit' }));
+      res.end(JSON.stringify({ error: 'synthetic rate limit' }), () => expire(mine));
+    } else {
+      expire(mine); // Accept the request and never send response headers.
     }
-    // Otherwise accept the request and never send response headers.
-  });
-  try {
+  };
+  let httpServer = null;
+  const servers = [];
+  const freshServer = async () => {
+    httpServer = http.createServer(handler);
+    servers.push(httpServer);
     await new Promise((resolve) => httpServer.listen(0, '127.0.0.1', resolve));
+  };
+  const headerAwareFetch = async (...args) => {
+    const response = await nativeFetch(...args);
+    if (expireAfterHeaders) { const d = expireAfterHeaders; expireAfterHeaders = null; expire(d); }
+    return response;
+  };
+  try {
+    await freshServer();
     Module._load = function (request, parent, isMain) {
       if (request === 'electron') return {
         ipcMain: { handle: (channel, handler) => handlers.set(channel, handler), on() {} },
@@ -224,35 +257,32 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
     };
     delete require.cache[clientPath];
     const client = require('../main/client');
-    global.setTimeout = () => ({ unref() {} }); // Suppress background polling at registration.
+    global.setTimeout = () => ({ unref() {} }); // Suppress background polling at registration only.
     client.registerClientProxies(() => ({
       clientServerUrl: `http://127.0.0.1:${httpServer.address().port}`,
       clientToken: 'synthetic-token',
     }));
     Module._load = originalLoad;
     global.setTimeout = nativeSetTimeout;
+    global.fetch = headerAwareFetch;
+    client.setReconcileClockForTests({ now: () => clock, sleep: async (ms) => { clock += ms; await socketClosed; } });
+    const stubTimeouts = () => {
+      AbortSignal.timeout = (delay) => {
+        timeoutDelays.push(delay);
+        const controller = new AbortController();
+        if (timeoutDelays.length === 1) mutationSignal = controller;
+        current = { controller, delay };
+        return controller.signal;
+      };
+    };
 
     for (const scenario of ['headers', 'pending', 'body', 'rate-limit']) {
       await t.test(scenario, async () => {
+        await freshServer();
         mode = scenario;
         mutations = statusReads = 0;
         timeoutDelays.length = 0;
-        Date.now = () => clock;
-        AbortSignal.timeout = (delay) => {
-          clearTimeout(abortTimer);
-          timeoutDelays.push(delay);
-          const controller = new AbortController();
-          if (timeoutDelays.length === 1) mutationSignal = controller;
-          else abortTimer = nativeSetTimeout(() => {
-            clock += delay;
-            controller.abort(new DOMException('synthetic status deadline', 'TimeoutError'));
-          }, 250);
-          return controller.signal;
-        };
-        global.setTimeout = (callback, delay, ...args) => {
-          clock += delay;
-          return nativeSetTimeout(callback, 1, ...args);
-        };
+        stubTimeouts();
         try {
           await assert.rejects(handlers.get('templates:applyBulk')(null, {
             templateId: 'synthetic-template', productIds: ['synthetic-product'],
@@ -270,21 +300,14 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
             `status discovery exceeded 30s: ${clock - budgetStarted}ms; RPC timeouts ${timeoutDelays}`);
           const lastDelay = timeoutDelays.at(-1);
           if (scenario === 'pending') {
-            // The pending read consumed part of the 30s budget, so the next
-            // status deadline must be SHORTER than a fresh 30s timeout. The
-            // exact remainder depends on fetch/timer behaviour that differs
-            // across Node versions, so assert the property, not a precise ms
-            // value. A budget-ignoring regression would produce exactly 30_000.
-            assert.ok(lastDelay > 0 && lastDelay < 30_000,
-              `pending reconciliation must shrink the deadline, saw ${lastDelay}`);
+            // The pending read and the pause consumed part of the 30s budget:
+            // 30,000 − 5,000 − 250 left for the second read.
+            assert.equal(lastDelay, 30_000 - 5_000 - 250);
           } else {
             assert.equal(lastDelay, 30_000);
           }
         } finally {
-          clearTimeout(abortTimer);
           AbortSignal.timeout = nativeTimeout;
-          Date.now = nativeNow;
-          global.setTimeout = nativeSetTimeout;
           httpServer.closeAllConnections();
         }
       });
@@ -292,18 +315,16 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
 
     for (const scenario of ['direct', 'generic-abort', 'overlay', 'collect', 'read']) {
       await t.test(`initial mutation body timeout: ${scenario}`, async () => {
+        await freshServer();
         mode = `initial-body-${scenario}`;
         mutations = statusReads = 0;
         timeoutDelays.length = 0;
-        AbortSignal.timeout = (delay) => {
-          timeoutDelays.push(delay);
-          return nativeTimeout(300);
-        };
+        stubTimeouts();
         if (scenario === 'generic-abort') {
           // Some runtimes expose AbortError instead of the signal's timeout
           // reason. Keep the actual HTTP/body abort and normalize only its name.
           global.fetch = async (...args) => {
-            const response = await nativeFetch(...args);
+            const response = await headerAwareFetch(...args);
             const read = response.text.bind(response);
             response.text = async () => {
               try { return await read(); }
@@ -352,15 +373,20 @@ test('overlay reconciliation bounds hanging HTTP status reads by the remaining b
           assert.equal(timeoutDelays[0], scenario === 'read' ? 20_000 : 120_000);
         } finally {
           AbortSignal.timeout = nativeTimeout;
-          global.fetch = nativeFetch;
+          global.fetch = headerAwareFetch;
+          httpServer.closeAllConnections();
         }
       });
     }
+    client.setReconcileClockForTests(null);
   } finally {
     Module._load = originalLoad;
+    global.fetch = nativeFetch;
     if (previousClient) require.cache[clientPath] = previousClient;
     else delete require.cache[clientPath];
-    httpServer.closeAllConnections();
-    await new Promise((resolve) => httpServer.close(resolve));
+    for (const srv of servers) {
+      srv.closeAllConnections();
+      await new Promise((resolve) => srv.close(resolve));
+    }
   }
 });

@@ -46,6 +46,10 @@ const purchaseOrdersDomain = require('./ipc/purchaseOrders'); // v0.49.47: OPERA
 const labelsDomain     = require('./ipc/labels');
 const catalogStudioDomain = require('./ipc/catalogStudio');
 const socialGridDomain  = require('./ipc/socialGrid');  // v0.1.25: square product-grid posts
+// Fixed Assets & Branches A0/A1 (docs/ASSETS_AND_BRANCHES_PLAN.md)
+const assetsDomain      = require('./ipc/assets');       // the register, events, files, import, Fuel link
+const branchesDomain    = require('./ipc/branches');     // branches (per company)
+const ledgerDomain      = require('./ipc/ledger');       // fx rates + the accounting core (read-only)
 const bulkColumnsDomain = require('./ipc/bulkColumns'); // v0.1.71: saved bulk-table column sets
 const staffDomain       = require('./ipc/staff');        // Fuel F1: thin staff list (seed of HR)
 const fuelDomain        = require('./ipc/fuel');         // Fuel F1: records, rules, reports
@@ -88,6 +92,9 @@ function registerIpc(_ctx) {
   labelsDomain.register(helpers);
   catalogStudioDomain.register(helpers);
   socialGridDomain.register(helpers);       // v0.1.25
+  assetsDomain.register(helpers);           // Fixed Assets A1
+  branchesDomain.register(helpers);         // Fixed Assets A0
+  ledgerDomain.register(helpers);           // Fixed Assets A0
   bulkColumnsDomain.register(helpers);      // v0.1.71
   staffDomain.register(helpers);            // Fuel F1
   fuelDomain.register(helpers);             // Fuel F1

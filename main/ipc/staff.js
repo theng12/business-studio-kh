@@ -4,14 +4,16 @@
  * All `expose()`d: they act on the shared data, and the phone page needs the
  * driver / attendant tiles. Capabilities (main/util/capabilities.js):
  *   staff:list / staff:get / staff:getPhoto   fuel.record, fuel.manage, hr.view or hr.manage
+ *   staff:list / staff:get                     also assets.view / assets.manage (an asset's
+ *                                              custodian picker) — as tiles, like a recorder
  *   staff:getPhoto                             also attendance.supervise — their own crew only
  *   staff:me                                   the same, or attendance.self / attendance.supervise
  *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage or hr.manage
  * HR1: what comes back depends on the caller (main/ipc/hrAccess.js): hr.manage
  * the full record, hr.view the directory (no ID / NSSF / bank / date of birth /
- * address), fuel.manage the F1 record without notes, a recorder the tile. Only
- * hr.manage may link a record to an app account (userId). The HR profile fields
- * themselves are edited through hr:updateProfile (hr.manage).
+ * address), fuel.manage the F1 record without notes, a recorder (or an assets.*
+ * caller) the tile. Only hr.manage may link a record to an app account (userId).
+ * The HR profile fields themselves are edited through hr:updateProfile (hr.manage).
  */
 
 const { userError } = require('../util/userError');

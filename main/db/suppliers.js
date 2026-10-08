@@ -203,6 +203,20 @@ function remove(id) {
       `Archive the supplier instead to hide it from active lists.`,
     );
   }
+  // Fixed Assets (docs/ASSETS_AND_BRANCHES_PLAN.md §2 gap 6): an asset bought
+  // from this supplier keeps the link — same rule as purchase orders.
+  const assetCount = getDb()
+    .prepare(`SELECT COUNT(*) as n FROM fixed_assets WHERE supplier_id = ?`)
+    .get(id)?.n ?? 0;
+  const eventCount = getDb()
+    .prepare(`SELECT COUNT(*) as n FROM asset_events WHERE supplier_id = ?`)
+    .get(id)?.n ?? 0;
+  if (assetCount + eventCount > 0) {
+    throw new Error(
+      `Can't delete supplier — ${assetCount + eventCount} fixed asset record${assetCount + eventCount === 1 ? '' : 's'} reference it. ` +
+      `Archive the supplier instead to hide it from active lists.`,
+    );
+  }
   const res = getDb().prepare(`DELETE FROM suppliers WHERE id = ?`).run(id);
   return { deleted: res.changes };
 }
