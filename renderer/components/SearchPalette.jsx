@@ -30,12 +30,23 @@
  *   - catalogProject / catalogTemplate → open the saved editor after flushing drafts
  * Suppliers and POs only come back for an account that may see costing —
  * the server decides (main/ipc/search.js).
+ *
+ * 2026-10-08: "Go to" rows — modules ("Go to Fuel") and pages ("Fill-ups ·
+ * Fuel") whose name matches, from renderer/lib/modules.js, filtered by the
+ * account's caps (pages also by whether they can open now). ORDER
+ * (`paletteRows`): records first whenever there are any, so Enter on
+ * "barcode" opens the product, not Barcode Maker; "Go to" rows lead only when
+ * no record matched or the query IS a module's name ("fuel"). Enter on a
+ * leading "Go to" row while records are still loading waits for them (the
+ * scanner queue below) unless that row is an exact module name or was picked
+ * with the arrow keys. A module that cannot open yet says why in a toast.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store/index.js';
 import { useUserCaps } from './Sidebar.jsx';
 import { hasCap } from '../lib/capabilities.js';
+import { entryPage, getModule, noCompanyReason, paletteRows, searchNav } from '../lib/modules.js';
 
 const DEBOUNCE_MS = 150;
 
@@ -48,12 +59,15 @@ function kindBadge(kind) {
     case 'po':       return 'PO';
     case 'catalogProject': return 'Catalog';
     case 'catalogTemplate': return 'Template';
+    case 'module':   return 'Module';
+    case 'page':     return 'Page';
     default:         return kind || '';
   }
 }
 
 export function SearchPalette({ open, onClose }) {
   const setActiveModule = useAppStore((s) => s.setActiveModule);
+  const openModule = useAppStore((s) => s.openModule);
   const openLibraryProduct = useAppStore((s) => s.openLibraryProduct);
   const openCatalogProject = useAppStore((s) => s.openCatalogProject);
   const openCatalogTemplate = useAppStore((s) => s.openCatalogTemplate);
@@ -63,6 +77,9 @@ export function SearchPalette({ open, onClose }) {
   const openPurchaseOrder = useAppStore((s) => s.openPurchaseOrder);
   const openPurchaseOrdersForSupplier = useAppStore((s) => s.openPurchaseOrdersForSupplier);
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
+  const companyCount = useAppStore((s) => s.companies?.length ?? 0);
+  const isModuleAvailable = useAppStore((s) => s.isModuleAvailable);
+  const addToast = useAppStore((s) => s.addToast);
   const userCaps = useUserCaps();
   const canSeeCosting = hasCap(userCaps, 'costing.view');
   const canSeeCatalog = hasCap(userCaps, 'catalog.design');
@@ -81,6 +98,9 @@ export function SearchPalette({ open, onClose }) {
   const resultScope = useRef(null);
   const currentScope = `${activeCompanyId}|${query.trim()}|${canSeeCosting}|${canSeeCatalog}`;
   const visibleResults = resultScope.current === currentScope ? results : [];
+  const canOpen = (id) => (isModuleAvailable ? isModuleAvailable(id) : true);
+  const navHits = searchNav(query, userCaps, { isAvailable: canOpen });
+  const rows = paletteRows(navHits, visibleResults);
   /* 0.1.94: Enter pressed before the results for what is typed have arrived
    * (a barcode scanner types and presses Enter in one burst) is queued and
    * opens the top result once they land, instead of being dropped. The top
@@ -153,6 +173,15 @@ export function SearchPalette({ open, onClose }) {
   }, [query, open, activeCompanyId, canSeeCosting, canSeeCatalog, currentScope]);
 
   async function openResult(r) {
+    if (r && (r.kind === 'module' || r.kind === 'page')) {
+      if (r.kind === 'module' && !entryPage(getModule(r.id), { caps: userCaps, isAvailable: canOpen })) {
+        addToast?.(`${getModule(r.id)?.name || 'This module'}: ${noCompanyReason(companyCount).toLowerCase()}.`, 'info');
+        return;
+      }
+      const went = r.kind === 'module' ? await openModule?.(r.id, userCaps) : await setActiveModule(r.id);
+      if (went) onClose?.();
+      return;
+    }
     if (!r || resultScope.current !== currentScope || searching) return;
     const companyId = activeCompanyId;
     let opened;
@@ -183,7 +212,8 @@ export function SearchPalette({ open, onClose }) {
   useEffect(() => {
     if (!enterQueued || searching || resultScope.current !== currentScope) return;
     setEnterQueued(false);
-    if (visibleResults[0]) openResult(visibleResults[0]);
+    const first = paletteRows(navHits, visibleResults)[0];
+    if (first) openResult(first);
     // openResult is recreated each render; the queue fires on the results.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enterQueued, searching, currentScope, results]);
@@ -196,7 +226,7 @@ export function SearchPalette({ open, onClose }) {
     }
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setHighlight((h) => Math.max(0, Math.min(visibleResults.length - 1, h + 1)));
+      setHighlight((h) => Math.max(0, Math.min(rows.length - 1, h + 1)));
       return;
     }
     if (e.key === 'ArrowUp') {
@@ -206,11 +236,18 @@ export function SearchPalette({ open, onClose }) {
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (query.trim() && (searching || resultScope.current !== currentScope)) {
+      const picked = rows[highlight];
+      // Records for this query may still be on their way (never without a company).
+      const pending = !!activeCompanyId && !!query.trim() && (searching || resultScope.current !== currentScope);
+      if (picked && (picked.kind === 'module' || picked.kind === 'page') && (!pending || picked.exact || highlight > 0)) {
+        openResult(picked);
+        return;
+      }
+      if (pending) {
         setEnterQueued(true);
         return;
       }
-      openResult(visibleResults[highlight]);
+      openResult(picked);
       return;
     }
   }
@@ -232,27 +269,26 @@ export function SearchPalette({ open, onClose }) {
             ref={inputRef}
             className="palette__input"
             type="text"
-            placeholder={!activeCompanyId ? 'Pick a company first'
-              : `Search products, brands, categories${canSeeCatalog ? ', catalogs, templates' : ''}${canSeeCosting ? ', suppliers, POs' : ''}…`}
+            placeholder={!activeCompanyId ? 'Go to a module or page (pick a company to search products)'
+              : `Search modules, products, brands, categories${canSeeCatalog ? ', catalogs, templates' : ''}${canSeeCosting ? ', suppliers, POs' : ''}…`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            disabled={!activeCompanyId}
           />
           {searching ? <span className="palette__hint">searching…</span> : null}
         </div>
 
         {showResults ? (
           <div className="palette__results">
-            {searchError && !searching ? (
+            {searchError && !searching && !navHits.length ? (
               <div className="palette__empty palette__empty--error" role="alert">
                 Search failed: {searchError}
               </div>
-            ) : visibleResults.length === 0 && !searching ? (
+            ) : rows.length === 0 && !searching ? (
               <div className="palette__empty">No matches for &ldquo;{query}&rdquo;.</div>
             ) : (
               <ul role="listbox">
-                {visibleResults.map((r, i) => (
+                {rows.map((r, i) => (
                   <li
                     key={`${r.kind}:${r.id}`}
                     role="option"

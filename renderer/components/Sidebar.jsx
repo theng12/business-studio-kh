@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useAppStore } from '../store/index.js';
 // v0.1.22: shared with Settings — see renderer/lib/capabilities.js.
-import { hasCap, hasAnyCap } from '../lib/capabilities.js';
+import { hasCap } from '../lib/capabilities.js';
 import { WhatsNewModal } from './WhatsNewModal.jsx';
 import { hasUnseenWhatsNew, loadLastSeenVersion, saveLastSeenVersion } from '../lib/whatsNewSeen.js';
 import { PresenceModal } from './PresenceModal.jsx';
 import { ConnectionLegendModal } from './ConnectionLegendModal.jsx';
 import { timeAgo } from '../lib/format.js';
+import { HOME_PAGE, entryPage, getPage, moduleOfPage, noCompanyReason, visibleModules, visibleSections } from '../lib/modules.js';
+import { IconHome, NavIcon } from './navIcons.jsx';
 
 /**
  * v0.26.30: collapsible sidebar. When the user runs the app on a
@@ -30,118 +32,9 @@ function saveSidebarCollapsed(v) {
   try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, v ? 'true' : 'false'); } catch {}
 }
 
-// v0.45.0: `roleMin` (optional) — the lowest role for which this nav item is
-// shown. Omitted = visible to everyone. Hierarchy: viewer < photographer <
-// editor < admin. Standalone / server-host renderers always run as admin
-// since local IPC isn't gated.
-/* v0.1.25: exported so App.jsx can DERIVE its keyboard shortcuts from the same
- * list the sidebar renders. They used to be two hand-kept lists, and they drifted:
- * the sidebar advertised ⌘7/⌘8/⌘9 for History/Suppliers/Purchase Orders while
- * App.jsx's SHORTCUTS map simply did not contain them, so those keys did nothing.
- * Deriving the map removes the class of bug rather than fixing one instance. */
-export const NAV = [
-  {
-    label: 'Workspace',
-    items: [
-      { id: 'company',    name: 'Company',         icon: IconCompany },
-      { id: 'dashboard',  name: 'Dashboard',       icon: IconDashboard,  shortcut: '1' },
-      { id: 'brands',     name: 'Brands',          icon: IconBrand },
-      { id: 'library',   name: 'Product Library', icon: IconLibrary,   shortcut: '2' },
-      // v0.22.13 promoted Categories to a top-level sidebar entry;
-      // v0.22.14 demoted it back to a Settings tab. Brands has rich
-      // per-row content (icon, color, product count) that justifies
-      // top-level real estate; categories are just `{ id, name }`
-      // and live more comfortably inside Settings. The full UI moved
-      // with it (paginated list, inline rename, danger delete) — only
-      // its location changed.
-    ],
-  },
-  {
-    label: 'Image Studio',
-    items: [
-      // v0.49.51: gated by CAPABILITY (not role rank), so custom roles get
-      // the right nav. A module shows if the user has any of its `caps`.
-      { id: 'workspace', name: 'Image Workspace', icon: IconWorkspace, shortcut: '3', caps: ['images.manage'] },
-      { id: 'aistudio',  name: 'AI Studio',       icon: IconAiStudio,  shortcut: '4', caps: ['ai.run'] },
-      { id: 'overlay',   name: 'Overlay Studio',  icon: IconOverlay,   shortcut: '5', caps: ['overlay.use'] },
-      { id: 'export',    name: 'Export Center',   icon: IconExport,    shortcut: '6', caps: ['export.run'] },
-    ],
-  },
-  {
-    label: 'Label Studio',
-    items: [
-      // UI pass, 2026-10: every entry has its own glyph — these used to
-      // borrow Overlay / Export / Library / History, so four rows in a
-      // column looked identical.
-      { id: 'labeltemplates', name: 'Label Templates', icon: IconLabel, caps: ['labels.use'] },
-      { id: 'labelgenerate', name: 'Generate & Print', icon: IconPrint, caps: ['labels.use'] },
-      { id: 'barcodes', name: 'Barcode Maker', icon: IconBarcode, caps: ['labels.use'] },
-      { id: 'labeljobs', name: 'Label History', icon: IconLabelHistory, caps: ['labels.use'] },
-    ],
-  },
-  {
-    label: 'Catalog Studio',
-    items: [
-      { id: 'catalogtemplates', name: 'Catalog Templates', icon: IconCatalogTemplate, caps: ['catalog.design'] },
-      { id: 'catalogprojects', name: 'Catalog Projects', icon: IconCatalog, caps: ['catalog.design'] },
-    ],
-  },
-  {
-    // v0.1.25: Social Grid — square product grids for Facebook / Instagram.
-    // Gated on catalog.design because it is the same job as a catalog (lay
-    // products out for an audience), just sized for a post instead of a page.
-    label: 'Social',
-    items: [
-      { id: 'socialgrid', name: 'Social Grid', icon: IconSocialGrid, caps: ['catalog.design'] },
-    ],
-  },
-  {
-    // v0.49.46: OPERATIONS section. Visible to any role with the
-    // 'View costs, suppliers & POs' capability (costing.view). The whole
-    // section is dropped if every item inside it is gated out.
-    label: 'Operations',
-    items: [
-      { id: 'suppliers',      name: 'Suppliers',       icon: IconSupplier, shortcut: '8', caps: ['costing.view'] },
-      { id: 'purchaseorders', name: 'Purchase Orders', icon: IconPo,       shortcut: '9', caps: ['costing.view'] },
-      { id: 'costcalc',       name: 'Cost Calculator', icon: IconCostCalc,                caps: ['costing.view'] },
-    ],
-  },
-  {
-    // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §5). The record-keeping screens are
-    // open to fuel.record too (they show only what a recorder may do: add
-    // slips, dips, deliveries); review, flags and reports are fuel.manage.
-    label: 'Fuel',
-    items: [
-      { id: 'fueloverview', name: 'Fuel overview',       icon: IconFuel,        caps: ['fuel.manage'] },
-      { id: 'fuelassets',   name: 'Vehicles & machines', icon: IconVehicle,     caps: ['fuel.record', 'fuel.manage'] },
-      { id: 'fuelfills',    name: 'Fill-ups',            icon: IconFillUp,      caps: ['fuel.record', 'fuel.manage'] },
-      { id: 'fueltanks',    name: 'Tanks & dips',        icon: IconTank,        caps: ['fuel.record', 'fuel.manage'] },
-      { id: 'fuelprices',   name: 'Fuel prices',         icon: IconFuelPrice,   caps: ['fuel.record', 'fuel.manage'] },
-      { id: 'fuelreports',  name: 'Fuel reports',        icon: IconFuelReport,  caps: ['fuel.manage'] },
-    ],
-  },
-  {
-    // The thin staff list F1 needs; HR1 grows it (and this section) later.
-    label: 'People',
-    items: [
-      { id: 'staff', name: 'Staff', icon: IconStaff, caps: ['fuel.manage'] },
-    ],
-  },
-  {
-    label: 'System',
-    // UI pass, 2026-10 (§5): pinned under the scrolling list, above the
-    // footer, so Settings is on screen at any window height — on a
-    // 1000px-tall window it used to sit below the fold.
-    pinned: true,
-    items: [
-      // v0.26.31: global audit-log feed. Sits above Settings because
-      // it's something users will visit often ("what did my assistant
-      // change yesterday?") whereas Settings is a configure-once page.
-      { id: 'history',  name: 'History',  icon: IconHistory, shortcut: '7', caps: ['history.view'] },
-      { id: 'settings', name: 'Settings', icon: IconSettings, shortcut: ',' },
-    ],
-  },
-];
+/* 2026-10-08: the nav list moved to renderer/lib/modules.js (the module
+ * registry). The sidebar now shows Home plus the pages of ONE module — the
+ * module of the page on screen — and Home shows every module as a tile. */
 
 // v0.49.51: capability helpers. `caps` is the current user's capability
 // array (the server attaches it to the connection; the host is all-access).
@@ -235,14 +128,6 @@ export function Sidebar({ onSearch }) {
   // collapsed. Persisted via localStorage helpers above.
   const [collapsed, setCollapsedRaw] = useState(loadSidebarCollapsed);
   const setCollapsed = (v) => { setCollapsedRaw(v); saveSidebarCollapsed(v); };
-  const [closedSections, setClosedSections] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('Sidebar.closedSections') || '{}'); } catch { return {}; }
-  });
-  const toggleSection = (label) => setClosedSections((current) => {
-    const next = { ...current, [label]: !current[label] };
-    try { localStorage.setItem('Sidebar.closedSections', JSON.stringify(next)); } catch {}
-    return next;
-  });
 
   // v0.45.0: effective role. Local IPC isn't role-gated, so standalone /
   // server-host renderers are admin by definition. In client mode we trust
@@ -284,48 +169,82 @@ export function Sidebar({ onSearch }) {
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(update) : null;
     ro?.observe(nav);
     return () => { nav.removeEventListener('scroll', update); ro?.disconnect(); };
-  }, [collapsed, closedSections, caps]);
+  }, [collapsed, caps, activeModule]);
 
-  function renderSection(section) {
-    const items = (!closedSections[section.label] || collapsed ? section.items : [])
-      .filter((item) => hasAnyCap(caps, item.caps));
-    // A section whose every item is gated out is dropped whole (v0.49.46).
-    if (section.items.every((item) => !hasAnyCap(caps, item.caps))) return null;
+  // 2026-10-08 (AGENTS.md §1): the sidebar shows ONE module — the module of
+  // the page on screen, derived from the page id, never stored. On Home it
+  // lists the modules instead (useful in the collapsed rail too).
+  const currentModule = moduleOfPage(activeModule);
+  const onHome = activeModule === HOME_PAGE || !currentModule;
+  const openModule = useAppStore((s) => s.openModule);
+  const homeKeys = platform === 'darwin' ? '⌘⇧H' : 'Ctrl+Shift+H';
+  // "Create a company first" on a first run, "Choose …" once one exists.
+  const companyCount = useAppStore((s) => s.companies.length);
+  const lockedReason = noCompanyReason(companyCount);
+
+  function renderPage(item) {
+    const active = activeModule === item.id;
+    const disabled = !isModuleAvailable(item.id);
     return (
-      <div key={section.label} className="sidebar__section">
-        {section.label ? (
-          <button type="button" className="sidebar__section-label" onClick={() => toggleSection(section.label)} aria-expanded={!closedSections[section.label]}>
-            <span>{section.label}</span><svg width="10" height="10" viewBox="0 0 10 10" className={closedSections[section.label] ? 'is-closed' : ''} aria-hidden="true"><path d="m2 3 3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-          </button>
+      <button
+        key={item.id}
+        type="button"
+        className={`sidebar__item${active ? ' is-active' : ''}${disabled ? ' is-disabled' : ''}`}
+        onClick={() => !disabled && setActiveModule(item.id)}
+        title={
+          disabled
+            ? lockedReason
+            : item.shortcut
+            ? `${item.name} (${modKey}${item.shortcut})`
+            : item.name
+        }
+        aria-current={active ? 'page' : undefined}
+        disabled={disabled}
+      >
+        <NavIcon name={item.icon} className="sidebar__item-icon" />
+        <span>{item.name}</span>
+        {item.shortcut ? (
+          <span className="sidebar__item-shortcut">{modKey}{item.shortcut}</span>
         ) : null}
-        {items.map((item) => {
-          const Icon = item.icon;
-          const active = activeModule === item.id;
-          const disabled = !isModuleAvailable(item.id);
-          return (
-            <button
-              key={item.id}
-              type="button"
-              className={`sidebar__item${active ? ' is-active' : ''}${disabled ? ' is-disabled' : ''}`}
-              onClick={() => !disabled && setActiveModule(item.id)}
-              title={
-                disabled
-                  ? 'Create a company first'
-                  : item.shortcut
-                  ? `${item.name} (${modKey}${item.shortcut})`
-                  : item.name
-              }
-              aria-current={active ? 'page' : undefined}
-              disabled={disabled}
-            >
-              <Icon className="sidebar__item-icon" />
-              <span>{item.name}</span>
-              {item.shortcut ? (
-                <span className="sidebar__item-shortcut">{modKey}{item.shortcut}</span>
-              ) : null}
-            </button>
-          );
-        })}
+      </button>
+    );
+  }
+
+  function renderModuleNav() {
+    if (onHome) {
+      return (
+        <div className="sidebar__section">
+          <div className="sidebar__section-label">Modules</div>
+          {visibleModules(caps).map((mod) => {
+            const disabled = !entryPage(mod, { caps, isAvailable: isModuleAvailable });
+            return (
+              <button
+                key={mod.id}
+                type="button"
+                className={`sidebar__item${disabled ? ' is-disabled' : ''}`}
+                data-module={mod.id}
+                onClick={() => !disabled && openModule(mod.id, caps)}
+                title={disabled ? lockedReason : mod.description}
+                disabled={disabled}
+              >
+                <NavIcon name={mod.icon} className="sidebar__item-icon" />
+                <span>{mod.name}</span>
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+    const sections = visibleSections(currentModule, caps);
+    return (
+      <div className="sidebar__section" data-module={currentModule.id}>
+        <div className="sidebar__section-label sidebar__module-label">{currentModule.name}</div>
+        {sections.map((section, i) => (
+          <div key={section.label || i} className="sidebar__group">
+            {sections.length > 1 && section.label ? <div className="sidebar__sublabel">{section.label}</div> : null}
+            {section.pages.map(renderPage)}
+          </div>
+        ))}
       </div>
     );
   }
@@ -368,12 +287,27 @@ export function Sidebar({ onSearch }) {
           <span>Search</span><span className="sidebar__item-shortcut">{modKey}K</span>
         </button>
 
-        <nav ref={navRef} className={`sidebar__nav${navHasMore ? ' sidebar__nav--more' : ''}`} aria-label="Primary">
-          {NAV.filter((section) => !section.pinned).map(renderSection)}
+        <button
+          type="button"
+          className={`sidebar__item sidebar__home${onHome ? ' is-active' : ''}`}
+          onClick={() => setActiveModule(HOME_PAGE)}
+          title={`Home — all modules (${homeKeys})`}
+          aria-current={onHome ? 'page' : undefined}
+        >
+          <IconHome className="sidebar__item-icon" />
+          <span>Home</span><span className="sidebar__item-shortcut">{homeKeys}</span>
+        </button>
+
+        <nav ref={navRef} className={`sidebar__nav${navHasMore ? ' sidebar__nav--more' : ''}`} aria-label={onHome ? 'Modules' : `${currentModule.name} pages`}>
+          {renderModuleNav()}
         </nav>
-        {NAV.some((section) => section.pinned) ? (
-          <nav className="sidebar__nav sidebar__nav--pinned" aria-label="System">
-            {NAV.filter((section) => section.pinned).map(renderSection)}
+        {/* §5: Settings is one click away on every screen. Inside System it is
+            already in the module's own list, so it is not repeated here. */}
+        {currentModule?.id !== 'system' ? (
+          <nav className="sidebar__nav sidebar__nav--pinned" aria-label="Settings">
+            <div className="sidebar__section">
+              {renderPage(getPage('settings'))}
+            </div>
           </nav>
         ) : null}
 
@@ -734,207 +668,23 @@ function NetworkChip() {
 /* ─── Inline SVG icons ─────────────────────────────────────────── */
 
 /* Fuel F1 + People — inline, stroke-based, 18px like the rest (§1). */
-function IconFuel({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="3" y="2.5" width="7.5" height="13" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4.8 6h3.9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M10.5 7.5h1.6a1 1 0 0 1 1 1v4.3a1.2 1.2 0 0 0 2.4 0V6.4L13.6 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
-function IconVehicle({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M1.8 12.5V6.2a1 1 0 0 1 1-1h7.4v7.3" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <path d="M10.2 7.5h3l2.3 2.6v2.4" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <circle cx="5" cy="13.2" r="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="12.8" cy="13.2" r="1.5" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
 
-function IconFillUp({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M9 2.5S4.5 7.6 4.5 10.7a4.5 4.5 0 0 0 9 0C13.5 7.6 9 2.5 9 2.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <path d="M7 11.2a2 2 0 0 0 2 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-function IconTank({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <ellipse cx="9" cy="4.5" rx="5.5" ry="2" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M3.5 4.5v9c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2v-9" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M9 8v6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M8 10h2M8 12h2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-function IconFuelPrice({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M2.5 9.6V3.5a1 1 0 0 1 1-1h6.1l6 6a1 1 0 0 1 0 1.4l-5.7 5.7a1 1 0 0 1-1.4 0l-6-6Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <circle cx="6" cy="6" r="1.2" stroke="currentColor" strokeWidth="1.2" />
-    </svg>
-  );
-}
 
-function IconFuelReport({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M3 15.5h12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <rect x="4" y="9" width="2.4" height="4.5" rx=".6" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="7.8" y="5.5" width="2.4" height="8" rx=".6" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="11.6" y="2.5" width="2.4" height="11" rx=".6" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
-  );
-}
 
-function IconStaff({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <circle cx="6.8" cy="6" r="2.6" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M2 15c.4-2.7 2.4-4.4 4.8-4.4s4.4 1.7 4.8 4.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M12 3.6a2.5 2.5 0 0 1 0 4.8M13.6 10.9c1.3.6 2.2 2 2.4 4.1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-function IconDashboard({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="2.5" y="2.5" width="5.5" height="6"  rx="1" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="2.5" y="10.5" width="5.5" height="5" rx="1" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="10" y="2.5" width="5.5" height="5"   rx="1" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="10" y="9.5" width="5.5" height="6"   rx="1" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
 
-function IconCompany({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M3 15.5V5l5-2.5L13 5v10.5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <path d="M2 15.5h14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <rect x="6" y="9.5" width="4" height="6" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
 
-function IconBrand({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M8.5 2.5h6V8.5L8.5 14.5L2.5 8.5L8.5 2.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <circle cx="11" cy="6" r="1" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
 
-function IconLibrary({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="2.5" y="3" width="13" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M2.5 7.5h13M7 3v12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-function IconWorkspace({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="2.5" y="3" width="13" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="6.5" cy="7.5" r="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M3 13l3.5-3.5 3 3 2-2L15 13" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
-function IconExport({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M9 11.5V2.5M9 2.5L5.5 6M9 2.5L12.5 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M3 11v3.5C3 15.3 3.7 16 4.5 16h9c.8 0 1.5-.7 1.5-1.5V11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-// v0.49.10: was a sun (circle + 8 rays) which read as "weather / brightness"
-// rather than "settings." Swapped for a Feather-style gear — recognised
-// across every desktop OS as the universal settings symbol.
-function IconSettings({ className }) {
-  return (
-    <svg
-      className={className}
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.85"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  );
-}
 
-// v0.26.31: clock with arrow — classic "history" iconography.
-// v0.49.46: small box-on-a-shelf glyph for Suppliers. Two horizontal
-// shelf lines + a stacked box reads as "inventory source" — distinct
-// from Library (grid) and Brands (shield).
-function IconSupplier({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M2.5 6.5h13M2.5 12.5h13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <rect x="5" y="3" width="5" height="3" rx="0.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="3" y="9" width="4" height="3.5" rx="0.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="10" y="9" width="5" height="3.5" rx="0.5" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
 
-// v0.49.47: clipboard with check — Purchase Orders. Reads as
-// "documented order" without colliding with Library's grid or
-// History's clock.
-function IconPo({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="3.5" y="2.5" width="11" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="6" y="1.5" width="6" height="2.5" rx="0.5" stroke="currentColor" strokeWidth="1.4" fill="none" />
-      <path d="M6 9.5l2 2 4-4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
-// v0.49.47: percentage/calc glyph — Cost Calculator. The "%" reads
-// as margin/pricing; the surrounding rect echoes a calculator body.
-function IconCostCalc({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="3" y="2.5" width="12" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="7" cy="7" r="1" fill="currentColor" />
-      <circle cx="11" cy="11" r="1" fill="currentColor" />
-      <path d="M6.5 11.5l5-5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-function IconHistory({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <circle cx="9" cy="9" r="6.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M9 5v4l2.5 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M2.5 4.5L3.5 7l2.5-1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
 function IconSparkles({ className }) {
   return (
@@ -953,24 +703,7 @@ function IconHeart({ className }) {
   );
 }
 
-function IconAiStudio({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M9 1.5l1.3 3.6L14 6.5l-3.7 1.4L9 11.5 7.7 7.9 4 6.5l3.7-1.4L9 1.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <path d="M14 11.5l.6 1.7L16.5 14l-1.9.8L14 16.5l-.6-1.7L11.5 14l1.9-.8L14 11.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-    </svg>
-  );
-}
 
-function IconOverlay({ className }) {
-  // Two stacked rectangles suggesting layers being composited.
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="2.5" y="2.5" width="9" height="9" rx="1.4" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="6.5" y="6.5" width="9" height="9" rx="1.4" stroke="currentColor" strokeWidth="1.4" fill="currentColor" fillOpacity="0.08" />
-    </svg>
-  );
-}
 
 function IconCheck({ className }) {
   return (
@@ -984,79 +717,12 @@ function IconCheck({ className }) {
    1.4 stroke (IconSettings draws on a 24 grid, so 1.85 there renders the
    same weight). */
 
-// Label sheet: a rounded label with a hole and two text lines.
-function IconLabel({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="2.5" y="4" width="13" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <circle cx="5.5" cy="9" r="1" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M8.5 7.5h4.5M8.5 10.5h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-// Printer: paper in, paper out.
-function IconPrint({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M5 6.5V2.5h8v4" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <path d="M5 12.5H3.5a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H13" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <rect x="5" y="10" width="8" height="5.5" rx="0.5" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
 
-// Barcode: bars of mixed width inside scan corners.
-function IconBarcode({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M2.5 5.5v-2a1 1 0 0 1 1-1h2M12.5 2.5h2a1 1 0 0 1 1 1v2M15.5 12.5v2a1 1 0 0 1-1 1h-2M5.5 15.5h-2a1 1 0 0 1-1-1v-2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5.5 6v6M8 6v6M10.5 6v6M12.5 6v6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-// Label history: a stack of printed labels.
-function IconLabelHistory({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="2.5" y="6.5" width="10" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M5.5 4h8.5a1.5 1.5 0 0 1 1.5 1.5V13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M5 10h5M5 12.5h3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-// Catalog template: a page with a layout wireframe.
-function IconCatalogTemplate({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="3.5" y="2" width="11" height="14" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="6" y="4.5" width="6" height="4" rx="0.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M6 11h6M6 13.5h3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
-// Catalog project: an open booklet.
-function IconCatalog({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <path d="M9 4.5C7.5 3.3 5.3 3 2.5 3.5v10c2.8-.5 5 0 6.5 1.2 1.5-1.2 3.7-1.7 6.5-1.2v-10C12.7 3 10.5 3.3 9 4.5z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-      <path d="M9 4.5v10" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
 
-// Social grid: a square post split into a 3 × 3 grid.
-function IconSocialGrid({ className }) {
-  return (
-    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
-      <rect x="2.5" y="2.5" width="13" height="13" rx="2" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M6.8 2.5v13M11.2 2.5v13M2.5 6.8h13M2.5 11.2h13" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
-  );
-}
 
 // Footer mode chips (replace the old emoji). 12 × 12, same stroke style.
 function IconServer({ className }) {
