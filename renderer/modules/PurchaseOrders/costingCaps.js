@@ -28,5 +28,8 @@ export function useCostingCaps() {
   return {
     canView: hasCap(caps, 'costing.view'),
     canManage: hasCap(caps, 'costing.manage'),
+    // Writing a product's price (Cost Calculator's "Save as retail price")
+    // is products:update on the server, i.e. products.edit — not costing.
+    canEditProducts: hasCap(caps, 'products.edit'),
   };
 }

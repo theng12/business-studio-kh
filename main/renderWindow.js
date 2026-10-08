@@ -144,9 +144,14 @@ async function toPdfBuffer(html, options = {}) {
   }));
 }
 
+/* `unique: true` claims the name when the bytes are written (open with `wx`,
+ * `-2`, `-3`… on EEXIST — writeUniqueFile) and resolves to the path actually
+ * written. Checking a free name first and writing after the render let two
+ * exports in the same minute pick, and overwrite, the same file. */
 async function toPdf(html, outputPath, options = {}) {
   const bytes = await toPdfBuffer(html, options);
   await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+  if (options.unique) return writeUniqueFile(path.dirname(outputPath), path.basename(outputPath), bytes);
   await fs.promises.writeFile(outputPath, bytes);
   return outputPath;
 }

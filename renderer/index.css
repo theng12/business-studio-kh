@@ -442,6 +442,9 @@ input, textarea, select {
 }
 
 .sidebar__item.is-active .sidebar__item-icon { opacity: 1; }
+/* Scrolled into view on page change (Sidebar.jsx); the margin keeps it clear of
+   the nav's bottom fade instead of parking it under the mask. */
+.sidebar__item.is-active { scroll-margin-block: 32px; }
 
 .sidebar__item-shortcut {
   margin-left: auto;
@@ -11884,11 +11887,15 @@ a:hover { text-decoration-thickness: 2px; }
 .po-list-table .po-list__number { white-space: nowrap; }
 
 /* PO detail lines table at 1280 px: SKU and numbers never wrap, the product
-   name keeps room for Khmer, the row buttons stay on screen. */
+   name keeps room for Khmer, the row buttons stay on screen.
+   2026-10-08: the table was 953 px in a 937 px box, so the sticky actions
+   column covered the end of LINE TOTAL with no scrollbar hint. Numeric
+   HEADERS may now wrap onto two lines ("Line total / USD") — the values
+   themselves still never wrap — and the name column gives up 40 px. */
 .po-lines-table .po-lines__sku,
-.po-lines-table th.is-num,
 .po-lines-table td.is-num { white-space: nowrap; }
-.po-lines-table .po-lines__name { min-width: 220px; }
+.po-lines-table th.is-num { white-space: normal; min-width: 64px; }
+.po-lines-table .po-lines__name { min-width: 180px; }
 .po-lines-table .po-lines__actions {
   position: sticky;
   right: 0;
@@ -12068,6 +12075,17 @@ a:hover { text-decoration-thickness: 2px; }
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-sm);
 }
+/* With First / Last and the page box the bar is wider, and in a narrow column
+   (Generate & Print's product list at 1280 px) it broke "← Prev", "Next →",
+   "Page size" and "Showing 1–50 of 2496" mid-phrase. Same rule the Library
+   already had (.lib-main .pagination): keep each piece on one line and wrap
+   whole pieces instead. */
+.pagination { flex-wrap: wrap; gap: var(--s-2) var(--s-3); }
+.pagination__controls { flex-wrap: wrap; gap: var(--s-2) var(--s-3); }
+.pagination__range,
+.pagination__page-size,
+.pagination__indicator,
+.pagination__btn { white-space: nowrap; }
 
 /* Toast action (Undo) on the same single line. */
 .toast.toast--has-action { display: flex; align-items: center; gap: var(--s-3); }

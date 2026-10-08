@@ -70,6 +70,32 @@ function scheduleBackgroundProductsRefresh(get) {
   }, BACKGROUND_REFRESH_MS);
 }
 
+/* A row merged from a save (mergeProductRow) can be older on the wire than a
+ * `products:list` that was already in flight when the save went out: that
+ * response lands after the merge and would put the pre-save row back (a
+ * flicker, and — if the panel remounts from it — a stale conflict token).
+ * So merged rows are remembered by `updatedAt`, and a list response keeps the
+ * merged copy wherever its own row is OLDER. Once a list returns the row at
+ * least as new, the entry is dropped; entries also expire after a while so
+ * the map cannot grow. Pure helper exported for tests. */
+const MERGED_ROW_TTL_MS = 120_000;
+const mergedRows = new Map(); // id → { row, updatedAt, at }
+
+export function preferNewerRows(list, merged, now = Date.now()) {
+  if (!Array.isArray(list) || merged.size === 0) return list;
+  let out = list;
+  list.forEach((p, i) => {
+    const m = p && merged.get(p.id);
+    if (!m) return;
+    if (now - m.at > MERGED_ROW_TTL_MS) { merged.delete(p.id); return; }
+    const listAt = Number(p.updatedAt);
+    if (Number.isFinite(listAt) && listAt >= m.updatedAt) { merged.delete(p.id); return; }
+    if (out === list) out = list.slice();
+    out[i] = { ...p, ...m.row };
+  });
+  return out;
+}
+
 function filtersAreDefault(filters) {
   return filters.search === '' &&
     (filters.brandIds == null || filters.brandIds.length === 0) &&
@@ -271,8 +297,9 @@ export function createProductsSlice(set, get) {
         if (get().products.length === 0) set({ productsLoading: true });
         const through = productsInvalidation;
         try {
-          const list = await window.api.products.list(companyId, filters);
+          const rawList = await window.api.products.list(companyId, filters);
           if (seq !== refreshSeq || get().activeCompanyId !== companyId) return;
+          const list = preferNewerRows(rawList, mergedRows);
           freshThrough.set(key, through);
           if (defaultView) {
             const ownsAll = allSeq === refreshAllSeq;
@@ -343,7 +370,7 @@ export function createProductsSlice(set, get) {
           const list = await window.api.products.list(companyId, {});
           if (seq !== refreshAllSeq || get().activeCompanyId !== companyId) return;
           allFreshThrough.set(companyId, through);
-          set({ allProducts: list });
+          set({ allProducts: preferNewerRows(list, mergedRows) });
         } catch (err) {
           if (seq === refreshAllSeq && get().activeCompanyId === companyId) {
             get().addToast(err.message, 'error');
@@ -414,22 +441,32 @@ export function createProductsSlice(set, get) {
       if (!row?.id) return;
       const companyId = get().activeCompanyId;
       if (row.companyId && companyId && row.companyId !== companyId) return;
+      const updatedAt = Number(row.updatedAt);
+      if (Number.isFinite(updatedAt)) {
+        const prev = mergedRows.get(row.id);
+        if (!prev || updatedAt >= prev.updatedAt) mergedRows.set(row.id, { row, updatedAt, at: Date.now() });
+      }
       const swap = (list) => {
         if (!Array.isArray(list)) return list;
         const at = list.findIndex((p) => p.id === row.id);
         if (at < 0) return list;
+        // Never replace a row with an OLDER copy of itself.
+        if (Number(list[at].updatedAt) > updatedAt) return list;
         const next = list.slice();
         next[at] = { ...list[at], ...row };
         return next;
       };
       set((s) => ({ products: swap(s.products), allProducts: swap(s.allProducts) }));
     },
+    /** Returns the server's `{ deleted, deletedEntryId }` (the recycle-bin
+     *  entry the delete was held under — the toast's Undo restores it). */
     async removeProduct(id) {
-      await window.api.products.remove(id);
+      const result = await window.api.products.remove(id);
       await Promise.all([
         get().refreshProducts(),
         get().refreshDashboard(),
       ]);
+      return result;
     },
   };
 }

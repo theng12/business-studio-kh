@@ -17,7 +17,8 @@ test.before(() => {
   db.exec(`CREATE TABLE products(id TEXT PRIMARY KEY, company_id TEXT, sku TEXT, name TEXT,
     brand_id TEXT, category_id TEXT, color_finish TEXT, barcode TEXT, status TEXT,
     process_status TEXT, price_retail REAL, price_wholesale REAL, prices TEXT, updated_at INTEGER);
-    CREATE TABLE product_images(id TEXT, product_id TEXT, filepath TEXT, order_index INTEGER, is_processed INTEGER);
+    CREATE TABLE product_images(id TEXT, product_id TEXT, filepath TEXT, order_index INTEGER, is_processed INTEGER,
+      processed_filepath TEXT, content_hash TEXT, workspace_revision INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE brands(id TEXT, company_id TEXT, name TEXT);
     CREATE TABLE categories(id TEXT, company_id TEXT, name TEXT);`);
   const insert = db.prepare(`INSERT INTO products(id, company_id, sku, name, color_finish, barcode, prices, updated_at)
@@ -28,7 +29,7 @@ test.before(() => {
   insert.run('nfd', 'EP-1', 'Épice blanche', null, null, 4);        // decomposed é
   insert.run('other-barcode', 'ZZ-9', 'Contains 885123 in its name', null, '9990001112223', 5);
   db.prepare("INSERT INTO products(id, company_id, sku, name, prices, updated_at) VALUES ('foreign', 'other', 'AV-M8101', 'x', '{}', 9)").run();
-  db.prepare("INSERT INTO product_images VALUES ('i1', 'm8101', 'a/av-m8101-001.jpg', 0, 0)").run();
+  db.prepare("INSERT INTO product_images(id, product_id, filepath, order_index, is_processed) VALUES ('i1', 'm8101', 'a/av-m8101-001.jpg', 0, 0)").run();
   db.prepare("INSERT INTO brands VALUES ('b1', 'co', 'MACEPRO Tiles')").run();
   db.prepare("INSERT INTO categories VALUES ('c1', 'co', 'ក្រ‌ឡា')").run();
   const original = Module._load;

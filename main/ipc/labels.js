@@ -9,7 +9,7 @@ const productsDb = require('../db/products');
 const brandsDb = require('../db/brands');
 const companies = require('../db/companies');
 const { labelsDocument, barcodeUri } = require('../studioRenderer');
-const { outputBaseName, freeOutputPath } = require('../util/outputNames');
+const { outputBaseName } = require('../util/outputNames');
 const renderer = require('../renderWindow');
 const events = require('../events');
 const { slugify, slugifyUnicode } = require('../util/slug');
@@ -201,8 +201,9 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
       if (format === 'pdf') {
         const html = await labelsDocument({ template, products, brands, layout });
         // Khmer template names survive; readable date; never over an earlier file.
-        const target = freeOutputPath(outputFolder, outputBaseName(template.name, 'labels'), 'pdf');
-        await renderer.toPdf(html, target, { orientation: layout.orientation });
+        // The name is claimed atomically at write time (unique), so two runs in
+        // the same minute get `-2` instead of overwriting each other.
+        const target = await renderer.toPdf(html, path.join(outputFolder, `${outputBaseName(template.name, 'labels')}.pdf`), { orientation: layout.orientation, unique: true });
         made.push(target);
         events.broadcast('progress:event', { id: opId, kind: 'labels', done: products.length, total: products.length, phase: 'finishing', label: template.name });
       } else {

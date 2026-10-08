@@ -8,7 +8,7 @@
  *     into `labels-…`.
  *   - The date is readable: `price-list-2026-10-08-1432.pdf`, not
  *     `catalog-1759912345678.pdf`. Minutes, not seconds; two exports in the
- *     same minute get `-2` (freeOutputPath / writeUniqueFile) rather than
+ *     same minute get `-2` (claimed at write time by writeUniqueFile) rather than
  *     overwriting each other.
  *
  * Pure apart from the optional `exists` check, so `npm test` covers it.
@@ -26,7 +26,15 @@ function outputBaseName(name, fallback, d = new Date()) {
   return `${slugifyUnicode(name, fallback)}-${readableStamp(d)}`;
 }
 
-/** `<folder>/<base>.<ext>`, or `<base>-2.<ext>`, `-3`… when that is taken. */
+/**
+ * `<folder>/<base>.<ext>`, or `<base>-2.<ext>`, `-3`… when that is taken.
+ *
+ * A CHECK only, so never pick a name with this and write it later: two
+ * exports in the same minute both saw the name free and the second
+ * overwrote the first (audit 2026-10). Writers claim the name when the bytes
+ * are written instead — `writeUniqueFile` (main/util/exclusiveFile.js, `wx`
+ * with the same `-2`, `-3` suffixes), or `toPdf(…, { unique: true })`.
+ */
 function freeOutputPath(folder, base, ext, exists = fs.existsSync) {
   let candidate = path.join(folder, `${base}.${ext}`);
   for (let i = 2; exists(candidate); i += 1) candidate = path.join(folder, `${base}-${i}.${ext}`);

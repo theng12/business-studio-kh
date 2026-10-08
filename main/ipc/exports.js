@@ -138,7 +138,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
   exposeLocal('exports:checkCollisions', ({ profileId, productIds, outputRoot, imageScope } = {}) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) assertProductInActiveCompany(pid);
-    return exportRunner.previewCollisions({ profile, productIds, outputRoot, imageScope: exportRunner.normalizeExportScope(imageScope) });
+    return exportRunner.previewCollisions({ profile, productIds, outputRoot, imageScope: exportRunner.effectiveScope(imageScope, profile) });
   });
 
   /**
@@ -156,7 +156,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
   expose('exports:expectedOutputs', ({ profileId, productIds, imageScope } = {}) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) assertProductInActiveCompany(pid);
-    return exportRunner.expectedOutputs({ profile, productIds, imageScope: exportRunner.normalizeExportScope(imageScope) });
+    return exportRunner.expectedOutputs({ profile, productIds, imageScope: exportRunner.effectiveScope(imageScope, profile) });
   });
 
   exposeLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId, imageScope }) => {
@@ -191,8 +191,9 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
         onExisting: onExistingMode,
         saveToLibrary: !!saveToLibrary,
         // Main image only / first N / all images — per profile, chosen in the
-        // Export Center. Missing or unknown = all, as before.
-        imageScope: exportRunner.normalizeExportScope(imageScope),
+        // Export Center. Missing = the profile's stored scope (server-side,
+        // so a caller that omits it still gets what the profile says).
+        imageScope: exportRunner.effectiveScope(imageScope, profile),
         isCancelled: () => run.cancelled,
         onProgress: (stage, payload) => {
           if (stage === 'image') {
@@ -267,7 +268,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
         productIds,
         outputRoot: tmpRoot,
         saveToLibrary: !!saveToLibrary,
-        imageScope: exportRunner.normalizeExportScope(imageScope),
+        imageScope: exportRunner.effectiveScope(imageScope, profile),
         isCancelled: () => run.cancelled,
         onProgress: (stage, payload) => {
           if (stage === 'image') {

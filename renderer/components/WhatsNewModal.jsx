@@ -2,6 +2,25 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.94', date: '2026-10-08',
+    items: [
+      'FIX — Switching company no longer leaves the previous company\'s product open in the side panel or its products ticked for bulk actions. The product panel\'s Save button is always fully visible, and "Cancel" on a saved product now says Close.',
+      'POLISH — Faster where it was slow on a full catalogue: Edit in table opens in about a third of a second instead of four; Image Workspace next/previous is three times quicker and keeps your Library order; background removal no longer freezes the app; autosave no longer reloads the whole product list; catalog and overlay previews send far less data.',
+      'NEW — Product Library: optional Retail, Wholesale, price-group, Barcode and Stock columns; "Select all N matching", shift-click ranges and "Selected only"; First/Last page buttons; keyboard row navigation; paste, multi-pick and drag-and-drop for photos; Remove selected photos; Undo on product and photo deletes; percentage price changes in Edit fields; the list keeps its order while you edit.',
+      'NEW — Search finds every word in any order, ignores dashes and spaces in SKUs, matches barcodes exactly, and handles Khmer text reliably — in the Library, ⌘K and the phone viewer.',
+      'NEW — Auto-match images shows what it will import before it imports, and adds new photos after the existing ones (tick a box to make them the main image).',
+      'NEW — Automatic weekly backups, keeping the last four, with a free-space check and a warning when backups are on the same disk as your data. Settings → Backups shows when the last one ran.',
+      'FIX — Working from a second Mac: a dead connection is noticed and reconnected, a sleeping server is detected in about 20–30 seconds instead of over a minute, reads give up after 20 seconds with a plain-English message, and an offline banner appears with Retry. The server Mac stays awake while serving (Settings → Multi-Mac).',
+      'NEW — Phone viewer: about 20 times less data per page (thumbnails), prices on product cards, better search, Android Back closes the open sheet, Download is the main save button on Android, it never sends you back to the token screen just because the Mac was briefly unreachable, long jobs are not repeated by mistake, and pairing is a QR code from Settings → Multi-Mac.',
+      'FIX — Studios use your whole catalogue, not the Library\'s current search: Generate & Print, Export Center, Catalog, Social Grid and Overlay/Label previews. Product pickers there are searchable.',
+      'FIX — Labels: Khmer names on two lines no longer overlap; number boxes no longer save 0 while you retype them, and never write into a different element; the designer fits a 13-inch screen; Generate & Print remembers your folder and settings and offers Open folder.',
+      'FIX — Exports and outputs: Khmer stays in file names and nothing overwrites an earlier file; Export Center can export only the main image or the first few, adds back only one library copy per profile, and has Show in Finder. AI "Promote" always goes to the product you can see.',
+      'FIX — Purchase orders: riel and other small rates read as "1 USD = 4,100 KHR"; closing an order that was never received asks first; a line needs a price; Save & add next; search by SKU; Duplicate as draft. Cost Calculator: searchable product, KHR margins, Save as retail price. Dashboard chips open the matching orders.',
+      'FIX — History names the other company\'s products correctly; Recently deleted has search and Restore selected; long jobs can\'t be closed by Esc halfway; plain-English error messages; better contrast and readable links in dark mode.',
+      'Internal — Library/Workspace: frozen workspace id list, mergeProductRow + background refresh with newer-row protection, field-sizing for Edit in table, bgRemoval worker (vite worker.format es) with main-thread fallback, Modal busy prop, toast actions, exact-id undo via deleted entry ids, bulkUpsert per-row expectedUpdatedAt. Connectivity: WS liveness + handshake timeout + powerMonitor resume, 12 s ping, 20 s read / 120 s write deadlines, stall watchdog, gzip, powerSaveBlocker, client:reconnectNow, ConnImg. Backups: atomic archive writes, filename-stamp ordering, serialized runs, will-quit cleanup. New files: main/util/{autoMatchPlan,outputNames,sharpLimits,exportScope}.js; additive column export_profiles.image_scope; channels files:revealPath (local) and client:reconnectNow (local).',
+    ],
+  },
+  {
     version: '0.1.93', date: '2026-10-06',
     items: [
       'POLISH — Catalog picking emphasizes selected products and groups page/all-matching Add actions. Design sections collapse with current-value summaries. Standard Undo and Redo shortcuts work outside text fields.',

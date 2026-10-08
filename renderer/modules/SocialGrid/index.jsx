@@ -208,6 +208,13 @@ function saveExportFolder(companyId, folder) {
   try { globalThis.localStorage?.setItem(exportFolderKey(companyId), folder || ''); } catch { /* storage unavailable */ }
 }
 
+/** Whether a progress event belongs to THIS screen's export run. Every
+ *  export broadcasts on the same bus, so a second export (another window,
+ *  another Mac on the server) used to move this bar too (audit 2026-10). */
+export function isOwnSocialProgress(ev, runId) {
+  return !!ev && ev.kind === 'socialGrid' && !ev.complete && !!runId && ev.id === runId;
+}
+
 /** Progress for the export overlay from the server's real per-image events:
  *  5% before the first image, then evenly up to 95%, 100% when it returns. */
 export function socialExportProgress(ev) {
@@ -242,6 +249,7 @@ export function PresetEditor({ presetId, onBack }) {
   const [saveState, setSaveState] = useState('saved');
   const [savedAt, setSavedAt] = useState(null);
   const [exporting, setExporting] = useState(false);
+  const exportRunId = useRef('');   // this run's progress id (isOwnSocialProgress)
   const [progress, setProgress] = useState(0);
   const [progressDetail, setProgressDetail] = useState('');
   const [exportFolder, setExportFolder] = useState(() => loadExportFolder(companyId));
@@ -253,7 +261,7 @@ export function PresetEditor({ presetId, onBack }) {
   useEffect(() => {
     if (!exporting || !window.api?.events?.onProgress) return undefined;
     const off = window.api.events.onProgress((ev) => {
-      if (ev?.kind !== 'socialGrid' || ev.complete) return;
+      if (!isOwnSocialProgress(ev, exportRunId.current)) return;
       const next = socialExportProgress(ev);
       setProgress(next.progress);
       if (next.detail) setProgressDetail(next.detail);
@@ -521,6 +529,7 @@ export function PresetEditor({ presetId, onBack }) {
       setExportFolder(folder);
       saveExportFolder(companyId, folder);
     }
+    exportRunId.current = `social-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setExporting(true);
     setProgress(5);
     setProgressDetail('');
@@ -529,7 +538,7 @@ export function PresetEditor({ presetId, onBack }) {
       const generation = editorGeneration.current;
       const committed = latest.current || preset;
       const baselineRevision = acknowledgedRevision.current;
-      const res = await window.api.socialGrid.exportImages(committed.config, folder, committed.id);
+      const res = await window.api.socialGrid.exportImages(committed.config, folder, committed.id, exportRunId.current);
       setProgress(100);
       const n = res.pageCount ?? res.outputPaths?.length ?? 0;
       addToast(`Saved ${n} image${n === 1 ? '' : 's'} to ${folder}`, 'success');

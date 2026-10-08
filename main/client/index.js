@@ -318,6 +318,14 @@ function rpcTimeoutMs(channel) {
 const _rpcInFlight = new Set();
 let _rpcWatchdog = null;
 let _stallProbe = null;
+/* A server busy with a long write (a big bulk upsert, an upload being
+ * decoded) can miss one 6s ping while still alive. So the watchdog needs TWO
+ * consecutive failed stall pings before it says anything, and when a write is
+ * among the waiting calls it says "busy" (degraded, amber) rather than
+ * "disconnected" — the regular ping loop, which it kicks, still flips to
+ * disconnected on its own two-in-a-row rule if the server really is gone. */
+let _stallProbeFailures = 0;
+const STALL_PROBE_FAILURES_TO_REPORT = 2;
 
 function ensureRpcWatchdog() {
   if (_rpcWatchdog) return;
@@ -345,16 +353,40 @@ function checkStalledRpcs() {
   _stallProbe = fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(RPC_STALL_PROBE_TIMEOUT_MS) })
     .then((res) => {
       if (!res.ok) throw Object.assign(new Error(`Status ${res.status}`), { httpStatus: res.status });
+      _stallProbeFailures = 0;
     })
     .catch((err) => {
-      if (err?.httpStatus) return; // the server answered — slow, not gone
-      const { analyzeFetchError } = require('../util/fetchErrors');
+      if (err?.httpStatus) { _stallProbeFailures = 0; return; } // the server answered — slow, not gone
       process.stderr.write(`[client rpc] ${stalled.channel} has had no response for ${Math.round(RPC_STALL_PROBE_MS / 1000)}s and /api/ping failed: ${err?.message || err}\n`);
+      const verdict = stallProbeVerdict(++_stallProbeFailures, [..._rpcInFlight].map((f) => f.channel));
+      if (verdict === 'retry') {
+        // One miss: probe again on the next tick before saying anything.
+        stalled.probed = false;
+        return;
+      }
+      _stallProbeFailures = 0;
+      if (verdict === 'busy') {
+        setConnectionState({
+          status: 'degraded',
+          lastError: 'The server Mac is busy — it is still working on a save or upload from this Mac and has not answered a quick check. Leave it to finish.',
+        });
+        schedulePoll(PING_CONFIRM_DELAY_MS);
+        return;
+      }
+      const { analyzeFetchError } = require('../util/fetchErrors');
       _consecutivePingFailures = PING_FAILURE_THRESHOLD;
       setConnectionState({ status: 'disconnected', lastError: analyzeFetchError(err, url).message });
       schedulePoll(PING_CONFIRM_DELAY_MS);
     })
     .finally(() => { _stallProbe = null; });
+}
+
+/** Pure: what a failed stall ping means. 'retry' until the second
+ *  consecutive miss; then 'busy' if a write is among the waiting calls
+ *  (the server may just be working on it), else 'down'. */
+function stallProbeVerdict(failures, inFlightChannels) {
+  if (failures < STALL_PROBE_FAILURES_TO_REPORT) return 'retry';
+  return (inFlightChannels || []).some((c) => isLikelyMutationChannel(c)) ? 'busy' : 'down';
 }
 
 async function rpc(channel, args, timeoutMs) {
@@ -1570,11 +1602,8 @@ function registerClientFileHandlers() {
   // never goes to the server. Same rule as main/ipc/files.js.
   handleLocal('files:revealPath', async (absPath) => {
     if (typeof absPath !== 'string' || !path.isAbsolute(absPath)) throw new Error('An absolute path is required');
-    let stat;
-    try { stat = require('node:fs').statSync(absPath); } catch { throw new Error(`Not found: ${absPath}`); }
-    if (stat.isDirectory()) return require('../util/openPath').openPathOrThrow(absPath, 'folder');
-    require('electron').shell.showItemInFolder(absPath);
-    return true;
+    // Same shared rule as the standalone handler: packages are revealed, never opened.
+    return require('../util/openPath').revealPath(absPath);
   });
 
   handleLocal('labels:openOutput', async ({ outputPath } = {}) => {
@@ -1618,9 +1647,9 @@ function registerClientFileHandlers() {
         const built = await rpc('labels:buildDocument', { companyId, templateId, productIds, layout });
         templateName = built.templateName;
         events.broadcast('progress:event', { id: opId, kind: 'labels', done: 0, total: built.products.length, phase: 'rendering', label: templateName });
-        const { outputBaseName, freeOutputPath } = require('../util/outputNames');
-        const target = freeOutputPath(outputFolder, outputBaseName(templateName, 'labels'), 'pdf');
-        await renderer.toPdf(built.html, target, { orientation: layout.orientation });
+        const { outputBaseName } = require('../util/outputNames');
+        // Name claimed atomically at write time (unique → `wx`, `-2` on EEXIST).
+        const target = await renderer.toPdf(built.html, path.join(outputFolder, `${outputBaseName(templateName, 'labels')}.pdf`), { orientation: layout.orientation, unique: true });
         made.push({ filePath: target });
         items = built.products.map((product) => ({ ...product, filePath: target }));
         events.broadcast('progress:event', { id: opId, kind: 'labels', done: built.products.length, total: built.products.length, phase: 'finishing', label: templateName });
@@ -2608,14 +2637,16 @@ function registerClientImageImportBridges() {
         try {
           const bytes = await fsp.readFile(entry.sourcePath);
           const ext = path.extname(entry.sourcePath).toLowerCase() || '.jpg';
-          const res = await rpc('images:importFromBytes', { productId: entry.productId, bytes, ext });
+          // makeMain rides on the add itself: the server sets the main image
+          // by row id inside the same product-lock turn as the add. A second
+          // set-main-by-filepath RPC here could hit a different photo if
+          // another Mac renumbered the product's files in between.
+          const res = await rpc('images:importFromBytes', {
+            productId: entry.productId, bytes, ext,
+            ...(entry.makeMain === true ? { makeMain: true } : {}),
+          });
           if (res?.skipped) skippedDup += 1;
           else { imported += 1; touched.add(entry.productId); }
-          if (entry.makeMain === true && res?.added?.filepath) {
-            // Straight after the add; the server's set-main runs under the
-            // product's image lock.
-            await rpc('images:setMainImage', { productId: entry.productId, filepath: res.added.filepath });
-          }
         } catch (err) {
           failures.push({ filepath: relativeTo(folderPath, entry.sourcePath), sku: entry.sku ?? '', error: err.message });
         }
@@ -2743,6 +2774,7 @@ module.exports = {
   // Pure timing rules, exported for test/connectivity.test.js.
   rpcTimeoutMs,
   pingRetryDelay,
+  stallProbeVerdict,
   rpc,
   baseUrl,
   authHeader,

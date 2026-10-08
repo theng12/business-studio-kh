@@ -130,8 +130,11 @@ function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, on
   }
   if (!element) return <aside className="studio-inspector studio-inspector--empty"><svg className="inspector-empty-icon" width="28" height="28" viewBox="0 0 28 28" fill="none" aria-hidden="true"><rect x="5" y="5" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" strokeDasharray="3 2.5" /><path d="M14 10v8M10 14h8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg><strong>Select an element</strong><p>Click any object on the label, or a row in the Layers list, to adjust its content and layout.</p></aside>;
   // `key` travels with the patch so the designer can record ONE undo step per
-  // field edit (see changeFromInspector), not one per keystroke.
-  const set = (key, value) => onChange({ [key]: value }, key);
+  // field edit (see changeFromInspector), not one per keystroke. So does the
+  // element id: a number field commits to the element it was focused on
+  // (NumberField `target`), which is not always the one selected by the time
+  // it blurs — the canvas selects on pointerdown (audit 2026-10).
+  const set = (key, value, id = element.id) => onChange({ [key]: value }, key, id);
   // Any field gaining focus starts a new edit: its first change pushes history.
   return <aside className="studio-inspector" onFocusCapture={onFieldFocus}><div className="inspector-title"><div><span>{element.type}</span><strong>{TYPES.find(([id]) => id === element.type)?.[1] || element.type}</strong></div><Button variant="danger" size="sm" onClick={onRemove}>Remove</Button></div>
     {!['rect', 'colorbar', 'divider', 'productImage', 'logo', 'image', 'cert'].includes(element.type) ? <>
@@ -146,9 +149,9 @@ function Inspector({ element, selectionCount = 0, priceGroups = [], onChange, on
     {['image', 'cert'].includes(element.type) ? <Button variant="ghost" onClick={onPickImage}>{element.src ? 'Replace image…' : 'Choose image…'}</Button> : null}
     {/* Numbers commit on blur / Enter, so clearing a box to type "12" no longer
         moves the element to 0 first (NumberField). */}
-    <div className="inspector-grid"><label>X (mm)<NumberField step="0.1" value={element.x} onCommit={(v) => set('x', v)} /></label><label>Y (mm)<NumberField step="0.1" value={element.y} onCommit={(v) => set('y', v)} /></label><label>Width<NumberField step="0.1" min={0.5} value={element.width} onCommit={(v) => set('width', v)} /></label><label>Height<NumberField step="0.1" min={0.5} value={element.height} onCommit={(v) => set('height', v)} /></label></div>
-    <label>Rotation<NumberField min={-180} max={180} value={element.rotation || 0} onCommit={(v) => set('rotation', v)} /></label>
-    {!NON_TEXT_TYPES.includes(element.type) ? <div className="inspector-grid"><label>Font size<NumberField min={1} max={200} step="0.5" value={element.fontSize || 10} onCommit={(v) => set('fontSize', v)} /></label><label>Weight<Select value={element.fontWeight || 400} onChange={(e) => set('fontWeight', Number(e.target.value))}><option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Heavy</option></Select></label><label>Color<Input type="color" value={element.color || '#111827'} onChange={(e) => set('color', e.target.value)} /></label><label>Align<Select value={element.align || 'left'} onChange={(e) => set('align', e.target.value)}><option>left</option><option>center</option><option>right</option></Select></label></div> : null}
+    <div className="inspector-grid"><label>X (mm)<NumberField step="0.1" value={element.x} target={element.id} onCommit={(v, id) => set('x', v, id)} /></label><label>Y (mm)<NumberField step="0.1" value={element.y} target={element.id} onCommit={(v, id) => set('y', v, id)} /></label><label>Width<NumberField step="0.1" min={0.5} value={element.width} target={element.id} onCommit={(v, id) => set('width', v, id)} /></label><label>Height<NumberField step="0.1" min={0.5} value={element.height} target={element.id} onCommit={(v, id) => set('height', v, id)} /></label></div>
+    <label>Rotation<NumberField min={-180} max={180} value={element.rotation || 0} target={element.id} onCommit={(v, id) => set('rotation', v, id)} /></label>
+    {!NON_TEXT_TYPES.includes(element.type) ? <div className="inspector-grid"><label>Font size<NumberField min={1} max={200} step="0.5" value={element.fontSize || 10} target={element.id} onCommit={(v, id) => set('fontSize', v, id)} /></label><label>Weight<Select value={element.fontWeight || 400} onChange={(e) => set('fontWeight', Number(e.target.value))}><option value="400">Regular</option><option value="600">Semibold</option><option value="700">Bold</option><option value="800">Heavy</option></Select></label><label>Color<Input type="color" value={element.color || '#111827'} onChange={(e) => set('color', e.target.value)} /></label><label>Align<Select value={element.align || 'left'} onChange={(e) => set('align', e.target.value)}><option>left</option><option>center</option><option>right</option></Select></label></div> : null}
     {['rect', 'colorbar'].includes(element.type) ? <label>Fill<Input type="color" value={element.fill || '#eef2ff'} onChange={(e) => set('fill', e.target.value)} /></label> : null}
     {element.type === 'barcode' ? <label>Format<Select value={element.format || 'code128'} onChange={(e) => set('format', e.target.value)}><option value="code128">Code 128</option><option value="ean13">EAN-13</option><option value="upca">UPC-A</option><option value="code39">Code 39</option></Select></label> : null}
     <div className="inspector-actions"><Button variant="ghost" onClick={onDuplicate}>Duplicate</Button><Button variant="ghost" onClick={() => onLayer(-1)}>Send back</Button><Button variant="ghost" onClick={() => onLayer(1)}>Bring front</Button></div>
@@ -308,9 +311,12 @@ export function LabelTemplates() {
    * in "Font size", a colour-picker drag) folds into the same step. Focusing
    * any field, changing the selection, or undo/redo starts a new step. */
   const inspectorEditKey = useRef(null);
-  const changeFromInspector = useCallback((patch, key = Object.keys(patch).join(',')) => {
-    const id = selectedIds[0];
-    if (!id || !draft) return;
+  const changeFromInspector = useCallback((patch, key = Object.keys(patch).join(','), targetId = null) => {
+    // The inspector names the element it edits; selectedIds[0] is only the
+    // fallback. A field committing after the selection moved must still land
+    // on the element it was typed for, not on the newly selected one.
+    const id = targetId || selectedIds[0];
+    if (!id || !draft || !draft.elements?.some((x) => x.id === id)) return;
     const editKey = `${id}:${key}`;
     if (inspectorEditKey.current !== editKey) { history.push(draft.elements); inspectorEditKey.current = editKey; }
     changeElement(id, patch);

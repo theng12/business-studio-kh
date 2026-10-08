@@ -49,10 +49,11 @@ test('small exchange rates read and type as "1 USD = N" but store the same rate-
   assert.equal(fx.formatFx('KHR', 1 / 4100), `1 USD = ${(4100).toLocaleString()} KHR`);
   assert.equal(fx.formatFx('VND', 1 / 25000), `1 USD = ${(25000).toLocaleString()} VND`);
   assert.equal(fx.formatFx('CNY', 0.14), '1 CNY = 0.14 USD');
-  // Any rate under a cent is inverted for display, whatever the currency.
-  assert.match(fx.formatFx('THB', 0.005), /^1 USD = 200 THB$/);
+  // The shown direction follows the field's label (the currency), never the
+  // size of the rate — a tiny THB rate stays "1 THB = … USD" (review fix 17).
+  assert.equal(fx.formatFx('THB', 0.005), `1 THB = ${(0.005).toLocaleString()} USD`);
   assert.equal(fx.formatFx('USD', 1), 'USD');
-  assert.equal(fx.formatFx('KHR', 0), '1 KHR = ? USD');
+  assert.equal(fx.formatFx('KHR', 0), '1 USD = ? KHR');
 
   assert.equal(fx.quotesPerUsd('khr'), true);
   assert.equal(fx.quotesPerUsd('CNY'), false);
@@ -126,7 +127,10 @@ test('automatic backups: due after a week, named apart, and retention keeps the 
   assert.equal(b.autoBackupDue({ lastAutoAt: null, now }), true, 'never backed up');
   assert.equal(b.autoBackupDue({ lastAutoAt: now - 6 * DAY, now }), false);
   assert.equal(b.autoBackupDue({ lastAutoAt: now - 7 * DAY, now }), true);
-  assert.equal(b.autoBackupDue({ lastAutoAt: now + DAY, now }), true, 'a future date does not postpone forever');
+  // A future time counts as just made; lastAutoBackupAt skips future-dated
+  // files, so it cannot postpone backups either (review fix 12).
+  assert.equal(b.autoBackupDue({ lastAutoAt: now + DAY, now }), false);
+  assert.equal(b.lastAutoBackupAt([{ fileName: 'media-studio-kh-backup-auto-v1-f.iskhbackup', createdAt: now + 400 * DAY, auto: true }], now), null);
 
   const auto = (i) => ({ fileName: `media-studio-kh-backup-auto-v1-${i}.iskhbackup`, backupPath: `/b/auto-${i}`, createdAt: now - i * 7 * DAY, auto: true });
   const manual = (i) => ({ fileName: `media-studio-kh-backup-v1-${i}.iskhbackup`, backupPath: `/b/manual-${i}`, createdAt: now - i * DAY - 1, auto: false });

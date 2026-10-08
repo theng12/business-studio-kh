@@ -24,13 +24,28 @@ function relativeTo(folderPath, abs) {
   }
 }
 
-/** True when `filePath` is a file somewhere inside `folderPath`. */
-function isInsideFolder(folderPath, filePath) {
-  if (typeof folderPath !== 'string' || typeof filePath !== 'string' || !folderPath || !filePath) return false;
-  const root = path.resolve(folderPath);
-  const target = path.resolve(filePath);
+function lexicallyInside(root, target) {
   const rel = path.relative(root, target);
   return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/**
+ * True when `filePath` is a file somewhere inside `folderPath`.
+ *
+ * Lexical AND real: the path must sit under the folder as written, and once
+ * symlinks are resolved (fs.realpathSync on both sides) it must still be
+ * under the folder's real location — a symlink inside the picked folder that
+ * points at ~/Library or another drive is refused. A path that does not exist
+ * (or cannot be resolved) is refused; there would be nothing to import.
+ */
+function isInsideFolder(folderPath, filePath, fs = require('node:fs')) {
+  if (typeof folderPath !== 'string' || typeof filePath !== 'string' || !folderPath || !filePath) return false;
+  if (!lexicallyInside(path.resolve(folderPath), path.resolve(filePath))) return false;
+  try {
+    return lexicallyInside(fs.realpathSync(folderPath), fs.realpathSync(filePath));
+  } catch (_) {
+    return false;
+  }
 }
 
 /**

@@ -1483,7 +1483,11 @@
     }
     for (var k in blobCache) {
       if (productId != null && blobCache[k].productId !== productId) continue;
-      try { URL.revokeObjectURL(blobCache[k].url); } catch (e) {}
+      // A pinned URL is still on screen (spin frame, open lightbox); it is
+      // dropped from the cache now and revoked when its viewer lets go.
+      if (!blobPinned(blobCache[k].url)) {
+        try { URL.revokeObjectURL(blobCache[k].url); } catch (e) {}
+      }
       delete blobCache[k];
     }
     if (productId != null) {
@@ -1529,6 +1533,7 @@
     paintBulkBar();
     var detail = document.getElementById('detail');
     if (detail) detail.classList.remove('open');
+    dropLayer('detail'); // and its Back entry
     // v0.1.74: the post-overlay save sheet belongs to a session too. Leaving it
     // up across a disconnect would keep a blob of the old server's image alive
     // and offer to save from a token that no longer works.
@@ -1545,28 +1550,85 @@
   var READ_TIMEOUT_MS = 20000;
   var WRITE_TIMEOUT_MS = 120000;
   var ORIGINAL_TIMEOUT_MS = 60000;
+  /* Review fix: long single-request jobs. The server keeps working after the
+     phone gives up, so a 2-minute deadline on a 40-product overlay run told
+     the user "can't reach the server" while the work was still happening —
+     and a retry ran it twice. These channels get a very long deadline, and
+     when even that runs out it is reported as "still working", never as the
+     server being down (see rpcAt). Nothing here is ever retried on its own. */
+  var JOB_TIMEOUT_MS = 15 * 60 * 1000;
+  var JOB_CHANNELS = {
+    'templates:applyBulk': 1,
+    'templates:renderZip': 1,
+    'images:autoEnhanceProducts': 1,
+    'images:autoCropProducts': 1,
+    'images:importFromBytes': 1,
+  };
   var NET_DOWN_MESSAGE = 'Can’t reach the server Mac. Check it’s awake and this phone is on Tailscale (or the same Wi-Fi).';
+  var JOB_TIMEOUT_MESSAGE = 'The server Mac is taking a long time and may still finish. Check the result before running it again.';
 
-  function timeoutSignal(ms) {
-    if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(ms);
-    if (typeof AbortController === 'undefined') return undefined;
-    var c = new AbortController();
-    setTimeout(function () { try { c.abort(); } catch (_) {} }, ms);
-    return c.signal;
-  }
+  /* Review fix: the deadline is in two parts. `ms` covers the wait for the
+     server's answer to START (headers). Once it has, the body gets its own
+     deadline — at least BODY_TIMEOUT_MS — because a 2,500-product list on a
+     thin link can take longer than 20s just to arrive, and it used to be
+     cut off mid-body by the header deadline with an error nothing classified
+     as a network failure (no banner, no automatic retry). */
+  var BODY_TIMEOUT_MS = 120000;
   /* fetch with a deadline. A network-level failure (no answer, refused,
-     timed out) rejects with `err.network = true` and plain words; HTTP
-     error statuses resolve as usual for the caller to read. */
+     timed out, or the body cut off) rejects with `err.network = true` and
+     plain words — also when it happens while reading the body through
+     res.json() / res.blob() / res.text(). HTTP error statuses resolve as
+     usual for the caller to read. */
   function fetchT(url, options, ms) {
     var opts = Object.assign({}, options || {});
-    var signal = timeoutSignal(ms || READ_TIMEOUT_MS);
-    if (signal) opts.signal = signal;
-    return fetch(url, opts).catch(function (e) {
+    var headerMs = ms || READ_TIMEOUT_MS;
+    var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var timedOut = false;
+    var timer = null;
+    function arm(limit) {
+      if (!ctrl) return;
+      clearTimeout(timer);
+      timer = setTimeout(function () { timedOut = true; try { ctrl.abort(); } catch (_) {} }, limit);
+    }
+    function disarm() { clearTimeout(timer); timer = null; }
+    function networkError(e) {
       var err = new Error(NET_DOWN_MESSAGE);
       err.network = true;
+      // Our own deadline ran out (as opposed to the network refusing or
+      // dropping the request). Callers that know the server is busy treat
+      // this differently from "the server is down".
+      if (timedOut) err.timedOut = true;
       err.cause = e;
-      throw err;
+      return err;
+    }
+    if (ctrl) opts.signal = ctrl.signal;
+    arm(headerMs);
+    return fetch(url, opts).then(function (res) {
+      arm(Math.max(headerMs, BODY_TIMEOUT_MS));
+      ['json', 'blob', 'text', 'arrayBuffer'].forEach(function (name) {
+        if (!res || typeof res[name] !== 'function') return;
+        var read = res[name];
+        res[name] = function () {
+          return read.call(res).then(function (value) { disarm(); return value; }, function (e) {
+            disarm();
+            // A body that arrived whole but is not JSON is not a network fault.
+            if (e && e.name === 'SyntaxError') throw e;
+            throw networkError(e);
+          });
+        };
+      });
+      return res;
+    }, function (e) {
+      disarm();
+      throw networkError(e);
     });
+  }
+  function isJobChannel(channel) {
+    return Object.prototype.hasOwnProperty.call(JOB_CHANNELS, String(channel || ''));
+  }
+  function rpcTimeoutFor(channel) {
+    if (isJobChannel(channel)) return JOB_TIMEOUT_MS;
+    return isReadChannel(channel) ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS;
   }
   function isReadChannel(channel) {
     var action = String(channel || '').split(':').slice(1).join(':');
@@ -1579,7 +1641,7 @@
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + requestToken },
       body: JSON.stringify({ channel: channel, args: args === undefined ? null : args }),
-    }, isReadChannel(channel) ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS).then(function (res) {
+    }, rpcTimeoutFor(channel)).then(function (res) {
       noteOnline();
       if (!res.ok) {
         return res.json().catch(function () { return {}; }).then(function (j) {
@@ -1590,7 +1652,18 @@
         });
       }
       return res.json().then(function (b) { return b.result; });
-    }, function (err) {
+    }).catch(function (err) {
+      // .catch, not a second .then argument: a body cut off inside res.json()
+      // above is a network failure too, and must reach the banner logic.
+      // A job that outlived even its long deadline is a busy server, not a
+      // missing one: no offline banner, and words that say "check first".
+      if (err && err.timedOut && isJobChannel(channel)) {
+        var busy = new Error(JOB_TIMEOUT_MESSAGE);
+        busy.network = true;
+        busy.timedOut = true;
+        busy.cause = err;
+        throw busy;
+      }
       if (err && err.network) noteOffline();
       throw err;
     });
@@ -1615,14 +1688,40 @@
     delete blobCache[key]; blobCache[key] = hit; // most recently used last
     return hit;
   }
+  /* Review fix: pins. The spin viewer loads every full-size frame first and
+     draws them later as CSS backgrounds, and the lightbox shows one photo for
+     as long as it is open — so "least recently fetched" is not "not on
+     screen". Twenty full-size frames passed the 80 MB cap and the first ones
+     were revoked before they were drawn (a blank frame). A viewer pins the
+     URLs it is showing; eviction and clearImageCaches skip pinned URLs, and
+     the viewer unpins on close (which revokes a URL the cache has already
+     let go of). */
+  var blobPins = Object.create(null); // object URL -> pin count
+  function blobPinned(url) { return !!(url && blobPins[url]); }
+  function pinBlobUrl(url) {
+    if (url) blobPins[url] = (blobPins[url] || 0) + 1;
+    return url;
+  }
+  function unpinBlobUrl(url) {
+    if (!url || !blobPins[url]) return;
+    blobPins[url] -= 1;
+    if (blobPins[url] > 0) return;
+    delete blobPins[url];
+    var cached = Object.keys(blobCache).some(function (k) { return blobCache[k].url === url; });
+    if (cached) return; // still cached: the cache owns it and revokes it on eviction
+    try { URL.revokeObjectURL(url); } catch (e) {}
+  }
   function blobCachePut(key, entry) {
     blobCache[key] = entry;
     var keys = Object.keys(blobCache);
+    var count = keys.length;
     var bytes = 0;
     keys.forEach(function (k) { bytes += blobCache[k].bytes || 0; });
-    for (var i = 0; i < keys.length - 1 && (keys.length - i > BLOB_CACHE_MAX_ITEMS || bytes > BLOB_CACHE_MAX_BYTES); i++) {
+    for (var i = 0; i < keys.length - 1 && (count > BLOB_CACHE_MAX_ITEMS || bytes > BLOB_CACHE_MAX_BYTES); i++) {
       var old = blobCache[keys[i]];
+      if (blobPinned(old.url)) continue; // on screen right now
       bytes -= old.bytes || 0;
+      count -= 1;
       try { URL.revokeObjectURL(old.url); } catch (e) {}
       delete blobCache[keys[i]];
     }
@@ -1633,13 +1732,16 @@
   // v0.1.94: `opts.w` asks for the server's thumbnail (320 for cards, 640 for
   // gallery tiles); omit it for the full photo (detail viewer, saving).
   // `opts.v` is a version stamp so an edited picture gets a fresh fetch.
+  // `opts.pin` pins the returned URL (see blobPins) BEFORE it can be evicted;
+  // the caller must unpinBlobUrl() it when the picture leaves the screen.
   function assetUrl(relpath, productId, opts) {
     if (!relpath) return Promise.resolve(null);
     var w = opts && opts.w && thumbable(relpath) ? opts.w : null;
     var v = opts && opts.v ? String(opts.v) : '';
+    var pin = !!(opts && opts.pin);
     var key = relpath + (w ? '|w' + w : '') + (v ? '|v' + v : '');
     var cached = blobCacheGet(key);
-    if (cached) return Promise.resolve(cached.url);
+    if (cached) return Promise.resolve(pin ? pinBlobUrl(cached.url) : cached.url);
     var request = imageRequestContext(productId);
     var enc = relpath.split('/').map(encodeURIComponent).join('/');
     var query = [];
@@ -1656,6 +1758,7 @@
           try { URL.revokeObjectURL(url); } catch (e) {}
           return null;
         }
+        if (pin) pinBlobUrl(url);
         blobCachePut(key, { url: url, productId: productId, bytes: blob.size || 0 });
         return url;
       })
@@ -1692,7 +1795,12 @@
     net.offline = false;
     if (net.timer) { clearTimeout(net.timer); net.timer = null; }
     hideNetBanner();
-    // Whatever failed while the server was away is asked for again.
+    // Whatever failed while the server was away is asked for again — and
+    // ALWAYS asked: the 5s throttle must not swallow it. Typical case: the
+    // foreground resync fires while Wi-Fi is still reconnecting, fails, and
+    // the server answers 2s later; inside the throttle that recovery used to
+    // return early and leave "Can't reach the server Mac" in the grid.
+    lastResyncAt = 0;
     resync('back online');
   }
   function scheduleNetProbe() {
@@ -1901,6 +2009,7 @@
     paintBulkBar();
     var detail = document.getElementById('detail');
     if (detail) detail.classList.remove('open');
+    dropLayer('detail'); // and its Back entry
     state.companyId = request.id;
     state.categories = [];
     state.categoriesById = {};
@@ -2277,12 +2386,120 @@
   document.getElementById('sortSheetClose').addEventListener('click', function () { closeSheet('sortSheet'); });
   document.getElementById('sortSheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('sortSheet'); });
 
+  /* ── Back closes the top layer (v0.1.94, reworked in the review fix) ──
+     Every layer — the product sheet, a menu sheet, the spin viewer, the
+     lightbox — owns ONE history entry, pushed when it opens (from the tap
+     that opened it). The phone's Back pops that entry and we close the layer
+     on top of the stack: the most recently opened one, not the last one in
+     DOM order. Nothing is pushed from the popstate handler any more — Chrome
+     marks an entry added without a user gesture as skippable, and a later
+     Back then jumped straight out of /m. A layer closed by its own button
+     drops its entry with history.go(-n).
+     Opens and closes are reconciled once per turn (a microtask), so "close
+     this sheet, open that one" in one handler reuses the entry; and while
+     our own go(-n) is in flight nothing else is pushed or popped, so a
+     product opened right after another was closed cannot be closed by the
+     late popstate of the first (the old closeDetail → history.back() race). */
+  var layerStack = [];          // element ids, oldest first
+  var historyDepth = 0;         // our entries above the page's own entry
+  var historyBackPending = false;
+  var historyBackTimer = null;
+  var historySyncQueued = false;
+  function hasHistoryApi() {
+    return typeof history !== 'undefined' && !!history && typeof history.pushState === 'function';
+  }
+  var historyBase = (hasHistoryApi() && history.state && typeof history.state.mskhLayer === 'number')
+    ? history.state.mskhLayer : 0;
+  function historyDepthOf(st) {
+    var n = (st && typeof st.mskhLayer === 'number') ? st.mskhLayer : 0;
+    return Math.max(0, n - historyBase);
+  }
+  function layerIsOpen(id) {
+    var el = document.getElementById(id);
+    return !!(el && el.classList.contains('open'));
+  }
+  function pruneLayers() { layerStack = layerStack.filter(layerIsOpen); }
+  function openLayer(id) {
+    if (layerStack.indexOf(id) < 0) layerStack.push(id);
+    scheduleHistorySync();
+  }
+  function dropLayer(id) {
+    var i = layerStack.indexOf(id);
+    if (i >= 0) layerStack.splice(i, 1);
+    scheduleHistorySync();
+  }
+  function scheduleHistorySync() {
+    if (historySyncQueued) return;
+    historySyncQueued = true;
+    Promise.resolve().then(function () { historySyncQueued = false; syncHistory(); });
+  }
+  function syncHistory() {
+    if (!hasHistoryApi() || historyBackPending) return;
+    pruneLayers();
+    if (historyDepth > layerStack.length) {
+      historyBackPending = true;
+      try { history.go(layerStack.length - historyDepth); } catch (_) { historyBackPending = false; return; }
+      // A browser that never reports the traversal must not freeze history
+      // handling: after a moment, believe history.state instead.
+      clearTimeout(historyBackTimer);
+      historyBackTimer = setTimeout(function () {
+        if (!historyBackPending) return;
+        historyBackPending = false;
+        historyDepth = historyDepthOf(history.state);
+        syncHistory();
+      }, 1500);
+      return;
+    }
+    while (historyDepth < layerStack.length) {
+      try { history.pushState({ mskhLayer: historyBase + historyDepth + 1 }, ''); } catch (_) { return; }
+      historyDepth += 1;
+    }
+  }
+  function closeLayerById(id) {
+    if (id === 'imgPreview') closeImgPreview();
+    else if (id === 'spin') closeSpin();
+    else if (id === 'detail') closeDetail();
+    else {
+      var el = document.getElementById(id);
+      // The sheet's own backdrop handler does its clean-up (each one closes
+      // on a click whose target is the backdrop itself).
+      try { el.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (_) {}
+      if (el.classList.contains('open')) closeSheet(id);
+    }
+    var i = layerStack.indexOf(id);
+    if (i >= 0) layerStack.splice(i, 1); // off the stack whatever the close did
+  }
+  /** Close the most recently opened layer. True when there was one. */
+  function closeTopOverlay() {
+    pruneLayers();
+    if (!layerStack.length) return false;
+    closeLayerById(layerStack[layerStack.length - 1]);
+    return true;
+  }
+  window.addEventListener('popstate', function (e) {
+    var expected = historyBackPending;
+    historyBackPending = false;
+    clearTimeout(historyBackTimer);
+    historyDepth = historyDepthOf(e && e.state);
+    // Our own go(-n) landing: push for anything opened while it was in flight.
+    if (expected) { syncHistory(); return; }
+    // The user pressed Back: close layers from the top until they match.
+    pruneLayers();
+    while (layerStack.length > historyDepth && closeTopOverlay()) { /* one layer per entry */ }
+    syncHistory(); // can only go back (Forward into a dead entry), never push
+  });
+
   /* ── shared sheet open/close ───────────────────────────────── */
-  function openSheet(id) { document.getElementById(id).classList.add('open'); document.body.style.overflow = 'hidden'; }
+  function openSheet(id) {
+    document.getElementById(id).classList.add('open');
+    document.body.style.overflow = 'hidden';
+    openLayer(id);
+  }
   function closeSheet(id) {
     document.getElementById(id).classList.remove('open');
     // Don't unlock body scroll if the product detail sheet is still open.
     document.body.style.overflow = document.getElementById('detail').classList.contains('open') ? 'hidden' : '';
+    dropLayer(id);
   }
   document.getElementById('companySheetClose').addEventListener('click', function () { closeSheet('companySheet'); });
   document.getElementById('companySheet').addEventListener('click', function (e) { if (e.target === this) closeSheet('companySheet'); });
@@ -2339,37 +2556,50 @@
     });
   }
 
-  /* search:begin — v0.1.94 phone search. Pure functions (the connectivity
-     tests run this block on its own).
-     - every word must match (AND), each anywhere in SKU, name, brand,
-       colour / finish or barcode;
-     - separators in codes do not matter: "AB 123", "ab123" and "AB-123" all
-       find SKU AB-123;
-     - Khmer (and anything else) is compared in Unicode NFC with the
-       zero-width spaces/joiners (U+200B–U+200D, U+FEFF) removed, because
-       Khmer text is routinely typed with invisible word breaks. */
+  /* search:begin — phone search. Pure functions (tests run this block on its
+     own). A COPY of the desktop rule in main/db/search.js
+     (compileProductSearch / matchProductSearch); test/searchParity.test.js
+     runs both over the same samples, so change them together:
+     - every word must match (AND), each in the SKU, name or colour / finish —
+       or in the SKU with separators ignored ("avm8101" finds "AV-M8101");
+     - the barcode matches only EXACTLY (the whole query, separators
+       ignored) — a substring of a 13-digit barcode matched half the catalogue
+       for any number typed;
+     - separators are whitespace - _ . / \ : , · | + #;
+     - NFC, with invisible characters removed (U+200B–U+200D, U+2060, U+FEFF,
+       U+00AD), because Khmer text is routinely typed with invisible breaks;
+     - a query is capped at 200 characters.
+     Phone-only extra: a word may also match the product's brand name (the
+     phone has no brand filter). */
+  var SEARCH_INVISIBLE_RE = /[\u200B-\u200D\u2060\uFEFF\u00AD]/g;
+  var SEARCH_SEPARATORS_RE = /[\s\-_.\/\\:,\u00B7|+#]+/g;
+  var MAX_SEARCH_QUERY = 200;
   function normalizeSearchText(s) {
     var t = String(s == null ? '' : s);
     if (typeof t.normalize === 'function') t = t.normalize('NFC');
-    return t.replace(/[\u200B-\u200D\uFEFF]/g, '').toLowerCase();
+    return t.replace(SEARCH_INVISIBLE_RE, '').toLowerCase();
   }
   function compactSearchText(s) {
-    return normalizeSearchText(s).replace(/[\s\-_.\/\\]+/g, '');
+    return normalizeSearchText(s).replace(SEARCH_SEPARATORS_RE, '');
   }
   function productSearchFields(p, brandName) {
     return {
-      hay: normalizeSearchText([p.sku, p.name, brandName, p.colorFinish, p.barcode].filter(Boolean).join(' \n ')),
-      codes: [compactSearchText(p.sku), compactSearchText(p.barcode)],
+      hay: [p.sku, p.name, p.colorFinish, brandName].map(normalizeSearchText).join('\n'),
+      skuKey: compactSearchText(p.sku),
+      barcodeKey: compactSearchText(p.barcode),
     };
   }
   function productMatchesSearch(fields, query) {
-    var q = normalizeSearchText(query).trim();
-    if (!q) return true;
-    var words = q.split(/\s+/).filter(Boolean);
-    var allWords = words.every(function (w) { return fields.hay.indexOf(w) !== -1; });
-    if (allWords) return true;
-    var compact = compactSearchText(q);
-    return compact.length >= 2 && fields.codes.some(function (c) { return !!c && c.indexOf(compact) !== -1; });
+    var q = String(query == null ? '' : query).trim().slice(0, MAX_SEARCH_QUERY);
+    var words = normalizeSearchText(q).split(/\s+/).filter(Boolean);
+    if (words.length === 0) return true;
+    var key = compactSearchText(q);
+    if (fields.barcodeKey && fields.barcodeKey === key) return true;
+    return words.every(function (w) {
+      if (fields.hay.indexOf(w) !== -1) return true;
+      var wk = compactSearchText(w);
+      return !!wk && fields.skuKey.indexOf(wk) !== -1;
+    });
   }
   /* search:end */
   var searchFieldCache = typeof WeakMap === 'function' ? new WeakMap() : null;
@@ -2530,18 +2760,24 @@
      product list itself (`mainImagePath`) — no per-card image-list call. That
      was one extra request per card (24 per page, enough to trip the server's
      rate limit on a fast scroll) and then the FULL photo, ~1.7 MB a card. A
-     server too old to send `mainImagePath` falls back to the old lookup. */
+     server too old to send `mainImagePath` falls back to the old lookup.
+     Review fix: `mainImagePath` is the ORIGINAL, so a background-removed main
+     photo showed un-removed on the card. `mainDisplayPath` (products:list) is
+     the processed copy when there is one — the same rule as getMainImage and
+     the detail sheet — and `mainDisplayStamp` changes with those bytes, so
+     the cached thumbnail is replaced when the picture is. */
   function lazyThumb(p) {
     if (p.imageCount === 0) return;
     var slot = document.querySelector('.thumb[data-thumb="' + p.id + '"]');
     if (!slot) return;
     var request = imageRequestContext(p.id);
-    var main = Object.prototype.hasOwnProperty.call(p, 'mainImagePath')
-      ? Promise.resolve(p.mainImagePath || null)
+    var main = Object.prototype.hasOwnProperty.call(p, 'mainDisplayPath') ? Promise.resolve(p.mainDisplayPath || null)
+      : Object.prototype.hasOwnProperty.call(p, 'mainImagePath') ? Promise.resolve(p.mainImagePath || null)
       : getMainImage(p.id);
+    var stamp = String(p.updatedAt || '') + (p.mainDisplayStamp ? '.' + p.mainDisplayStamp : '');
     main.then(function (rel) {
       if (!rel || !imageRequestCurrent(request)) return;
-      return assetUrl(rel, p.id, { w: 320, v: p.updatedAt }).then(function (url) {
+      return assetUrl(rel, p.id, { w: 320, v: stamp }).then(function (url) {
         if (url && imageRequestCurrent(request) && slot.isConnected) {
           slot.style.backgroundImage = 'url("' + url + '")'; slot.textContent = '';
         }
@@ -2591,7 +2827,7 @@
     fields.innerHTML = '';
     document.getElementById('detail').classList.add('open');
     document.body.style.overflow = 'hidden';
-    pushSheetHistory();
+    openLayer('detail');
 
     // Resolve category id → human name via the per-company map we loaded at
     // boot.
@@ -4795,7 +5031,7 @@
       return;
     }
 
-    rpc('templates:applyBulk', Object.assign(
+    applyBulkTracked(Object.assign(
       { templateId: templateId, productIds: job.productIds, destination: dest }, job.scopeArgs))
       .then(function (res) {
         var done = (res && res.done) || [];
@@ -4808,6 +5044,14 @@
             state.products = rows || [];
             applyFilter();
             render();
+            if (res && res.reconciled) {
+              // The reply was lost but the server confirmed the run finished.
+              // Its record has counts only — no per-picture results to save.
+              var images = Number((res.summary && res.summary.imagesCount) || 0);
+              toast('Overlay finished on the server Mac — ' + images + ' image' + (images === 1 ? '' : 's')
+                + (job.saveToDevice ? '. Open a product to save its pictures.' : ''));
+              return;
+            }
             // doneCount is products; done.length is images. The two differ as
             // soon as a run targets more than one image per product.
             var applied = (res && res.summary && res.summary.doneCount) || done.length;
@@ -4824,8 +5068,86 @@
             }
           });
       })
-      .catch(function (e) { toast('Overlay failed: ' + e.message); })
+      .catch(function (e) { toast(e && e.unconfirmed ? e.message : ('Overlay failed: ' + e.message)); })
       .finally(restore);
+  }
+
+  /* ── review fix: a lost batch-overlay reply is not a failed run ───────
+     templates:applyBulk is ONE long request. When the phone loses it — the
+     deadline ran out, the Wi-Fi dropped — the server may still be working, or
+     may already have finished. So the run carries an operationId, and after a
+     lost reply the phone asks templates:getApplyOutcome what happened instead
+     of reporting a failure that invites a second run (which would stamp the
+     overlay twice). The apply itself is never re-sent. */
+  var APPLY_OUTCOME_POLL_MS = 3000;
+  var APPLY_OUTCOME_MAX_WAIT_MS = 10 * 60 * 1000;
+  var APPLY_OUTCOME_UNREACHABLE_MS = 2 * 60 * 1000;
+  /* A v4 UUID (the server's validator wants one). Not crypto.randomUUID:
+     that exists only in a secure context, and this viewer is plain HTTP.
+     getRandomValues is available either way. */
+  function newOperationId() {
+    var b = new Array(16);
+    var c = (typeof crypto !== 'undefined' && crypto && typeof crypto.getRandomValues === 'function') ? crypto : null;
+    if (c) {
+      var u8 = new Uint8Array(16); c.getRandomValues(u8);
+      for (var i = 0; i < 16; i += 1) b[i] = u8[i];
+    } else {
+      for (var j = 0; j < 16; j += 1) b[j] = Math.floor(Math.random() * 256);
+    }
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    var hex = b.map(function (x) { return (x + 0x100).toString(16).slice(1); }).join('');
+    return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' + hex.slice(16, 20) + '-' + hex.slice(20);
+  }
+  function unconfirmedError(message, cause) {
+    var err = new Error(message);
+    err.unconfirmed = true;
+    err.cause = cause;
+    return err;
+  }
+  /* Poll until the run is no longer pending. Resolves the outcome, or null
+     when the server could not be reached for APPLY_OUTCOME_UNREACHABLE_MS. */
+  function awaitApplyOutcome(operationId) {
+    var started = Date.now();
+    var lastAnswerAt = started;
+    function again() {
+      return new Promise(function (resolve) { setTimeout(resolve, APPLY_OUTCOME_POLL_MS); }).then(poll);
+    }
+    function poll() {
+      return rpc('templates:getApplyOutcome', { operationId: operationId }).then(function (outcome) {
+        lastAnswerAt = Date.now();
+        if (outcome && outcome.status === 'pending' && Date.now() - started < APPLY_OUTCOME_MAX_WAIT_MS) return again();
+        return outcome || null;
+      }, function (err) {
+        if (!(err && err.network)) throw err;
+        if (Date.now() - lastAnswerAt >= APPLY_OUTCOME_UNREACHABLE_MS) return null;
+        return again();
+      });
+    }
+    return poll();
+  }
+  function applyBulkTracked(args) {
+    var operationId = newOperationId();
+    return rpc('templates:applyBulk', Object.assign({}, args, { operationId: operationId }))
+      .catch(function (err) {
+        // The server answered with an error: that is a real failure.
+        if (!(err && err.network)) throw err;
+        return awaitApplyOutcome(operationId).then(function (outcome) {
+          var status = outcome && outcome.status;
+          if (status === 'succeeded') {
+            return { operationId: operationId, reconciled: true, done: [], failed: [], skipped: [], summary: outcome.summary || {} };
+          }
+          if (status === 'failed') {
+            throw new Error('the server Mac reported an error. Check the photos before running it again.');
+          }
+          if (status === 'lost') {
+            throw unconfirmedError('The server Mac can’t confirm whether the overlay finished. Check the photos before running it again.', err);
+          }
+          throw unconfirmedError('The overlay may still be running on the server Mac. Check the photos before running it again.', err);
+        }, function (pollErr) {
+          throw unconfirmedError('Couldn’t confirm whether the overlay finished. Check the photos before running it again.', pollErr);
+        });
+      });
   }
 
   /* ── v0.1.76: work through the results, saving one after another ──────
@@ -4994,13 +5316,17 @@
       if (!imgs) { toast('Couldn’t load the photos — try again.'); return; }
       if (imgs.length < 2) { toast('Add 2+ photos to spin'); return; }
       var rels = imgs.map(function (im) { return (im.isProcessed && im.processedFilepath) ? im.processedFilepath : im.filepath; });
-      return Promise.all(rels.map(function (rel) { return assetUrl(rel, productId); })).then(function (urls) {
+      // Pinned as each one arrives: the frames are drawn later, as CSS
+      // backgrounds, and must outlive the blob cache's eviction until closeSpin.
+      return Promise.all(rels.map(function (rel) { return assetUrl(rel, productId, { pin: true }); })).then(function (urls) {
         urls = urls.filter(Boolean);
-        if (urls.length < 2) { toast('Could not load frames'); return; }
+        if (urls.length < 2) { urls.forEach(unpinBlobUrl); toast('Could not load frames'); return; }
+        if (spinState) spinState.urls.forEach(unpinBlobUrl);
         spinState = { urls: urls, idx: 0, n: urls.length, startX: 0, startIdx: 0, dragging: false };
         setSpinFrame(0);
         document.getElementById('spin').classList.add('open');
         document.body.style.overflow = 'hidden';
+        openLayer('spin');
       });
     }).catch(function (e) { toast(e.message); }).finally(function () { btn.disabled = false; });
   }
@@ -5010,7 +5336,10 @@
     // scroll. Only release the lock if the detail sheet is now closed too —
     // otherwise the page would scroll behind the still-open sheet.
     document.body.style.overflow = document.getElementById('detail').classList.contains('open') ? 'hidden' : '';
+    if (spinState) spinState.urls.forEach(unpinBlobUrl);
     spinState = null;
+    document.getElementById('spinFrame').style.backgroundImage = '';
+    dropLayer('spin');
   }
   (function () {
     var stage = document.getElementById('spinStage');
@@ -5047,7 +5376,9 @@
     if (!imgs || !imgs.length) return;
     var n = imgs.length;
     var idx = Math.max(0, Math.min(startIndex || 0, n - 1));
-    previewState = { images: imgs, index: idx, productId: productId };
+    if (previewState && previewState.pinned) unpinBlobUrl(previewState.pinned);
+    // `pinned`: the cached object URL on screen, kept from eviction (blobPins).
+    previewState = { images: imgs, index: idx, productId: productId, pinned: null };
     paintImgPreview();
     // v0.1.74: an optional one-line instruction pinned to the top of the
     // lightbox, for the case where the user has to do something here rather
@@ -5057,6 +5388,7 @@
     hintEl.hidden = !hint;
     document.getElementById('imgPreview').classList.add('open');
     document.body.style.overflow = 'hidden';
+    openLayer('imgPreview');
   }
   function paintImgPreview() {
     var s = previewState; if (!s) return;
@@ -5068,11 +5400,15 @@
     // result — arrives as a blob URL instead of a server path.
     if (img.blobUrl) { el.src = img.blobUrl; return; }
     var rel = (img.isProcessed && img.processedFilepath) ? img.processedFilepath : img.filepath;
-    assetUrl(rel, s.productId).then(function (url) {
+    assetUrl(rel, s.productId, { pin: true }).then(function (url) {
       // Bail if state moved on (rapid prev/next swipes).
       if (url && previewState && previewState.images[previewState.index] === img) {
+        if (previewState.pinned) unpinBlobUrl(previewState.pinned);
+        previewState.pinned = url;
         el.src = url;
         el.alt = img.filename || '';
+      } else if (url) {
+        unpinBlobUrl(url);
       }
     });
     document.getElementById('imgPreviewInfo').textContent =
@@ -5097,9 +5433,11 @@
     if (previewState) {
       var shown = previewState.images[previewState.index];
       if (shown && shown.blobUrl) { try { URL.revokeObjectURL(shown.blobUrl); } catch (_) {} }
+      if (previewState.pinned) unpinBlobUrl(previewState.pinned);
     }
     previewState = null;
     document.getElementById('imgPreviewImg').src = '';
+    dropLayer('imgPreview');
   }
   document.getElementById('imgPreviewClose').addEventListener('click', closeImgPreview);
   document.getElementById('imgPreviewPrev').addEventListener('click', previewPrev);
@@ -5163,60 +5501,17 @@
     this.value = ''; // reset so the same photo can be picked again
   });
 
-  function closeDetail(fromHistory) {
+  function closeDetail() {
     document.getElementById('detail').classList.remove('open');
     document.body.style.overflow = '';
     stopAiPolling(); // v0.47.0 — no point polling once the sheet is closed.
     if (isSelecting()) exitSelectMode(); // v0.49.12 — selection belongs to this product\'s view.
-    // v0.1.94: closed by its own button — drop the history entry the sheet
-    // pushed, so Back afterwards leaves the page as expected.
-    if (fromHistory !== true && sheetInHistory) {
-      sheetInHistory = false;
-      try { history.back(); } catch (_) {}
-    }
+    // Drops the history entry the sheet pushed (see openLayer / syncHistory),
+    // so Back afterwards leaves the page as expected.
+    dropLayer('detail');
   }
   document.getElementById('detailClose').addEventListener('click', function () { closeDetail(); });
   document.getElementById('detail').addEventListener('click', function (e) { if (e.target === this) closeDetail(); });
-
-  /* ── v0.1.94: Android Back closes the product sheet ──────────────────
-     Opening a product pushes one history entry; the phone's Back button (or
-     the back gesture) pops it, and we close whatever is on top — a lightbox,
-     a menu sheet, then the product sheet itself — instead of leaving /m and
-     dropping the user back on the browser's start page. */
-  var sheetInHistory = false;
-  function pushSheetHistory() {
-    if (sheetInHistory || typeof history === 'undefined' || !history.pushState) return;
-    try { history.pushState({ mskhSheet: 'detail' }, ''); sheetInHistory = true; } catch (_) {}
-  }
-  function closeTopOverlay() {
-    var preview = document.getElementById('imgPreview');
-    if (preview && preview.classList.contains('open')) { closeImgPreview(); return true; }
-    var spin = document.getElementById('spin');
-    if (spin && spin.classList.contains('open')) { closeSpin(); return true; }
-    var open = document.querySelectorAll('.sheet-overlay.open');
-    var top = open.length ? open[open.length - 1] : null;
-    if (!top) return false;
-    // The sheet's own backdrop handler does its clean-up (each one closes on
-    // a click whose target is the backdrop itself).
-    try { top.dispatchEvent(new MouseEvent('click', { bubbles: true })); } catch (_) {}
-    if (top.classList.contains('open')) closeSheet(top.id);
-    return true;
-  }
-  window.addEventListener('popstate', function () {
-    if (!sheetInHistory) return;
-    sheetInHistory = false;
-    var detail = document.getElementById('detail');
-    if (closeTopOverlay()) {
-      // Something above the product was closed; the product stays open and
-      // keeps its Back entry.
-      if (detail.classList.contains('open')) pushSheetHistory();
-      return;
-    }
-    if (detail.classList.contains('open')) { closeDetail(true); return; }
-    // The product sheet was already closed some other way (company switch,
-    // disconnect) — this Back press meant "leave", so leave.
-    try { history.back(); } catch (_) {}
-  });
 
   /* ── helpers ───────────────────────────────────────────────── */
 
@@ -5283,14 +5578,15 @@
      and then removed from the address bar (and from history) at once, so it
      is not left on screen, in a bookmark or in a shared link. */
   function readPairingToken() {
+    var m = null;
     try {
       var hash = (typeof location !== 'undefined' && location.hash) || '';
-      var m = /(?:^#|&)t=([^&]+)/.exec(hash);
+      m = /(?:^#|&)t=([^&]+)/.exec(hash);
       if (!m) return;
+      // Review fix: decode INSIDE the try whose finally clears the fragment —
+      // a malformed `%` sequence used to throw before replaceState ran and
+      // left the token in the address bar and in history.
       var t = decodeURIComponent(m[1]).trim();
-      if (typeof history !== 'undefined' && history.replaceState) {
-        history.replaceState(history.state, '', (location.pathname || '/m') + (location.search || ''));
-      }
       var origin = /^https?:/.test(location.origin || '') ? location.origin : '';
       if (!t || !origin) return;
       if (origin !== baseUrl || t !== token) {
@@ -5302,6 +5598,15 @@
         localStorage.setItem(LS.tok, t);
       }
     } catch (_) { /* a malformed fragment is ignored; the Connect form still works */ }
+    finally {
+      if (m) {
+        try {
+          if (typeof history !== 'undefined' && history.replaceState) {
+            history.replaceState(history.state, '', (location.pathname || '/m') + (location.search || ''));
+          }
+        } catch (_) { /* nothing else to try; the token is at least not stored twice */ }
+      }
+    }
   }
   readPairingToken();
 

@@ -567,8 +567,9 @@ async function handleRequest(req, res, dataDir) {
     // viewer trying to hit `products:update` gets "Forbidden" rather than a
     // misleading "Bad request" if the payload also happens to be wrong.
     // Local IPC is bypassed entirely — this only fires for /api/rpc.
-    const { isAllowed } = require('../util/permissions');
-    if (!isAllowed(user.role, channel)) {
+    const { isAllowed, impliedChannels } = require('../util/permissions');
+    if (!isAllowed(user.role, channel)
+      || (impliedChannels?.(channel, body.args) ?? []).some((c) => !isAllowed(user.role, c))) {
       // v0.1.89: a plain sentence — this text is shown as-is in a toast on
       // the other Mac and on the phone. The role and the channel name are
       // in the server's own log instead.

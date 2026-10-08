@@ -14,7 +14,7 @@ import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { ReframeModal } from './ReframeModal.jsx';
 import { ConnImg } from '../../components/ConnImg.jsx';
-import { undoImageDeletes, undoProductDeletes } from './undoDelete.js';
+import { entryIdsFrom, undoImageDeletes, undoProductDeletes } from './undoDelete.js';
 import { importableImageFiles, extOfImageFile, pasteTargetIsTextField } from './imageDrop.js';
 
 // v0.27.0: raised 20 → 50 (matches imageManager.MAX_IMAGES_PER_PRODUCT
@@ -34,6 +34,13 @@ const STATUS_OPTIONS = [
   { value: 'inactive', label: 'Inactive' },
   { value: 'draft',    label: 'Draft' },
 ];
+
+/** True when a new-product form holds anything the user typed. */
+function newProductDraftHasContent(form) {
+  if (!form || typeof form !== 'object') return false;
+  const blank = emptyForm();
+  return Object.keys(form).some((k) => JSON.stringify(form[k] ?? null) !== JSON.stringify(blank[k] ?? null));
+}
 
 function emptyForm() {
   return {
@@ -313,6 +320,19 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     await saveQueue.current?.flush(() => autoSavePayload.current);
   }, [addToast]);
   useEffect(() => registerCompanySwitchFlusher(flushOwed), [flushOwed]);
+  /* A NEW product is not created until its first Save, so a company switch
+   * while one is half-typed drops it with the panel. Say so instead of
+   * letting it vanish silently. */
+  const latestForm = useRef(form);
+  latestForm.current = form;
+  useEffect(() => {
+    if (!isCreating) return undefined;
+    return registerCompanySwitchFlusher(async () => {
+      if (newProductDraftHasContent(latestForm.current)) {
+        addToast('Unsaved new product discarded — it was never saved, so the company switch closed it.', 'info');
+      }
+    });
+  }, [isCreating, addToast]);
   useEffect(() => {
     onRegisterFlush?.(flushOwed);
     return () => onRegisterFlush?.(null);
@@ -674,15 +694,14 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     if (!ok) return;
     try {
       await flushOwed();
-      await removeProduct(id);
-      const companyId = activeCompanyId;
-      addToast(`Deleted ${sku || 'product'} — restore it from Settings → Recently deleted if that was a mistake.`, 'success', {
-        // 0.1.94: Undo puts it straight back from the recycle bin.
+      const removed = await removeProduct(id);
+      const entryIds = entryIdsFrom(removed);
+      addToast(`Deleted ${sku || 'product'} — restore it from Settings → Recently deleted if that was a mistake.`, 'success', entryIds.length === 0 ? undefined : {
+        // 0.1.94: Undo puts exactly this delete's bin entry back.
         action: {
           label: 'Undo',
           onClick: () => undoProductDeletes({
-            companyId,
-            productIds: [id],
+            entryIds,
             addToast,
             onRestored: () => {
               const st = useAppStore.getState();
@@ -891,28 +910,29 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     });
     if (!ok) return;
     try {
-      const next = await window.api.images.removeFromProduct(productId, tile.id, tile.contentHash ?? null);
-      if (gen === selectionGen.current && productId === activeProductIdRef.current) setImages(next);
+      const res = await window.api.images.removeFromProduct(productId, tile.id, tile.contentHash ?? null, { withEntry: true });
+      const next = Array.isArray(res) ? res : res?.images;
+      const entryIds = entryIdsFrom(res);
+      if (Array.isArray(next) && gen === selectionGen.current && productId === activeProductIdRef.current) setImages(next);
       useAppStore.getState().refreshProducts();
       // v0.22.9: explicit success toast that names the file that was
       // removed. Beyond the basic "yes it worked" feedback, this is
       // the explicit visual confirmation of WHICH file the click
       // affected — important now that the surrounding tiles re-flow
       // and the user can't easily eyeball which one disappeared.
-      addToast(`Removed ${basename} — restore it from Settings → Recently deleted.`, 'success', {
-        action: { label: 'Undo', onClick: () => undoRemovedImages(productId, 1) },
+      addToast(`Removed ${basename} — restore it from Settings → Recently deleted.`, 'success', entryIds.length === 0 ? undefined : {
+        action: { label: 'Undo', onClick: () => undoRemovedImages(productId, entryIds) },
       });
     } catch (err) {
       addToast(err.message, 'error');
     }
   }
 
-  /** 0.1.94: Undo on a photo-remove toast — the newest `count` held photos. */
-  function undoRemovedImages(productId, count) {
+  /** 0.1.94: Undo on a photo-remove toast — exactly the bin entries that
+   *  toast's removals created (never "the newest N" for the product). */
+  function undoRemovedImages(productId, entryIds) {
     return undoImageDeletes({
-      companyId: activeCompanyId,
-      productId,
-      count,
+      entryIds,
       addToast,
       onRestored: () => {
         useAppStore.getState().refreshProducts?.();
@@ -953,9 +973,12 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     let removed = 0;
     let latest = null;
     const failures = [];
+    const entryIds = [];
     for (const t of targets) {
       try {
-        latest = await window.api.images.removeFromProduct(productId, t.id, t.contentHash ?? null);
+        const res = await window.api.images.removeFromProduct(productId, t.id, t.contentHash ?? null, { withEntry: true });
+        latest = Array.isArray(res) ? res : (Array.isArray(res?.images) ? res.images : latest);
+        entryIds.push(...entryIdsFrom(res));
         removed += 1;
       } catch (err) {
         failures.push(err.message);
@@ -964,8 +987,8 @@ export const ProductForm = memo(function ProductForm({ product, visible = true, 
     if (latest && gen === selectionGen.current && productId === activeProductIdRef.current) setImages(latest);
     if (removed > 0) useAppStore.getState().refreshProducts();
     if (failures.length === 0) {
-      addToast(`Removed ${removed} photo${removed === 1 ? '' : 's'} — restore from Settings → Recently deleted.`, 'success', {
-        action: { label: 'Undo', onClick: () => undoRemovedImages(productId, removed) },
+      addToast(`Removed ${removed} photo${removed === 1 ? '' : 's'} — restore from Settings → Recently deleted.`, 'success', entryIds.length === 0 ? undefined : {
+        action: { label: 'Undo', onClick: () => undoRemovedImages(productId, entryIds) },
       });
     } else {
       addToast(`Removed ${removed} of ${n} — ${failures[0]}`, 'error');

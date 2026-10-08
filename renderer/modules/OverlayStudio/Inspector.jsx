@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ANCHORS, BARCODE_FORMATS, IMAGE_SOURCES, TOKENS, priceGroupTokens } from './elementDefaults.js';
 import { Button, Field, Input, Select, Textarea, SliderField } from '../../components/ui.jsx';
 import { FontFamilyPicker } from './FontFamilyPicker.jsx';
@@ -29,6 +29,12 @@ import { EyeIcon, EyeOffIcon, LockIcon, UnlockIcon } from './icons.jsx';
  *     bounds, and an optional `format` for display normalisation
  *     (e.g. rounding for the displayed percent in FracField)
  */
+/* The element the inspector is showing. A NumberInput remembers it, so an
+ * edit typed for element A is committed to A even when the canvas selects B
+ * (on pointerdown) before the input blurs — audit 2026-10, the same bug as
+ * the label designer's NumberField. */
+const InspectorTarget = createContext(null);
+
 function NumberInput({
   value,
   onCommit,
@@ -39,6 +45,19 @@ function NumberInput({
   const fmt = format ?? ((n) => (n == null ? '' : String(n)));
   const [draft, setDraft] = useState(() => fmt(value));
   const dirty = useRef(false);
+  const target = useContext(InspectorTarget);
+  // The previous render's commit, i.e. the one bound to the element the
+  // user was typing for. Used once if the element changes under a dirty field.
+  const prev = useRef({ target, commitTo: null });
+  // Declared before the `prev` update below, so it still sees the previous
+  // render's commit. Only `target` re-runs it.
+  useLayoutEffect(() => {
+    if (Object.is(prev.current.target, target)) return;
+    if (dirty.current && prev.current.commitTo) prev.current.commitTo(draft);
+    dirty.current = false;
+    setDraft(fmt(value));
+  }, [target]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { prev.current = { target, commitTo: (text) => commitText(text) }; });
 
   // Resync only when the user isn't editing — otherwise we'd squash
   // their in-progress text every time the parent re-renders.
@@ -56,7 +75,13 @@ function NumberInput({
 
   function commit() {
     dirty.current = false;
-    const raw = draft.trim();
+    commitText(draft);
+  }
+
+  /* Parse + clamp + commit `text` with THIS render's `value` / `onCommit`.
+   * Returns nothing; reverts the draft when the text is not a number. */
+  function commitText(text) {
+    const raw = String(text ?? '').trim();
     if (raw === '' || raw === '-' || raw === '.') {
       // Empty / partial input → revert to last committed.
       setDraft(fmt(value));
@@ -104,7 +129,15 @@ function NumberInput({
  * Numeric inputs that represent fractions accept percentages (0–100) for
  * readability and convert to 0–1 fractions on the way out.
  */
-export function Inspector({ element, onChange, onDelete, priceGroups = [] }) {
+export function Inspector(props) {
+  return (
+    <InspectorTarget.Provider value={props.element?.id ?? null}>
+      <InspectorBody {...props} />
+    </InspectorTarget.Provider>
+  );
+}
+
+function InspectorBody({ element, onChange, onDelete, priceGroups = [] }) {
   const priceTokens = priceGroupTokens(priceGroups);
   if (!element) {
     return (

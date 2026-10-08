@@ -47,6 +47,29 @@ export function cleanGenerateSettings(raw) {
   return out;
 }
 
+/* What a company with no saved settings starts from. Used on every company
+ * switch, so a company never inherits the previous company's format, paper
+ * or margins just because it has nothing saved of its own (audit 2026-10). */
+export const GENERATE_DEFAULTS = Object.freeze({
+  outputFolder: '', format: 'pdf', mode: 'sheet', pageSize: 'A4', orientation: 'portrait', marginMm: 8, gapMm: 2, printer: '',
+});
+
+/** Saved settings over the defaults: every key always has a value. */
+export function generateSettingsFor(saved) {
+  return { ...GENERATE_DEFAULTS, ...cleanGenerateSettings(saved) };
+}
+
+/**
+ * The remembered printer, or '' when this Mac no longer has it (renamed,
+ * removed, or the settings came from a Mac with other printers). A silent
+ * print to a missing device fails; '' means "show the printer dialog".
+ */
+export function availablePrinter(current, printers) {
+  if (!current) return '';
+  const rows = Array.isArray(printers) ? printers : [];
+  return rows.some((p) => p?.name === current) ? current : '';
+}
+
 export function loadGenerateSettings(companyId) {
   if (!companyId) return {};
   try {

@@ -206,6 +206,17 @@ window.__ui = (() => {
       setNative(el, String(value));
       return 'ok';
     },
+    /* 2026-10 audit: the label designer's number boxes are NumberFields that
+     * commit on Enter / blur, never per keystroke — type, then press Enter. */
+    fieldCommit: (label, value) => {
+      const el = api.fieldInput(label);
+      if (!el) return 'MISS field ' + label;
+      el.focus();
+      setNative(el, String(value));
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      el.blur();
+      return 'ok';
+    },
     fieldValue: (label) => {
       const el = api.fieldInput(label);
       return el ? el.value : null;
@@ -427,7 +438,14 @@ class Crawl {
       const d = res.exceptionDetails;
       throw new Error(`page eval failed: ${d.exception?.description || d.text}`);
     }
-    return res.result.value;
+    // A toolkit helper that cannot find its target returns 'MISS …'. Many
+    // navigation clicks are not asserted, so print every miss: a renamed
+    // button otherwise goes stale silently (the 2026-10 "Cancel" → "Close").
+    const value = res.result.value;
+    if (typeof value === 'string' && value.startsWith('MISS')) {
+      process.stdout.write(`  miss [${this.phase || '-'}] ${value}\n`);
+    }
+    return value;
   }
 
   async waitFor(expression, timeoutMs = 12_000, label = expression) {
@@ -550,9 +568,14 @@ async function deepImageFlow(crawl, photoPath) {
 
   crawl.phase = 'deep: open the workspace';
   // Close the create form, then use the row's Process router — the same path a
-  // user takes. `Create` leaves the form open on purpose.
-  await crawl.eval(`window.__ui.clickExact('Cancel')`);
+  // user takes. `Create` leaves the form open on purpose. 2026-10 audit: once
+  // the product exists (and auto-saves) the panel's button reads "Close" —
+  // "Cancel" only appears on an unsaved draft.
+  const closedPanel = await crawl.eval(`window.__ui.clickExact('Close')`);
   await crawl.settle(600);
+  const panelGone = await crawl.eval(`!!document.querySelector('.lib-inspector') && document.querySelector('.lib-inspector').hidden`);
+  crawl.step("deep: a saved product's panel closes with Close", closedPanel === 'ok' && panelGone,
+    `${closedPanel} · details hidden: ${panelGone}`);
   const routed = await crawl.eval(`window.__ui.clickProcessFor(${JSON.stringify(sku)})`);
   if (routed !== 'ok') { crawl.step('deep: open Process router', false, routed); return; }
   await crawl.waitFor(`!!document.querySelector('.process-dest__label')`, 6000, 'the Process destination modal');
@@ -1239,7 +1262,7 @@ async function deepLabelDesignerFlow(crawl) {
   await crawl.settle(250);
   await crawl.eval(`window.__ui.clickElAt(0, false)`, true);
   await crawl.settle(250);
-  await crawl.eval(`window.__ui.fieldSet('Rotation', '45')`);
+  await crawl.eval(`window.__ui.fieldCommit('Rotation', '45')`);
   await crawl.settle(450);
   const rotated = await crawl.eval(`(async () => {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1661,7 +1684,9 @@ async function deepBulkTableFlow(crawl, photoPath) {
   await crawl.eval(`(() => { try { localStorage.removeItem('BulkTable.columnWidths'); } catch {} return 'ok'; })()`);
   await crawl.eval(`window.__ui.pressEscape()`);
   await crawl.settle(200);
-  await crawl.eval(`window.__ui.clickExact('Close')`);
+  // Esc already closes the (clean) table through the shared Modal; Close is
+  // only needed if it is still open.
+  await crawl.eval(`document.querySelector('.bulk-table__grid') ? window.__ui.clickExact('Close') : 'already closed'`);
   await crawl.waitFor(`!document.querySelector('.bulk-table__grid')`, 10_000, 'the table to close for the width round-trip');
   await crawl.settle(350);
   await crawl.eval(`window.__ui.click('button', 'Image operations')`);
@@ -2232,9 +2257,24 @@ async function deepListToolsFlow(crawl) {
   await crawl.eval(`window.__ui.pressEscape()`);
   await crawl.cdp.send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false });
   await crawl.settle(200);
-  const narrowLibrary = await crawl.eval(`(() => { const r = document.querySelector('.lib-layout').getBoundingClientRect(); const main = document.querySelector('.lib-main').getBoundingClientRect(); const details = document.querySelector('.lib-inspector').getBoundingClientRect(); return { width: innerWidth, right: r.right, table: main.width, details: details.width }; })()`);
+  // 2026-10 audit: the Details column only exists while a product is open, so
+  // measure both states — nothing open (table takes the room, Details hidden)
+  // and a product open (Details ≥320px beside a still-usable table).
+  const measureLibrary = `(() => { const r = document.querySelector('.lib-layout').getBoundingClientRect(); const main = document.querySelector('.lib-main').getBoundingClientRect(); const details = document.querySelector('.lib-inspector').getBoundingClientRect(); return { width: innerWidth, right: Math.round(r.right), table: Math.round(main.width), details: Math.round(details.width) }; })()`;
+  const narrowEmpty = await crawl.eval(measureLibrary);
+  await crawl.shot('library-1100-none-open');
+  await crawl.eval(`(() => { const row = document.querySelector('.lib-main tr.lib-row'); if (!row) return 'MISS row'; row.click(); return 'ok'; })()`);
+  await crawl.waitFor(`document.querySelector('.lib-inspector') && !document.querySelector('.lib-inspector').hidden`, 6000, 'the Details column for an open product');
+  await crawl.settle(300);
+  const narrowOpen = await crawl.eval(measureLibrary);
   await crawl.shot('library-1100');
-  crawl.step('list tools: Library panels fit a 1100px viewport with a scrollable table', narrowLibrary.right <= 1100 && narrowLibrary.table > 150 && narrowLibrary.details >= 320, JSON.stringify(narrowLibrary));
+  const narrowLibrary = { empty: narrowEmpty, open: narrowOpen };
+  crawl.step('list tools: Library panels fit a 1100px viewport with a scrollable table',
+    narrowEmpty.right <= 1100 && narrowEmpty.details === 0 && narrowEmpty.table > 600
+      && narrowOpen.right <= 1100 && narrowOpen.table > 150 && narrowOpen.details >= 320,
+    JSON.stringify(narrowLibrary));
+  await crawl.eval(`window.__ui.pressEscape()`);
+  await crawl.settle(300);
   await crawl.cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
 
   /* ── B: Brands ────────────────────────────────────────────────────── */
@@ -2721,15 +2761,30 @@ async function deepOverlayFitFlow(crawl, photoPath) {
 
   /* Pick the square-ish product as the backdrop; placeholders stay OFF (the
    * real preview is the default) so the editor draws its plain <img>s. */
-  const picked = await crawl.eval(`(() => {
-    const sel = document.querySelector('.ovl-editor__backdrop-picker select');
-    if (!sel) return 'MISS backdrop select';
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-    sel.focus();
-    setter.call(sel, ${JSON.stringify(seeded.id)});
-    sel.dispatchEvent(new Event('change', { bubbles: true }));
-    return 'ok';
-  })()`);
+  // 2026-10 audit: "Preview against" is a searchable ProductCombobox now (a
+  // native <select> of ~2,500 products cannot be searched) — open it, search
+  // the SKU, pick the row, and confirm the trigger shows the pick.
+  const picked = await crawl.eval(`(async () => {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const sku = ${JSON.stringify(seeded.sku)};
+    const trigger = document.querySelector('.ovl-editor__backdrop-picker .product-combobox__trigger');
+    if (!trigger) return 'MISS backdrop combobox';
+    trigger.click();
+    await sleep(150);
+    const search = document.querySelector('.ovl-editor__backdrop-picker .product-combobox__search');
+    if (!search) return 'MISS combobox search';
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(search, sku);
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(150);
+    const row = Array.from(document.querySelectorAll('.ovl-editor__backdrop-picker .product-combobox__row'))
+      .find((r) => (r.querySelector('.product-combobox__sku') || {}).textContent === sku);
+    if (!row) return 'MISS row ' + sku;
+    row.click();
+    await sleep(150);
+    const label = (document.querySelector('.ovl-editor__backdrop-picker .product-combobox__label') || {}).textContent || '';
+    return label.startsWith(sku) ? 'ok' : 'trigger shows ' + label;
+  })()`, true);
   await crawl.settle(1600);
   const fit = await crawl.eval(`(() => {
     const read = (el) => el ? {
@@ -2753,7 +2808,7 @@ async function deepOverlayFitFlow(crawl, photoPath) {
       && !!fit.backdrop && fit.backdrop.fit === 'contain' && fit.backdrop.dataFit === 'contain'
       && !!fit.element && fit.element.fit === 'contain' && fit.element.dataFit === 'contain'
       && fit.element.natural === '900x900' && boxAspect > 2.5,
-    `backdrop ${JSON.stringify(fit.backdrop)} · element ${JSON.stringify(fit.element)} · box aspect ${boxAspect.toFixed(2)}`);
+    `picked ${picked} · placeholders ${fit.placeholders} · backdrop ${JSON.stringify(fit.backdrop)} · element ${JSON.stringify(fit.element)} · box aspect ${boxAspect.toFixed(2)}`);
 
   /* v0.1.72: the truthful preview is the server-composed PNG at the canvas
    * aspect. It used `object-fit: cover`, which silently crops the moment that

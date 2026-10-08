@@ -290,7 +290,8 @@ test('files:revealPath is local-only, in preload, and handled on the client Mac'
 test('Social Grid shows real export progress, not a timer', () => {
   const src = read('renderer/modules/SocialGrid/index.jsx');
   assert.doesNotMatch(src, /setInterval\(\(\) => setProgress/);
-  assert.match(src, /ev\?\.kind !== 'socialGrid'/);
+  // Only this run's events (audit 2026-10 — see test/reviewFixesExport.test.js).
+  assert.match(src, /isOwnSocialProgress\(ev, exportRunId\.current\)/);
   const { socialExportProgress } = loadEsm('renderer/modules/SocialGrid/index.jsx');
   assert.deepEqual(socialExportProgress({ done: 0, total: 4 }), { progress: 5, detail: 'Image 1 of 4' });
   assert.deepEqual(socialExportProgress({ done: 4, total: 4 }), { progress: 95, detail: 'Image 4 of 4' });

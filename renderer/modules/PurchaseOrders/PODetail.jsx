@@ -29,6 +29,7 @@ import { STATUS_TONE, STATUS_LABEL } from './index.jsx';
 import { useCostingCaps } from './costingCaps.js';
 import { formatDate } from '../../lib/format.js';
 import { fxLabel, formatFx, fxPlaceholder, quotesPerUsd } from './fxRate.js';
+import { partialStatusChangeText } from './statusSteps.js';
 import { FxRateInput } from './FxRateInput.jsx';
 import { suggestNextPoNumber } from './poNumber.js';
 
@@ -334,7 +335,7 @@ export function PODetail({ poId, onBack, onOpenPo }) {
     const sure = await confirm({
       title: `Change the currency to ${next}?`,
       message: toUsd
-        ? `Every line and cost line will be read as USD and re-converted at rate 1. The current rate (1 ${prev} = ${Number(before.exchangeRateToUsd) || 0} USD) is discarded.`
+        ? `Every line and cost line will be read as USD and re-converted at rate 1. The current rate (${formatFx(prev, before.exchangeRateToUsd)}) is discarded.`
         : `Every line and cost line will be read as ${next} and re-converted to USD at the rate you enter below.`,
       detail: isCostSource(before.status)
         ? 'This PO is received, so the landed cost of every product on it updates too.'
@@ -345,7 +346,10 @@ export function PODetail({ poId, onBack, onOpenPo }) {
     if (!sure || generation !== generationRef.current || !currentContext()) return;
     const exchangeRateToUsd = toUsd ? 1 : Number(rateBox.value);
     if (!toUsd && (String(rateBox.value).trim() === '' || !Number.isFinite(exchangeRateToUsd) || exchangeRateToUsd <= 0)) {
-      addToast(`Currency not changed — enter how many US dollars one ${next} is worth (a number above 0).`, 'error'); return;
+      // Worded the way the rate box asks (fxLabel): "1 USD = ? KHR" or "1 CNY = ? USD".
+      addToast(quotesPerUsd(next)
+        ? `Currency not changed — enter how many ${next} one US dollar buys (a number above 0).`
+        : `Currency not changed — enter how many US dollars one ${next} is worth (a number above 0).`, 'error'); return;
     }
     if (detailRef.current.header.updatedAt !== before.updatedAt) {
       addToast('This purchase order changed while the currency confirmation was open. Review its current currency and try again.', 'error'); return;
@@ -391,11 +395,13 @@ export function PODetail({ poId, onBack, onOpenPo }) {
   /** Apply one or more status steps in order, each against the revision the
    *  previous step returned, then reload the detail once. */
   async function runStatusChange(steps, before, generation, successText) {
+    let done = 0;
     try {
       let revision = before.updatedAt;
       for (const step of steps) {
         const row = await window.api.purchaseOrders.setStatus(poId, step, revision);
         revision = row?.updatedAt;
+        done += 1;
         if (generation !== generationRef.current || !currentContext()) return;
       }
       const fresh = await window.api.purchaseOrders.getDetail(poId);
@@ -403,6 +409,14 @@ export function PODetail({ poId, onBack, onOpenPo }) {
       applySnapshot(fresh); addToast(successText, 'success');
     } catch (err) {
       if (generation !== generationRef.current || !currentContext()) return;
+      if (done > 0 && done < steps.length) {
+        // An earlier step landed and a later one did not (received, then the
+        // close failed): say exactly where the PO stands, then show it.
+        addToast(partialStatusChangeText(steps, done, err, STATUS_LABEL), 'error');
+        const fresh = await window.api.purchaseOrders.getDetail(poId).catch(() => null);
+        if (fresh && generation === generationRef.current && currentContext()) applySnapshot(fresh);
+        return;
+      }
       if (parseConflictError(err)) {
         // A status transition has side effects: refresh its current state and
         // require the warning again rather than overwriting a stale confirmation.
@@ -411,12 +425,6 @@ export function PODetail({ poId, onBack, onOpenPo }) {
         applySnapshot(fresh); addToast('This purchase order changed elsewhere. Review its status and try again.', 'error');
       } else {
         addToast(`Failed to change status: ${err.message}`, 'error');
-        // A two-step change (received, then closed) may have half-applied:
-        // show what the PO is now.
-        if (steps.length > 1) {
-          const fresh = await window.api.purchaseOrders.getDetail(poId).catch(() => null);
-          if (fresh && generation === generationRef.current && currentContext()) applySnapshot(fresh);
-        }
       }
     }
   }
@@ -593,22 +601,29 @@ export function PODetail({ poId, onBack, onOpenPo }) {
     let created = null;
     let copiedLines = 0;
     let copiedCosts = 0;
+    let source = null;
     try {
-      if (!await saveNow()) return;
-      const existing = await window.api.purchaseOrders.list(header.companyId, { status: 'all' }).catch(() => []);
+      if (!await saveNow() || generation !== generationRef.current || !currentContext()) return;
+      // Copy what was just SAVED: `header`/`detail` were captured before the
+      // save and miss any edit made in the last 500 ms (changeStatus reads the
+      // ref after its save for the same reason).
+      source = detailRef.current;
+      if (!source?.header) return;
+      const saved = source.header;
+      const existing = await window.api.purchaseOrders.list(saved.companyId, { status: 'all' }).catch(() => []);
       created = await window.api.purchaseOrders.create({
-        companyId: header.companyId,
-        supplierId: header.supplierId,
+        companyId: saved.companyId,
+        supplierId: saved.supplierId,
         poNumber: suggestNextPoNumber((Array.isArray(existing) ? existing : []).map((po) => po.poNumber)) || null,
-        currency: header.currency,
-        exchangeRateToUsd: header.exchangeRateToUsd,
+        currency: saved.currency,
+        exchangeRateToUsd: saved.exchangeRateToUsd,
         exchangeRateDate: Date.now(),
-        incoterm: header.incoterm,
-        containerType: header.containerType,
-        notes: header.notes || null,
+        incoterm: saved.incoterm,
+        containerType: saved.containerType,
+        notes: saved.notes || null,
         status: 'draft',
       });
-      for (const l of detail.lines) {
+      for (const l of source.lines || []) {
         await window.api.purchaseOrders.addLine(created.id, {
           productId: l.productId, supplierSku: l.supplierSku, qty: l.qty,
           unitPriceSupplierCurrency: l.unitPriceSupplierCurrency,
@@ -617,7 +632,7 @@ export function PODetail({ poId, onBack, onOpenPo }) {
         });
         copiedLines += 1;
       }
-      for (const c of detail.components) {
+      for (const c of source.components || []) {
         await window.api.purchaseOrders.addComponent(created.id, {
           kind: c.kind, label: c.label, allocationBasis: c.allocationBasis, notes: c.notes,
           // Typed positive; the DB re-signs a discount (landedCost.signedComponentAmount).
@@ -625,10 +640,10 @@ export function PODetail({ poId, onBack, onOpenPo }) {
         });
         copiedCosts += 1;
       }
-      addToast(`Draft ${created.poNumber || ''} created from ${header.poNumber || 'this PO'}`.replace(/\s+/g, ' '), 'success');
+      addToast(`Draft ${created.poNumber || ''} created from ${source.header.poNumber || 'this PO'}`.replace(/\s+/g, ' '), 'success');
     } catch (err) {
       addToast(created
-        ? `Draft created, but copying stopped after ${copiedLines} of ${detail.lines.length} lines and ${copiedCosts} of ${detail.components.length} costs: ${err.message}`
+        ? `Draft created, but copying stopped after ${copiedLines} of ${source?.lines?.length ?? 0} lines and ${copiedCosts} of ${source?.components?.length ?? 0} costs: ${err.message}`
         : `Could not duplicate: ${err.message}`, 'error');
     } finally {
       setDuplicating(false);
@@ -1295,8 +1310,19 @@ function LineModal({ mode, poId, currency, line, products, existingLines = [], o
     : null;
   const priceMissing = String(unitPrice).trim() === '';
 
+  // One save at a time: a double Enter (or Enter then a click) used to add
+  // the same line twice. Held from the zero-price confirm through onSave.
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+
   async function submit(next = false) {
-    if (!canSubmit) return;
+    if (!canSubmit || savingRef.current) return;
+    savingRef.current = true; setSaving(true);
+    try { await submitOnce(next); }
+    finally { savingRef.current = false; setSaving(false); }
+  }
+
+  async function submitOnce(next) {
     // A blank price used to save as 0 and put $0 into landed cost. Blank is
     // refused (the button says why); an explicit 0 — a free sample — asks.
     if (Number(unitPrice) === 0 && !await confirm({
@@ -1321,7 +1347,7 @@ function LineModal({ mode, poId, currency, line, products, existingLines = [], o
       // Edit doesn't change productId — only the editable fields.
       delete payload.productId;
     }
-    onSave(payload, { next });
+    await onSave(payload, { next });
   }
 
   const canSubmit = (mode === 'edit' || productId) && qty !== '' && Number(qty) > 0
@@ -1340,11 +1366,11 @@ function LineModal({ mode, poId, currency, line, products, existingLines = [], o
         <>
           <Button type="button" onClick={onCancel}>Cancel</Button>
           {mode === 'create' ? (
-            <Button type="button" onClick={() => submit(true)} disabled={!canSubmit} title={blockedReason || 'Save this line and start the next one'}>
+            <Button type="button" onClick={() => submit(true)} disabled={!canSubmit || saving} title={blockedReason || 'Save this line and start the next one'}>
               Save &amp; add next
             </Button>
           ) : null}
-          <Button type="submit" form="po-line-form" variant="primary" disabled={!canSubmit} title={blockedReason}>Save</Button>
+          <Button type="submit" form="po-line-form" variant="primary" disabled={!canSubmit || saving} title={blockedReason}>{saving ? 'Saving…' : 'Save'}</Button>
         </>
       }
     >

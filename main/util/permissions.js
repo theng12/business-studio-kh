@@ -144,7 +144,21 @@ function capsForRole(role) {
   return Array.from(set);
 }
 
+/**
+ * Arguments that make a call do MORE than its channel's capability covers.
+ * `images:importFromBytes` with `makeMain: true` also sets the main image,
+ * which on its own is `images:setMainImage` (images.manage, not images.add) —
+ * so a photographer must not reach set-main through the add channel. Returns
+ * the extra channels the caller must ALSO be allowed, for the server's RPC
+ * gate. Pure.
+ */
+function impliedChannels(channel, args) {
+  if (channel === 'images:importFromBytes' && args && args.makeMain === true) return ['images:setMainImage'];
+  return [];
+}
+
 module.exports = {
+  impliedChannels,
   ROLES,
   READ_CHANNELS,
   PHOTOGRAPHER_EXTRA,
