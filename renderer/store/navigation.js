@@ -2,6 +2,7 @@
 // MODULES allowlist + ALWAYS_AVAILABLE gating used by `isModuleAvailable`.
 
 import { flushCompanySwitches } from '../lib/companySwitch.js';
+import { entryPage, getModule, loadLastPages, rememberPage } from '../lib/modules.js';
 
 // Whitelist of routable module names. Must stay in sync with PAGES in
 // App.jsx — `setActiveModule` rejects anything not in this set.
@@ -15,7 +16,8 @@ import { flushCompanySwitches } from '../lib/companySwitch.js';
 // v0.26.31: 'history' added — global audit-log feed page.
 // v0.49.46: 'suppliers' added — OPERATIONS section Phase 1.
 // v0.49.47: 'purchaseorders' + 'costcalc' added — OPERATIONS Phase 2-4.
-const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'export', 'aistudio', 'overlay',
+// 2026-10-08: 'home' added — the Home grid of module tiles (renderer/lib/modules.js).
+const MODULES = ['home', 'dashboard', 'company', 'brands', 'library', 'workspace', 'export', 'aistudio', 'overlay',
   'labeltemplates', 'labelgenerate', 'barcodes', 'labeljobs', 'catalogtemplates', 'catalogprojects', 'catalogstudio',
   'socialgrid',
   'suppliers', 'purchaseorders', 'costcalc', 'history', 'settings', 'support',
@@ -27,7 +29,7 @@ const MODULES = ['dashboard', 'company', 'brands', 'library', 'workspace', 'expo
 // v0.26.31: 'history' is also always-available — it reads from the
 // global audit_log which doesn't require an active company. Useful
 // even before any company has been created (just shows an empty list).
-const ALWAYS_AVAILABLE = new Set(['dashboard', 'company', 'settings', 'support', 'overlay', 'history']);
+const ALWAYS_AVAILABLE = new Set(['home', 'dashboard', 'company', 'settings', 'support', 'overlay', 'history']);
 
 /** Unique non-empty string ids, order kept — what a hand-off carries. */
 export function handoffIds(productIds) {
@@ -62,6 +64,8 @@ export function createNavigationSlice(set, get) {
       await flushCompanySwitches();
       if (intent !== navigationIntent || get().activeCompanyId !== companyId) return false;
       set(withHandoffScope(patch));
+      // The Home tile reopens the page last visited in each module.
+      if (patch?.activeModule) rememberPage(patch.activeModule);
       return true;
     } catch (error) {
       get().addToast(`Couldn't leave this editor: ${error.message}`, 'error');
@@ -70,8 +74,9 @@ export function createNavigationSlice(set, get) {
   }
 
   return {
-    // — Navigation
-    activeModule: 'dashboard',
+    // — Navigation. The app opens on Home (App.jsx may skip straight into the
+    // only module an account can reach — `startPage` in lib/modules.js).
+    activeModule: 'home',
 
     // — Workspace context
     activeProductId: null,
@@ -112,6 +117,17 @@ export function createNavigationSlice(set, get) {
       const intent = ++navigationIntent;
       if (name === get().activeModule) return true;
       return navigate({ activeModule: name }, intent);
+    },
+
+    /** Open a module (a Home tile, ⌘K "Go to …"): its last visited page if
+     *  this account may still open it, else its first. `caps` comes from the
+     *  caller's useUserCaps(). False when nothing in it is available yet. */
+    openModule(moduleId, caps) {
+      const mod = getModule(moduleId);
+      if (!mod) return Promise.resolve(false);
+      const page = entryPage(mod, { caps, isAvailable: (id) => get().isModuleAvailable(id), lastPages: loadLastPages() });
+      if (!page) return Promise.resolve(false);
+      return get().setActiveModule(page);
     },
 
     setActiveProductId(id) {

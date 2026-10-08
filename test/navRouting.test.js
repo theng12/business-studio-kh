@@ -25,7 +25,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const SIDEBAR = path.join(ROOT, 'renderer', 'components', 'Sidebar.jsx');
+// 2026-10-08: the nav list lives in the module registry (the sidebar and the
+// Home grid both render it), so the "sidebar entries" are its pages.
+const SIDEBAR = path.join(ROOT, 'renderer', 'lib', 'modules.js');
 const NAVIGATION = path.join(ROOT, 'renderer', 'store', 'navigation.js');
 const APP = path.join(ROOT, 'renderer', 'App.jsx');
 
@@ -35,10 +37,12 @@ function stripComments(src) {
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
 }
 
-/** Nav entry ids from the sidebar's NAV config, e.g. `{ id: 'overlay', … }`. */
+/** Page ids from the registry, e.g. `{ id: 'overlay', name: … }` — one line
+ *  each, which is what tells a page from a module (whose `name` is on the next
+ *  line). */
 function sidebarIds() {
   const src = stripComments(fs.readFileSync(SIDEBAR, 'utf8'));
-  return [...src.matchAll(/\{\s*id:\s*'([a-z0-9]+)'\s*,\s*name:/g)].map((m) => m[1]);
+  return [...src.matchAll(/\{[ \t]*id:[ \t]*'([a-z0-9]+)'[ \t]*,[ \t]*name:/g)].map((m) => m[1]);
 }
 
 /** The MODULES allowlist in the navigation slice. */

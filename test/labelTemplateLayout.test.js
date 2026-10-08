@@ -5,7 +5,8 @@ const path = require('node:path');
 
 const css = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'index.css'), 'utf8');
 const catalogSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'modules', 'CatalogStudio', 'index.jsx'), 'utf8');
-const sidebarSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'components', 'Sidebar.jsx'), 'utf8');
+// 2026-10-08: the nav list is the module registry.
+const sidebarSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'lib', 'modules.js'), 'utf8');
 
 test('label template card actions stay inside narrow grid cards', () => {
   assert.match(css, /\.studio-card--template \.studio-card__body\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s);

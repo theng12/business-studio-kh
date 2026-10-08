@@ -36,14 +36,51 @@ drifted badly before this check.
 
 ---
 
-## 1. Navigation — left sidebar, never top tabs
+## 1. Navigation — Home grid of modules, then a per-module left sidebar
 
-- Use a vertical sidebar on the left (~220px wide) for the primary navigation.
-- Group items into labeled sections (e.g. `SETUP`, `PRODUCTION`, `SYSTEM`). Section labels in small uppercase tracked-out text.
-- App name + a small logo mark at the top of the sidebar.
-- Active item: light-grey fill, bold/darker text, darker-tinted icon. Inactive: subdued text, lighter icon.
-- Use **inline SVG icons** (stroke-based, ~18px). Do not add an icon library as a dependency.
-- The top of the main content area shows the current page title + the active context chip (e.g. active company / workspace / project). It does **not** repeat the nav.
+**Owner's instruction, 2026-10-08:** *"i want the 'module' to be a square grid instead. since i will
+keep adding more features until i get a full app for managing my business."* The one long sidebar
+listing every page is replaced by two levels (verified 2026-10-08):
+
+- **Home** (page id `home`, `renderer/modules/Home/index.jsx`) is a grid of **square module tiles** —
+  icon, name, one-line description, optional live badge (Fuel: red flags; Purchasing: open orders).
+  The app opens on Home; an account that can reach exactly one module besides System goes straight
+  into it (`startPage`). A tile opens the page last visited in that module (remembered per module
+  in `localStorage`, try/catch), else its first page the account may open. Tiles fit 1280 × 800
+  without scrolling (3–5 columns by width, even rows — `renderer/modules/Home/layout.js`); arrow
+  keys move between tiles, Enter opens one.
+- **Inside a module** the left sidebar (~220px) shows: app name + logo mark, company switcher,
+  Search (⌘K), **⌂ Home** (⌘⇧H — not ⌘0, which Electron's default View menu uses for Actual Size),
+  the **module name** as the heading, then that module's pages, under small labels when the module
+  has more than one group (e.g. Labels / Catalogs). On Home the sidebar lists the modules instead.
+- **The module is derived, never stored.** `moduleOfPage(activeModule)` decides which module the
+  sidebar shows, so ⌘K, ⌘1–9, a hand-off (`openFuel`, "Use in ▾", `sendProductsToLabels`, …) or a
+  notification that lands on another module's page switches the sidebar by itself.
+- Section labels: small uppercase tracked-out text. Active item: light-grey fill, bold/darker
+  text, darker-tinted icon. Inactive: subdued text, lighter icon. Collapsed (icon-rail) mode still
+  works.
+- Use **inline SVG icons** (stroke-based, ~18px; the tiles draw the same SVG larger) — all in
+  `renderer/components/navIcons.jsx`. Do not add an icon library as a dependency.
+- The top of the main content area shows the current page title + the active context chip (e.g.
+  active company). It does **not** repeat the nav. Home's own header is "Home" + the company chip.
+- The sidebar footer keeps version + What's new (§3) and Support (§4). Settings (§5) is pinned
+  under every module's pages and is a page of the System tile — reachable from every screen.
+
+**One source of truth: `renderer/lib/modules.js` (`APP_MODULES`).** The tiles, the sidebar, the
+⌘1–9 / ⌘, map (`shortcutMap`), the shortcuts sheet (`NAV`) and ⌘K's "Go to …" rows (`searchNav`)
+are all derived from it. Current modules: Products, Media Studio, Labels & Catalogs, Purchasing,
+Fuel, People, System.
+
+- **Add a page:** one `{ id, name, icon, caps?, shortcut? }` line in its module's section, plus the
+  route in `PAGES` (`renderer/App.jsx`) and the id in `MODULES` (`renderer/store/navigation.js`),
+  plus a `[id, label, module]` row in `scripts/probe-ui-crawl.js`. `test/launcher.test.js` fails
+  until all four agree.
+- **Add a module** (Assets, Finance, …): one entry in `APP_MODULES` — `id`, `name`, a short
+  `description`, an `icon` key drawn in `navIcons.jsx`, `sections` of pages, and optionally a
+  `badge` (`caps`, `load(api, companyId)` → number, `label`, `tone`). The tile, its sidebar and ⌘K
+  follow. **Never add a tile for a module that has no built page.**
+- A tile is hidden when the account has no page in that module (caps); it is dimmed ("Choose a
+  company first") when none of its pages is available without a company.
 
 Top-tab navigation across feature areas is forbidden. Sub-tabs *inside* a single page are acceptable but rare.
 
@@ -81,8 +118,9 @@ Top-tab navigation across feature areas is forbidden. Sub-tabs *inside* a single
 - "Settings" is always reachable, even when no business/company/workspace is selected.
 - Houses: data folder location, app preferences, reset-to-default actions, and other global config.
 - Leave it ungated in the nav config so the "select a workspace first" gate doesn't block it. In
-  this app that means giving the nav item no `caps` key — capability gating only hides an item
-  when it *has* a `caps` array the user fails (see `hasAnyCap` in `renderer/components/Sidebar.jsx`).
+  this app that means giving its page in `renderer/lib/modules.js` no `caps` key — capability
+  gating only hides an item when it *has* a `caps` array the user fails (see `hasAnyCap` in
+  `renderer/lib/capabilities.js`). It is also pinned in every module's sidebar (§1) (verified 2026-10-08).
 
 ## 6. Saves are automatic — show a status indicator AND keep an explicit Save button
 
@@ -347,22 +385,24 @@ main/                    # main process — CommonJS (require/module.exports)
   backupManager.js       # backup / restore
 renderer/                # React + Vite — ESM (import/export)
   main.jsx               # entry; mounts App
-  App.jsx                # PAGES map + module routing (no router library)
+  App.jsx                # PAGES map + page routing (no router library)
   index.css              # ALL styling lives here — one hand-written file
   store/                 # Zustand: index.js composes 13 slice files
   lib/                   # renderer-only helpers (imageUrl, presets…)
-  components/            # shared UI (25 files)
+    modules.js           # §1 module registry: Home tiles, sidebar, shortcuts, ⌘K
+  components/            # shared UI (26 files)
     ui.jsx               # Button Input Textarea Select Field Badge
                          # SliderField Modal EmptyState Pagination paginate
     Toast.jsx            # toasts (own file, NOT in ui.jsx)
     ConfirmModal.jsx     # confirm() helper + destructive-confirm wrapper
     SaveStatus.jsx       # §6 auto-save pill
-    Sidebar.jsx          # nav config + footer (version, What's new, Support)
+    Sidebar.jsx          # Home item + one module's pages + footer (version, What's new, Support)
+    navIcons.jsx         # every nav / tile icon, inline SVG (§1)
     WhatsNewModal.jsx    # the §3 changelog array
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
-  modules/<Name>/        # 20 feature modules, one folder each
+  modules/<Name>/        # 21 feature modules, one folder each (Home is the §1 grid)
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 215 files — `node --test test/**/*.test.js`
+test/                    # 216 files — `node --test test/**/*.test.js`
 scripts/                 # 15 files: build-icon.js, build-webclient.js (/m + /f),
                          # seed-realistic.js (--fuel adds staff + 6 months of fuel,
                          #   --hr adds 3 months of attendance + leave on top),

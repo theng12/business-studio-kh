@@ -24,6 +24,38 @@ not into a private copy. AGENTS.md (§1, §2, §6, §7, §18) wins if the two di
   another module, or `{ label, onClick }` to stay inside this module (editor →
   list). Don't use "← Back" ghost buttons in `actions`.
 
+## Home grid and module sidebar (AGENTS.md §1)
+
+The app opens on **Home**: one square tile per module, and inside a module
+the sidebar lists only that module's pages. Both are rendered from the module
+registry, `renderer/lib/modules.js` — never hand-list pages or tiles anywhere
+else.
+
+- **Tile** (`.home-tile`, a `<button>`): a 44px `--c-brand-soft` icon square
+  with the module's 24px icon, the name (`--fs-lg` / 600), a one-line
+  description (`--fs-sm`, muted, at most ~60 characters) and, at the foot, an
+  optional `Badge` with a live count. Cards use `--radius-xl`, `--shadow-card`,
+  and the brand focus ring. No per-module colours: one accent (`--c-brand`).
+  Status tones (`rose`, `slate`, …) only on the badge.
+- **Badges** are cheap and never block: they load after the grid paints,
+  are cached per company for a minute (`loadBadge`), are gated by the badge's
+  `caps`, and show nothing on zero or on an error. Count only something that
+  needs a look (red flags, open orders), never a total.
+- **Grid geometry** comes from `renderer/modules/Home/layout.js`: square tiles,
+  3–5 columns by width with even rows, sized to fit the height so 8–10 tiles
+  sit in a 1280 × 800 window without scrolling. Gap is `--s-4` (= `TILE_GAP`).
+- **Keyboard:** one tab stop for the grid (roving `tabIndex`), arrow keys and
+  Home/End move, Enter/Space open. ⌘⇧H returns to Home from anywhere.
+- **Disabled tile:** dimmed with "Choose a company first." when none of its
+  pages is available yet. A module the account has no page in is not shown.
+- **Module sidebar:** Search, ⌂ Home, then the module name as the uppercase
+  section label, then its pages; a module with more than one group shows each
+  group's label in small sentence-case text (`.sidebar__sublabel`). Settings is
+  pinned below the pages on every module except System, where it is a page.
+- **Adding a module or page** is a registry edit (see AGENTS.md §1); give it a
+  glyph in `components/navIcons.jsx` drawn on the 18 × 18 grid with a 1.4
+  stroke.
+
 ## Toolbar: `.toolbar`
 This is the row between the header and the content:
 `search · sort · count · .toolbar__spacer · .segments (view switch) · buttons`.
@@ -76,8 +108,8 @@ a form grid.
 ## Section titles: `.section-title` (optionally in `.section-head`)
 Use **sentence case, 13px / 600**, never uppercase. A muted `.section-hint`
 can sit beside it, and `.section-head__actions` sits on the right of the row.
-Uppercase tracked-out labels are only for sidebar groups (§1) and table
-headers.
+Uppercase tracked-out labels are only for the sidebar's module heading (§1)
+and table headers.
 
 ## Save status: `SaveStatus` (§6)
 `<SaveStatus state={saveState} savedAt={savedAt} onSave={saveNow} error={msg} />`
