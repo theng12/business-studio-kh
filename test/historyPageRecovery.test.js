@@ -105,8 +105,11 @@ function crawlerSurface(forcedLabelPage = false) {
   const document = { querySelector(sel) { if (sel === '.page--history') return current === 'History' ? {} : null; if (sel === '.page-fallback' || sel === '.page__error') return null; return current ? { textContent: current } : null; } };
   const __ui = { all: () => buttons, textOf: (el) => el?.textContent || '', click(sel, text) { buttons.find((b) => b.textContent.includes(text))?.click(); return 'ok'; }, crash: () => null, header: () => current, bareRanges: () => [], sliderCount: () => 0, valueBoxCount: () => 0 };
   const source = fs.readFileSync(path.join(ROOT, 'scripts/probe-ui-crawl.js'), 'utf8');
-  const methods = source.slice(source.indexOf('  async goto(label)'), source.indexOf('\n}\n', source.indexOf('  async goto(label)')));
-  const sandbox = { window: { __ui }, document };
+  // From the sidebar helpers (2026-10-08: goto reaches other modules through
+  // Home) to the end of the Crawl class.
+  const from = source.indexOf('  /* Click the sidebar item with this exact label');
+  const methods = source.slice(from, source.indexOf('\n}\n', from));
+  const sandbox = { window: { __ui }, document, MODULE_OF_LABEL: {} };
   const crawler = vm.runInNewContext(`new (class {${methods}})()`, sandbox);
   const results = [];
   crawler.eval = async (code) => vm.runInNewContext(code, sandbox);

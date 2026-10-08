@@ -14,7 +14,8 @@
  * WHAT IT DOES
  *   1. boots an isolated copy (its own user-data dir + data folder), creates a
  *      company through the UI, then
- *   2. visits every sidebar page, one by one — recording a screenshot, the page
+ *   2. visits every page, one by one — through its Home tile, then the module
+ *      sidebar (2026-10-08: the sidebar lists one module) — recording a screenshot, the page
  *      title, any crash into the error boundary, and any `input[type=range]`
  *      that is missing its typeable value box (the v0.1.53/v0.1.58 fix), then
  *   3. clicks every Settings tab,
@@ -479,14 +480,60 @@ class Crawl {
     process.stdout.write(`  ${mark} ${name}${detail ? ` — ${detail}` : ''}\n`);
   }
 
-  /* Navigate by clicking the real sidebar button. */
-  async goto(label) {
-    const res = await this.eval(`(() => {
+  /* Click the sidebar item with this exact label; 'absent' when the sidebar
+   * shows another module (not a 'MISS': goto then goes through Home). */
+  async clickSidebar(label) {
+    return this.eval(`(() => {
       const item = window.__ui.all('.sidebar__item').find((el) => window.__ui.textOf(el.querySelector('span:not(.sidebar__item-shortcut)')) === ${JSON.stringify(label)});
-      if (!item) return 'MISS';
+      if (!item) return 'absent';
       item.click();
       return 'ok';
     })()`);
+  }
+
+  /* The module the sidebar is showing ('' on Home). */
+  async sidebarModule() {
+    return this.eval(`(document.querySelector('.sidebar__nav [data-module]:not(.sidebar__item)')?.dataset?.module) || ''`);
+  }
+
+  /* Home through the sidebar's Home item, then wait for the tiles. */
+  async goHome() {
+    const res = await this.eval(`window.__ui.click('.sidebar__home')`);
+    if (res !== 'ok') throw new Error(`Home item not found (${res})`);
+    await this.waitFor(`document.querySelectorAll('.home-tile').length > 0 && !!document.querySelector('.sidebar__home.is-active')`, 10_000, 'the Home grid');
+    await this.settle(200);
+  }
+
+  /* Open a module by clicking its Home tile, as a user does. */
+  async openModule(moduleId) {
+    await this.goHome();
+    const res = await this.eval(`(() => {
+      const tile = document.querySelector('.home-tile[data-module=${JSON.stringify(moduleId)}]');
+      if (!tile) return 'MISS tile ${moduleId}';
+      if (tile.getAttribute('aria-disabled') === 'true') return 'MISS tile ${moduleId} is disabled';
+      tile.click();
+      return 'ok';
+    })()`);
+    if (res !== 'ok') throw new Error(res);
+    await this.waitFor(`(document.querySelector('.sidebar__nav [data-module]:not(.sidebar__item)')?.dataset?.module) === ${JSON.stringify(moduleId)}`, 10_000, `the ${moduleId} sidebar`);
+  }
+
+  /* A real key press through CDP (focus, activation and React all see it). */
+  async key(key, { code = key, keyCode = 0, modifiers = 0, text } = {}) {
+    await this.cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key, code, windowsVirtualKeyCode: keyCode, modifiers });
+    if (text) await this.cdp.send('Input.dispatchKeyEvent', { type: 'char', key, code, text, windowsVirtualKeyCode: keyCode, modifiers });
+    await this.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, windowsVirtualKeyCode: keyCode, modifiers });
+  }
+
+  /* Navigate by clicking the real sidebar button. The sidebar shows one
+   * module (2026-10-08), so a page in another module is reached the way a user
+   * reaches it: Home → the module's tile → the page in its sidebar. */
+  async goto(label, moduleId = MODULE_OF_LABEL[label]) {
+    let res = await this.clickSidebar(label);
+    if (res !== 'ok' && moduleId) {
+      await this.openModule(moduleId);
+      res = await this.clickSidebar(label);
+    }
     if (res !== 'ok') throw new Error(`sidebar item not found: ${label} (${res})`);
     await this.waitFor(
       `!document.querySelector('.page-fallback') && (document.querySelector('.page__header') || document.querySelector('.page__error'))`,
@@ -496,9 +543,16 @@ class Crawl {
     await this.settle();
   }
 
-  async checkPage(id, label) {
+  async checkPage(id, label, moduleId) {
     this.phase = `page:${id}`;
-    await this.goto(label);
+    await this.goto(label, moduleId);
+    if (moduleId) {
+      const side = await this.sidebarModule();
+      if (side !== moduleId) {
+        this.step(`page ${id}`, false, `the sidebar shows ${side || 'Home'}, not ${moduleId}`);
+        return;
+      }
+    }
     const crash = await this.eval('window.__ui.crash()');
     const header = await this.eval('window.__ui.header()');
     if (id === 'history') {
@@ -3001,35 +3055,119 @@ async function deepModalFocusFlow(crawl) {
     JSON.stringify({ focusedAfter, steps: steps.map((s) => (s.focused ? s.value : `LOST@${s.value}`)) }));
 }
 
+/* [page id, sidebar label, module] — the module is the Home tile that holds
+ * the page (renderer/lib/modules.js). test/launcher.test.js checks this list
+ * against the registry, so a moved or renamed page fails there first. */
 const PAGE_LABELS = [
-  ['company', 'Company'],
-  ['dashboard', 'Dashboard'],
-  ['brands', 'Brands'],
-  ['library', 'Product Library'],
-  ['workspace', 'Image Workspace'],
-  ['aistudio', 'AI Studio'],
-  ['overlay', 'Overlay Studio'],
-  ['export', 'Export Center'],
-  ['labeltemplates', 'Label Templates'],
-  ['labelgenerate', 'Generate & Print'],
-  ['barcodes', 'Barcode Maker'],
-  ['labeljobs', 'Label History'],
-  ['catalogtemplates', 'Catalog Templates'],
-  ['catalogprojects', 'Catalog Projects'],
-  ['socialgrid', 'Social Grid'],
-  ['suppliers', 'Suppliers'],
-  ['purchaseorders', 'Purchase Orders'],
-  ['costcalc', 'Cost Calculator'],
+  ['company', 'Company', 'products'],
+  ['dashboard', 'Dashboard', 'products'],
+  ['brands', 'Brands', 'products'],
+  ['library', 'Product Library', 'products'],
+  ['workspace', 'Image Workspace', 'media'],
+  ['aistudio', 'AI Studio', 'media'],
+  ['overlay', 'Overlay Studio', 'media'],
+  ['export', 'Export Center', 'media'],
+  ['socialgrid', 'Social Grid', 'media'],
+  ['labeltemplates', 'Label Templates', 'labels'],
+  ['labelgenerate', 'Generate & Print', 'labels'],
+  ['barcodes', 'Barcode Maker', 'labels'],
+  ['labeljobs', 'Label History', 'labels'],
+  ['catalogtemplates', 'Catalog Templates', 'labels'],
+  ['catalogprojects', 'Catalog Projects', 'labels'],
+  ['suppliers', 'Suppliers', 'purchasing'],
+  ['purchaseorders', 'Purchase Orders', 'purchasing'],
+  ['costcalc', 'Cost Calculator', 'purchasing'],
   // Fuel F1 + the thin staff list.
-  ['fueloverview', 'Fuel overview'],
-  ['fuelassets', 'Vehicles & machines'],
-  ['fuelfills', 'Fill-ups'],
-  ['fueltanks', 'Tanks & dips'],
-  ['fuelprices', 'Fuel prices'],
-  ['fuelreports', 'Fuel reports'],
-  ['staff', 'Staff'],
-  ['history', 'History'],
+  ['fueloverview', 'Overview', 'fuel'],
+  ['fuelassets', 'Vehicles & machines', 'fuel'],
+  ['fuelfills', 'Fill-ups', 'fuel'],
+  ['fueltanks', 'Tanks & dips', 'fuel'],
+  ['fuelprices', 'Prices', 'fuel'],
+  ['fuelreports', 'Reports', 'fuel'],
+  ['staff', 'Staff', 'people'],
+  ['history', 'History', 'system'],
 ];
+/* Labels are unique except across modules; the deep flows name pages by
+ * label, so the first module listed for a label wins. Settings is pinned in
+ * every sidebar, so it needs no module. */
+const MODULE_OF_LABEL = Object.fromEntries([...PAGE_LABELS].reverse().map(([, label, mod]) => [label, mod]));
+
+/**
+ * The Home grid and the module sidebar (2026-10-08): tiles render, a tile
+ * opens its module, the Home item returns, arrow keys + Enter open a tile,
+ * ⌘K "Go to" switches the sidebar to another module, ⌘⇧H comes home, and the
+ * grid fits 1280 × 800 without scrolling. Screenshots at 1280 × 800 and
+ * 1920 × 1080 of Home and two modules.
+ */
+async function launcherFlow(crawl) {
+  crawl.phase = 'launcher';
+  await crawl.goHome();
+  const tiles = await crawl.eval(`window.__ui.all('.home-tile').map((t) => t.dataset.module)`);
+  const title = await crawl.eval(`window.__ui.textOf(document.querySelector('.page__title'))`);
+  crawl.step('launcher: Home renders module tiles', title === 'Home' && Array.isArray(tiles) && tiles.length >= 6
+    && ['products', 'media', 'fuel', 'system'].every((m) => tiles.includes(m)), `${title} · ${JSON.stringify(tiles)}`);
+  const chip = await crawl.eval(`window.__ui.textOf(document.querySelector('.page__header .context-chip'))`);
+  crawl.step('launcher: Home shows the company chip', !!chip, chip || '(none)');
+
+  await crawl.eval(`document.querySelector('.home-tile[data-module="fuel"]').click()`);
+  await crawl.waitFor(`!document.querySelector('.page-fallback') && !!document.querySelector('.page__header') && !document.querySelector('.home-tile')`, 15_000, 'the Fuel page');
+  const fuelSide = await crawl.sidebarModule();
+  const fuelItems = await crawl.eval(`window.__ui.all('.sidebar__nav:not(.sidebar__nav--pinned) .sidebar__item').map((el) => window.__ui.textOf(el.querySelector('span:not(.sidebar__item-shortcut)')))`);
+  crawl.step('launcher: a tile opens its module', fuelSide === 'fuel' && fuelItems.includes('Fill-ups') && !fuelItems.includes('Product Library'),
+    `sidebar ${fuelSide}: ${JSON.stringify(fuelItems)}`);
+  const settingsPinned = await crawl.eval(`window.__ui.all('.sidebar__nav--pinned .sidebar__item').map(window.__ui.textOf).some((t) => t.startsWith('Settings'))`);
+  crawl.step('launcher: Settings is reachable inside a module', settingsPinned);
+
+  await crawl.goHome();
+  const back = await crawl.eval(`document.querySelectorAll('.home-tile').length > 0 && (document.querySelector('.sidebar__nav [data-module]:not(.sidebar__item)') === null)`);
+  crawl.step('launcher: the Home item returns to the grid', back);
+
+  // Keyboard: focus the first tile, → moves to the second, Enter opens it.
+  await crawl.eval(`document.querySelector('.home-tile[tabindex="0"]')?.focus()`);
+  const first = await crawl.eval(`document.activeElement?.dataset?.module || ''`);
+  await crawl.key('ArrowRight', { keyCode: 39 });
+  await crawl.settle(150);
+  const second = await crawl.eval(`document.activeElement?.dataset?.module || ''`);
+  await crawl.key('Enter', { keyCode: 13, text: '\r' });
+  await crawl.waitFor(`!document.querySelector('.home-tile')`, 10_000, 'Enter to open a tile');
+  await crawl.settle(300);
+  const opened = await crawl.sidebarModule();
+  crawl.step('launcher: arrow keys move between tiles, Enter opens one', first && second && first !== second && opened === second,
+    `${first} → ${second}, opened ${opened}`);
+
+  // ⌘K "Go to Purchasing" from inside another module switches the sidebar.
+  await crawl.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }))`);
+  await crawl.waitFor(`!!document.querySelector('.palette__input')`, 4000, 'the search palette');
+  await crawl.eval(`window.__ui.set('.palette__input', 'purchas')`);
+  await crawl.waitFor(`window.__ui.all('.palette__row').some((r) => window.__ui.textOf(r).includes('Go to Purchasing'))`, 4000, '"Go to Purchasing"');
+  await crawl.shot('launcher-palette-goto');
+  await crawl.eval(`document.querySelector('.palette__input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`);
+  await crawl.waitFor(`!document.querySelector('.palette__input')`, 6000, 'the palette to close');
+  await crawl.settle(400);
+  const viaPalette = await crawl.sidebarModule();
+  crawl.step('launcher: ⌘K "Go to" switches the sidebar to that module', viaPalette === 'purchasing', `sidebar ${viaPalette}`);
+
+  // ⌘⇧H from anywhere.
+  await crawl.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'H', metaKey: true, shiftKey: true, bubbles: true }))`);
+  await crawl.waitFor(`document.querySelectorAll('.home-tile').length > 0`, 6000, '⌘⇧H to Home');
+  crawl.step('launcher: ⌘⇧H goes Home', true);
+
+  // Sizes the owner uses: Home must fit 1280 × 800 without scrolling.
+  for (const [w, h] of [[1280, 800], [1920, 1080]]) {
+    await crawl.cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
+    await crawl.goHome();
+    await crawl.settle(400);
+    const fit = await crawl.eval(`(() => { const p = document.querySelector('.page--home'); const g = document.querySelector('.home-grid').getBoundingClientRect(); return { scroll: p.scrollHeight - p.clientHeight, bottom: Math.round(g.bottom), cols: getComputedStyle(document.querySelector('.home-grid')).gridTemplateColumns.split(' ').length, tile: Math.round(document.querySelector('.home-tile').getBoundingClientRect().width) }; })()`);
+    crawl.step(`launcher: Home fits ${w}×${h} without scrolling`, fit && fit.scroll <= 1 && fit.bottom <= h, JSON.stringify(fit));
+    await crawl.shot(`launcher-home-${w}x${h}`);
+    for (const [mod, label] of [['fuel', 'Fill-ups'], ['media', 'Overlay Studio']]) {
+      await crawl.goto(label, mod);
+      await crawl.shot(`launcher-${mod}-${w}x${h}`);
+    }
+  }
+  await crawl.cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await crawl.goHome();
+}
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -3058,6 +3196,40 @@ async function main() {
   const version = await crawl.eval(`window.__ui.textOf(document.querySelector('.sidebar__version'))`);
   await crawl.step('shell renders', true, `version chip ${version || '(missing)'}`);
   if (!version || version === 'v0.0.0') crawl.step('version chip is real', false, `got ${version}`);
+
+  /* 1b ── first run (no company yet): Home welcomes and offers one action */
+  crawl.phase = 'first run';
+  try {
+    const companyCount = await crawl.eval(`(async () => (await window.api.companies.list()).length)()`, true);
+    if (companyCount > 0) {
+      crawl.step('first run: Home welcome', true, `skipped — this profile already has ${companyCount} company(ies); use a fresh profile`);
+    } else {
+      await crawl.goHome();
+      const first = await crawl.eval(`(() => {
+        const intro = document.querySelector('.home-intro');
+        const fuel = document.querySelector('.home-tile[data-module="fuel"]');
+        return {
+          title: window.__ui.textOf(intro?.querySelector('.empty__title') || intro),
+          primaries: intro ? intro.querySelectorAll('.btn--primary').length : 0,
+          action: window.__ui.textOf(intro?.querySelector('.btn--primary')),
+          aboveGrid: !!intro && !!(intro.compareDocumentPosition(document.querySelector('.home-grid')) & Node.DOCUMENT_POSITION_FOLLOWING),
+          fuelLocked: fuel?.getAttribute('aria-disabled') === 'true',
+          fuelText: window.__ui.textOf(fuel?.querySelector('.home-tile__desc')),
+        };
+      })()`);
+      await crawl.shot('first-run-home');
+      crawl.step('first run: Home welcomes with one action above the grid',
+        /Welcome to Business Studio KH/.test(first.title) && first.primaries === 1 && /Create your first company/.test(first.action) && first.aboveGrid,
+        JSON.stringify(first));
+      crawl.step('first run: locked tiles say "Create a company first"', first.fuelLocked && first.fuelText === 'Create a company first.', first.fuelText);
+      await crawl.eval(`document.querySelector('.home-intro .btn--primary').click()`);
+      await crawl.waitFor(`!document.querySelector('.home-tile') && !!document.querySelector('.page__header')`, 10_000, 'the Company page');
+      const landed = await crawl.eval(`window.__ui.textOf(document.querySelector('.page__title'))`);
+      crawl.step('first run: the action opens the Company page', landed === 'Company', landed);
+    }
+  } catch (err) {
+    crawl.step('first run', false, `crawl error: ${err.message}`);
+  }
 
   /* 2 ── create a company through the UI so the other pages have data */
   crawl.phase = 'seed company';
@@ -3089,10 +3261,17 @@ async function main() {
     crawl.step('seed company', false, `crawl error: ${err.message}`);
   }
 
-  /* 3 ── every page */
-  for (const [id, label] of PAGE_LABELS) {
+  /* 2b ── the Home grid + module sidebar (2026-10-08) */
+  try {
+    await launcherFlow(crawl);
+  } catch (err) {
+    crawl.step('launcher flow', false, `crawl error: ${err.message}`);
+  }
+
+  /* 3 ── every page, each reached through its module */
+  for (const [id, label, moduleId] of PAGE_LABELS) {
     try {
-      await crawl.checkPage(id, label);
+      await crawl.checkPage(id, label, moduleId);
     } catch (err) {
       crawl.step(`page ${id}`, false, `crawl error: ${err.message}`);
     }
