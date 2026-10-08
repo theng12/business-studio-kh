@@ -5,7 +5,7 @@ import {
   createIdleTimer, needsKeepAlive, SESSION_IDLE_MS, PIN_IDLE_MS, DONE_SECONDS, OFFLINE_RETRY_MS, SEARCH_THRESHOLD,
   classifyError, messageText, confirmationLine, displayName, sortTiles, tileLetters, filterTiles, initials, ppTime,
 } from './kioskLogic.js';
-import { KioskCamera, makeNoPhotoImage } from './KioskCamera.jsx';
+import { KioskCamera } from './KioskCamera.jsx';
 import { KioskMe, KioskLeaveForm, KioskCorrectionForm } from './KioskMe.jsx';
 
 /**
@@ -84,9 +84,10 @@ export function Kiosk({ preview = true, onExitPreview }) {
   // Tile photos, a few at a time; cached by id + photo hash.
   useEffect(() => {
     let cancelled = false;
+    // A key is recorded only once its photo has arrived, so a run cut short
+    // (StrictMode's double effect, a refresh) leaves nothing marked as done.
     const todo = tiles.list.filter((p) => p.hasPhoto && !photoKeys.current.has(`${p.id}:${p.photoSha256}`));
     if (!todo.length) return undefined;
-    todo.forEach((p) => photoKeys.current.add(`${p.id}:${p.photoSha256}`));
     let i = 0;
     async function worker() {
       while (!cancelled && i < todo.length) {
@@ -94,13 +95,14 @@ export function Kiosk({ preview = true, onExitPreview }) {
         try {
           const res = await window.api.kiosk.tilePhoto(p.id);
           if (cancelled || !res?.bytes) continue;
+          photoKeys.current.add(`${p.id}:${p.photoSha256}`);
           const url = URL.createObjectURL(new Blob([res.bytes], { type: res.mime || 'image/jpeg' }));
           setPhotos((prev) => {
             if (prev[p.id]) URL.revokeObjectURL(prev[p.id]);
             return { ...prev, [p.id]: url };
           });
         } catch (_) {
-          photoKeys.current.delete(`${p.id}:${p.photoSha256}`); // try again on the next refresh
+          /* not marked — tried again on the next refresh */
         }
       }
     }
@@ -187,15 +189,16 @@ export function Kiosk({ preview = true, onExitPreview }) {
   }, [state.screen, endSession]);
 
   /* ── clocking ── */
+  /** `bytes` = the camera photo, or null with `noPhotoBy` (a manager allowed it on this session, server-checked). */
   const clockWith = useCallback(async (bytes, noPhotoBy = null) => {
     const s = stateRef.current;
     if (!s.session) return;
     dispatch({ type: 'SAVING' });
     setBusy(true); setMessage(null);
     try {
-      const res = await window.api.kiosk.clock(s.session.token, bytes);
+      const res = await window.api.kiosk.clock(s.session.token, bytes || null, !bytes && !!noPhotoBy);
       lastServerUse.current = Date.now();
-      dispatch({ type: 'CLOCKED', event: res?.event, duplicate: !!res?.duplicate, noPhotoBy: noPhotoBy ? displayName(noPhotoBy, lang) : null });
+      dispatch({ type: 'CLOCKED', event: res?.event, duplicate: !!res?.duplicate, noPhotoBy: noPhotoBy ? displayName(noPhotoBy, lang) : null, preview: !!res?.preview });
     } catch (err) {
       if (classifyError(err).kind === 'sessionEnded') { sessionEnded(); return; }
       dispatch({ type: 'CLOCK_FAILED' });
@@ -214,18 +217,19 @@ export function Kiosk({ preview = true, onExitPreview }) {
     setPin('');
     try {
       if (s.screen === 'pin') {
-        const res = await window.api.kiosk.signIn(s.person.id, typed);
+        const res = await window.api.kiosk.signIn(s.person.id, typed, preview || undefined);
         lastServerUse.current = Date.now();
         idle.current.touch(Date.now());
         dispatch({ type: 'SIGNED_IN', ...res });
       } else if (s.screen === 'managerPin') {
         if (s.managerAction === 'no-photo') {
-          await window.api.kiosk.verifyManagerPin(s.manager.id, typed, 'no-photo');
+          // The server marks THIS session (never the manager's own) and the clock then needs no photo.
+          await window.api.kiosk.verifyManagerPin(s.manager.id, typed, 'no-photo', s.session.token, preview || undefined);
           dispatch({ type: 'MANAGER_OK' });
-          await clockWith(await makeNoPhotoImage({ personName: displayName(s.session?.employee || s.person, 'en'), managerName: displayName(s.manager, 'en') }), s.manager);
+          await clockWith(null, s.manager);
         } else if (preview) {
           // Preview inside the normal app: nothing is locked, so nothing to unlock.
-          await window.api.kiosk.verifyManagerPin(s.manager.id, typed, s.managerAction);
+          await window.api.kiosk.verifyManagerPin(s.manager.id, typed, s.managerAction, undefined, true);
           if (onExitPreview) onExitPreview();
         } else if (s.managerAction === 'leave') {
           await window.api.kioskMode.leave(s.manager.id, typed);
@@ -239,7 +243,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
       const kind = classifyError(err).kind;
       if (kind === 'offline') setUnreachable(true);
       if (kind === 'sessionEnded') { sessionEnded(); return; }
-      // The stand-in picture could not be made: back to the camera screen, still signed in.
+      // A no-photo clock that failed after the manager PIN: back to the camera screen, still signed in.
       if (stateRef.current.screen === 'saving') dispatch({ type: 'CLOCK_FAILED' });
       if (s.screen === 'pin' && ['locked', 'lockedManager', 'paused', 'noPin', 'cannotClock'].includes(kind)) {
         // Nothing more to try on this person right now: back to the tiles, with the reason.
@@ -302,6 +306,8 @@ export function Kiosk({ preview = true, onExitPreview }) {
   const screen = state.screen;
   const canRecover = offerRecovery({ preview, status: kioskStatus, unreachable });
   const openRecovery = canRecover ? () => { setMessage(null); dispatch({ type: 'OPEN_RECOVERY' }); } : null;
+  // Standalone / server kiosk: no office Mac in the wording.
+  const recoveryLabel = t(lang, kioskStatus?.recoveryNeedsOffline === false ? 'recovery_offer_local' : 'recovery_offer');
   const visibleTiles = filterTiles(tiles.list, { query, letter });
   const showSearch = tiles.list.length > SEARCH_THRESHOLD;
   const sessionLeft = inSession(state) ? Math.ceil(idle.current.remainingMs(now) / 1000) : null;
@@ -335,6 +341,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
             onManager={screen === 'tiles' ? () => { setMessage(null); dispatch({ type: 'MANAGER_MENU' }); } : null}
             onBack={screen === 'managerPick' ? () => { setMessage(null); dispatch({ type: 'MANAGER_BACK' }); } : null}
             onRecovery={openRecovery}
+            recoveryLabel={recoveryLabel}
           />
         )}
 
@@ -380,6 +387,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
             <p className="kiosk-done__name">{state.session?.employee?.nameKm || ''}{state.session?.employee?.nameKm && state.session?.employee?.nameEn ? ' · ' : ''}{state.session?.employee?.nameEn || ''}</p>
             <p className="kiosk-done__line">{confirmationLine('km', state.result.kind, state.result.at)}</p>
             <p className="kiosk-done__line kiosk-done__line--en">{confirmationLine('en', state.result.kind, state.result.at)}</p>
+            {state.result.preview ? <p className="kiosk-done__note">{t(lang, 'preview_not_saved')}</p> : null}
             {state.result.duplicate ? <p className="kiosk-done__note">{t(lang, 'already_done')}</p> : null}
             {state.result.noPhotoBy ? <p className="kiosk-done__note">{t(lang, 'no_photo_marked', { name: state.result.noPhotoBy })}</p> : null}
             {state.session?.needsCheck ? <p className="kiosk-done__note">{t(lang, 'needs_check')}</p> : null}
@@ -404,7 +412,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
         {screen === 'leave' && state.session && (
           <KioskLeaveForm
             lang={lang} view={me.view} sessionToken={state.session.token}
-            onSent={() => { lastServerUse.current = Date.now(); openMe({ key: 'sent_leave' }); }}
+            onSent={() => { lastServerUse.current = Date.now(); openMe({ key: preview ? 'preview_not_saved' : 'sent_leave' }); }}
             onCancel={() => dispatch({ type: 'VIEW_ME' })}
             onSessionEnded={sessionEnded}
           />
@@ -413,7 +421,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
         {screen === 'correction' && state.session && (
           <KioskCorrectionForm
             lang={lang} view={me.view} sessionToken={state.session.token}
-            onSent={() => { lastServerUse.current = Date.now(); openMe({ key: 'sent_correction' }); }}
+            onSent={() => { lastServerUse.current = Date.now(); openMe({ key: preview ? 'preview_not_saved' : 'sent_correction' }); }}
             onCancel={() => dispatch({ type: 'VIEW_ME' })}
             onSessionEnded={sessionEnded}
           />
@@ -427,7 +435,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
                 {preview ? t(lang, 'preview_exit') : t(lang, 'manager_leave')}
               </button>
               {!preview ? <button type="button" className="kiosk-btn" onClick={() => dispatch({ type: 'MANAGER_ACTION', action: 'quit' })}>{t(lang, 'manager_quit')}</button> : null}
-              {openRecovery ? <button type="button" className="kiosk-btn" onClick={openRecovery}>{t(lang, 'recovery_offer')}</button> : null}
+              {openRecovery ? <button type="button" className="kiosk-btn" onClick={openRecovery}>{recoveryLabel}</button> : null}
               <button type="button" className="kiosk-btn" onClick={() => dispatch({ type: 'RESET' })}>{t(lang, 'cancel')}</button>
             </div>
           </div>
@@ -464,9 +472,9 @@ function Tile({ person, photo, lang, onTap, managerMode }) {
   );
 }
 
-function TilesScreen({ lang, tiles, visible, photos, showSearch, query, setQuery, letter, setLetter, title, managerMode, notice, message, onTap, onRetry, onManager, onBack, onRecovery }) {
+function TilesScreen({ lang, tiles, visible, photos, showSearch, query, setQuery, letter, setLetter, title, managerMode, notice, message, onTap, onRetry, onManager, onBack, onRecovery, recoveryLabel }) {
   const recoveryLink = onRecovery
-    ? <div className="kiosk-actions kiosk-actions--quiet"><button type="button" className="kiosk-btn kiosk-btn--quiet" onClick={onRecovery}>{t(lang, 'recovery_offer')}</button></div>
+    ? <div className="kiosk-actions kiosk-actions--quiet"><button type="button" className="kiosk-btn kiosk-btn--quiet" onClick={onRecovery}>{recoveryLabel || t(lang, 'recovery_offer')}</button></div>
     : null;
   if (tiles.status === 'loading' && !tiles.list.length) {
     return <div className="kiosk-panel" role="status"><p className="kiosk-h2">{t(lang, 'loading')}</p></div>;

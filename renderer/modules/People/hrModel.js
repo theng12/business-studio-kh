@@ -236,6 +236,32 @@ export const ALERT_KINDS = {
 };
 export const alertKindLabel = (k) => ALERT_KINDS[k] || k || 'Alert';
 
+/**
+ * Review fix M1: a dialog that loads data for "this person on this day" keeps
+ * the answer together with the key it was asked for, and shows it only while
+ * that key is still the dialog's — never the previous person's rows.
+ */
+export const EMPTY_DAY_LOAD = Object.freeze({ key: null, events: [], day: null, error: null });
+export function loadedFor(state, key, empty) {
+  return state && key && state.key === key ? state : empty;
+}
+
+/**
+ * Review fix L1: fold one batch answer (`{ byEmployee, errors }` from
+ * leave:balances / hr:listEmployeeSchedules with `employeeIds`) into what is
+ * on screen. Values already shown stay until their new value arrives (no
+ * flicker on a refresh); a row that failed shows its own error and keeps
+ * nothing stale; a row that recovered loses its error.
+ */
+export const EMPTY_BATCH = Object.freeze({ values: {}, errors: {} });
+export function mergeBatch(prev, res) {
+  const values = { ...(prev?.values || {}) };
+  const errors = { ...(prev?.errors || {}) };
+  for (const [id, v] of Object.entries(res?.byEmployee || {})) { values[id] = v; delete errors[id]; }
+  for (const [id, msg] of Object.entries(res?.errors || {})) { errors[id] = msg; delete values[id]; }
+  return { values, errors };
+}
+
 /* ─── corrections ─────────────────────────────────────────────────────── */
 
 export const CORRECTION_STATUS = {
@@ -253,6 +279,20 @@ export function correctionForm(c) {
     outTime: isNum(c?.proposedOutAt) ? fmtHm(c.proposedOutAt) : '',
     note: '',
   };
+}
+
+/**
+ * The approve call's times (review fix L2): a typed time replaces the
+ * proposal, an EMPTIED field that had a proposal sends null (the server then
+ * removes that time — e.g. approve only the forgotten clock-out), and a field
+ * that was empty and stays empty is left out.
+ */
+export function correctionDecision(correction, form) {
+  const pick = (typed, proposed) => (typed ? typed : (isNum(proposed) ? null : undefined));
+  const out = { inTime: pick(form.inTime, correction?.proposedInAt), outTime: pick(form.outTime, correction?.proposedOutAt) };
+  const note = String(form.note || '').trim();
+  if (note) out.note = note;
+  return out;
 }
 
 export function validateCorrectionForm(form) {
@@ -329,6 +369,26 @@ export function overtimeNeedsLook(rows) {
   return (rows || []).filter((r) => r.state === 'pending' || r.state === 'reapprove' || r.state === 'exceeds');
 }
 
+/**
+ * The Adjust dialog's starting values (review fix L3): per category the
+ * approved minutes, but never more than the attendance shows now (an approval
+ * that outgrew a corrected day starts at what can still be approved); no
+ * approval yet → the computed minutes.
+ */
+export function overtimeAdjustForm(row) {
+  const form = { note: row?.approval?.note || '' };
+  for (const c of OT_CATEGORIES) {
+    const computed = row?.computed?.[c.key] || 0;
+    form[c.key] = String(row?.approved ? Math.min(row.approved[c.key] || 0, computed) : computed);
+  }
+  return form;
+}
+
+/** A category field is locked only when there is nothing to approve AND it holds nothing. */
+export function overtimeFieldLocked(form, computed, key) {
+  return !(computed?.[key] > 0) && !(Number(form?.[key]) > 0);
+}
+
 /** Adjust form → minutes, checked never above the computed figure. */
 export function validateOvertimeAdjust(form, computed) {
   const errors = {};
@@ -363,6 +423,34 @@ export const LATENESS_STATE = {
   reapprove: { label: 'Needs re-confirming', tone: 'rose' },
   exceeds: { label: 'More than the attendance shows', tone: 'rose' },
 };
+
+/**
+ * Re-confirming a month (review fix L8) keeps an earlier WAIVER as the number
+ * of minutes waived, not as the old confirmed figure: waived = computed then −
+ * confirmed then; confirmed now = max(0, computed now − waived), with the old
+ * note. A month that had no waiver re-confirms at today's computed minutes.
+ * Returns the confirmLateness args beyond employeeId / month, plus `waived`
+ * ({ late, early }) for the question to ask first; null when there is no
+ * earlier confirmation.
+ */
+export function reconfirmLateness(row) {
+  const l = row?.lateness;
+  if (!l) return null;
+  const t = row.totals || {};
+  const waived = {
+    late: Math.max(0, (l.computedLateMin || 0) - (l.confirmedLateMin || 0)),
+    early: Math.max(0, (l.computedEarlyLeaveMin || 0) - (l.confirmedEarlyLeaveMin || 0)),
+  };
+  if (!waived.late && !waived.early) return { args: {}, waived };
+  return {
+    args: {
+      lateMinutes: Math.max(0, (t.lateMin || 0) - waived.late),
+      earlyLeaveMinutes: Math.max(0, (t.earlyLeaveMin || 0) - waived.early),
+      note: l.note || 'Earlier waiver kept',
+    },
+    waived,
+  };
+}
 
 /** The waiver form: lower figures need a note. */
 export function validateLatenessForm(form, computed) {

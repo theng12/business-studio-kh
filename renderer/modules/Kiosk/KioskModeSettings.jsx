@@ -12,12 +12,14 @@ const CAMERA_WORDS = {
 };
 
 /** The recovery code, shown once in the confirmation dialog (Khmer + English). */
-function RecoveryCodeNote({ code }) {
+function RecoveryCodeNote({ code, isClient }) {
   return (
     <div className="kiosk-settings__recovery">
       <p className="settings-note" role="note">
-        Recovery code — only for when the office Mac is gone or cannot be reached and no manager PIN can be
-        checked. It turns kiosk mode off on this Mac. It is shown only now.
+        {isClient
+          ? 'Recovery code — it works only while the office Mac is gone or cannot be reached, so no manager PIN can be checked. '
+          : 'Recovery code — for when no manager PIN works (forgotten, or locked). '}
+        It turns kiosk mode off on this Mac. It is shown only now.
       </p>
       <div className="kiosk-settings__code" aria-label="Recovery code">{code}</div>
       <p className="kiosk-settings__warn" lang="km">សរសេរលេខកូដនេះទុក ហើយរក្សាទុកឱ្យឆ្ងាយពីហាង។</p>
@@ -74,8 +76,10 @@ export function KioskModePanel({ config, addToast }) {
     const ok = await confirm({
       title: 'Use this Mac as the attendance kiosk?',
       message: 'The app restarts as one full-screen clock-in screen: staff photos, PIN, camera. The sidebar and every other screen are hidden, and the usual quit shortcuts stop working.',
-      detail: 'To leave kiosk mode later, a manager taps "Manager" on the kiosk screen and enters their own PIN. Make sure at least one manager has a staff record linked to their account and a PIN before you continue.',
-      extra: <RecoveryCodeNote code={code} />,
+      detail: config?.mode === 'client'
+        ? 'To leave kiosk mode later, a manager taps "Manager" on the kiosk screen and enters their own PIN (checked by the office Mac). Make sure at least one manager has a staff record linked to their account and a PIN before you continue.'
+        : 'To leave kiosk mode later, a manager taps "Manager" on the kiosk screen and enters their own PIN. (This Mac checked that at least one manager has a PIN.)',
+      extra: <RecoveryCodeNote code={code} isClient={config?.mode === 'client'} />,
       confirmLabel: 'I wrote it down — restart as kiosk',
       cancelLabel: 'Not now',
     });

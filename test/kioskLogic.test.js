@@ -136,7 +136,7 @@ test('clocking: tiles → PIN → camera → saving → done', () => {
   assert.equal(s.screen, 'saving');
   s = L.kioskReduce(s, { type: 'CLOCKED', event: { kind: 'out', at: 42 }, duplicate: false });
   assert.equal(s.screen, 'done');
-  assert.deepEqual(s.result, { kind: 'out', at: 42, duplicate: false, noPhotoBy: null });
+  assert.deepEqual(s.result, { kind: 'out', at: 42, duplicate: false, noPhotoBy: null, preview: false });
   assert.equal(L.kioskReduce(s, { type: 'RESET' }).screen, 'tiles');
   assert.equal(L.kioskReduce(s, { type: 'RESET' }).session, null);
 });
@@ -360,6 +360,28 @@ test('recovery: offered only on the real kiosk, with a code set, while the offic
   assert.equal(L.offerRecovery({ preview: true, status, unreachable: true }), false);
   assert.equal(L.offerRecovery({ preview: false, status: { enabled: true, hasRecoveryCode: false }, unreachable: true }), false);
   assert.equal(L.offerRecovery({ preview: false, status: null, unreachable: true }), false);
+  // Standalone / server kiosk: no office Mac to lose — offered whenever a manager is asked for.
+  assert.equal(L.offerRecovery({ preview: false, status: { ...status, recoveryNeedsOffline: false }, unreachable: false }), true);
+  assert.equal(L.offerRecovery({ preview: false, status: { ...status, recoveryNeedsOffline: true }, unreachable: false }), false);
+});
+
+test('crash screen: reloads after 5 s, then 10 s; the 3rd crash within 2 minutes stops reloading', () => {
+  const now = 10_000_000;
+  const a = L.crashPlan([], now);
+  assert.deepEqual([a.reload, a.delayMs], [true, 5000]);
+  const b = L.crashPlan(a.recent, now + 20_000);
+  assert.deepEqual([b.reload, b.delayMs], [true, 10000]);
+  const c = L.crashPlan(b.recent, now + 40_000);
+  assert.deepEqual([c.reload, c.delayMs], [false, null], 'no reload loop');
+  const later = L.crashPlan(c.recent, now + 10 * 60_000);
+  assert.deepEqual([later.reload, later.delayMs], [true, 5000], 'old crashes no longer count');
+  assert.equal(L.crashPlan(['junk', NaN], now).reload, true);
+});
+
+test('preview says nothing is saved', () => {
+  assert.equal(L.STRINGS.en.preview_badge, 'Preview — nothing is saved');
+  const done = run([{ type: 'PICK_TILE', person }, { type: 'SIGNED_IN', sessionToken: 't', nextKind: 'in' }, { type: 'SAVING' }, { type: 'CLOCKED', event: { kind: 'in', at: 1 }, preview: true }]);
+  assert.equal(done.result.preview, true);
 });
 
 test('recovery: screen transitions', () => {

@@ -102,33 +102,3 @@ export function KioskCamera({ lang, kind, busy, onCapture, onNoPhoto, onViewReco
     </div>
   );
 }
-
-/**
- * The stand-in "photo" for a clock-in a manager allowed without the camera.
- * It is saved as the event's photo, so whoever reviews the clock-in sees
- * plainly that there was no picture and which manager allowed it.
- */
-export async function makeNoPhotoImage({ personName, managerName }) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 960;
-  canvas.height = 540;
-  const g = canvas.getContext('2d');
-  g.fillStyle = '#e5e7eb';
-  g.fillRect(0, 0, canvas.width, canvas.height);
-  g.strokeStyle = '#b91c1c';
-  g.lineWidth = 12;
-  g.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
-  g.fillStyle = '#111827';
-  g.textAlign = 'center';
-  g.font = 'bold 56px -apple-system, "Helvetica Neue", Arial, sans-serif';
-  g.fillText('NO CAMERA PHOTO', canvas.width / 2, 150);
-  g.font = '34px -apple-system, "Helvetica Neue", Arial, "Khmer Sangam MN", sans-serif';
-  g.fillText(`Person: ${personName || '-'}`, canvas.width / 2, 250);
-  g.fillText(`Allowed by manager: ${managerName || '-'}`, canvas.width / 2, 310);
-  g.font = '26px -apple-system, "Helvetica Neue", Arial, sans-serif';
-  g.fillText(`Kiosk screen clock: ${new Date().toString().slice(0, 24)}`, canvas.width / 2, 390);
-  g.fillText('The time on the record is the office Mac\'s time.', canvas.width / 2, 440);
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
-  if (!blob) throw new Error('Could not make the stand-in picture');
-  return blob.arrayBuffer();
-}

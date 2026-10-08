@@ -397,6 +397,8 @@ contextBridge.exposeInMainWorld('api', {
     updateSchedule:        (id, patch)                => invoke('hr:updateSchedule', { id, patch }),
     assignSchedule:        (employeeId, scheduleId, effectiveFrom) => invoke('hr:assignSchedule', { employeeId, scheduleId, effectiveFrom }),
     listEmployeeSchedules: (employeeId)               => invoke('hr:listEmployeeSchedules', employeeId),
+    /** HR1 review fix L1: many people at once → { byEmployee: { id: history }, errors: { id: message } }. */
+    listEmployeeSchedulesFor: (employeeIds)           => invoke('hr:listEmployeeSchedules', { employeeIds }),
     listHolidays:          (opts)                     => invoke('hr:listHolidays', opts),
     createHoliday:         (input)                    => invoke('hr:createHoliday', input),
     updateHoliday:         (id, patch)                => invoke('hr:updateHoliday', { id, patch }),
@@ -452,6 +454,8 @@ contextBridge.exposeInMainWorld('api', {
     createType:   (input)                        => invoke('leave:createType', input),
     updateType:   (id, patch)                    => invoke('leave:updateType', { id, patch }),
     balances:     (employeeId)                   => invoke('leave:balances', { employeeId }),
+    /** HR1 review fix L1: many people at once → { byEmployee: { id: Balance[] }, errors: { id: message } }. */
+    balancesFor:  (employeeIds)                  => invoke('leave:balances', { employeeIds }),
     ledger:       (employeeId, leaveTypeId)      => invoke('leave:ledger', { employeeId, leaveTypeId }),
     listRequests: (filters)                      => invoke('leave:listRequests', filters),
     request:      (args)                         => invoke('leave:request', args),
@@ -466,19 +470,25 @@ contextBridge.exposeInMainWorld('api', {
   kiosk: {
     tiles:             ()                                => invoke('kiosk:tiles'),
     tilePhoto:         (id)                              => invoke('kiosk:tilePhoto', { id }),
-    signIn:            (employeeId, pin)                 => invoke('kiosk:signIn', { employeeId, pin }),
+    /** preview: the in-app dry run (owner / hr.manage) — nothing is written, wrong PINs are not counted. */
+    signIn:            (employeeId, pin, preview)        => invoke('kiosk:signIn', { employeeId, pin, preview }),
     signOut:           (sessionToken)                    => invoke('kiosk:signOut', { sessionToken }),
-    clock:             (sessionToken, photo)             => invoke('kiosk:clock', { sessionToken, photo }),
+    /** noPhoto: only after a manager allowed it on this session (verifyManagerPin purpose 'no-photo'). */
+    clock:             (sessionToken, photo, noPhoto)    => invoke('kiosk:clock', { sessionToken, photo, noPhoto }),
     me:                (sessionToken)                    => invoke('kiosk:me', { sessionToken }),
     requestLeave:      (args)                            => invoke('kiosk:requestLeave', args),
     requestCorrection: (args)                            => invoke('kiosk:requestCorrection', args),
     /** purpose: 'leave' (default) | 'quit' | 'no-photo' — only the History wording differs. */
-    verifyManagerPin:  (employeeId, pin, purpose)        => invoke('kiosk:verifyManagerPin', { employeeId, pin, purpose }),
+    verifyManagerPin:  (employeeId, pin, purpose, sessionToken, preview) => invoke('kiosk:verifyManagerPin', { employeeId, pin, purpose, sessionToken, preview }),
   },
   /** HR1: THIS Mac as the attendance kiosk (local; main/kioskWindow.js). Leaving
    *  and quitting need a manager PIN, which main checks with the server. */
   kioskMode: {
+    /** True only in the locked-down kiosk window (main passes --mskh-kiosk-window); renderer/main.jsx mounts only the kiosk there. */
+    isKioskWindow:   process.argv.includes('--mskh-kiosk-window'),
     status:          ()                    => invoke('kioskMode:status'),
+    /** The kiosk screen crashed: one line to this Mac's crash.log. */
+    logError:        (message, stack)      => invoke('kioskMode:logError', { message, stack }),
     askCamera:       ()                    => invoke('kioskMode:askCamera'),
     /** Step 1 of turning kiosk mode on: a fresh recovery code, shown once (only its hash is kept). */
     newRecoveryCode: ()                    => invoke('kioskMode:newRecoveryCode'),

@@ -111,7 +111,13 @@ export const STRINGS = {
     no_photo_requested: 'អ្នកគ្រប់គ្រងអនុញ្ញាតឱ្យកត់ត្រាដោយគ្មានរូបថត។',
     leaving: 'កំពុងចាកចេញពីរបៀបកត់ត្រាវត្តមាន…',
     closing: 'កំពុងបិទកម្មវិធី…',
-    preview_badge: 'មើលជាមុន — អេក្រង់មិនត្រូវបានចាក់សោ',
+    preview_badge: 'មើលជាមុន — គ្មានអ្វីត្រូវបានរក្សាទុកទេ',
+    preview_not_saved: 'មើលជាមុន — មិនបានរក្សាទុកទេ។',
+    crash_title: 'មានបញ្ហា។ កំពុងចាប់ផ្ដើមអេក្រង់ឡើងវិញ…',
+    crash_stuck: 'អេក្រង់នេះមានបញ្ហាម្តងហើយម្តងទៀត។ សូមហៅអ្នកគ្រប់គ្រង។',
+    crash_restart: 'ចាប់ផ្ដើមឡើងវិញឥឡូវ',
+    crash_who: 'អ្នកគ្រប់គ្រងណា?',
+    pin_label: 'លេខសម្ងាត់',
     preview_exit: 'បិទការមើលជាមុន',
     err_wrong_pin: 'លេខសម្ងាត់មិនត្រឹមត្រូវ។ នៅសល់ {n} ដងទៀត។',
     err_wrong_pin_plain: 'លេខសម្ងាត់មិនត្រឹមត្រូវ។',
@@ -125,6 +131,7 @@ export const STRINGS = {
     err_not_manager: 'មានតែអ្នកគ្រប់គ្រងទេដែលអាចធ្វើបាន។',
     err_other: 'មិនបានសម្រេចទេ៖ {msg}',
     recovery_offer: 'Mac នៅការិយាល័យមិនអាចទាក់ទងបាន? ប្រើលេខកូដសង្គ្រោះ',
+    recovery_offer_local: 'ប្រើលេខកូដសង្គ្រោះ',
     recovery_title: 'លេខកូដសង្គ្រោះ',
     recovery_hint: 'វាយលេខកូដ ១២ តួ ដែលបានសរសេរទុក នៅពេលបើករបៀបកត់ត្រាវត្តមាន។ វានឹងបិទរបៀបកត់ត្រាវត្តមាននៅលើ Mac នេះ។',
     recovery_submit: 'បិទរបៀបកត់ត្រាវត្តមាន',
@@ -234,7 +241,13 @@ export const STRINGS = {
     no_photo_requested: 'A manager allows clocking without a photo.',
     leaving: 'Leaving kiosk mode…',
     closing: 'Closing the app…',
-    preview_badge: 'Preview — the screen is not locked',
+    preview_badge: 'Preview — nothing is saved',
+    preview_not_saved: 'Preview — nothing was saved.',
+    crash_title: 'Something went wrong. Restarting the screen…',
+    crash_stuck: 'This screen keeps failing. Call a manager.',
+    crash_restart: 'Restart now',
+    crash_who: 'Which manager?',
+    pin_label: 'PIN',
     preview_exit: 'Close preview',
     err_wrong_pin: 'Wrong PIN. {n} tries left.',
     err_wrong_pin_plain: 'Wrong PIN.',
@@ -248,6 +261,7 @@ export const STRINGS = {
     err_not_manager: 'Only a manager can do this.',
     err_other: 'Not done: {msg}',
     recovery_offer: 'Office Mac unreachable? Use recovery code',
+    recovery_offer_local: 'Use recovery code',
     recovery_title: 'Recovery code',
     recovery_hint: 'Type the 12-character code that was written down when kiosk mode was turned on. It turns kiosk mode off on this Mac.',
     recovery_submit: 'Turn kiosk mode off',
@@ -382,7 +396,7 @@ export function kioskReduce(state, event) {
         notice: null,
         managerAction: null,
         manager: null,
-        result: { kind: event.event?.kind || s.session.nextKind, at: event.event?.at ?? null, duplicate: !!event.duplicate, noPhotoBy: event.noPhotoBy || null },
+        result: { kind: event.event?.kind || s.session.nextKind, at: event.event?.at ?? null, duplicate: !!event.duplicate, noPhotoBy: event.noPhotoBy || null, preview: !!event.preview },
       };
     case 'CLOCK_FAILED':
       if (!s.session) return s;
@@ -449,7 +463,25 @@ export function inSession(state) {
  * (main refuses the code otherwise anyway).
  */
 export function offerRecovery({ preview, status, unreachable }) {
-  return !preview && !!status?.enabled && !!status?.hasRecoveryCode && !!unreachable;
+  if (preview || !status?.enabled || !status?.hasRecoveryCode) return false;
+  // A standalone / server kiosk has no office Mac to lose: offered whenever a manager is asked for.
+  return status.recoveryNeedsOffline === false ? true : !!unreachable;
+}
+
+/* ── the kiosk screen crashed (KioskErrorBoundary) ────────────────── */
+
+export const CRASH_WINDOW_MS = 2 * 60 * 1000;
+export const CRASH_STOP_AFTER = 3;
+
+/**
+ * Reload after a crash, backing off (5 s, then 10 s); after 3 crashes within
+ * 2 minutes stop and stay on the error screen (manager / recovery code only),
+ * so a broken screen never reload-loops. `history` = earlier crash times.
+ */
+export function crashPlan(history, now = Date.now()) {
+  const recent = [...(history || []).filter((t) => Number.isFinite(t) && now - t < CRASH_WINDOW_MS), now];
+  if (recent.length >= CRASH_STOP_AFTER) return { reload: false, delayMs: null, recent };
+  return { reload: true, delayMs: 5000 * recent.length, recent };
 }
 
 /** The recovery code as typed → shown grouped (XXXX-XXXX-XXXX), letters and digits only, at most 12. */

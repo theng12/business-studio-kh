@@ -30,6 +30,22 @@ function company(requested) {
 }
 function staffMember(id) { return inCompany(employees.get(id), 'Staff member'); }
 
+/**
+ * Run `read(id)` for each id of the active company; one bad id (not found,
+ * another company, a failing read) is reported for that id and never fails
+ * the others. Shared by the batch reads (HR1 review fix L1).
+ */
+function batchPerEmployee(companyId, ids, read) {
+  const byEmployee = {};
+  const errors = {};
+  for (const id of [...new Set(ids)]) {
+    const e = employees.get(id);
+    if (!e || e.companyId !== companyId) { errors[id] = 'Staff member not found'; continue; }
+    try { byEmployee[id] = read(id); } catch (err) { errors[id] = err?.message || String(err); }
+  }
+  return { byEmployee, errors };
+}
+
 function deviceLabel() {
   const { getCallerUserId } = require('../db/_util');
   const uid = getCallerUserId();
@@ -239,8 +255,17 @@ function register({ expose }) {
     emitHrChange('leaveType', 'update', id, t.companyId);
     return t;
   });
-  expose('leave:balances', ({ employeeId } = {}) => {
+  /**
+   * `{ employeeId }` → Balance[] (as before). `{ employeeIds: [...] }` (HR1
+   * review fix L1: one round trip for a whole page of the Balances grid) →
+   * `{ byEmployee: { id: Balance[] }, errors: { id: message } }` — a person
+   * not found (or in another company) is an error for that row only.
+   */
+  expose('leave:balances', ({ employeeId, employeeIds } = {}) => {
     const companyId = company();
+    if (Array.isArray(employeeIds)) {
+      return batchPerEmployee(companyId, employeeIds, (id) => leave.balances(companyId, id));
+    }
     staffMember(employeeId);
     return leave.balances(companyId, employeeId);
   });
@@ -308,4 +333,4 @@ function ownEvent(e) {
   return { id: e.id, employeeId: e.employeeId, kind: e.kind, at: e.at, workDate: e.workDate, source: e.source, queuedForMs: e.queuedForMs, hasPhoto: e.hasPhoto, reviewStatus: e.reviewStatus };
 }
 
-module.exports = { register, ownView, ownEvent, crewOf };
+module.exports = { register, ownView, ownEvent, crewOf, batchPerEmployee };

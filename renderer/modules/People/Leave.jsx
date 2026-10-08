@@ -22,7 +22,9 @@ import { fmtShort } from '../Fuel/fuelModel.js';
 import { useHrCaps, useHrLookups, useHrTick, usePager } from './hrHooks.js';
 import { HrPermissionNote, PersonCell, ToneBadge, clampServerPage } from './HrShared.jsx';
 import { AdjustBalanceModal, LeaveRequestModal, LedgerTable, useLeaveDecisions } from './LeaveModals.jsx';
-import { LEAVE_STATUS, VIA_LABELS, errText, fmtDateRange, fmtDays, leaveTypeName, personName } from './hrModel.js';
+import { EMPTY_BATCH, LEAVE_STATUS, VIA_LABELS, errText, fmtDateRange, fmtDays, leaveTypeName, loadedFor, mergeBatch, personName } from './hrModel.js';
+
+const EMPTY_LEDGER_LOAD = Object.freeze({ key: null, balances: [], ledger: [], error: null });
 
 const VIEWS = [{ value: 'requests', label: 'Requests' }, { value: 'balances', label: 'Balances' }];
 const STATUS_VIEWS = [
@@ -157,7 +159,8 @@ function Balances({ lookups, canManage, view, setView }) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const tick = useHrTick(['leave', 'leaveType']);
   const [status, setStatus] = useState('active');
-  const [balances, setBalances] = useState({}); // employeeId → Balance[]
+  // employeeId → Balance[] (+ per-row errors), one batch call per page (review fix L1).
+  const [batch, setBatch] = useState(EMPTY_BATCH);
   const [error, setError] = useState(null);
   const [retry, setRetry] = useState(0);
   const [opened, setOpened] = useState(null);
@@ -169,14 +172,15 @@ function Balances({ lookups, canManage, view, setView }) {
   const shown = people.slice(pageStart, pageEnd);
   const shownKey = shown.map((e) => e.id).join(',');
 
-  useEffect(() => { setBalances({}); setOpened(null); }, [activeCompanyId]);
+  useEffect(() => { setBatch(EMPTY_BATCH); setOpened(null); }, [activeCompanyId]);
   useEffect(() => { setPage(0); }, [status, pageSize]);
   useEffect(() => {
     if (!activeCompanyId || !shownKey) return undefined;
     let alive = true;
     const ids = shownKey.split(',');
-    Promise.all(ids.map((id) => window.api.leave.balances(id).then((b) => [id, b])))
-      .then((pairs) => { if (alive) { setBalances(Object.fromEntries(pairs)); setError(null); } })
+    // Old values stay on screen until the new ones arrive: no flicker on a refresh.
+    window.api.leave.balancesFor(ids)
+      .then((res) => { if (alive) { setBatch((b) => mergeBatch(b, res)); setError(null); } })
       .catch((err) => { if (alive) setError(errText(err)); });
     return () => { alive = false; };
   }, [activeCompanyId, shownKey, tick, retry]);
@@ -203,7 +207,9 @@ function Balances({ lookups, canManage, view, setView }) {
             </thead>
             <tbody>
               {shown.map((e) => {
-                const list = balances[e.id] || null;
+                const list = batch.values[e.id] || null;
+                const rowError = batch.errors[e.id] || null;
+                const blank = rowError ? '—' : '…';
                 const by = new Map((list || []).map((b) => [b.leaveTypeId, b]));
                 const pending = (list || []).reduce((s, b) => s + (b.pendingDays || 0), 0);
                 return (
@@ -211,9 +217,9 @@ function Balances({ lookups, canManage, view, setView }) {
                     <td><PersonCell employee={e} size={28} sub={e.staffCode} /></td>
                     {types.map((t) => {
                       const b = by.get(t.id);
-                      return <td key={t.id} className={`is-num${b && b.balance < 0 ? ' hr-negative' : ''}`}>{list ? fmtDays(b?.balance) : '…'}</td>;
+                      return <td key={t.id} className={`is-num${b && b.balance < 0 ? ' hr-negative' : ''}`}>{list ? fmtDays(b?.balance) : blank}</td>;
                     })}
-                    <td className="is-num">{list ? (pending ? fmtDays(pending) : '—') : '…'}</td>
+                    <td className="is-num" title={rowError ? `Couldn't load: ${rowError}` : undefined}>{list ? (pending ? fmtDays(pending) : '—') : rowError ? <span className="field__error">Couldn't load</span> : '…'}</td>
                   </tr>
                 );
               })}
@@ -232,20 +238,23 @@ function Balances({ lookups, canManage, view, setView }) {
 /** One person's balances and ledger, with Adjust… */
 export function LedgerModal({ open, employee, lookups, canManage, onClose }) {
   const tick = useHrTick(['leave', 'leaveType']);
-  const [balances, setBalances] = useState([]);
-  const [ledger, setLedger] = useState([]);
   const [typeId, setTypeId] = useState('');
   const [adjusting, setAdjusting] = useState(false);
-  const [error, setError] = useState(null);
+  // Review fix M1: the answer is kept with the person + filter it was asked
+  // for and shown only while it still matches — never the previous person's.
+  const key = open && employee?.id ? `${employee.id}|${typeId}` : null;
+  const [loaded, setLoaded] = useState(EMPTY_LEDGER_LOAD);
   useEffect(() => { if (open) setTypeId(''); }, [open, employee?.id]);
   useEffect(() => {
-    if (!open || !employee?.id) return undefined;
+    if (!key) return undefined;
     let alive = true;
     Promise.all([window.api.leave.balances(employee.id), window.api.leave.ledger(employee.id, typeId || undefined)])
-      .then(([b, l]) => { if (alive) { setBalances(b || []); setLedger(l || []); setError(null); } })
-      .catch((err) => { if (alive) setError(errText(err)); });
+      .then(([b, l]) => { if (alive) setLoaded({ key, balances: b || [], ledger: l || [], error: null }); })
+      .catch((err) => { if (alive) setLoaded({ key, balances: [], ledger: [], error: errText(err) }); });
     return () => { alive = false; };
-  }, [open, employee?.id, typeId, tick]);
+  }, [key, tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { balances, ledger, error } = loadedFor(loaded, key, EMPTY_LEDGER_LOAD);
+  const loading = !!key && loaded.key !== key;
   return (
     <>
       <Modal
@@ -256,7 +265,7 @@ export function LedgerModal({ open, employee, lookups, canManage, onClose }) {
         footer={canManage ? <Button onClick={() => setAdjusting(true)}>Adjust balance…</Button> : null}
       >
         {error ? <p className="field__error">{error}</p> : null}
-        <BalanceTable balances={balances} />
+        {loading ? <p className="muted">Loading…</p> : <BalanceTable balances={balances} />}
         <div className="section-head hr-subhead">
           <h3 className="section-title">Ledger</h3>
           <div className="section-head__actions">
@@ -266,7 +275,7 @@ export function LedgerModal({ open, employee, lookups, canManage, onClose }) {
             </Select>
           </div>
         </div>
-        <LedgerTable rows={ledger} types={lookups.maps.leaveTypes} />
+        {loading ? null : <LedgerTable rows={ledger} types={lookups.maps.leaveTypes} />}
       </Modal>
       <AdjustBalanceModal open={open && adjusting} employee={employee} types={lookups.leaveTypes} onClose={() => setAdjusting(false)} />
     </>

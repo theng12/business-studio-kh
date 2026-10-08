@@ -20,7 +20,7 @@ import { LoadError, ReasonModal } from '../Fuel/FuelShared.jsx';
 import { useHrCaps, useHrLookups, useHrTick } from './hrHooks.js';
 import { DayDetailModal, HrPermissionNote, MonthSelect, PersonCell, ToneBadge } from './HrShared.jsx';
 import {
-  OT_CATEGORIES, OT_STATE, errText, fmtHours, fmtMinutes, fmtWorkDate, otTotal, overtimeNeedsLook, overtimeRows, personName,
+  OT_CATEGORIES, OT_STATE, errText, fmtHours, fmtMinutes, fmtWorkDate, otTotal, overtimeAdjustForm, overtimeFieldLocked, overtimeNeedsLook, overtimeRows, personName,
   ppMonthKey, ratesLine, validateOvertimeAdjust,
 } from './hrModel.js';
 
@@ -208,8 +208,7 @@ function AdjustOvertimeModal({ open, row, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (!open || !row) return;
-    const src = row.approved || row.computed;
-    setForm({ ...Object.fromEntries(OT_CATEGORIES.map((c) => [c.key, String(src[c.key] || 0)])), note: row.approval?.note || '' });
+    setForm(overtimeAdjustForm(row));
     setErrors({}); setBusy(false);
   }, [open, row]);
   async function save() {
@@ -238,7 +237,7 @@ function AdjustOvertimeModal({ open, row, onClose, onDone }) {
       <div className="form-grid">
         {OT_CATEGORIES.map((c) => (
           <Field key={c.key} label={`${c.label} (min)`} error={errors[c.key]} hint={`The attendance shows ${row?.computed?.[c.key] || 0} min`}>
-            {({ id }) => <Input id={id} inputMode="numeric" value={form[c.key] ?? ''} invalid={!!errors[c.key]} disabled={!row?.computed?.[c.key]} onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.value }))} />}
+            {({ id }) => <Input id={id} inputMode="numeric" value={form[c.key] ?? ''} invalid={!!errors[c.key]} disabled={overtimeFieldLocked(form, row?.computed, c.key)} onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.value }))} />}
           </Field>
         ))}
         <Field label="Note" span="full" error={errors.note}>
