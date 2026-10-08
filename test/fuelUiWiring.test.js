@@ -215,3 +215,23 @@ test('L9: picked-photo previews are released on reset; lists use thumbnails', ()
   assert.match(shared, /function FuelPhotoThumb[\s\S]*?useFuelPhotoUrl\(photo\?\.id\)/, 'thumbnails ask for the 320 px size (the default)');
   assert.match(shared, /function FuelPhotoLarge[\s\S]*?useFuelPhotoUrl\(photo\?\.id, \{ thumb: false \}\)/);
 });
+
+test('reports rank by suspected loss and list every flag of the month', () => {
+  const src = code('renderer/modules/Fuel/FuelReports.jsx');
+  assert.match(src, /const assets = rankDrivers\(report\?\.assets\)/);
+  assert.match(src, /const drivers = rankDrivers\(report\?\.drivers\)/);
+  assert.match(src, /suspectedLossRiel/);
+  assert.match(src, /cashOverpaidRiel/);
+  assert.match(src, /Cash above pump price/);
+  assert.match(src, /Suspected loss = fuel used more than/);
+  assert.match(src, /report\?\.flagList/);
+  assert.match(src, /flagStatusBadge\(f\)/);
+});
+
+test('Send to farm names the carrier, and the lists show it', () => {
+  const src = code('renderer/modules/Fuel/FuelTanks.jsx');
+  assert.match(src, /input\.carriedByEmployeeId = form\.carriedBy/);
+  assert.match(src, /<StaffSelect [^\n]*prefer="driver" value=\{r\.form\.carriedBy\}/);
+  assert.match(src, /carried by \{name\(t\.carriedByEmployeeId\)\}/);
+  assert.match(src, /<th>Carried by<\/th>/);
+});

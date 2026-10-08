@@ -11,7 +11,7 @@ import { Button, Field, Input, Modal, Select, Textarea } from '../../components/
 import { newClientRef } from './fuelHooks.js';
 import { AssetSelect, LocationSelect, PhotoPicker, StaffSelect, WhenField, photosPayload, revokePreviews } from './FuelShared.jsx';
 import {
-  FILL_KINDS, PHOTO_KINDS, defaultPhotoKind, diffFillCorrection, emptyFillForm, errText, fillToCorrectionForm,
+  FILL_KINDS, PHOTO_KINDS, defaultPhotoKind, slipEvidenceNote, diffFillCorrection, emptyFillForm, errText, fillToCorrectionForm,
   flagHeadline, fmtLitres, meterWord, parseNumber, validateFillForm,
 } from './fuelModel.js';
 
@@ -177,16 +177,25 @@ export function AddFillModal({ open, onClose, lookups, defaults, canManage = tru
           <input type="checkbox" checked={form.fullTank} onChange={(e) => set('fullTank')(e.target.checked)} />
           <span>Filled to full</span>
         </label>
-        <Field label="Photos" span="full" hint="Odometer, pump display, receipt — whatever the slip came with.">
-          {() => (
-            <PhotoPicker
-              kinds={PHOTO_KINDS.fill}
-              value={photos}
-              onChange={setPhotos}
-              defaultKind={(list) => defaultPhotoKind(form.kind, list)}
-              onError={(m) => addToast(m, 'error')}
-            />
-          )}
+        <Field label="Photos" span="full" hint="The slip first, then the odometer or pump display if you have them.">
+          {() => {
+            // Rule A7 for a paper slip: with the slip photographed (and the
+            // meter reading typed) a missing meter / pump photo is only noted;
+            // with no photo at all it is an amber flag. Say so before Save.
+            const note = slipEvidenceNote({ photoCount: photos.length, meterUnit: asset?.meterUnit, meterReading: form.meterReading });
+            return (
+              <>
+                <PhotoPicker
+                  kinds={PHOTO_KINDS.fill}
+                  value={photos}
+                  onChange={setPhotos}
+                  defaultKind={(list) => defaultPhotoKind(form.kind, list, { paperSlip: true })}
+                  onError={(m) => addToast(m, 'error')}
+                />
+                <p className={`fuel-evidence-note${note.tone === 'amber' ? ' is-warning' : ' is-ok'}`} role="status">{note.text}</p>
+              </>
+            );
+          }}
         </Field>
         <Field label="Note" span="full">
           {({ id }) => <Textarea id={id} rows={2} value={form.note} onChange={(e) => set('note')(e.target.value)} />}

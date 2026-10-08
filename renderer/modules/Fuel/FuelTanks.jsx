@@ -132,7 +132,7 @@ export function FuelTanks() {
           <div className="section-head"><h2 className="section-title">On the way to a farm store</h2><span className="section-hint">Sent and not yet received.</span></div>
           <div className="data-table-wrap">
             <table className="data-table">
-              <thead><tr><th>Sent</th><th>From</th><th>To</th><th className="is-num">Litres sent</th><th>Containers</th><th className="is-actions" /></tr></thead>
+              <thead><tr><th>Sent</th><th>From</th><th>To</th><th className="is-num">Litres sent</th><th>Carried by</th><th>Containers</th><th className="is-actions" /></tr></thead>
               <tbody>
                 {pending.map((t) => (
                   <tr key={t.id}>
@@ -140,6 +140,7 @@ export function FuelTanks() {
                     <td>{lookups.maps.locations.get(t.fromLocationId)?.name || '—'}</td>
                     <td>{lookups.maps.locations.get(t.toLocationId)?.name || '—'}</td>
                     <td className="is-num">{fmtLitres(t.litresSent)}</td>
+                    <td>{t.carriedByEmployeeId ? staffName(lookups.maps.staff.get(t.carriedByEmployeeId)) : <span className="muted">—</span>}</td>
                     <td>{t.containers ? `${t.containers}${t.containerNote ? ` · ${t.containerNote}` : ''}` : '—'}</td>
                     <td className="is-actions">{canRecord ? <Button size="sm" onClick={() => setDialog({ kind: 'receive', transfer: t })}>Received…</Button> : null}</td>
                   </tr>
@@ -325,7 +326,11 @@ function TankDetail({ location, lookups, tick }) {
                   <td>{lookups.maps.locations.get(t.fromLocationId)?.name || '—'} → {lookups.maps.locations.get(t.toLocationId)?.name || 'outside'}</td>
                   <td className="is-num">{fmtLitres(t.litresSent)}</td>
                   <td className="is-num">{t.received ? fmtLitres(t.litresReceived) : <span className="muted">not yet</span>}</td>
-                  <td>{name(t.sentByEmployeeId)}{t.received ? <div className="muted">received by {name(t.receivedByEmployeeId)}</div> : null}</td>
+                  <td>
+                    {name(t.sentByEmployeeId)}
+                    {t.carriedByEmployeeId ? <div className="muted">carried by {name(t.carriedByEmployeeId)}</div> : null}
+                    {t.received ? <div className="muted">received by {name(t.receivedByEmployeeId)}</div> : null}
+                  </td>
                   <td className="is-actions">{!t.voided ? <Button size="sm" variant="ghost" onClick={() => setVoiding({ kind: 'transfer', record: t })}>Void…</Button> : null}</td>
                 </tr>
               ))}
@@ -750,7 +755,7 @@ function DeliveryModal({ open, location, lookups, canManage, onClose }) {
 
 function TransferModal({ open, lookups, canManage, onClose }) {
   const addToast = useAppStore((s) => s.addToast);
-  const r = useRecordForm(open, { fromLocationId: '', toLocationId: '', litresSent: '', pumpBefore: '', pumpAfter: '', containers: '', containerNote: '', sentBy: '', at: ppInputValue(), note: '' });
+  const r = useRecordForm(open, { fromLocationId: '', toLocationId: '', litresSent: '', pumpBefore: '', pumpAfter: '', containers: '', containerNote: '', sentBy: '', carriedBy: '', at: ppInputValue(), note: '' });
   const from = lookups.maps.locations.get(r.form.fromLocationId);
   async function save() {
     const { form } = r;
@@ -774,6 +779,7 @@ function TransferModal({ open, lookups, canManage, onClose }) {
       if (containers != null) input.containers = Math.round(containers);
       if (form.containerNote.trim()) input.containerNote = form.containerNote.trim();
       if (form.sentBy) input.sentByEmployeeId = form.sentBy;
+      if (form.carriedBy) input.carriedByEmployeeId = form.carriedBy;
       if (form.note.trim()) input.note = form.note.trim();
       if (r.photos.length) input.photos = await photosPayload(r.photos);
       const res = await window.api.fuel.recordTransfer(input);
@@ -811,7 +817,9 @@ function TransferModal({ open, lookups, canManage, onClose }) {
         <Field label="Sent by">
           {({ id }) => <StaffSelect id={id} staff={lookups.staff} value={r.form.sentBy} onChange={r.set('sentBy')} />}
         </Field>
-        <span />
+        <Field label="Carried by" hint="Who takes it to the farm — named if litres go missing on the way.">
+          {({ id }) => <StaffSelect id={id} staff={lookups.staff} prefer="driver" value={r.form.carriedBy} onChange={r.set('carriedBy')} />}
+        </Field>
         <Field label="Photos" span="full" hint="Containers, seals, the pump meter.">
           {() => <PhotoPicker kinds={PHOTO_KINDS.transfer} value={r.photos} onChange={r.setPhotos} defaultKind="containers" onError={(m) => addToast(m, 'error')} />}
         </Field>

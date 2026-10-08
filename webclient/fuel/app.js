@@ -351,6 +351,13 @@
   function activeStaff(pred) {
     return S.staff.filter(function (e) { return e.status === 'active' && (!pred || pred(e)); });
   }
+  /** Drivers first (they usually take the cans), then everyone else, each by name. */
+  function carrierOrder(list) {
+    return list.slice().sort(function (a, b) {
+      if (!!a.isDriver !== !!b.isDriver) return a.isDriver ? -1 : 1;
+      return staffName(a).localeCompare(staffName(b));
+    });
+  }
   function assetTiles(preferId) {
     var list = S.assets.filter(function (a) { return a.status === 'active'; }).slice();
     list.sort(function (a, b) {
@@ -494,6 +501,13 @@
       steps: [
         { type: 'tiles', key: 'fromLocationId', title: 'pick_tank', autoSingle: true, remember: LS.tank, items: function () { return locTiles(['tank']); } },
         { type: 'tiles', key: 'toLocationId', title: 'pick_to_farm', autoSingle: true, items: function () { return locTiles(['farm_store']); } },
+        // Who takes the fuel to the farm — named on the "lost on the way" check (F1).
+        // The server accepts none, so "Not known" is offered too.
+        {
+          type: 'tiles', key: 'carriedByEmployeeId', title: 'pick_carrier', search: true, none: 'carrier_unknown',
+          when: function () { return activeStaff().length > 0; },
+          items: function () { return staffTiles(carrierOrder(activeStaff())); },
+        },
       ].concat(pumpMeterSteps('fromLocationId'), [
         { type: 'number', key: 'containers', title: 'containers_q', decimals: 0, optional: true, when: function (d) { return d.how !== 'cans' || flowMeterFrom(d.fromLocationId); } },
         { type: 'photo', kind: 'containers', title: 'photo_containers' },
@@ -502,6 +516,7 @@
       build: function (d) {
         var meterOn = flowMeterFrom(d.fromLocationId);
         var args = { fromLocationId: d.fromLocationId, toLocationId: d.toLocationId };
+        if (d.carriedByEmployeeId) args.carriedByEmployeeId = d.carriedByEmployeeId;
         if (meterOn) { args.pumpMeterBefore = d.pumpMeterBefore; args.pumpMeterAfter = d.pumpMeterAfter; }
         else args.litresSent = litresOf(d, false);
         if (d.how === 'cans' && !meterOn) args.containers = d.cansCount;
@@ -513,6 +528,7 @@
         return [
           ['field_tank', locName(d.fromLocationId)],
           ['field_to', locName(d.toLocationId)],
+          ['field_carrier', d.carriedByEmployeeId ? staffName(byId(S.staff, d.carriedByEmployeeId)) : tr('carrier_unknown')],
           meterOn ? ['field_pump', num(d.pumpMeterBefore) + ' → ' + num(d.pumpMeterAfter)] : null,
           ['field_litres', litresText(litresOf(d, meterOn))],
           d.how === 'cans' && !meterOn ? ['field_containers', String(d.cansCount)] : d.containers != null ? ['field_containers', String(d.containers)] : null,
@@ -1175,6 +1191,7 @@
     } else if (res.transfer) {
       rows.push(['field_tank', locName(rec.fromLocationId) + ' → ' + locName(rec.toLocationId)]);
       rows.push(['litres_sent', litresText(rec.litresSent)]);
+      if (rec.carriedByEmployeeId) rows.push(['field_carrier', staffName(byId(S.staff, rec.carriedByEmployeeId))]);
       if (rec.litresReceived != null) rows.push(['litres_received', litresText(rec.litresReceived)]);
     }
     return rows;

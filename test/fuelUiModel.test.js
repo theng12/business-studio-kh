@@ -297,14 +297,16 @@ test('a dip older than the rule is stale; no dip at all is too', () => {
 
 /* ─── reports ─────────────────────────────────────────────────────────── */
 
-test('drivers rank by excess riel; unknown excess last', () => {
+test('drivers and vehicles rank by suspected loss, like the server; then excess; unknown last', () => {
   const r = M.rankDrivers([
-    { name: 'B', excessRiel: null },
-    { name: 'C', excessRiel: 100000 },
-    { name: 'A', excessRiel: -5000 },
-    { name: 'D', excessRiel: 250000 },
+    { name: 'B', suspectedLossRiel: null, excessRiel: 900000 },
+    { name: 'C', suspectedLossRiel: 100000, excessRiel: 100 },
+    { name: 'A', suspectedLossRiel: 0, excessRiel: -5000 },
+    { name: 'D', suspectedLossRiel: 250000, excessRiel: 50 },
+    { name: 'E', suspectedLossRiel: 0, excessRiel: 20000 },
   ]);
-  assert.deepEqual(r.map((d) => d.name), ['D', 'C', 'A', 'B']);
+  assert.deepEqual(r.map((d) => d.name), ['D', 'C', 'E', 'A', 'B']);
+  assert.equal(M.totalSuspectedLoss([{ suspectedLossRiel: 1000 }, { suspectedLossRiel: null }, { suspectedLossRiel: 250 }]), 1250);
 });
 
 /* ─── Settings → Fuel ─────────────────────────────────────────────────── */
@@ -431,4 +433,39 @@ test('1280 px fit: compact table dates, and litres keep the slip\'s precision', 
   assert.equal(M.fmtLitres(120), '120 L');
   assert.equal(M.fmtLitres(410.125, 1), '410.1 L');
   assert.equal(M.meterShort('km'), 'Odometer');
+});
+
+test('flag statuses for the report: answered, open, or no longer firing', () => {
+  assert.deepEqual(M.flagStatusBadge({ status: 'open', resolved: true }), { label: 'No longer firing', tone: 'slate' });
+  assert.deepEqual(M.flagStatusBadge({ status: 'open', resolved: false }), { label: 'Open', tone: 'amber' });
+  assert.equal(M.flagStatusBadge({ status: 'confirmed', resolved: true }).label, 'Theft confirmed', 'an answer outranks "no longer firing"');
+  assert.equal(M.flagStatusBadge({ status: 'dismissed' }).label, 'Checked — OK');
+});
+
+test('T3, F1, A7 and P1 headlines follow the tuned rules', () => {
+  const lk = maps({
+    locations: [{ id: 't1', name: 'Warehouse tank' }],
+    staff: [{ id: 'e1', nameEn: 'Dara' }, { id: 'e2', nameEn: 'Sokha' }],
+    assets: [{ id: 'a1', name: 'Truck 3A' }],
+  });
+  const closed = M.flagHeadline({ ruleKey: 'T3', locationId: 't1', measured: 4.2, details: { open: false, from: Date.UTC(2026, 6, 2, 1), to: Date.UTC(2026, 6, 6, 1) } }, lk);
+  assert.match(closed, /^Warehouse tank: no dip for 4 days \(.+ to .+\)$/);
+  assert.equal(M.flagHeadline({ ruleKey: 'T3', locationId: 't1', measured: 3.6, details: { open: true } }, lk), 'Warehouse tank has not been dipped for 3 days');
+  assert.equal(M.flagHeadline({ ruleKey: 'F1', locationId: 't1', measured: 190, expected: 200, details: { carrierEmployeeId: 'e2' } }, lk),
+    'Warehouse tank: 10 L lost on the way to the farm (carried by Sokha)');
+  assert.match(M.flagHeadline({ ruleKey: 'A7', severity: 'info', assetId: 'a1', details: { paperSlip: true } }, lk), /paper slip .*noted/);
+  assert.match(M.flagHeadline({ ruleKey: 'A7', severity: 'amber', assetId: 'a1' }, lk), /missing/);
+  assert.equal(M.flagHeadline({ ruleKey: 'P1', employeeId: 'e1', measured: 1.06, expected: 1 }, lk), 'Dara: vehicles they filled used 6% more than normal');
+  assert.equal(M.flagHeadline({ ruleKey: 'P1', employeeId: 'e1', measured: 1.05, expected: 1, details: { diffPct: 5.13 } }, lk), 'Dara: vehicles they filled used 5.1% more than normal');
+});
+
+test('the paper-slip form says when a photo turns "missing evidence" into a note', () => {
+  assert.equal(M.slipEvidenceNote({ photoCount: 0, meterUnit: 'km', meterReading: '100' }).tone, 'amber');
+  assert.match(M.slipEvidenceNote({ photoCount: 0 }).text, /amber .*missing evidence/);
+  assert.equal(M.slipEvidenceNote({ photoCount: 1, meterUnit: 'km', meterReading: '' }).tone, 'amber', 'no reading: still flagged');
+  assert.equal(M.slipEvidenceNote({ photoCount: 1, meterUnit: 'km', meterReading: '45,120' }).tone, 'ok');
+  assert.equal(M.slipEvidenceNote({ photoCount: 1, meterUnit: 'none', meterReading: '' }).tone, 'ok');
+  assert.equal(M.defaultPhotoKind('warehouse_tank', [], { paperSlip: true }), 'receipt', 'the first photo of a slip is the slip');
+  assert.equal(M.defaultPhotoKind('warehouse_tank', [{ kind: 'receipt' }], { paperSlip: true }), 'meter');
+  assert.equal(M.defaultPhotoKind('cash_station', []), 'pump_display');
 });

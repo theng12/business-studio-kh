@@ -267,11 +267,18 @@ export function AssetSelect({ assets, value, onChange, id, includeAll, allLabel 
   );
 }
 
-export function StaffSelect({ staff, value, onChange, id, role, includeAll, allLabel = 'Anyone', noneLabel = 'Not recorded', invalid }) {
-  const list = (staff || []).filter((e) => (
+/**
+ * Staff picker. `role` limits it to drivers or attendants; `prefer` keeps
+ * everyone but lists that role first (e.g. the carrier: usually a driver,
+ * sometimes anyone).
+ */
+export function StaffSelect({ staff, value, onChange, id, role, prefer, includeAll, allLabel = 'Anyone', noneLabel = 'Not recorded', invalid }) {
+  const has = (e, r) => (r === 'driver' ? e.isDriver : e.isFuelAttendant);
+  let list = (staff || []).filter((e) => (
     (e.status !== 'left' || e.id === value)
-    && (!role || (role === 'driver' ? e.isDriver : e.isFuelAttendant) || e.id === value)
+    && (!role || has(e, role) || e.id === value)
   ));
+  if (prefer) list = [...list.filter((e) => has(e, prefer)), ...list.filter((e) => !has(e, prefer))];
   return (
     <Select id={id} value={value || ''} invalid={invalid} onChange={(e) => onChange(e.target.value)}>
       <option value="">{includeAll ? allLabel : noneLabel}</option>
