@@ -52,7 +52,9 @@ const BACKUP_DIR_NAME = 'backups';
 // snapshot step (db.backup() produces a single consistent file).
 // Fuel F1: `fuel` (evidence photos) and `hr` (staff photos) travel too — they
 // are not under assets/ on purpose (read only through permission-checked calls).
-const BACKUP_DATA_ENTRIES = ['database.sqlite', 'assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr'];
+// Fixed Assets: `fixed-assets` (asset photos and documents — evidence, read only
+// through assets:getFile) travels too, and is in ARCHIVE_TOP_LEVEL_DIRS below.
+const BACKUP_DATA_ENTRIES = ['database.sqlite', 'assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr', 'fixed-assets'];
 
 /** Resolve existing symlinks while preserving any not-yet-created suffix. */
 function canonicalizeExistingPath(inputPath) {
@@ -116,7 +118,8 @@ const ARCHIVE_TOP_LEVEL_FILES = new Set([
 ]);
 // Fuel F1: fuel/ (evidence photos) and hr/ (staff photos) must be restorable too —
 // they are in BACKUP_DATA_ENTRIES, and an archive entry outside this set is refused.
-const ARCHIVE_TOP_LEVEL_DIRS = new Set(['assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr']);
+// Fixed Assets: fixed-assets/ likewise (in both lists, or every backup holding an asset photo is unrestorable).
+const ARCHIVE_TOP_LEVEL_DIRS = new Set(['assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr', 'fixed-assets']);
 
 function archivePathSupported(relPath) {
   const cleaned = relPath.replace(/\/$/, '');
@@ -363,6 +366,7 @@ module.exports = {
   BACKUP_EXT,
   BACKUP_DIR_NAME,
   BACKUP_DATA_ENTRIES,
+  ARCHIVE_TOP_LEVEL_DIRS,
   canonicalizeExistingPath,
   isPathInside,
   safeArchiveEntry,

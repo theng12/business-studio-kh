@@ -463,6 +463,11 @@ function initDb(dataDir) {
     process.stderr.write(`[roles] seed failed: ${err.message}\n`);
   }
 
+  // Fixed Assets & Branches A0/A1 (docs/ASSETS_AND_BRANCHES_PLAN.md §3, §5):
+  // branches, fx rates, the accounting core and the register. Additive only —
+  // CREATE TABLE IF NOT EXISTS / addColumnIfMissing, no SCHEMA_VERSION bump.
+  require('./assetSchema').ensureAssetSchema(db);
+
   return db;
 }
 

@@ -1082,6 +1082,20 @@ const PROXIED_CHANNELS = [
   'pos:addLine','pos:updateLine','pos:removeLine',
   'pos:addComponent','pos:updateComponent','pos:removeComponent',
   'pos:listPayments','pos:addPayment','pos:updatePayment','pos:removePayment',
+  // Fixed Assets & Branches A0/A1: the register, branches, rates and the
+  // ledger live with the data on the server (database + its fixed-assets/
+  // folder) — straight RPC. The one exception is assets:saveImportSample
+  // (handleLocal below: the Save dialog opens on this Mac).
+  'assets:getSettings','assets:updateSettings','assets:listCategories','assets:createCategory','assets:updateCategory',
+  'assets:list','assets:get','assets:create','assets:update','assets:previewActivation','assets:activate','assets:cancelDraft',
+  'assets:addFile','assets:getFile','assets:reorderFiles','assets:retireFile','assets:transfer','assets:voidEvent',
+  'assets:reverseEvent','assets:listEvents','assets:getSchedule','assets:linkFuelAsset','assets:unlinkFuelAsset',
+  'assets:createFuelAsset','assets:importColumns','assets:importPlan','assets:importApply','assets:getImportSample',
+  'branches:list','branches:get','branches:create','branches:update','branches:close','branches:suggestFromFuel',
+  'fx:list','fx:rateOn','fx:setRate','fx:voidRate','ledger:listAccounts','ledger:updateAccount','ledger:getEntry',
+  'ledger:entriesForAsset','ledger:listPeriods','ledger:checkIntegrity','ledger:lockPeriod','ledger:unlockPeriod',
+  'assets:setCustodian','assets:setStatus','assets:recordRepair','assets:recordCapex','assets:changeLife','assets:changeSalvage',
+  'assets:addNote',
   // Fuel F1: the staff list and every fuel record live with the data on the
   // server — pure DB + the server's own fuel/ folder — so straight RPC. The one
   // exception is fuel:saveMonthlyWorkbook (handleLocal below: dialog on this Mac).
@@ -1578,6 +1592,21 @@ function registerClientFileHandlers() {
       try { size = fs.statSync(abs).size; } catch (_) {}
       return { abs, rel: path.relative(folderPath, abs), name: path.basename(abs), size };
     });
+  });
+
+  // Fixed Assets A1: the import sample is built on the server (it lists the
+  // company's categories and branches); the Save dialog opens on THIS Mac.
+  handleLocal('assets:saveImportSample', async () => {
+    const res = await rpc('assets:getImportSample');
+    const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);
+    const out = await dialog.showSaveDialog({
+      title: 'Save sample workbook',
+      defaultPath: res?.filename || 'fixed-assets-import-sample.xlsx',
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
+    });
+    if (out.canceled || !out.filePath) return null;
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return out.filePath;
   });
 
   // Fuel F1: the workbook is built on the server (where the data is) and the

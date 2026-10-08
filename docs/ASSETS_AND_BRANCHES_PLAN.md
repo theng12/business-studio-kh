@@ -1,6 +1,6 @@
 # Fixed Assets & Branches: design plan (2026-10-08)
 
-**Status: approved direction 2026-10-08 with the answers in §13a; not built yet.** This was written for the owner (Theng) after his decisions of 2026-10-08:
+**Status: approved direction 2026-10-08 with the answers in §13a. A0 + A1 backend built 2026-10-08 (no screens yet) — the channel list is §14 "Assets API" at the end.** This was written for the owner (Theng) after his decisions of 2026-10-08:
 - Branches are locations inside one company.
 - Depreciation is kept two ways: book (straight-line) and tax (Cambodian classes).
 - Old assets come in at an opening value on a start date.
@@ -402,8 +402,8 @@ The **preview** is the same function without the post. It shows the per-asset li
 
 ### 6.1 Tag codes and printing
 
-- **Code format:** `<PREFIX>-<seq, at least 4 digits><check digit>`, for example **`CK-04273`**. The check digit uses the Damm algorithm (pure module `main/util/assetTagCode.js`), so one mistyped digit or two swapped digits are always caught.
-  - Manual entry accepts `CK04273`, `ck-04273` or, inside a branch count, just `4273` (the prefix is assumed).
+- **Code format:** `<PREFIX>-<seq, at least 4 digits><check digit>`, for example **`CK-04270`** (sequence 427, Damm digit 0; the earlier `CK-04273` did not carry a valid check digit). The check digit uses the Damm algorithm (pure module `main/util/assetTagCode.js`), so one mistyped digit or two swapped digits are always caught.
+  - Manual entry accepts `CK04270`, `ck-04270` or, inside a branch count, just `4270` (the prefix is assumed).
   - Upper-case letters, digits and `-` all fit the **QR alphanumeric mode**: a version 1 symbol (21×21) at error-correction level **Q**. That is big, chunky modules that still read from a phone photo at 15 mm and survive scratches.
   - `barcodeUri` gains an optional `eclevel`, passed to bwip-js.
 - **The QR holds only the code. No URL.** A URL would tie stickers that last years to a server address that changes (LAN versus Tailscale). It would also be opened by the iPhone Camera app in Safari, which on iOS does not share storage with a home-screen web app, so the page would be signed out.
@@ -435,7 +435,7 @@ The owner has never tracked assets, so the first "stock-take" is the register be
 
 | Way | How | Works over HTTP? |
 |---|---|---|
-| **1. Bluetooth 2D scanner** (recommended for counts; about $25–60) | Paired with the phone as a keyboard (HID mode). The page keeps a hidden input focused; the scanner types `CK-04273⏎`. About 1 second per item, no camera. | Yes, on iOS and Android |
+| **1. Bluetooth 2D scanner** (recommended for counts; about $25–60) | Paired with the phone as a keyboard (HID mode). The page keeps a hidden input focused; the scanner types `CK-04270⏎`. About 1 second per item, no camera. | Yes, on iOS and Android |
 | **2. Photograph the tag** | `<input type=file accept=image/* capture=environment>`, then the page decodes the QR from the photo with a **vendored pure-JS decoder (jsQR, Apache-2.0)**, inlined in the bundle and also used on the server. If the phone cannot decode it, the shrunk photo is sent and the server tries at full size (sharp → raw pixels → the same decoder). The photo can be kept as evidence. | Yes |
 | **3. Type the code** | A big number pad. The branch prefix is assumed, the check digit is verified as you type, and the code is suggested from the branch's expected list. | Yes |
 | (4. BarcodeDetector) | Feature-detected and used on the **still photo** when present. It needs a secure context and iOS has none, so expect it never to fire over HTTP; it is a free upgrade if HTTPS ever happens. | No |
@@ -693,3 +693,181 @@ All are listed for the accountant in open question 3.
 - `codex/hr1` (worktree `/Users/vengtheng/.codex/worktrees/workspace-concurrency/media-studio-kh`) has only a docs commit so far. It must coordinate on `employees.branch_id`.
 - `codex/launcher` (the Home grid) has no changes yet.
 - No files were modified in this session.
+---
+
+## 14. Assets API (A0 + A1 backend, built 2026-10-08)
+
+For the Mac screens (and, from A3, the `/a` phone page). Every channel below is `expose()`d (works
+locally, from a client Mac and over `/api/rpc` with a token) unless marked **local**. All act on the
+caller's **active company**; an id from another company is refused. Renderer: `window.api.assets.*`,
+`window.api.branches.*`, `window.api.fx.*`, `window.api.ledger.*` (main/preload.js); live updates:
+`window.api.assets.onChanged(cb)` receives `assets:changed { kind, op, id, companyId, originUserId }`
+(ids only; `kind` is `asset | category | settings | branch | fx | account | period`). Errors are plain
+sentences; bad arguments are `Bad request: <reason>` (validators: `main/server/assetValidators.js`).
+
+**Capabilities** (all opt-in, none in the Editor preset): **V** = `assets.view` *or* `assets.manage`;
+**M** = `assets.manage`; **C** = `assets.count`, `assets.view` or `assets.manage`; **B** = baseline (any
+signed-in account); **S** = `system.manage`; **F** = `assets.manage` or `system.manage`; **A** = admin
+only (`ADMIN_ONLY`). Local calls on the server Mac's own window are not gated. `files:pickWorkbook` /
+`files:parseWorkbook` are now `products.edit` **or** `assets.manage` (§2 gap 5). Rules for A3 are already
+routed: `stocktake:(list|get|scan|tick|addUnknown|claimTag|listMyScans|lookupTag)` → count or manage, the
+rest of `stocktake:*` → manage.
+
+**Conventions.** Dates `'YYYY-MM-DD'` (Phnom Penh), periods `'YYYY-MM'`. Money is whole minor units:
+`costMinor` in the asset's `costCurrency` (`USD` cents or `KHR` riel); every book figure
+(`costUsdMinor`, `salvageMinor`, `nbvMinor`, `openingAccumMinor`, schedule rows) is **US cents**; tax
+figures are **riel**. Event dates default to today and cannot be in the future. Files are
+`bytes` = ArrayBuffer/Uint8Array locally, `{ __bin: true, b64 }` over HTTP; ≤ 15 MB; photos are stored
+resized to 1600 px JPEG, documents may be a photo or a PDF (kept byte for byte), all under
+`<dataDir>/fixed-assets/files/<yyyy-mm>/` with sha256, read only through `assets:getFile`.
+
+**Asset object** (`assets:list` items, `assets:get`): `{ id, companyId, tagCode, tagSeq, name, nameKm,
+categoryId, categoryName, categoryKey, isVehicle, quantity, serialNo, makeModel, plateNo, registrationNo,
+insuranceUntil, roadTaxUntil, branchId, branchCode, branchName, locationNote, custodianEmployeeId,
+custodianName, custodianCode, status ('in_use'|'in_storage'|'in_repair'|'disposed'|'lost'), recordState
+('draft'|'active'|'cancelled'), accountingTreatment ('capitalised'|'tracked_only'|'not_depreciated'|null
+while a draft), depreciateOverride (true|false|null — the §13a "Depreciate this item" tick), needsCost,
+origin ('manual'|'import'|'fuel'|'tagging_walk'), acquisitionKind ('purchase'|'opening'|'gift'|
+'self_built'), purchaseDate, inServiceDate, supplierId, supplierName, purchaseOrderId, invoiceNo,
+costMinor, costCurrency, costFxKhrPerUsd, costUsdMinor, vatMinor, warrantyUntil, warrantyNote,
+costBasis ('actual'|'deemed'), openingAsOf, openingAccumMinor, usefulLifeMonths, scheduleLifeMonths,
+salvageMinor, depreciationStartPeriod, accumMinor, nbvMinor, lastPostedPeriod, taxClass, taxClassReason,
+taxCostKhrMinor, taxFxKhrPerUsd, taxFxSource, taxOpeningWdvKhrMinor, fuelAssetId, tagPrintedAt,
+mainPhotoId, photoCount, activatedAt, acquisitionEntryId, cancelledAt, cancelReason, notes, createdAt,
+updatedAt }`.
+
+### Settings and categories
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:getSettings` | — | `{ registerStartDate ('2026-01-01'), tagPrefix, capitalizationThresholdMinor (30000), capitalizationThresholdCurrency, convention ('mid_month'), autoPostDepreciation, taxYearEndMonth, photoCapPerAsset (20), scanPhotoRetentionMonths (24) }` | V |
+| `assets:updateSettings` | any of those keys | settings. `registerStartDate` must be the 1st of a month and, like `convention`, is fixed once an opening or purchase is posted | M |
+| `assets:listCategories` | `{ includeArchived? }` | `Category[]` — `{ id, builtinKey, nameEn, nameKm, tagPrefix, defaultLifeMonths, defaultSalvagePct, bookMethod, taxClass, glCostAccountId, glAccumAccountId, glExpenseAccountId, isVehicle, sort, archived, assetCount }` (15 built-ins seeded on first use) | V |
+| `assets:createCategory` | `{ nameEn, nameKm?, tagPrefix?, defaultLifeMonths?, defaultSalvagePct?, bookMethod?, taxClass?, gl*AccountId?, isVehicle? }` | `Category` | M |
+| `assets:updateCategory` | `{ id, patch }` | `Category`. New assets only. Tax class / book method / accounts of a category with posted assets: **admin only** | M (A for those fields) |
+
+### The register
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:list` | `{ q?, branchId? ('none' = no branch), categoryId?, status?, recordState? ('all' includes cancelled), custodianEmployeeId?, attention? ('drafts'\|'needs_cost'\|'no_photo'\|'tags_not_printed'\|'warranty_ending'\|'insurance_due'\|'road_tax_due'), fuelLinked?, limit? (50, ≤500), offset? }` | `{ items: Asset[], total, limit, offset, counts: { drafts, active, cancelled, needsCost, fromFuelNeedsCost } }` | V |
+| `assets:get` | `id` | `Asset & { files: File[], events: Event[] (latest 100), ledger: { costMinor, accumDepMinor, impairmentMinor }, fuel: { id, name, typeName, status, fuelType, meterUnit } \| null }` | V |
+| `assets:create` | `{ categoryId, name, tagCode? (a pre-printed code; else one is allocated), nameKm?, quantity?, serialNo?, makeModel?, plateNo?, registrationNo?, insuranceUntil?, roadTaxUntil?, branchId?, locationNote?, custodianEmployeeId?, status?, acquisitionKind?, purchaseDate?, inServiceDate?, supplierId?, purchaseOrderId?, invoiceNo?, costMinor?, costCurrency?, costFxKhrPerUsd?, vatMinor?, warrantyUntil?, warrantyNote?, costBasis?, usefulLifeMonths? (default: the category's), salvageMinor? (default at activation: category %), depreciateOverride?, taxClass?, taxClassReason?, notes? }` | `Asset` (a **draft**) | M |
+| `assets:update` | `{ id, patch }` — draft: any field above; active: identity/paperwork only (name, nameKm, serialNo, makeModel, plateNo, registrationNo, insuranceUntil, roadTaxUntil, locationNote, warrantyUntil, warrantyNote, invoiceNo, notes) plus `inServiceDate` once if it had none. Unchanged values in a whole-form save are ignored. `{ retag: true, retagReason }` replaces a damaged tag (old code kept, never reused). `expectedUpdatedAt` optional | `Asset` | M |
+| `assets:previewActivation` | `id` | `{ treatment, entryDate, costUsdMinor, salvageMinor, openingAccumMinor, nbvMinor, scheduleLifeMonths, depreciationStartPeriod, taxClass, taxCostKhrMinor, taxFxSource, posts, lines: [{ account, debitMinor, creditMinor, lineRole }] }` — writes nothing | M |
+| `assets:activate` | `id` | `{ asset, entry \| null }` — posts the §5.4 entry (below) and records an `acquire` / `open` event | M |
+| `assets:cancelDraft` | `{ id, reason }` | `Asset` (`cancelled`; tag never reused; a Fuel link is released) | M |
+
+### Photos and documents
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:addFile` | `{ assetId, kind ('photo'\|'invoice'\|'warranty'\|'registration'\|'insurance'\|'other'), bytes, originalName? }` | `File = { id, assetId, kind, position, sha256, originalSha256, mime, bytes, width, height, originalName, uploadedByUserId, uploadedAt, retired, retiredAt, retiredReason }` (never the disk path). Photos capped at `photoCapPerAsset`, documents at 100 | M |
+| `assets:getFile` | `{ fileId, thumb? }` | `{ bytes, mime, intact, sha256, kind, uploadedAt, retired }` (thumb = 320 px JPEG of a photo). **assets.count alone: photos only** (A3 narrows to the counted branch) | C |
+| `assets:reorderFiles` | `{ assetId, fileIds }` (every live photo once; first = main) | `File[]` | M |
+| `assets:retireFile` | `{ fileId, reason }` | `File` (hidden; bytes kept — asset files are never swept) | M |
+
+### Events (the event log is the truth, §3.5)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:transfer` | `{ assetIds (1–1000), toBranchId?, toEmployeeId? (null = no custodian), date?, reason? }` | `{ batchId, moved: [{ assetId, eventId }], unchanged: [assetId] }` — one `transfer` event per asset | M |
+| `assets:setCustodian` | `{ id, employeeId \| null, date?, reason? }` | `{ asset, eventId }` | M |
+| `assets:setStatus` | `{ id, status ('in_use'\|'in_storage'\|'in_repair'), date?, reason? }` | `{ asset, eventId }` | M |
+| `assets:recordRepair` | `{ id, reason, date?, amountMinor?, currency?, vendor?, supplierId?, documentFileIds? }` | `{ asset, event }` — history only, **no journal** | M |
+| `assets:recordCapex` | `{ id, reason, amountMinor, currency?, fxKhrPerUsd?, extendsLifeMonths?, date?, supplierId?, documentFileIds? }` | `{ asset, event, entry }` — at or above the threshold only (below it: "use Record repair") | M |
+| `assets:changeLife` | `{ id, newLifeMonths (months LEFT from that month), reason, date? }` | `{ asset, event }` — prospective | M |
+| `assets:changeSalvage` | `{ id, newSalvageMinor (US cents), reason, date? }` | `{ asset, event }` — prospective | M |
+| `assets:addNote` | `{ id, text, date? }` | `{ asset, event }` | M |
+| `assets:voidEvent` | `{ id, reason }` | `{ event, asset }` — transfer / custodian / status (only the latest; the asset goes back), repair, note, life / salvage change (only before depreciation posted from its month) | M |
+| `assets:reverseEvent` | `{ id, reason }` | `{ asset, event (kind 'reversal'), entry }` — capex (mirror entry in the open month) or acquire / open (asset back to **draft**, only while nothing else is posted for it) | M |
+| `assets:listEvents` | `{ assetId?, batchId?, kind?, includeVoided? (true), limit?, offset? }` | `Event[] = { id, assetId, tagCode, assetName, batchId, eventDate, effectivePeriod, kind, from/toBranchId, from/toEmployeeId, from/toStatus, amountMinor, currency, fxKhrPerUsd, amountUsdMinor, newLifeMonths, newSalvageMinor, extendsLifeMonths, vendor, supplierId, reason, detail, documentFileIds, journalEntryId, reversesEventId, reversedByEventId, recordedByUserId, createdAt, voided, voidReason }` | V |
+| `assets:getSchedule` | `{ id, basis: 'book' \| 'tax' }` | book: `{ treatment, startPeriod, lifeMonths, basisMinor, salvageMinor, openingAccumMinor, endAccumMinor, endNbvMinor, fullyDepreciatedAt, changes, rows: [{ period, amountMinor, accumMinor, nbvMinor, segment, postedMinor }] }` or `{ rows: [], note }`; tax: `{ taxClass, method, pooled, rateBp, label, costKhrMinor, fxSource, confirmWithAccountant, rows: [{ year, depreciationKhr, accumKhr, wdvKhr }] }` (pooled classes: `rows: []` + note) | V |
+
+### Fuel link (§3.4)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:linkFuelAsset` | `{ id, fuelAssetId }` | `Asset` — the register's name / plate / custodian / branch are written to Fuel | M |
+| `assets:unlinkFuelAsset` | `{ id, reason }` | `Asset` | M |
+| `assets:createFuelAsset` | `{ id, typeId, fuelType?, meterUnit?, tankCapacityL?, baselineRate?, homeLocation?, notes? }` | `{ asset, fuelAsset }` — "Track fuel for this"; also needs `fuel.manage` | M + fuel.manage |
+
+The first `assets:*` call for a company creates a draft (`origin 'fuel'`, `needsCost`) for every fuel
+vehicle / machine not yet linked (marker `app_state assets.fuelLinked.<companyId>`); after that a vehicle
+created in Fuel gets its draft in the same transaction. `fuel:updateAsset` changes to a linked vehicle's
+name, plate or driver are mirrored into the register (a driver change on an active asset is a
+`custodian` event "Driver changed in Fuel"); register changes are mirrored into `fuel_assets.name`,
+`plate_or_serial`, `assigned_employee_id`, `branch_id`.
+
+### Import (§11 wizard)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `assets:importColumns` | — | `[{ key, label, aliases, accepts, draftOnly }]` — the canonical columns for auto-mapping | M |
+| `assets:importPlan` | `{ rows: [{ <column key>: value }] }` (≤ 5,000; the file is read with `files:parseWorkbook`) | `{ rows: [{ rowNo, action ('create'\|'update'\|'skip'\|'error'), assetId, tagCode, values, events, link, warnings, errors }], summary: { total, create, update, skip, error, warnings } }` — writes nothing | M |
+| `assets:importApply` | `{ rows }` | `{ created, updated, skipped, failed, rows: [{ rowNo, action, assetId, tagCode, warnings, errors }] }` — rows with errors are skipped; each row is its own savepoint | M |
+| `assets:getImportSample` | — | `{ filename, bytes }` — sheets Assets, Instructions, Categories, Branches | M |
+| `assets:saveImportSample` | — | saved path or `null` (Save dialog) | M, **local** |
+
+Columns: `tag_code, name, name_km, category, branch, location_note, custodian (staff code), status,
+serial_no, make_model, plate_no, supplier, purchase_date, in_service_date, cost, cost_currency,
+value_at_start, remaining_life_months, useful_life_months, salvage (US dollars), depreciate (yes/no),
+warranty_until, insurance_until, road_tax_until, notes, fuel_vehicle (plate)`. Upsert by tag code (a
+valid unused code creates the asset with it); a blank tag matches name + serial, else a new tag is
+allocated. Dates: `YYYY-MM-DD`, day/month/year or an Excel serial. Only filled cells change anything.
+Imported assets are drafts. On an active asset, money and basis columns are refused (warning) and
+branch / custodian / status become events with the reason "Import".
+
+### Branches
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `branches:list` | `{ status?: 'active' (default) \| 'closed' \| 'all' }` | `Branch[] = { id, companyId, code, nameEn, nameKm, address, phone, managerEmployeeId, isHeadOffice, status, closedAt, closedReason, sort, notes, assetCount }` | B |
+| `branches:get` | `id` | `Branch` | B |
+| `branches:create` | `{ code, nameEn, nameKm?, address?, phone?, managerEmployeeId?, isHeadOffice?, sort?, notes? }` | `Branch` (code upper-cased, unique per company; one head office) | S |
+| `branches:update` | `{ id, patch }` (same fields; `status: 'active'` reopens) | `Branch` | S |
+| `branches:close` | `{ id, reason }` | `Branch` — refused while assets are assigned to it | S |
+| `branches:suggestFromFuel` | — | `[{ text, vehicles }]` — Fuel's `home_location` texts, suggestions only | S |
+
+### Exchange rates
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `fx:list` | `{ source?, includeVoided?, from?, to?, limit? }` | `Rate[] = { id, rateDate, khrPerUsd, source ('house'\|'official'), sourceNote, createdAt, voided, voidReason }` | B |
+| `fx:rateOn` | `{ date, source? ('house') }` | `{ rate: Rate & { exact } \| null, settingsKhrPerUsd }` — read-only, never seeds | B |
+| `fx:setRate` | `{ rateDate, khrPerUsd (100–100000), source?, sourceNote?, fileId? }` | `Rate` (a rate already on that date+source is voided, "Replaced…") | F |
+| `fx:voidRate` | `{ id, reason }` | `Rate` | F |
+
+### Ledger (read-only until Finance)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `ledger:listAccounts` | `{ includeArchived? }` | `Account[] = { id, code, nameEn, nameKm, type, normalBalance, parentId, systemKey, isPostable, archived, balanceMinor }` (§5.3 chart seeded on first use) | V |
+| `ledger:updateAccount` | `{ id, patch: { code?, nameEn?, nameKm?, archived? } }` | `Account` (system accounts cannot be archived) | M |
+| `ledger:getEntry` | `id` | `Entry = { id, entryNo ('JE-2026-000001'), entryDate, period, intendedDate, sourceKind, sourceId, idempotencyKey, memo, baseCurrency, fxKhrPerUsd, fxSource, status, totalMinor, khrTotal, lineCount, reversesEntryId, reversedByEntryId, createdByUserId, createdAt, lines: [{ lineNo, accountId, accountCode, accountName, accountKey, debitMinor, creditMinor, txnCurrency, txnAmountMinor, khrMinor, branchId, assetId, employeeId, lineRole, memo }] }` | V |
+| `ledger:entriesForAsset` | `assetId` | `Entry[]` (oldest first) | V |
+| `ledger:listPeriods` | — | `[{ period, status ('open'\|'locked'), entryCount, totalMinor, lockedAt, lockedByUserId, lockNote }]` | V |
+| `ledger:checkIntegrity` | — | `{ checked, unbalanced: [...] }` (USD and riel) | V |
+| `ledger:lockPeriod` | `{ period, note? }` | `{ period, status: 'locked' }` | A |
+| `ledger:unlockPeriod` | `{ period, note? }` | `{ period, status: 'open' }` | A |
+
+### Posting rules as built (§5.2, §5.4)
+
+- `ledger.post` (main/db/ledger.js) refuses an entry whose debits ≠ credits in US cents; riel is
+  `round(cents × rate / 100)` per line (a line paid in riel keeps its real riel figure), and the riel
+  rounding difference goes to the largest other line, so riel balances too. The rate is the entry's own
+  (stored on the entry); with none given, the **house** rate on the entry date (seeded once from this Mac's
+  Settings rate, "from Settings", when the company has none; an earlier date falls back to the earliest).
+- **Idempotent** on `(company, idempotency_key)` — the plan said globally unique; per company is the
+  correct scope (keys like `dep:2027-03` repeat across companies). Activation keys are
+  `asset:<id>:activate:<n>` (n grows after a reversal), capex `evt:<eventId>`, reversals `rev:<entryId>`.
+- **Locked month** → posted on the 1st of the first open month after it, `intended_date` kept, memo
+  "Late entry for 14 Mar 2026 (March 2026 is locked)". **Reversal** → mirror lines (same riel, same rate)
+  dated today (or the first open month), linked both ways once; a reversal cannot itself be reversed.
+- **SQLite triggers**: no UPDATE/DELETE on `journal_lines`, no DELETE on `journal_entries`, the only
+  UPDATE is setting `reversed_by_entry_id` once, and no line can be added after posting (`line_count`).
+- Activation posts nothing for `tracked_only`. Purchase / gift / self-built: Dr category cost (role
+  `cost`) / Cr 2190 purchases clearing (`clearing`), dated the purchase date; a purchase dated before
+  the register start is refused ("enter it as Already owned"). Opening, cost + date known: dated the day
+  before the start, Dr cost / Cr accumulated depreciation (`accum_dep`, the §4.1 figure from in-service
+  to the start) / Cr 3100 opening equity (`equity`, the NBV). Opening, deemed: Dr cost / Cr 3100. Land
+  (`not_depreciated`): posted the same way, never depreciated. Capex: Dr cost / Cr 2190. Every line
+  carries `asset_id` and `branch_id`.
+- **Treatment** at activation: category book method `none` → `not_depreciated`; tick on →
+  `capitalised`; tick off → `tracked_only`; no tick → `costUsdMinor ≥ capitalizationThresholdMinor`
+  ($300). Tax cost is the riel at the **official** rate on the purchase date (house when missing,
+  labelled in `taxFxSource`), or the riel actually paid.
+
+Depreciation runs, disposals, lost/found, impairment, revaluation, tax years, stock-takes, tags and
+reports are A2/A3 and not built yet.
