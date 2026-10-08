@@ -9,6 +9,11 @@
  * /api/rpc server with phone accounts (pump, driver and farm phones) — so every flag is computed
  * exactly as in the app. Known theft patterns are planted; ./fuel-truth.json lists them.
  * `--fuel --products 0` builds only the fuel dataset (≈15 s; `--fuel-days 1095` for three years, ≈2 min).
+ * --assets adds the fixed-asset register to KT Ceramic (scripts/seed-assets.js): 5 branches, ≈300
+ * assets (the fuel vehicles included), opening values with known and unknown cost, ≈21 months of
+ * events and monthly depreciation from --assets-start (default 2025-01-01), two period closes and a
+ * purchase entered late into a closed month; ./assets-truth.json holds the independent model and the
+ * check of the app's figures against it. `--assets --products 0` builds only that.
  * ./fuel-truth.json also holds the phone accounts' tokens (test accounts, like ./users.json).
  *
  * Why: the UI crawl's test companies are nearly empty, so layout and speed problems that only show
@@ -53,6 +58,8 @@ const IMG_SCALE = argVal('--images-scale', 1);
 const CONCURRENCY = argVal('--concurrency', 4);
 const FUEL = argv.includes('--fuel');
 const FUEL_DAYS = argVal('--fuel-days', 183);
+const ASSETS = argv.includes('--assets');
+const ASSETS_START = (() => { const i = argv.indexOf('--assets-start'); return i >= 0 ? argv[i + 1] : '2025-01-01'; })();
 
 // ---- safety: never write outside this folder, never touch the owner's data ----
 function assertSafe(p) {
@@ -620,6 +627,14 @@ async function main() {
     t = realNow();
     report.counts.fuel = await seedFuel({ kt, report });
     mark('fuel', t);
+  }
+
+  // ---------------- fixed assets (opt-in) ----------------
+  if (ASSETS) {
+    t = realNow();
+    report.counts.assets = await require('./seed-assets').seedAssets({ repo: REPO, root: ROOT, kt, log, seed: SEED, start: ASSETS_START });
+    mark('assets', t);
+    if (!report.counts.assets.ok) report.failures.push({ what: 'assets truth check', diffs: report.counts.assets.diffs });
   }
 
   // ---------------- final tallies ----------------

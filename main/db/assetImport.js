@@ -55,7 +55,7 @@ const IMPORT_COLUMNS = [
   { key: 'cost_currency', label: 'Cost currency', aliases: ['currency', 'ccy'], accepts: 'USD (default) or KHR.' },
   { key: 'value_at_start', label: 'Value at start date', aliases: ['opening value', 'deemed cost', 'value now', 'current value'], accepts: 'For old things whose cost is unknown: its value on the register start date, in the cost currency.' },
   { key: 'remaining_life_months', label: 'Months of life left', aliases: ['remaining life', 'life left', 'remaining months'], accepts: 'With value_at_start: how many more months it will be used.' },
-  { key: 'useful_life_months', label: 'Useful life (months)', aliases: ['life', 'useful life', 'life months'], accepts: 'Total life in months (defaults to the category\'s).' },
+  { key: 'useful_life_months', label: 'Useful life (months)', aliases: ['life', 'useful life', 'life months'], accepts: 'Total life: 36, "36 months" or "3 years" (defaults to the category\'s).' },
   { key: 'salvage', label: 'Salvage value', aliases: ['residual', 'residual value', 'scrap value'], accepts: 'What it will be worth at the end, in US dollars (defaults to the category\'s %).' },
   { key: 'depreciate', label: 'Depreciate this item', aliases: ['capitalise', 'capitalize', 'depreciate item'], accepts: 'yes / no to override the $300 rule; blank follows it.' },
   { key: 'warranty_until', label: 'Warranty until', aliases: ['warranty', 'warranty end'], accepts: 'YYYY-MM-DD.' },
@@ -108,10 +108,15 @@ function parseMoney(v, currency) {
   return currency === 'KHR' ? Math.round(n) : Math.round(n * 100);
 }
 
+/** "36", "36 months", "36 mo" → 36; "8 years", "8 yrs", "8 y" → 96. Anything else is a row error (review L3). */
 function parseMonths(v) {
   if (v == null) return null;
-  const n = Number(String(v).replace(/[^\d.]/g, ''));
-  if (!Number.isInteger(n) || n < 1 || n > 1200) throw badRequest(`"${v}" is not a number of months (1–1200)`);
+  const s = String(v).trim().toLowerCase();
+  const m = /^(\d+(?:\.\d+)?)\s*(months?|mos?|m|years?|yrs?|y)?$/.exec(s);
+  if (!m) throw badRequest(`"${v}" is not a number of months — write 36, "36 months" or "3 years"`);
+  const years = m[2] && m[2].startsWith('y');
+  const n = years ? Number(m[1]) * 12 : Number(m[1]);
+  if (!Number.isInteger(n) || n < 1 || n > 1200) throw badRequest(`"${v}" is not a whole number of months (1–1200)`);
   return n;
 }
 
@@ -386,4 +391,4 @@ function importColumns() {
   return IMPORT_COLUMNS.map((c) => ({ ...c, aliases: [...c.aliases], draftOnly: MONEY_FIELDS.includes(c.key) }));
 }
 
-module.exports = { IMPORT_COLUMNS, MAX_ROWS, planImport, applyImport, sampleWorkbook, importColumns, parseDate, parseMoney };
+module.exports = { IMPORT_COLUMNS, MAX_ROWS, planImport, applyImport, sampleWorkbook, importColumns, parseDate, parseMoney, parseMonths };

@@ -146,22 +146,33 @@ test('posted means permanent: SQLite refuses edits, deletes and extra lines', { 
   assert.equal(ledger.getEntry(e.id).lines.length, 3);
 });
 
-test('a locked month: the entry lands on the first day of the first open month, with the memo', { skip: skipReason }, () => {
+test('locks mean "closed through": earlier dates go to the first open month, with the memo (review M5)', { skip: skipReason }, () => {
   const { company, ledger } = fixture();
-  ledger.lockPeriod(company.id, '2026-03', 'March closed');
-  ledger.lockPeriod(company.id, '2026-04');
-  assert.equal(ledger.isLocked(company.id, '2026-03'), true);
-  const e = opening(ledger, company.id, 'late', '2026-03-14');
+  ledger.lockPeriod(company.id, '2026-04', 'Closed through April');
+  assert.equal(ledger.closedThrough(company.id), '2026-04');
+  for (const p of ['2026-01', '2026-03', '2026-04']) assert.equal(ledger.isLocked(company.id, p), true, `${p} is closed`);
+  assert.equal(ledger.isLocked(company.id, '2026-05'), false);
+  // A date BEFORE the locked month (no row of its own) is closed too.
+  const e = opening(ledger, company.id, 'late', '2026-01-20');
   assert.equal(e.entryDate, '2026-05-01');
   assert.equal(e.period, '2026-05');
-  assert.equal(e.intendedDate, '2026-03-14');
-  assert.match(e.memo, /^Late entry for 14 Mar 2026 \(March 2026 is locked\)/);
+  assert.equal(e.intendedDate, '2026-01-20');
+  assert.match(e.memo, /^Late entry for 20 Jan 2026 \(January 2026 is locked\)/);
+  // Locking an earlier month is a no-op; a month that has not ended cannot be locked.
+  assert.equal(ledger.lockPeriod(company.id, '2026-02').closedThrough, '2026-04');
+  assert.throws(() => ledger.lockPeriod(company.id, '2099-01'), /has not ended/);
+  ledger.lockPeriod(company.id, '2026-06');
   const periods = ledger.listPeriods(company.id);
-  assert.deepEqual(periods.map((p) => [p.period, p.status, p.entryCount]), [['2026-05', 'open', 1], ['2026-04', 'locked', 0], ['2026-03', 'locked', 0]]);
-  ledger.unlockPeriod(company.id, '2026-03', 'Correction');
-  assert.equal(opening(ledger, company.id, 'ontime', '2026-03-20').entryDate, '2026-03-20');
+  assert.deepEqual(periods.map((p) => [p.period, p.status, p.entryCount]), [['2026-06', 'locked', 0], ['2026-05', 'locked', 1], ['2026-04', 'locked', 0]]);
+  // Only the latest locked month can be unlocked; that reopens back to the previous lock.
+  assert.throws(() => ledger.unlockPeriod(company.id, '2026-04', 'x'), /closed through June 2026 — unlock that month first/);
+  assert.equal(ledger.unlockPeriod(company.id, '2026-06', 'Correction').closedThrough, '2026-04');
+  assert.equal(opening(ledger, company.id, 'ontime', '2026-05-20').entryDate, '2026-05-20');
+  assert.equal(opening(ledger, company.id, 'stillLate', '2026-04-30').entryDate, '2026-05-01');
+  ledger.unlockPeriod(company.id, '2026-04');
+  assert.equal(ledger.closedThrough(company.id), null);
   const actions = db.getDb().prepare("SELECT action FROM audit_log WHERE entity_type = 'ledger_period' ORDER BY id").all().map((r) => r.action);
-  assert.deepEqual(actions, ['lock', 'lock', 'unlock']);
+  assert.deepEqual(actions, ['lock', 'lock', 'unlock', 'unlock']);
 });
 
 test('reverse: the mirror entry in the open month, linked both ways, only once', { skip: skipReason }, () => {
@@ -191,7 +202,7 @@ test('exchange rates: house seeded from Settings once, replace, void, official f
   const e = ledger.post({ companyId: company.id, entryDate: '2026-03-01', sourceKind: 'asset_acquire', idempotencyKey: 'p1',
     lines: [{ accountKey: 'fa.cost.vehicle', debitMinor: 10_000 }, { accountKey: 'fa.clearing.purchase', creditMinor: 10_000 }] });
   assert.equal(e.fxKhrPerUsd, 4100, 'seeded from Settings (4,100 outside the app)');
-  assert.match(e.fxSource, /house 2026-03-01 \(seeded\)/);
+  assert.match(e.fxSource, /house 2026-01-01 \(seeded\)/, 'seeded at the register start, not the entry date (review L4)');
   const seeded = fx.list(company.id)[0];
   assert.equal(seeded.sourceNote, 'from Settings');
   // A later house rate is used from its date; an earlier date falls back to the earliest one.

@@ -1091,6 +1091,9 @@ const PROXIED_CHANNELS = [
   'assets:addFile','assets:getFile','assets:reorderFiles','assets:retireFile','assets:transfer','assets:voidEvent',
   'assets:reverseEvent','assets:listEvents','assets:getSchedule','assets:linkFuelAsset','assets:unlinkFuelAsset',
   'assets:createFuelAsset','assets:importColumns','assets:importPlan','assets:importApply','assets:getImportSample',
+  'assets:previewDepreciation','assets:runDepreciation','assets:listRuns','assets:reverseRun','assets:checkIntegrity',
+  'assets:previewDisposal','assets:dispose','assets:partialDispose','assets:markLost','assets:markFound','assets:impair','assets:revalue',
+  'assets:getTaxYear','assets:setPoolOpening','assets:markTaxYearFiled','assets:unfileTaxYear','assets:getReport','assets:getWorkbook',
   'branches:list','branches:get','branches:create','branches:update','branches:close','branches:suggestFromFuel',
   'fx:list','fx:rateOn','fx:setRate','fx:voidRate','ledger:listAccounts','ledger:updateAccount','ledger:getEntry',
   'ledger:entriesForAsset','ledger:listPeriods','ledger:checkIntegrity','ledger:lockPeriod','ledger:unlockPeriod',
@@ -1596,6 +1599,19 @@ function registerClientFileHandlers() {
 
   // Fixed Assets A1: the import sample is built on the server (it lists the
   // company's categories and branches); the Save dialog opens on THIS Mac.
+  handleLocal('assets:saveWorkbook', async (args = {}) => {
+    const res = await rpc('assets:getWorkbook', args || {});
+    const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);
+    const out = await dialog.showSaveDialog({
+      title: 'Save fixed-asset workbook',
+      defaultPath: res?.filename || 'fixed-assets.xlsx',
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
+    });
+    if (out.canceled || !out.filePath) return null;
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return out.filePath;
+  });
+
   handleLocal('assets:saveImportSample', async () => {
     const res = await rpc('assets:getImportSample');
     const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);

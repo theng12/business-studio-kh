@@ -94,7 +94,7 @@ function diffPatch(before, patch) {
  *
  * Returns the auto-incremented id of the new row.
  */
-function log({ entityType, entityId, action, before, after, userId }) {
+function log({ entityType, entityId, action, before, after, userId, sensitivity = null }) {
   if (!entityType || !action) {
     // Audit logging shouldn't break the calling write; just bail.
     return null;
@@ -102,12 +102,18 @@ function log({ entityType, entityId, action, before, after, userId }) {
   const db = getDb();
   const uid = userId !== undefined ? userId : getCallerUserId();
   try {
+    // Fixed Assets (review M6): a row's sensitivity (assets pass 'finance') is
+    // kept when this database has the audit_log.sensitivity column (HR1 adds
+    // it) — checked, so the code works whichever lands first.
+    const withSensitivity = sensitivity && hasSensitivityColumn(db);
     const info = db
-      .prepare(`
-        INSERT INTO audit_log (entity_type, entity_id, user_id, action, before_json, after_json, created_at)
-        VALUES (@entityType, @entityId, @userId, @action, @beforeJson, @afterJson, @createdAt)
-      `)
+      .prepare(withSensitivity
+        ? `INSERT INTO audit_log (entity_type, entity_id, user_id, action, before_json, after_json, created_at, sensitivity)
+           VALUES (@entityType, @entityId, @userId, @action, @beforeJson, @afterJson, @createdAt, @sensitivity)`
+        : `INSERT INTO audit_log (entity_type, entity_id, user_id, action, before_json, after_json, created_at)
+           VALUES (@entityType, @entityId, @userId, @action, @beforeJson, @afterJson, @createdAt)`)
       .run({
+        ...(withSensitivity ? { sensitivity: String(sensitivity) } : {}),
         entityType,
         entityId: entityId ?? null,
         userId: uid ?? null,
@@ -121,6 +127,16 @@ function log({ entityType, entityId, action, before, after, userId }) {
     process.stderr.write(`[audit] log failed (${entityType}/${action}): ${err.message}\n`);
     return null;
   }
+}
+
+const _sensitivityColumn = new WeakMap();
+/** Remembered once found (a column is never dropped); looked up again until then. */
+function hasSensitivityColumn(db) {
+  if (_sensitivityColumn.get(db)) return true;
+  let has;
+  try { has = db.prepare('PRAGMA table_info(audit_log)').all().some((c) => c.name === 'sensitivity'); } catch (_) { has = false; }
+  if (has) _sensitivityColumn.set(db, true);
+  return has;
 }
 
 /**
@@ -253,10 +269,21 @@ const NO_USER = '@local';
 const FUEL_ENTITY_SQL = "entity_type <> 'employee' AND substr(entity_type, 1, 5) <> 'fuel_'";
 function isFuelEntityType(t) { return t === 'employee' || (typeof t === 'string' && t.startsWith('fuel_')); }
 
-function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
+/**
+ * Fixed Assets (review M6): rows about asset values and the books are only for
+ * callers with assets.view or assets.manage (main/ipc/audit.js), and History's
+ * "Clear" keeps them. Branch rows stay visible — branch names are not sensitive.
+ */
+const ASSET_ENTITY_TYPES = ['fixed_asset', 'asset_event', 'asset_category', 'asset_settings', 'journal_entry', 'gl_account',
+  'fx_rate', 'ledger_period', 'accounting_period', 'depreciation_run', 'tax_year', 'stocktake'];
+const ASSET_ENTITY_SQL = `entity_type NOT IN (${ASSET_ENTITY_TYPES.map((t) => `'${t}'`).join(', ')})`;
+function isAssetEntityType(t) { return ASSET_ENTITY_TYPES.includes(t); }
+
+function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hideAssets = false } = {}) {
   const wheres = [];
   const params = {};
   if (hideFuel) wheres.push(FUEL_ENTITY_SQL);
+  if (hideAssets) wheres.push(ASSET_ENTITY_SQL);
   if (entityType) { wheres.push('entity_type = @entityType'); params.entityType = entityType; }
   if (userId === NO_USER) wheres.push('user_id IS NULL');
   else if (userId) { wheres.push('user_id = @userId'); params.userId = userId; }
@@ -281,11 +308,11 @@ function recentWhere({ entityType = null, userId = null, since = null, until = n
   return { whereSql: wheres.length ? `WHERE ${wheres.join(' AND ')}` : '', params };
 }
 
-function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
+function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hideAssets = false } = {}) {
   const db = getDb();
   const cappedLimit  = Math.min(Math.max(1, Number(limit)  || 100), 500);
   const cappedOffset = Math.max(0, Number(offset) || 0);
-  const built = recentWhere({ entityType, userId, since, until, q, hideFuel });
+  const built = recentWhere({ entityType, userId, since, until, q, hideFuel, hideAssets });
   const params = { ...built.params, limit: cappedLimit, offset: cappedOffset };
   const whereSql = built.whereSql;
   const rows = db
@@ -361,9 +388,9 @@ function attachEntityNames(db, entries) {
  * Total count for the global history feed. Used by the History page
  * to render "Showing 1–50 of 12,847" pagination labels.
  */
-function countRecent({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
+function countRecent({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hideAssets = false } = {}) {
   const db = getDb();
-  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q, hideFuel });
+  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q, hideFuel, hideAssets });
   const row = db
     .prepare(`SELECT COUNT(*) AS n FROM audit_log ${whereSql}`)
     .get(params);
@@ -397,21 +424,26 @@ function stats() {
  * (it would lock the DB and isn't worth the stall on a shared server).
  */
 function clearOlderThan(days) {
+  // Fixed Assets (review M6): rows about asset values and the books are never cleared.
   const db = getDb();
   const n = Number(days);
   if (!Number.isFinite(n) || n <= 0) {
-    const info = db.prepare('DELETE FROM audit_log').run();
-    return { deleted: info.changes };
+    const kept = db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE NOT (${ASSET_ENTITY_SQL})`).get().n;
+    const info = db.prepare(`DELETE FROM audit_log WHERE ${ASSET_ENTITY_SQL}`).run();
+    return { deleted: info.changes, kept };
   }
   const cutoff = Date.now() - n * 24 * 60 * 60 * 1000;
-  const info = db.prepare('DELETE FROM audit_log WHERE created_at < ?').run(cutoff);
-  return { deleted: info.changes };
+  const kept = db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE created_at < ? AND NOT (${ASSET_ENTITY_SQL})`).get(cutoff).n;
+  const info = db.prepare(`DELETE FROM audit_log WHERE created_at < ? AND ${ASSET_ENTITY_SQL}`).run(cutoff);
+  return { deleted: info.changes, kept };
 }
 
 module.exports = {
   NO_USER,
   recentWhere,
   isFuelEntityType,
+  isAssetEntityType,
+  ASSET_ENTITY_TYPES,
   log,
   logUpdate,
   diffPatch,

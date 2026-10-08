@@ -72,6 +72,19 @@ test('the §9 matrix: view reads, manage writes, count gets photos, admin locks 
     assert.equal(allowedByCaps(c, 'ledger:lockPeriod'), false, 'admin only');
   }
   assert.equal(allowedByCaps(caps('*'), 'ledger:lockPeriod'), true);
+  // A2: reads for view, posting for manage, filing a tax year for the admin only.
+  for (const ch of ['assets:previewDepreciation', 'assets:listRuns', 'assets:getTaxYear', 'assets:getReport', 'assets:getWorkbook', 'assets:saveWorkbook', 'assets:checkIntegrity']) {
+    assert.equal(allowedByCaps(view, ch), true, `view → ${ch}`);
+    assert.equal(allowedByCaps(editor, ch), false, `editor ✗ ${ch}`);
+  }
+  for (const ch of ['assets:runDepreciation', 'assets:reverseRun', 'assets:dispose', 'assets:partialDispose', 'assets:markLost', 'assets:markFound', 'assets:impair', 'assets:revalue', 'assets:setPoolOpening']) {
+    assert.equal(allowedByCaps(manage, ch), true, `manage → ${ch}`);
+    assert.equal(allowedByCaps(view, ch), false, `view ✗ ${ch}`);
+  }
+  for (const ch of ['assets:markTaxYearFiled', 'assets:unfileTaxYear']) {
+    assert.equal(allowedByCaps(manage, ch), false, `admin only: ${ch}`);
+    assert.equal(allowedByCaps(caps('*'), ch), true);
+  }
   assert.equal(allowedByCaps(system, 'branches:create'), true);
   assert.equal(allowedByCaps(manage, 'branches:create'), false);
   assert.equal(allowedByCaps(system, 'fx:setRate'), true);
@@ -90,8 +103,8 @@ test('client mode proxies every exposed channel; the Save dialog is local on bot
   const src = read('main/client/index.js');
   const block = src.match(/PROXIED_CHANNELS\s*=\s*\[([\s\S]*?)\n\];/)[1];
   for (const ch of EXPOSED) assert.ok(block.includes(`'${ch}'`), `${ch} is not proxied in client mode`);
-  assert.deepEqual(LOCAL, ['assets:saveImportSample']);
-  assert.ok(/handleLocal\('assets:saveImportSample'/.test(src));
+  assert.deepEqual(LOCAL.sort(), ['assets:saveImportSample', 'assets:saveWorkbook']);
+  for (const ch of LOCAL) assert.ok(src.includes(`handleLocal('${ch}'`), `${ch} has no client-side Save dialog`);
 });
 
 test('preload exposes every channel and the live-update event', () => {
@@ -140,5 +153,5 @@ test('additive only: SCHEMA_VERSION untouched, and the native tests are in the t
     assert.ok(!/DROP TABLE|ALTER TABLE \w+ (DROP|RENAME)|SCHEMA_VERSION/.test(src), `${f} must stay additive`);
   }
   const native = JSON.parse(read('package.json')).scripts['test:native'];
-  for (const f of ['test/assetsNative.test.js', 'test/ledgerNative.test.js', 'test/assetsBackupNative.test.js']) assert.ok(native.includes(f), `${f} is not in test:native`);
+  for (const f of ['test/assetsNative.test.js', 'test/ledgerNative.test.js', 'test/assetsBackupNative.test.js', 'test/assetsReviewNative.test.js', 'test/assetsDepreciationNative.test.js']) assert.ok(native.includes(f), `${f} is not in test:native`);
 });

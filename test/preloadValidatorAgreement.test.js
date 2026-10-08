@@ -228,7 +228,9 @@ test('preload ↔ validator — a wrapper that sends no argument is accepted', (
  * limit: number }`. That is a limitation of the probe, not a statement that
  * those channels are fine.
  */
-const FIELD_PROBES = ['sample-uuid', 1, 0, true, null, {}, [], ''];
+// Fixed Assets A2: a month ('2026-03') and a tax year (2026) are shaped values
+// the asset channels require (assets:previewDepreciation, assets:getTaxYear…).
+const FIELD_PROBES = ['sample-uuid', 1, 0, true, null, {}, [], '', '2026-03', 2026];
 
 test('preload ↔ validator — a single-field object wrapper accepts its own payload', () => {
   const src = fs.readFileSync(PRELOAD, 'utf8');

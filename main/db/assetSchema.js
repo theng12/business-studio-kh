@@ -294,6 +294,70 @@ function ensureAssetSchema(db) {
 
   ensureLedgerSchema(db);
 
+  /* A2 (§3.6): depreciation runs, tax pool openings, filed tax-year snapshots. */
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS depreciation_runs (
+      id                    TEXT PRIMARY KEY,
+      company_id            TEXT NOT NULL REFERENCES companies(id) ON DELETE RESTRICT,
+      period                TEXT NOT NULL,
+      status                TEXT NOT NULL DEFAULT 'posted',
+      kind                  TEXT NOT NULL DEFAULT 'manual',
+      attempt               INTEGER NOT NULL DEFAULT 1,
+      journal_entry_id      TEXT REFERENCES journal_entries(id) ON DELETE RESTRICT,
+      asset_count           INTEGER NOT NULL DEFAULT 0,
+      total_minor           INTEGER NOT NULL DEFAULT 0,
+      catch_up_minor        INTEGER NOT NULL DEFAULT 0,
+      run_by_user_id        TEXT,
+      run_at                INTEGER NOT NULL,
+      reversed_by_entry_id  TEXT REFERENCES journal_entries(id) ON DELETE RESTRICT,
+      reversed_at           INTEGER,
+      reversed_by_user_id   TEXT,
+      reverse_reason        TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_depreciation_runs_company ON depreciation_runs(company_id, period);
+    CREATE INDEX IF NOT EXISTS idx_depreciation_runs_entry ON depreciation_runs(journal_entry_id);
+    CREATE INDEX IF NOT EXISTS idx_depreciation_runs_reversal ON depreciation_runs(reversed_by_entry_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_depreciation_runs_one_posted ON depreciation_runs(company_id, period) WHERE status = 'posted';
+
+    CREATE TABLE IF NOT EXISTS tax_pool_openings (
+      id                       TEXT PRIMARY KEY,
+      company_id               TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      tax_year                 INTEGER NOT NULL,
+      tax_class                TEXT NOT NULL,
+      opening_wdv_khr_minor    INTEGER NOT NULL,
+      source_note              TEXT,
+      is_estimate              INTEGER NOT NULL DEFAULT 0,
+      confirmed_by_accountant  INTEGER NOT NULL DEFAULT 0,
+      entered_by_user_id       TEXT,
+      created_at               INTEGER NOT NULL,
+      updated_at               INTEGER NOT NULL,
+      UNIQUE (company_id, tax_year, tax_class)
+    );
+
+    CREATE TABLE IF NOT EXISTS tax_year_snapshots (
+      id                  TEXT PRIMARY KEY,
+      company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE RESTRICT,
+      tax_year            INTEGER NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'filed',
+      snapshot_json       TEXT NOT NULL,
+      fx_source_summary   TEXT,
+      filed_by_user_id    TEXT,
+      filed_at            INTEGER NOT NULL,
+      unfiled_at          INTEGER,
+      unfiled_by_user_id  TEXT,
+      unfile_reason       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_tax_year_snapshots_company ON tax_year_snapshots(company_id, tax_year);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tax_year_snapshots_one_filed ON tax_year_snapshots(company_id, tax_year) WHERE status = 'filed';
+  `);
+
+  // Review M4: which activation figures were filled in by default (cleared again when activation is undone).
+  addColumnIfMissing(db, 'fixed_assets', 'salvage_defaulted', 'INTEGER NOT NULL DEFAULT 0');
+  addColumnIfMissing(db, 'fixed_assets', 'cost_fx_defaulted', 'INTEGER NOT NULL DEFAULT 0');
+  // A2: when and how it left the register.
+  addColumnIfMissing(db, 'fixed_assets', 'disposed_on', 'TEXT');
+  addColumnIfMissing(db, 'fixed_assets', 'disposal_event_id', 'TEXT');
+
   // §3.1 additive branch columns. HR1 may add employees.branch_id too — the
   // same name and type, so whichever runs second is a no-op.
   addColumnIfMissing(db, 'employees', 'branch_id', 'TEXT REFERENCES branches(id)');

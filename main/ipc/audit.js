@@ -25,16 +25,21 @@ const { callerCanManage } = require('./fuelAccess');
  */
 function hideFuel() { return !callerCanManage(); }
 
+/** Fixed Assets (review M6): asset and ledger rows only for assets.view / assets.manage. */
+function hideAssets() { return !require('./assetAccess').callerCanView(); }
+
 function register({ expose }) {
   expose('audit:listForEntity', ({ entityType, entityId, limit } = {}) => {
     if (!entityType || !entityId) return [];
     if (auditLog.isFuelEntityType(entityType) && hideFuel()) return [];
+    if (auditLog.isAssetEntityType(entityType) && hideAssets()) return [];
     return auditLog.listForEntity(entityType, entityId, Number(limit) || 200);
   });
 
   expose('audit:countForEntity', ({ entityType, entityId } = {}) => {
     if (!entityType || !entityId) return 0;
     if (auditLog.isFuelEntityType(entityType) && hideFuel()) return 0;
+    if (auditLog.isAssetEntityType(entityType) && hideAssets()) return 0;
     return auditLog.countForEntity(entityType, entityId);
   });
 
@@ -47,10 +52,10 @@ function register({ expose }) {
    */
   // v0.1.89: + since / until (epoch ms) and q (text) for the History filters.
   expose('audit:listRecent', ({ limit, offset, entityType, userId, since, until, q } = {}) => {
-    return auditLog.listRecent({ limit, offset, entityType, userId, since, until, q, hideFuel: hideFuel() });
+    return auditLog.listRecent({ limit, offset, entityType, userId, since, until, q, hideFuel: hideFuel(), hideAssets: hideAssets() });
   });
   expose('audit:countRecent', ({ entityType, userId, since, until, q } = {}) => {
-    return auditLog.countRecent({ entityType, userId, since, until, q, hideFuel: hideFuel() });
+    return auditLog.countRecent({ entityType, userId, since, until, q, hideFuel: hideFuel(), hideAssets: hideAssets() });
   });
 
   // v0.33.0: history retention. stats() backs the "X events · oldest N

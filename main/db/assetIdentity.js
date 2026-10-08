@@ -61,7 +61,7 @@ function createDraftFor(f) {
     status: f.status === 'retired' ? 'in_storage' : 'in_use',
     origin: 'fuel', needsCost: true, fuelAssetId: f.id,
     notes: f.home_location ? `Fuel home location: ${f.home_location}` : null,
-  });
+  }, { allowArchivedCategory: true });
 }
 
 /** One-time per company: drafts for every unlinked fuel vehicle. Idempotent. Returns how many were made. */
@@ -87,7 +87,14 @@ function onFuelAssetCreated(fuelAssetId) {
   const f = getDb().prepare('SELECT * FROM fuel_assets WHERE id = ?').get(fuelAssetId);
   if (!f || !isLinkedCompany(f.company_id)) return null;
   if (getDb().prepare('SELECT 1 FROM fixed_assets WHERE fuel_asset_id = ?').get(f.id)) return null;
-  return createDraftFor(f);
+  // Never break Fuel (review M3): the draft is made in its own savepoint; if it
+  // cannot be made, the vehicle is still saved and the reason is logged.
+  try {
+    return getDb().transaction(() => createDraftFor(f))();
+  } catch (err) {
+    process.stderr.write(`[assets] no register draft for fuel vehicle ${f.id}: ${err.message}\n`);
+    return null;
+  }
 }
 
 function fuelMirror(a) {
