@@ -320,6 +320,7 @@ contextBridge.exposeInMainWorld('api', {
     reactivate: (id)                 => invoke('staff:reactivate', id),
     setPhoto:   (id, bytes)          => invoke('staff:setPhoto', { id, bytes }),
     getPhoto:   (id, thumb)          => invoke('staff:getPhoto', { id, thumb }),
+    me:         ()                   => invoke('staff:me'),
   },
   /** Fuel F1: vehicles, tanks, fills, dips, deliveries, transfers, prices,
    *  flags and monthly reports. Full list: docs/PEOPLE_AND_FUEL_PLAN.md "Fuel API". */

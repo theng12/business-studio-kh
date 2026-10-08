@@ -3,14 +3,14 @@
  *
  * All `expose()`d: they act on the shared data, and the phone page needs the
  * driver / attendant tiles. Capabilities (main/util/capabilities.js):
- *   staff:list / staff:get / staff:getPhoto      fuel.record or fuel.manage
+ *   staff:list / staff:get / staff:getPhoto / staff:me   fuel.record or fuel.manage
  *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage
  * HR1 will move the edits under hr.manage.
  */
 
 const employees = require('../db/employees');
 const fuelPhotos = require('../fuelPhotos');
-const { activeCompanyId, inCompany, emitFuelChange, callerCanManage } = require('./fuelAccess');
+const { activeCompanyId, inCompany, emitFuelChange, callerCanManage, getCallerUserId } = require('./fuelAccess');
 
 /** What a recorder (pump / driver phone) needs for a tile — no phone number, notes or account link. */
 function tile(e) {
@@ -25,7 +25,20 @@ function register({ expose }) {
   expose('staff:list', (filters = {}) => {
     const companyId = activeCompanyId(filters?.companyId);
     if (callerCanManage()) return employees.list(companyId, filters || {});
-    return employees.list(companyId, { ...(filters || {}), status: 'active' }).map(tile);
+    return employees.list(companyId, { ...(filters || {}), status: 'active', searchPhone: false }).map(tile);
+  });
+
+  /**
+   * The staff member linked to the calling account (`userId`), as a tile, or
+   * null. The phone page (`/f`) uses it to pre-select "my" vehicle and to know
+   * whether this phone belongs to a driver or a pump attendant. Local calls (no
+   * caller) get null.
+   */
+  expose('staff:me', () => {
+    const companyId = activeCompanyId();
+    const uid = getCallerUserId();
+    const me = uid ? employees.getByUserId(companyId, uid) : null;
+    return me && me.status === 'active' ? tile(me) : null;
   });
 
   expose('staff:get', (id) => {

@@ -57,16 +57,23 @@ export function timeAgo(ts, now = Date.now()) {
   return formatDate(ms);
 }
 
+/* Fuel F1: records are dated in Phnom Penh time whichever Mac shows them, so
+ * the two formatters take an optional `{ timeZone }` (e.g. 'Asia/Phnom_Penh').
+ * Without it they use the Mac's own zone, as before. */
+function zoned(opts) {
+  return opts && opts.timeZone ? { timeZone: opts.timeZone } : null;
+}
+
 /** A calendar date in the house style, e.g. "2 Oct 2026". */
-export function formatDate(ts) {
+export function formatDate(ts, opts) {
   const ms = toMillis(ts);
   if (!Number.isFinite(ms)) return '—';
-  return new Date(ms).toLocaleDateString(undefined, DATE_OPTS);
+  return new Date(ms).toLocaleDateString(undefined, { ...DATE_OPTS, ...zoned(opts) });
 }
 
 /** Date and time to the minute, e.g. "2 Oct 2026, 14:05". */
-export function formatDateTime(ts) {
+export function formatDateTime(ts, opts) {
   const ms = toMillis(ts);
   if (!Number.isFinite(ms)) return '—';
-  return new Date(ms).toLocaleString(undefined, { ...DATE_OPTS, ...TIME_OPTS });
+  return new Date(ms).toLocaleString(undefined, { ...DATE_OPTS, ...TIME_OPTS, ...zoned(opts) });
 }

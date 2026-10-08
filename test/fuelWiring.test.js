@@ -62,7 +62,7 @@ test('every fuel/staff channel maps to a fuel capability (none fall through to l
 test('a recorder (fuel.record only) reaches the phone channels and nothing else', () => {
   const recorder = caps('fuel.record');
   for (const ch of PHONE) assert.equal(allowedByCaps(recorder, ch), true, ch);
-  for (const ch of ['fuel:listFills', 'fuel:voidRecord', 'fuel:correctFill', 'fuel:reviewFlag', 'fuel:getMonthlyReport', 'fuel:setPrice', 'staff:create', 'staff:markLeft', 'fuel:createAsset']) {
+  for (const ch of ['fuel:listFills', 'fuel:voidRecord', 'fuel:correctFill', 'fuel:reviewFlag', 'fuel:getMonthlyReport', 'fuel:setPrice', 'staff:create', 'staff:markLeft', 'fuel:createAsset', 'fuel:setDeliveryDips']) {
     assert.equal(allowedByCaps(recorder, ch), false, ch);
   }
 });

@@ -94,6 +94,7 @@ const FUEL_VALIDATORS = {
   /* staff */
   'staff:list': optObj((a) => strings(a, ['status', 'role', 'q', 'companyId'], 200)),
   'staff:get': idArg('staff id'),
+  'staff:me': () => true,
   'staff:create': obj((a) => first(
     isNonEmpty(a.staffCode) ? true : 'staffCode is required',
     strings(a, ['nameEn', 'nameKm', 'phone', 'position', 'notes', 'userId', 'companyId'], 2000),
@@ -165,35 +166,35 @@ const FUEL_VALIDATORS = {
   'fuel:recordFill': obj((a) => first(
     ['warehouse_tank', 'farm_store', 'cash_station'].includes(a.kind) ? true : 'kind must be warehouse_tank, farm_store or cash_station',
     isNonEmpty(a.assetId) ? true : 'assetId is required',
-    numbers(a, ['at', 'litres', 'cansCount', 'canSizeL', 'pumpMeterBefore', 'pumpMeterAfter', 'meterReading', 'amountPaidMinor', 'litresShownOnPump']),
+    numbers(a, ['at', 'queuedForMs', 'litres', 'cansCount', 'canSizeL', 'pumpMeterBefore', 'pumpMeterAfter', 'meterReading', 'amountPaidMinor', 'litresShownOnPump']),
     strings(a, ['locationId', 'stationId', 'stationName', 'driverEmployeeId', 'attendantEmployeeId', 'currency', 'note', 'companyId'], 1000),
     optBool(a.fullTank) ? true : 'fullTank must be true or false',
     clientRef(a), source(a), checkPhotos(a.photos),
   )),
   'fuel:recordDip': obj((a) => first(
     isNonEmpty(a.locationId) ? true : 'locationId is required',
-    numbers(a, ['at', 'dipCm', 'litres']),
+    numbers(a, ['at', 'queuedForMs', 'dipCm', 'litres']),
     strings(a, ['takenByEmployeeId', 'witnessEmployeeId', 'note', 'companyId'], 1000),
     clientRef(a), source(a), checkPhotos(a.photos),
   )),
   'fuel:recordDelivery': obj((a) => first(
     isNonEmpty(a.locationId) ? true : 'locationId is required',
     isNum(a.litresInvoiced) ? true : 'litresInvoiced must be a number',
-    numbers(a, ['at', 'priceMinorPerL', 'amountMinor']),
+    numbers(a, ['at', 'queuedForMs', 'priceMinorPerL', 'amountMinor']),
     strings(a, ['supplier', 'invoiceNo', 'currency', 'dipBeforeId', 'dipAfterId', 'receivedByEmployeeId', 'note', 'companyId'], 1000),
     clientRef(a), source(a), checkPhotos(a.photos),
   )),
   'fuel:setDeliveryDips': obj((a) => first(isNonEmpty(a.id) ? true : 'id is required', strings(a, ['dipBeforeId', 'dipAfterId'], 200))),
   'fuel:recordTransfer': obj((a) => first(
     isNonEmpty(a.fromLocationId) ? true : 'fromLocationId is required',
-    numbers(a, ['at', 'litresSent', 'containers', 'pumpMeterBefore', 'pumpMeterAfter']),
+    numbers(a, ['at', 'queuedForMs', 'litresSent', 'containers', 'pumpMeterBefore', 'pumpMeterAfter']),
     strings(a, ['toLocationId', 'containerNote', 'sentByEmployeeId', 'note', 'companyId'], 1000),
     clientRef(a), source(a), checkPhotos(a.photos),
   )),
   'fuel:receiveTransfer': obj((a) => first(
     isNonEmpty(a.id) ? true : 'id is required',
     isNum(a.litresReceived) ? true : 'litresReceived must be a number',
-    numbers(a, ['at']), strings(a, ['receivedByEmployeeId', 'note'], 1000), source(a), checkPhotos(a.photos),
+    numbers(a, ['at', 'queuedForMs']), strings(a, ['receivedByEmployeeId', 'note'], 1000), source(a), checkPhotos(a.photos),
   )),
   'fuel:addPhoto': obj((a) => first(
     ['fill', 'dip', 'delivery', 'transfer'].includes(a.ownerKind) ? true : 'ownerKind must be fill, dip, delivery or transfer',

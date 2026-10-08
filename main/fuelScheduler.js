@@ -15,13 +15,19 @@ const EVERY_MS = 12 * 60 * 60 * 1000;
 let _timer = null;
 let _startTimer = null;
 
-function runOnce({ log = () => {} } = {}) {
+let _running = false;
+
+async function runOnce({ log = () => {} } = {}) {
+  if (_running) return; // a slow pass is never stacked on itself
+  _running = true;
   try {
     const db = require('./db/index').getDb();
     const things = db.prepare('SELECT COUNT(*) AS n FROM fuel_assets').get().n
       + db.prepare('SELECT COUNT(*) AS n FROM fuel_stock_locations').get().n;
     if (things > 0) {
-      const res = require('./db/fuelFlags').recomputeAll();
+      // One asset / tank at a time, yielding between them, so the server keeps
+      // answering phones and client Macs during a long pass.
+      const res = await require('./db/fuelFlags').recomputeAllAsync();
       log('fuel:rules', `assets=${res.assets} locations=${res.locations} newFlags=${res.opened} errors=${res.errors}`);
     }
   } catch (err) {
@@ -32,14 +38,16 @@ function runOnce({ log = () => {} } = {}) {
     if (swept.retired) log('fuel:photo-retention', `retired=${swept.retired} missing=${swept.missing}`);
   } catch (err) {
     log('fuel:photo-retention-failed', err.message);
+  } finally {
+    _running = false;
   }
 }
 
 function startFuelScheduler({ log = () => {} } = {}) {
   stopFuelScheduler();
-  _startTimer = setTimeout(() => runOnce({ log }), START_DELAY_MS);
+  _startTimer = setTimeout(() => { runOnce({ log }).catch(() => {}); }, START_DELAY_MS);
   _startTimer.unref?.();
-  _timer = setInterval(() => runOnce({ log }), EVERY_MS);
+  _timer = setInterval(() => { runOnce({ log }).catch(() => {}); }, EVERY_MS);
   _timer.unref?.();
 }
 

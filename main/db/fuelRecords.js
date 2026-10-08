@@ -46,10 +46,26 @@ function sourceOf(v) {
   return v;
 }
 
-/** Phone records always use the server clock; Mac/import entries may carry the slip's time. */
-function recordTime(source, at) {
+/**
+ * Phone records always use the server clock; Mac/import entries may carry the slip's time.
+ *
+ * A phone that was offline keeps the record and sends it later (webclient/fuel —
+ * the `/f` page). It never sends a clock time — only `queuedForMs`, how long the
+ * record waited on the phone, measured by the phone as a difference (so a phone
+ * clock that is simply wrong does not matter). The time is then the server's
+ * now minus that wait, capped at MAX_PHONE_QUEUE_MS; `recorded_at` still holds
+ * the arrival time, so a reviewer can see the gap.
+ */
+const MAX_PHONE_QUEUE_MS = 48 * 60 * 60 * 1000;
+function phoneQueueMs(v) {
+  const n = num(v);
+  if (n == null || n <= 0) return 0;
+  return Math.min(Math.floor(n), MAX_PHONE_QUEUE_MS);
+}
+function recordTime(source, at, queuedForMs = null) {
   const now = Date.now();
-  if (source === 'phone' || at == null) return now;
+  if (source === 'phone') return now - phoneQueueMs(queuedForMs);
+  if (at == null) return now;
   const t = num(at);
   if (t == null || t <= 0) throw badRequest('at must be a time in milliseconds');
   if (t > now + FUTURE_SLACK_MS) throw badRequest('That time is in the future');
@@ -70,11 +86,86 @@ function readingValue(v, label) {
   return n;
 }
 
-function employeeIn(companyId, id, label) {
+function employeeIn(companyId, id, label, { allowLeft = false } = {}) {
   if (!id) return null;
   const row = employees.getRow(id);
   if (!row || row.company_id !== companyId) throw badRequest(`${label} is not on this company's staff list`);
+  // Someone who has left cannot be put on a NEW record; corrections of old
+  // records keep the people they already name.
+  if (row.status === 'left' && !allowLeft) {
+    throw badRequest(`${row.name_en || row.name_km || row.staff_code} has left and cannot be chosen — pick someone on the staff list`);
+  }
   return id;
+}
+
+/**
+ * A hash of what was sent with a client_ref. A retry of the same record hashes
+ * the same; the same ref with different content is a conflict, not a retry.
+ * Photos count by kind and size (the bytes are resent identically), and
+ * `queuedForMs` is left out because it grows while a record waits to be resent.
+ */
+function payloadHash(input) {
+  const skip = new Set(['queuedForMs', 'companyId', 'photos', 'clientRef']);
+  const norm = (v) => {
+    if (v == null || typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map(norm);
+    const out = {};
+    for (const k of Object.keys(v).sort()) out[k] = norm(v[k]);
+    return out;
+  };
+  const clean = {};
+  for (const k of Object.keys(input || {}).sort()) if (!skip.has(k) && input[k] !== undefined) clean[k] = norm(input[k]);
+  clean.photos = (Array.isArray(input?.photos) ? input.photos : []).map((p) => {
+    const b = p?.bytes;
+    const size = b == null ? 0 : (b.byteLength ?? b.length ?? (typeof b.b64 === 'string' ? b.b64.length : 0));
+    return `${p?.kind}:${size}`;
+  });
+  return require('node:crypto').createHash('sha256').update(JSON.stringify(clean)).digest('hex');
+}
+
+/** A saved row for this client_ref: same content → the duplicate; different → a plain conflict. */
+function assertSameRetry(row, hash) {
+  if (row && row.client_ref_hash && hash && row.client_ref_hash !== hash) {
+    const err = new Error('That record reference was already used for a different entry. Start a new entry instead of resending this one.');
+    err.code = 'CLIENT_REF_CONFLICT';
+    throw err;
+  }
+}
+
+/**
+ * A phone record that waited in the phone's offline queue is placed at
+ * "server now − queuedForMs" — but never before what it must follow: the
+ * tank's latest dip, the vehicle's latest fill, or this account's own previous
+ * record. So a long (or tampered) wait cannot slip a record in behind evidence
+ * already saved. Returns the time to store.
+ */
+function capQueuedTime(at, { source, queuedForMs, companyId, locationIds = [], assetId = null }) {
+  if (source !== 'phone' || !(num(queuedForMs) > 0)) return at;
+  const db = getDb();
+  let floor = 0;
+  const bump = (v) => { if (Number.isFinite(v) && v > floor) floor = v; };
+  for (const loc of locationIds.filter(Boolean)) {
+    bump(db.prepare('SELECT MAX(taken_at) AS t FROM fuel_dips WHERE location_id = ? AND voided_at IS NULL').get(loc).t);
+  }
+  if (assetId) bump(db.prepare('SELECT MAX(at) AS t FROM fuel_fills WHERE asset_id = ? AND voided_at IS NULL AND superseded_at IS NULL').get(assetId).t);
+  const uid = getCallerUserId();
+  if (uid) {
+    for (const [table, col] of [['fuel_fills', 'at'], ['fuel_dips', 'taken_at'], ['fuel_deliveries', 'delivered_at'], ['fuel_transfers', 'sent_at']]) {
+      bump(db.prepare(`SELECT MAX(${col}) AS t FROM ${table} WHERE company_id = ? AND recorded_by_user_id = ? AND voided_at IS NULL`).get(companyId, uid).t);
+    }
+  }
+  return Math.min(Date.now(), Math.max(at, floor + 1));
+}
+
+/**
+ * How long the phone says the record waited in its offline queue (capped at
+ * MAX_PHONE_QUEUE_MS), or null. Stored as reported; the record's `at` may be
+ * later than "arrival − wait" when capQueuedTime moved it after the records it
+ * must follow — rule Q1 tells the reviewer both.
+ */
+function queuedMs(source, queuedForMs) {
+  const n = source === 'phone' ? phoneQueueMs(queuedForMs) : 0;
+  return n > 0 ? n : null;
 }
 
 function callerEmployee(companyId) {
@@ -169,6 +260,7 @@ function rowToFill(r) {
     reviewNote: r.review_note ?? null, reviewedAmountMinor: r.reviewed_amount_minor ?? null, reviewedLitres: r.reviewed_litres ?? null,
     note: r.note ?? null, voided: !!r.voided_at, voidedAt: r.voided_at ?? null, voidReason: r.void_reason ?? null,
     voidedByUserId: r.voided_by_user_id ?? null, createdAt: r.created_at, updatedAt: r.updated_at,
+    queuedForMs: r.queued_for_ms ?? null,
   };
 }
 
@@ -195,7 +287,7 @@ function listRevisions(rootId) {
  * Turn a fill input (new, or an existing fill + correction patch) into the
  * values to store. Throws a plain-English error for anything missing.
  */
-function normalizeFill(companyId, input, { settings, existing = null } = {}) {
+function normalizeFill(companyId, input, { settings, existing = null, recordAt = null } = {}) {
   const kind = input.kind;
   if (!FILL_KINDS.includes(kind)) throw badRequest('kind must be warehouse_tank, farm_store or cash_station');
   const asset = fuel.getAsset(input.assetId);
@@ -265,7 +357,8 @@ function normalizeFill(companyId, input, { settings, existing = null } = {}) {
     litres = shownOnPump;
     litresSource = 'pump_display';
   } else if (kind === 'cash_station') {
-    const price = fuel.priceOn(companyId, asset.fuelType, input.at ?? Date.now());
+    // The price of the day the record is placed at (a queued phone record's computed time).
+    const price = fuel.priceOn(companyId, asset.fuelType, recordAt ?? input.at ?? Date.now());
     if (!price || price.currency !== cur) throw badRequest('Enter the litres shown on the pump (there is no published price for that day to work it out)');
     litres = Math.round((amountPaidMinor / price.priceMinorPerL) * 1000) / 1000;
     litresSource = 'derived_from_price';
@@ -280,8 +373,8 @@ function normalizeFill(companyId, input, { settings, existing = null } = {}) {
     locationId: location?.id ?? null,
     stationId,
     assetId: asset.id,
-    driverEmployeeId: employeeIn(companyId, input.driverEmployeeId, 'The driver'),
-    attendantEmployeeId: employeeIn(companyId, input.attendantEmployeeId, 'The attendant'),
+    driverEmployeeId: employeeIn(companyId, input.driverEmployeeId, 'The driver', { allowLeft: !!existing && input.driverEmployeeId === existing.driverEmployeeId }),
+    attendantEmployeeId: employeeIn(companyId, input.attendantEmployeeId, 'The attendant', { allowLeft: !!existing && input.attendantEmployeeId === existing.attendantEmployeeId }),
     litres,
     litresSource,
     typedLitres,
@@ -304,12 +397,12 @@ const FILL_INSERT = `
     driver_employee_id, attendant_employee_id, at, work_date, litres, litres_source, typed_litres, cans_count, can_size_l,
     pump_meter_before, pump_meter_after, meter_reading, full_tank, fuel_type, amount_paid_minor, currency, litres_shown_on_pump,
     source, client_ref, recorded_by_user_id, recorded_at, review_status, reviewed_by_user_id, reviewed_at, review_note,
-    reviewed_amount_minor, reviewed_litres, note, created_at, updated_at)
+    reviewed_amount_minor, reviewed_litres, note, queued_for_ms, client_ref_hash, created_at, updated_at)
   VALUES (@id, @companyId, @rootId, @supersedesId, @correctionReason, @kind, @locationId, @stationId, @assetId,
     @driverEmployeeId, @attendantEmployeeId, @at, @workDate, @litres, @litresSource, @typedLitres, @cansCount, @canSizeL,
     @pumpMeterBefore, @pumpMeterAfter, @meterReading, @fullTank, @fuelType, @amountPaidMinor, @currency, @litresShownOnPump,
     @source, @clientRef, @recordedByUserId, @recordedAt, @reviewStatus, @reviewedByUserId, @reviewedAt, @reviewNote,
-    @reviewedAmountMinor, @reviewedLitres, @note, @now, @now)
+    @reviewedAmountMinor, @reviewedLitres, @note, @queuedForMs, @clientRefHash, @now, @now)
 `;
 
 /** Look up an already-saved record by client_ref (idempotent retries). */
@@ -330,12 +423,18 @@ function prepareFill(input = {}) {
   const companyId = input.companyId;
   if (!companyId) throw badRequest('Company is required');
   const clientRef = clientRefValue(input.clientRef);
+  const hash = clientRef ? payloadHash(input) : null;
   const dup = findByClientRef('fuel_fills', companyId, clientRef);
-  if (dup) return { duplicate: getActiveFill(dup.root_id) || rowToFill(dup) };
+  if (dup) {
+    assertSameRetry(dup, hash);
+    return { duplicate: getActiveFill(dup.root_id) || rowToFill(dup) };
+  }
   const source = sourceOf(input.source);
-  const at = recordTime(source, input.at);
+  const at = capQueuedTime(recordTime(source, input.at, input.queuedForMs), {
+    source, queuedForMs: input.queuedForMs, companyId, locationIds: [input.locationId], assetId: input.assetId,
+  });
   const settings = fuel.getSettings(companyId);
-  const values = normalizeFill(companyId, { ...input, source, at }, { settings });
+  const values = normalizeFill(companyId, { ...input, source, at }, { settings, recordAt: at });
   const me = callerEmployee(companyId);
   if (!values.driverEmployeeId && me?.isDriver && values.kind === 'cash_station') values.driverEmployeeId = me.id;
   if (!values.attendantEmployeeId && me?.isFuelAttendant && values.kind !== 'cash_station') values.attendantEmployeeId = me.id;
@@ -345,6 +444,7 @@ function prepareFill(input = {}) {
       ...values, id, companyId, rootId: id, supersedesId: null, correctionReason: null, at, workDate: phnomPenhDate(at),
       source, clientRef, recordedByUserId: getCallerUserId(), recordedAt: Date.now(), reviewStatus: 'new',
       reviewedByUserId: null, reviewedAt: null, reviewNote: null, reviewedAmountMinor: null, reviewedLitres: null, now: Date.now(),
+      queuedForMs: queuedMs(source, input.queuedForMs), clientRefHash: hash,
     },
   };
 }
@@ -397,7 +497,7 @@ function correctFill(id, patch = {}, reason) {
   const merged = { ...current, ...patch };
   if (!('litres' in patch)) merged.litres = current.typedLitres;
   const at = 'at' in patch ? recordTime('mac', patch.at) : current.at;
-  const values = normalizeFill(current.companyId, { ...merged, at, source: current.source }, { settings, existing: current });
+  const values = normalizeFill(current.companyId, { ...merged, at, source: current.source }, { settings, existing: current, recordAt: at });
   const newId = uuid();
   const now = Date.now();
   const by = getCallerUserId();
@@ -409,7 +509,7 @@ function correctFill(id, patch = {}, reason) {
       at, workDate: phnomPenhDate(at), source: current.source, clientRef: null, recordedByUserId: current.recordedByUserId,
       recordedAt: current.recordedAt, reviewStatus: 'checked', reviewedByUserId: by, reviewedAt: now,
       reviewNote: str(patch.reviewNote, 1000) ?? current.reviewNote, reviewedAmountMinor: current.reviewedAmountMinor,
-      reviewedLitres: current.reviewedLitres, now,
+      reviewedLitres: current.reviewedLitres, now, queuedForMs: current.queuedForMs, clientRefHash: null,
     });
   })();
   const next = getFill(newId);
@@ -449,6 +549,7 @@ function rowToDip(r) {
     takenByEmployeeId: r.taken_by_employee_id ?? null, witnessEmployeeId: r.witness_employee_id ?? null,
     recordedByUserId: r.recorded_by_user_id ?? null, source: r.source, clientRef: r.client_ref ?? null, note: r.note ?? null,
     createdAt: r.created_at, voided: !!r.voided_at, voidedAt: r.voided_at ?? null, voidReason: r.void_reason ?? null,
+    queuedForMs: r.queued_for_ms ?? null,
   };
 }
 
@@ -458,12 +559,18 @@ function prepareDip(input = {}) {
   const companyId = input.companyId;
   if (!companyId) throw badRequest('Company is required');
   const clientRef = clientRefValue(input.clientRef);
+  const hash = clientRef ? payloadHash(input) : null;
   const dup = findByClientRef('fuel_dips', companyId, clientRef);
-  if (dup) return { duplicate: rowToDip(dup) };
+  if (dup) {
+    assertSameRetry(dup, hash);
+    return { duplicate: rowToDip(dup) };
+  }
   const loc = fuel.getLocation(input.locationId);
   if (!loc || loc.companyId !== companyId) throw badRequest('Pick the tank that was dipped');
   const source = sourceOf(input.source);
-  const takenAt = recordTime(source, input.at);
+  const takenAt = capQueuedTime(recordTime(source, input.at, input.queuedForMs), {
+    source, queuedForMs: input.queuedForMs, companyId, locationIds: [loc.id],
+  });
   const chart = fuel.getChart(loc.id);
   const dipCm = readingValue(input.dipCm, 'Dip');
   let litres;
@@ -488,6 +595,7 @@ function prepareDip(input = {}) {
       takenBy: employeeIn(companyId, input.takenByEmployeeId, 'The person dipping') ?? (me?.id ?? null),
       witness: employeeIn(companyId, input.witnessEmployeeId, 'The witness'),
       by: getCallerUserId(), source, clientRef, note: str(input.note, 1000), now: Date.now(),
+      queuedForMs: queuedMs(source, input.queuedForMs), clientRefHash: hash,
     },
   };
 }
@@ -498,9 +606,9 @@ function insertDip(values, photoRows = []) {
     db.transaction(() => {
       db.prepare(`
         INSERT INTO fuel_dips (id, company_id, location_id, taken_at, work_date, dip_cm, litres, litres_source, out_of_chart,
-          taken_by_employee_id, witness_employee_id, recorded_by_user_id, source, client_ref, note, created_at)
+          taken_by_employee_id, witness_employee_id, recorded_by_user_id, source, client_ref, note, queued_for_ms, client_ref_hash, created_at)
         VALUES (@id, @companyId, @locationId, @takenAt, @workDate, @dipCm, @litres, @litresSource, @outOfChart,
-          @takenBy, @witness, @by, @source, @clientRef, @note, @now)
+          @takenBy, @witness, @by, @source, @clientRef, @note, @queuedForMs, @clientRefHash, @now)
       `).run(values);
       for (const p of photoRows) insertPhotoRow({ ...p, companyId: values.companyId, ownerKind: 'dip', ownerId: values.id });
     })();
@@ -532,6 +640,7 @@ function rowToDelivery(r) {
     receivedByEmployeeId: r.received_by_employee_id ?? null, recordedByUserId: r.recorded_by_user_id ?? null,
     source: r.source, clientRef: r.client_ref ?? null, note: r.note ?? null, createdAt: r.created_at,
     voided: !!r.voided_at, voidedAt: r.voided_at ?? null, voidReason: r.void_reason ?? null,
+    queuedForMs: r.queued_for_ms ?? null,
   };
 }
 
@@ -550,8 +659,12 @@ function prepareDelivery(input = {}) {
   const companyId = input.companyId;
   if (!companyId) throw badRequest('Company is required');
   const clientRef = clientRefValue(input.clientRef);
+  const hash = clientRef ? payloadHash(input) : null;
   const dup = findByClientRef('fuel_deliveries', companyId, clientRef);
-  if (dup) return { duplicate: rowToDelivery(dup) };
+  if (dup) {
+    assertSameRetry(dup, hash);
+    return { duplicate: rowToDelivery(dup) };
+  }
   const loc = fuel.getLocation(input.locationId);
   if (!loc || loc.companyId !== companyId) throw badRequest('Pick the tank the delivery went into');
   const litresInvoiced = litresValue(input.litresInvoiced, 'Invoiced litres');
@@ -561,7 +674,9 @@ function prepareDelivery(input = {}) {
   const amount = int(input.amountMinor);
   if (amount != null && amount < 0) throw badRequest('Amount cannot be negative');
   const source = sourceOf(input.source);
-  const at = recordTime(source, input.at);
+  const at = capQueuedTime(recordTime(source, input.at, input.queuedForMs), {
+    source, queuedForMs: input.queuedForMs, companyId, locationIds: input.dipAfterId ? [] : [loc.id],
+  });
   const dips = checkDeliveryDips(loc.id, input.dipBeforeId, input.dipAfterId);
   const me = callerEmployee(companyId);
   return {
@@ -571,6 +686,7 @@ function prepareDelivery(input = {}) {
       dipBefore: dips.before, dipAfter: dips.after,
       receivedBy: employeeIn(companyId, input.receivedByEmployeeId, 'The person receiving') ?? (me?.id ?? null),
       by: getCallerUserId(), source, clientRef, note: str(input.note, 1000), now: Date.now(),
+      queuedForMs: queuedMs(source, input.queuedForMs), clientRefHash: hash,
     },
   };
 }
@@ -582,9 +698,9 @@ function insertDelivery(values, photoRows = []) {
       db.prepare(`
         INSERT INTO fuel_deliveries (id, company_id, location_id, supplier, invoice_no, delivered_at, work_date, litres_invoiced,
           price_minor_per_l, amount_minor, currency, dip_before_id, dip_after_id, received_by_employee_id, recorded_by_user_id,
-          source, client_ref, note, created_at)
+          source, client_ref, note, queued_for_ms, client_ref_hash, created_at)
         VALUES (@id, @companyId, @locationId, @supplier, @invoiceNo, @at, @workDate, @litresInvoiced,
-          @price, @amount, @currency, @dipBefore, @dipAfter, @receivedBy, @by, @source, @clientRef, @note, @now)
+          @price, @amount, @currency, @dipBefore, @dipAfter, @receivedBy, @by, @source, @clientRef, @note, @queuedForMs, @clientRefHash, @now)
       `).run(values);
       for (const p of photoRows) insertPhotoRow({ ...p, companyId: values.companyId, ownerKind: 'delivery', ownerId: values.id });
     })();
@@ -604,8 +720,11 @@ function createDelivery(input = {}) {
   return res.duplicate ? { delivery: res.duplicate, duplicate: true } : { delivery: res.delivery, duplicate: false };
 }
 
-/** Link the dips taken before/after a delivery (they are often recorded separately). */
-function setDeliveryDips(id, { dipBeforeId = null, dipAfterId = null } = {}) {
+/**
+ * Link the dips taken before/after a delivery. A field that is not passed
+ * keeps its current link; pass null to clear one.
+ */
+function setDeliveryDips(id, { dipBeforeId, dipAfterId } = {}) {
   const d = getDelivery(id);
   if (!d) throw badRequest('Delivery not found');
   if (d.voided) throw badRequest('That delivery is void');
@@ -631,6 +750,7 @@ function rowToTransfer(r) {
     recordedByUserId: r.recorded_by_user_id ?? null, receivedRecordedByUserId: r.received_recorded_by_user_id ?? null,
     source: r.source, clientRef: r.client_ref ?? null, note: r.note ?? null, createdAt: r.created_at,
     voided: !!r.voided_at, voidedAt: r.voided_at ?? null, voidReason: r.void_reason ?? null,
+    queuedForMs: r.queued_for_ms ?? null,
   };
 }
 
@@ -640,8 +760,12 @@ function prepareTransfer(input = {}) {
   const companyId = input.companyId;
   if (!companyId) throw badRequest('Company is required');
   const clientRef = clientRefValue(input.clientRef);
+  const hash = clientRef ? payloadHash(input) : null;
   const dup = findByClientRef('fuel_transfers', companyId, clientRef);
-  if (dup) return { duplicate: rowToTransfer(dup) };
+  if (dup) {
+    assertSameRetry(dup, hash);
+    return { duplicate: rowToTransfer(dup) };
+  }
   const from = fuel.getLocation(input.fromLocationId);
   if (!from || from.companyId !== companyId) throw badRequest('Pick the tank the fuel was sent from');
   let to = null;
@@ -665,7 +789,9 @@ function prepareTransfer(input = {}) {
   const containers = int(input.containers);
   if (containers != null && (containers < 0 || containers > 1000)) throw badRequest('Containers must be from 0 to 1000');
   const source = sourceOf(input.source);
-  const at = recordTime(source, input.at);
+  const at = capQueuedTime(recordTime(source, input.at, input.queuedForMs), {
+    source, queuedForMs: input.queuedForMs, companyId, locationIds: [from.id],
+  });
   const me = callerEmployee(companyId);
   return {
     values: {
@@ -673,6 +799,7 @@ function prepareTransfer(input = {}) {
       pumpBefore, pumpAfter, at, workDate: phnomPenhDate(at),
       sentBy: employeeIn(companyId, input.sentByEmployeeId, 'The sender') ?? (me?.id ?? null),
       by: getCallerUserId(), source, clientRef, note: str(input.note, 1000), now: Date.now(),
+      queuedForMs: queuedMs(source, input.queuedForMs), clientRefHash: hash,
     },
   };
 }
@@ -683,9 +810,10 @@ function insertTransfer(values, photoRows = []) {
     db.transaction(() => {
       db.prepare(`
         INSERT INTO fuel_transfers (id, company_id, from_location_id, to_location_id, litres_sent, typed_litres, containers, container_note,
-          pump_meter_before, pump_meter_after, sent_at, work_date, sent_by_employee_id, recorded_by_user_id, source, client_ref, note, created_at)
+          pump_meter_before, pump_meter_after, sent_at, work_date, sent_by_employee_id, recorded_by_user_id, source, client_ref, note,
+          queued_for_ms, client_ref_hash, created_at)
         VALUES (@id, @companyId, @from, @to, @litres, @typed, @containers, @containerNote,
-          @pumpBefore, @pumpAfter, @at, @workDate, @sentBy, @by, @source, @clientRef, @note, @now)
+          @pumpBefore, @pumpAfter, @at, @workDate, @sentBy, @by, @source, @clientRef, @note, @queuedForMs, @clientRefHash, @now)
       `).run(values);
       for (const p of photoRows) insertPhotoRow({ ...p, companyId: values.companyId, ownerKind: 'transfer', ownerId: values.id });
     })();
@@ -705,29 +833,65 @@ function createTransfer(input = {}) {
   return res.duplicate ? { transfer: res.duplicate, duplicate: true } : { transfer: res.transfer, duplicate: false };
 }
 
-/** Record what arrived at the farm. A repeat of an already-received transfer returns it unchanged. */
-function receiveTransfer(id, input = {}) {
+/**
+ * Record what arrived at the farm. A repeat of an already-received transfer
+ * returns it unchanged. `forbidSelf` (set for callers without fuel.manage):
+ * the account that recorded the send, or the person who sent it, cannot also
+ * confirm the receipt — the two ends must be two people. `photoRows` are
+ * inserted in the same transaction as the receipt.
+ */
+function receiveTransfer(id, input = {}, { forbidSelf = false, photoRows = [] } = {}) {
   const t = getTransfer(id);
   if (!t) throw badRequest('Transfer not found');
   if (t.voided) throw badRequest('That transfer is void');
   if (t.received) return { transfer: t, duplicate: true };
+  if (forbidSelf) {
+    const uid = getCallerUserId();
+    const meNow = callerEmployee(t.companyId);
+    const receiver = input.receivedByEmployeeId || meNow?.id || null;
+    if ((uid && t.recordedByUserId === uid) || (receiver && t.sentByEmployeeId && receiver === t.sentByEmployeeId)) {
+      throw badRequest('The person who sent this fuel cannot also confirm it arrived — the farm side has to receive it');
+    }
+  }
   const litres = num(input.litresReceived);
   if (litres == null || litres < 0 || litres > MAX_LITRES) throw badRequest('Enter the litres received');
   const source = sourceOf(input.source);
-  const at = recordTime(source, input.at);
+  // A phone's queued receipt cannot land before the send it answers.
+  const at = source === 'phone' ? Math.max(recordTime(source, input.at, input.queuedForMs), t.sentAt) : recordTime(source, input.at);
   if (at < t.sentAt) throw badRequest('Received cannot be earlier than sent');
   const me = callerEmployee(t.companyId);
-  const res = getDb().prepare(`
-    UPDATE fuel_transfers SET litres_received = ?, received_at = ?, received_by_employee_id = ?, received_note = ?, received_recorded_by_user_id = ?
-     WHERE id = ? AND litres_received IS NULL
-  `).run(litres, at, employeeIn(t.companyId, input.receivedByEmployeeId, 'The receiver') ?? (me?.id ?? null), str(input.note, 1000), getCallerUserId(), id);
-  if (res.changes === 0) return { transfer: getTransfer(id), duplicate: true };
+  const receiver = employeeIn(t.companyId, input.receivedByEmployeeId, 'The receiver') ?? (me?.id ?? null);
+  const db = getDb();
+  let changes = 0;
+  db.transaction(() => {
+    changes = db.prepare(`
+      UPDATE fuel_transfers SET litres_received = ?, received_at = ?, received_by_employee_id = ?, received_note = ?, received_recorded_by_user_id = ?
+       WHERE id = ? AND litres_received IS NULL
+    `).run(litres, at, receiver, str(input.note, 1000), getCallerUserId(), id).changes;
+    if (changes) for (const p of photoRows) insertPhotoRow({ ...p, companyId: t.companyId, ownerKind: 'transfer', ownerId: id });
+  })();
+  if (changes === 0) return { transfer: getTransfer(id), duplicate: true };
   const next = getTransfer(id);
   audit('fuel_transfer', id, 'receive', { after: { litresReceived: litres, receivedAt: at, receivedByEmployeeId: next.receivedByEmployeeId } });
   return { transfer: next, duplicate: false };
 }
 
 /* ─── void ────────────────────────────────────────────────────── */
+
+/** The time(s) a record counts at, for recomputing just that stretch of history. */
+function recordTimes(kind, row) {
+  if (kind === 'fill') return [row.at];
+  if (kind === 'dip') return [row.taken_at];
+  if (kind === 'transfer') return [row.sent_at, row.received_at].filter((t) => t != null);
+  if (kind === 'meterReset') return [row.at];
+  if (kind === 'delivery') {
+    const dips = new Map();
+    for (const id of [row.dip_before_id, row.dip_after_id]) if (id) { const d = getDip(id); if (d) dips.set(id, d); }
+    const { deliveryEffectiveAt } = require('../util/fuelAnomalies');
+    return [row.delivered_at, deliveryEffectiveAt({ deliveredAt: row.delivered_at, dipBeforeId: row.dip_before_id, dipAfterId: row.dip_after_id }, dips)];
+  }
+  return [];
+}
 
 const VOIDABLE = {
   fill: { table: 'fuel_fills', entity: 'fuel_fill' },
@@ -771,7 +935,11 @@ function voidRecord(kind, id, reason, { ownOnly = false } = {}) {
   getDb().prepare(`UPDATE ${spec.table} SET voided_at = ?, void_reason = ?, voided_by_user_id = ? WHERE id = ?`)
     .run(Date.now(), why, getCallerUserId(), row.id);
   audit(spec.entity, kind === 'fill' ? row.root_id : row.id, 'void', { before: { voided: false }, after: { voided: true, reason: why, revision: row.id } });
-  return { voided: true, already: false, kind, id: row.id, companyId: row.company_id, assetId: row.asset_id ?? null, locationIds: [row.location_id, row.from_location_id, row.to_location_id].filter(Boolean) };
+  return {
+    voided: true, already: false, kind, id: row.id, companyId: row.company_id, assetId: row.asset_id ?? null,
+    locationIds: [row.location_id, row.from_location_id, row.to_location_id].filter(Boolean),
+    times: recordTimes(kind, row),
+  };
 }
 
 /* ─── lists ───────────────────────────────────────────────────── */
@@ -874,9 +1042,20 @@ function listMine(companyId, userId, { days = 7 } = {}) {
 
 /* ─── rows for the rules ──────────────────────────────────────── */
 
+/*
+ * Rows for the rules. Each loader takes an optional time window
+ * `{ from, to }` (inclusive, epoch ms) so a save can recompute only the
+ * stretch of history it touched (main/db/fuelFlags.js); without one they
+ * return the whole history (the full pass, reports).
+ */
+const ALL_TIME = { from: -8.64e15, to: 8.64e15 };
+function win(range) { return { from: range?.from ?? ALL_TIME.from, to: range?.to ?? ALL_TIME.to }; }
+
 /** Active fills of an asset (not void, not superseded) with their photo kinds. */
-function activeFillsForAsset(assetId) {
-  const rows = getDb().prepare('SELECT * FROM fuel_fills WHERE asset_id = ? AND voided_at IS NULL AND superseded_at IS NULL ORDER BY at, created_at').all(assetId).map(rowToFill);
+function activeFillsForAsset(assetId, range) {
+  const { from, to } = win(range);
+  const rows = getDb().prepare(`SELECT * FROM fuel_fills WHERE asset_id = ? AND voided_at IS NULL AND superseded_at IS NULL
+    AND at >= ? AND at <= ? ORDER BY at, created_at`).all(assetId, from, to).map(rowToFill);
   return attachPhotoKinds(rows);
 }
 
@@ -890,20 +1069,46 @@ function attachPhotoKinds(fills) {
   return fills.map((f) => ({ ...f, photoKinds: [...(kinds.get(f.rootId) || [])] }));
 }
 
-function activeFillsForLocation(locationId) {
-  return getDb().prepare('SELECT * FROM fuel_fills WHERE location_id = ? AND voided_at IS NULL AND superseded_at IS NULL ORDER BY at, created_at').all(locationId).map(rowToFill);
+function activeFillsForLocation(locationId, range) {
+  const { from, to } = win(range);
+  return getDb().prepare(`SELECT * FROM fuel_fills WHERE location_id = ? AND voided_at IS NULL AND superseded_at IS NULL
+    AND at >= ? AND at <= ? ORDER BY at, created_at`).all(locationId, from, to).map(rowToFill);
 }
 
-function activeDipsForLocation(locationId) {
-  return getDb().prepare('SELECT * FROM fuel_dips WHERE location_id = ? AND voided_at IS NULL ORDER BY taken_at, created_at').all(locationId).map(rowToDip);
+function activeDipsForLocation(locationId, range) {
+  const { from, to } = win(range);
+  return getDb().prepare(`SELECT * FROM fuel_dips WHERE location_id = ? AND voided_at IS NULL AND taken_at >= ? AND taken_at <= ?
+    ORDER BY taken_at, created_at`).all(locationId, from, to).map(rowToDip);
 }
 
-function activeDeliveriesForLocation(locationId) {
-  return getDb().prepare('SELECT * FROM fuel_deliveries WHERE location_id = ? AND voided_at IS NULL ORDER BY delivered_at').all(locationId).map(rowToDelivery);
+/** Deliveries in the window, plus any linked to a dip in it (a delivery may be recorded after its "after" dip). */
+function activeDeliveriesForLocation(locationId, range, dipIds = []) {
+  const { from, to } = win(range);
+  const ids = dipIds.slice(0, 400);
+  const linked = ids.length ? ` OR dip_before_id IN (${ids.map(() => '?').join(',')}) OR dip_after_id IN (${ids.map(() => '?').join(',')})` : '';
+  return getDb().prepare(`SELECT * FROM fuel_deliveries WHERE location_id = ? AND voided_at IS NULL
+    AND ((delivered_at >= ? AND delivered_at <= ?)${linked}) ORDER BY delivered_at`).all(locationId, from, to, ...ids, ...ids).map(rowToDelivery);
 }
 
-function activeTransfersForLocation(locationId) {
-  return getDb().prepare('SELECT * FROM fuel_transfers WHERE (from_location_id = ? OR to_location_id = ?) AND voided_at IS NULL ORDER BY sent_at').all(locationId, locationId).map(rowToTransfer);
+/** Transfers sent from, or received at, the location within the window. */
+function activeTransfersForLocation(locationId, range) {
+  const { from, to } = win(range);
+  return getDb().prepare(`SELECT * FROM fuel_transfers WHERE voided_at IS NULL AND (
+      (from_location_id = ? AND sent_at >= ? AND sent_at <= ?)
+      OR (to_location_id = ? AND received_at >= ? AND received_at <= ?))
+    ORDER BY sent_at`).all(locationId, from, to, locationId, from, to).map(rowToTransfer);
+}
+
+/** The last pump-meter reading before `before` at a location (M2 continuity across a window edge). */
+function lastPumpEventBefore(locationId, before) {
+  const db = getDb();
+  const f = db.prepare(`SELECT * FROM fuel_fills WHERE location_id = ? AND voided_at IS NULL AND superseded_at IS NULL
+    AND pump_meter_after IS NOT NULL AND at < ? ORDER BY at DESC LIMIT 1`).get(locationId, before);
+  const t = db.prepare(`SELECT * FROM fuel_transfers WHERE from_location_id = ? AND voided_at IS NULL
+    AND pump_meter_after IS NOT NULL AND sent_at < ? ORDER BY sent_at DESC LIMIT 1`).get(locationId, before);
+  if (f && (!t || f.at >= t.sent_at)) return { fill: rowToFill(f) };
+  if (t) return { transfer: rowToTransfer(t) };
+  return null;
 }
 
 module.exports = {
@@ -916,4 +1121,5 @@ module.exports = {
   listFills, listDips, listDeliveries, listTransfers, listMine,
   insertPhotoRow, getPhoto, listPhotos, publicPhoto, photoOwnerRecord,
   activeFillsForAsset, activeFillsForLocation, activeDipsForLocation, activeDeliveriesForLocation, activeTransfersForLocation, attachPhotoKinds,
+  lastPumpEventBefore, payloadHash,
 };

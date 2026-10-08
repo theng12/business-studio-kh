@@ -3020,6 +3020,14 @@ const PAGE_LABELS = [
   ['suppliers', 'Suppliers'],
   ['purchaseorders', 'Purchase Orders'],
   ['costcalc', 'Cost Calculator'],
+  // Fuel F1 + the thin staff list.
+  ['fueloverview', 'Fuel overview'],
+  ['fuelassets', 'Vehicles & machines'],
+  ['fuelfills', 'Fill-ups'],
+  ['fueltanks', 'Tanks & dips'],
+  ['fuelprices', 'Fuel prices'],
+  ['fuelreports', 'Fuel reports'],
+  ['staff', 'Staff'],
   ['history', 'History'],
 ];
 

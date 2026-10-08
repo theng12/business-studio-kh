@@ -46,8 +46,14 @@ function register({ expose, emitCatalogChange, assertEntityInActiveCompany, SAFE
   });
   expose('companies:remove', (id) => {
     // Fuel F1 / §3: a company with staff or fuel history is never deleted.
-    require('../db/fuelHistory').assertCompanyRemovable(id);
+    const fuelHistory = require('../db/fuelHistory');
+    fuelHistory.assertCompanyRemovable(id);
+    // Its fuel configuration may still hold photos (vehicle tiles, price
+    // notices); their rows cascade away with the company, so the files go to
+    // the Trash afterwards — never erased (house rule).
+    const photoFiles = fuelHistory.companyPhotoFiles(id);
     const r = companies.remove(id);
+    if (r) fuelHistory.trashCompanyPhotoFiles(photoFiles);
     emitCatalogChange('company', 'remove', id);
     return r;
   });

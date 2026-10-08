@@ -2,19 +2,27 @@
  * Fuel F1: storing and reviewing the flags the rules raise (§3.6 `fuel_flags`, §4).
  *
  * Recompute model:
- *   - A *scope* is one asset (`asset:<id>`: A1–A7, C1, C2, C5) or one stock
- *     location (`location:<id>`: T1–T3, M1, M2). Recomputing a scope runs its
- *     rules over the whole history of that asset/location and upserts the
- *     result by UNIQUE(rule_key, subject):
+ *   - A *scope* is one asset (`asset:<id>`: A1–A7, C0–C5, Q1), one stock
+ *     location (`location:<id>`: T1, T2, M1, M2, F1, Q1) or a tank's dip
+ *     schedule (`tankdip:<id>`: T3). Results are upserted by UNIQUE(rule_key, subject):
  *       new flag           → inserted as `open`
  *       flag still firing  → numbers/explanation refreshed, `resolved_at` cleared,
- *                            status and review left exactly as they were
+ *                            status and review kept — unless it got materially
+ *                            worse since an explained/dismissed review, then it
+ *                            is reopened and the old review goes to History
  *       flag stopped firing (a record was corrected, voided, a photo added)
  *                          → `resolved_at` set; the row and its review stay
  *     So re-running never duplicates a flag and never loses a review.
- *   - After each saved record the affected scopes are recomputed
- *     (recomputeForRecord); a full pass over every company runs at app start
- *     and on a timer (main/fuelScheduler.js).
+ *   - After each save only the affected WINDOW is recomputed (recomputeForRecord
+ *     with the record's times: for an asset, from the full fill / reading
+ *     before the change to the next ones after it; for a tank, from the dip
+ *     before to the dip after). Only flags whose time falls in that window
+ *     are written or resolved, so a save costs the same after three years as
+ *     on day one (test/fuelReviewNative.test.js pins window = full pass and
+ *     the per-save time).
+ *   - The full pass (every asset and tank, whole history) runs 30 s after
+ *     start and every 12 h (main/fuelScheduler.js), yielding to the event
+ *     loop between scopes (recomputeAllAsync).
  */
 
 const { getDb } = require('./index');
@@ -23,6 +31,8 @@ const { uuid, audit, str, badRequest, getCallerUserId } = require('./_fuelUtil')
 const fuel = require('./fuel');
 const records = require('./fuelRecords');
 const rules = require('../util/fuelAnomalies');
+
+const { DAY_MS } = rules;
 
 const STATUSES = ['open', 'explained', 'confirmed', 'dismissed'];
 
@@ -55,20 +65,49 @@ const UPSERT = `
     last_seen_at = excluded.last_seen_at, resolved_at = NULL
 `;
 
-/** Write one scope's flags; resolve the scope's flags that no longer fire. Returns counts. */
-function storeScope(companyId, scopeKey, flags) {
+const FAR = 8.64e15;
+const SEVERITY_RANK = { info: 0, amber: 1, red: 2 };
+
+/**
+ * Has a reviewed flag got materially worse since its review? Severity rose
+ * (amber → red), or the gap between measured and expected grew by more than
+ * half. Then an "explained" or "dismissed" review no longer covers it.
+ */
+function worsened(old, next) {
+  if ((SEVERITY_RANK[next.severity] ?? 0) > (SEVERITY_RANK[old.severity] ?? 0)) return true;
+  const ok = (v) => typeof v === 'number' && Number.isFinite(v);
+  if (!ok(old.measured) || !ok(old.expected) || !ok(next.measured) || !ok(next.expected)) return false;
+  const before = Math.abs(old.measured - old.expected);
+  const after = Math.abs(next.measured - next.expected);
+  return before > 0 && after > before * 1.5;
+}
+
+/**
+ * Write one scope's flags and resolve the scope's flags that no longer fire —
+ * only within `[from, to]` (by each flag's `at`), so recomputing a window of
+ * history never touches flags outside it. A flag that was explained or
+ * dismissed and has since got worse (see worsened) is reopened; the old review
+ * goes to the audit log. Returns counts.
+ */
+function storeScope(companyId, scopeKey, flags, { from = -FAR, to = FAR } = {}) {
   const db = getDb();
   const now = Date.now();
+  const full = from <= -FAR && to >= FAR;
+  const inRange = (at) => (at == null ? full : at >= from && at <= to);
   let opened = 0;
+  let reopened = 0;
   db.transaction(() => {
     const seen = new Set();
     const upsert = db.prepare(UPSERT);
-    const exists = db.prepare('SELECT 1 FROM fuel_flags WHERE rule_key = ? AND subject = ?');
+    const existing = db.prepare('SELECT id, status, severity, measured, expected, review_note, reviewed_by_user_id, reviewed_at FROM fuel_flags WHERE rule_key = ? AND subject = ?');
+    const reopen = db.prepare(`UPDATE fuel_flags SET status = 'open', review_note = NULL, reviewed_by_user_id = NULL, reviewed_at = NULL WHERE id = ?`);
     for (const f of flags) {
+      if (!inRange(f.at)) continue;
       const key = `${f.ruleKey}|${f.subject}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (!exists.get(f.ruleKey, f.subject)) opened += 1;
+      const old = existing.get(f.ruleKey, f.subject);
+      if (!old) opened += 1;
       upsert.run({
         id: uuid(), companyId, ruleKey: f.ruleKey, subject: f.subject, subjectKind: f.subjectKind ?? null,
         subjectId: f.subjectId ?? null, scopeKey, assetId: f.refs?.assetId ?? null, locationId: f.refs?.locationId ?? null,
@@ -76,86 +115,230 @@ function storeScope(companyId, scopeKey, flags) {
         period: f.period ?? null, at: f.at ?? null, measured: f.measured, expected: f.expected, threshold: f.threshold,
         unit: f.unit, explanation: f.explanation, details: f.details ? JSON.stringify(f.details) : null, now,
       });
+      if (old && (old.status === 'explained' || old.status === 'dismissed') && worsened(old, f)) {
+        reopen.run(old.id);
+        reopened += 1;
+        try {
+          require('./auditLog').log({
+            entityType: 'fuel_flag', entityId: old.id, action: 'reopen', userId: null,
+            before: { status: old.status, severity: old.severity, measured: old.measured, expected: old.expected, reviewNote: old.review_note, reviewedByUserId: old.reviewed_by_user_id, reviewedAt: old.reviewed_at },
+            after: { status: 'open', severity: f.severity, measured: f.measured, expected: f.expected, reason: 'got worse since it was reviewed' },
+          });
+        } catch (_) { /* audit must not break the rules */ }
+      }
     }
-    const live = db.prepare('SELECT id, rule_key, subject FROM fuel_flags WHERE scope_key = ? AND resolved_at IS NULL').all(scopeKey);
+    const live = full
+      ? db.prepare('SELECT id, rule_key, subject FROM fuel_flags WHERE scope_key = ? AND resolved_at IS NULL').all(scopeKey)
+      : db.prepare('SELECT id, rule_key, subject FROM fuel_flags WHERE scope_key = ? AND resolved_at IS NULL AND at >= ? AND at <= ?').all(scopeKey, from, to);
     const resolve = db.prepare('UPDATE fuel_flags SET resolved_at = ? WHERE id = ?');
     for (const r of live) if (!seen.has(`${r.rule_key}|${r.subject}`)) resolve.run(now, r.id);
   })();
-  return { flags: flags.length, opened };
+  return { flags: flags.length, opened, reopened };
 }
 
-/** Run A1–A7, C1, C2, C5 for one asset. Returns the rule output too (reports use it). */
-function computeAsset(asset, settings) {
+/** The server's riel-per-dollar rate (Settings), for comparing USD cash with KHR prices. */
+function fxKhrPerUsd() {
+  try {
+    const v = require('../config').loadConfig()?.exchangeRateKhrPerUsd;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+  } catch (_) { /* no config outside the app (tests) */ }
+  return 4100;
+}
+
+/** Run A1–A7, C0–C5, Q1 for one asset over its whole history (reports, full pass). */
+function computeAsset(asset, settings, range = null) {
   const s = settings || fuel.getSettings(asset.companyId);
-  const fills = records.activeFillsForAsset(asset.id);
+  const fills = records.activeFillsForAsset(asset.id, range);
   const resets = fuel.listResets({ assetId: asset.id });
   return rules.assetRules({
     asset: { ...asset, maxPerDay: asset.typeMaxPerDay },
-    fills, resets, priceFor: fuel.priceLookup(asset.companyId), settings: s,
+    fills, resets, priceFor: fuel.priceLookup(asset.companyId), settings: s, fxKhrPerUsd: fxKhrPerUsd(),
   });
 }
 
-function recomputeAsset(assetId, settings) {
-  const asset = fuel.getAsset(assetId);
-  if (!asset) return null;
-  const out = computeAsset(asset, settings);
-  return storeScope(asset.companyId, `asset:${asset.id}`, out.flags);
-}
-
-/** Run T1–T3, M1, M2 for one stock location. */
-function computeLocation(loc, settings, now = Date.now()) {
-  const s = settings || fuel.getSettings(loc.companyId);
-  const chart = fuel.getChart(loc.id);
-  const dips = records.activeDipsForLocation(loc.id);
-  const deliveries = records.activeDeliveriesForLocation(loc.id);
-  const fills = records.activeFillsForLocation(loc.id);
-  const transfers = records.activeTransfersForLocation(loc.id);
-  const resets = fuel.listResets({ locationId: loc.id });
-  const t1 = rules.tankReconciliation({ location: loc, chart, dips, deliveries, fills, transfers, settings: s });
-  const t2 = rules.shortDeliveries({ location: loc, chart, deliveries, dips, fills, transfers, settings: s });
-  const t3 = rules.missedDips({ location: loc, dips, now, settings: s });
-  const m = rules.meterRules({ location: loc, fills, transfers, resets, settings: s });
-  return { flags: [...t1.flags, ...t2.flags, ...t3.flags, ...m.flags], intervals: t1.intervals, checks: t2.checks };
-}
-
-function recomputeLocation(locationId, settings, now) {
-  const loc = fuel.getLocation(locationId);
-  if (!loc) return null;
-  const out = computeLocation(loc, settings, now);
-  return storeScope(loc.companyId, `location:${loc.id}`, out.flags);
+/**
+ * The stretch of an asset's history a change at times `times` can affect:
+ *   context starts at the full fill / meter reading before the earliest change
+ *   (and a baseline window earlier for a learned baseline);
+ *   flags are rewritten from the earliest change to the next full fill and the
+ *   next meter reading after the latest one (a baseline window later when learned).
+ */
+function assetWindow(asset, settings, times) {
+  const db = getDb();
+  const tMin = Math.min(...times);
+  const tMax = Math.max(...times);
+  const one = (sql, ...a) => db.prepare(sql).get(...a)?.t ?? null;
+  const ACTIVE = 'asset_id = ? AND voided_at IS NULL AND superseded_at IS NULL';
+  const learned = asset.baselineSource === 'learned';
+  const span = settings.baselineWindowDays * DAY_MS;
+  const ctxFrom = learned ? tMin - span : tMin;
+  const prevFull = one(`SELECT MAX(at) AS t FROM fuel_fills WHERE ${ACTIVE} AND full_tank = 1 AND at < ?`, asset.id, ctxFrom);
+  const prevRead = one(`SELECT MAX(at) AS t FROM fuel_fills WHERE ${ACTIVE} AND meter_reading IS NOT NULL AND at < ?`, asset.id, tMin);
+  const ctx = Math.min(prevFull ?? ctxFrom, prevRead ?? tMin, ctxFrom);
+  const nextFull = one(`SELECT MIN(at) AS t FROM fuel_fills WHERE ${ACTIVE} AND full_tank = 1 AND at > ?`, asset.id, tMax);
+  const nextRead = one(`SELECT MIN(at) AS t FROM fuel_fills WHERE ${ACTIVE} AND meter_reading IS NOT NULL AND at > ?`, asset.id, tMax);
+  let to = nextFull == null || nextRead == null ? FAR : Math.max(nextFull, nextRead);
+  if (learned && to < FAR) to = Math.max(to, tMax + span);
+  return { ctx, from: tMin, to };
 }
 
 /**
- * Recompute everything a saved/changed record touches. Best-effort: a rule
- * failure must never undo or fail the save itself, so errors are logged.
+ * Recompute one asset's flags. With `times` (the record times a save
+ * touched) only the affected window is read and rewritten; without, the whole
+ * history (full pass, or a change to the asset's own capacity/baseline).
  */
-function recomputeForRecord({ assetIds = [], locationIds = [] } = {}) {
+function recomputeAsset(assetId, settings, times = null) {
+  const asset = fuel.getAsset(assetId);
+  if (!asset) return null;
+  const s = settings || fuel.getSettings(asset.companyId);
+  const ts = (times || []).filter((t) => Number.isFinite(t));
+  if (!ts.length) return storeScope(asset.companyId, `asset:${asset.id}`, computeAsset(asset, s).flags);
+  const w = assetWindow(asset, s, ts);
+  const out = computeAsset(asset, s, { from: w.ctx, to: w.to });
+  return storeScope(asset.companyId, `asset:${asset.id}`, out.flags, { from: w.from, to: w.to });
+}
+
+/** Run T1, T2, M1, M2, F1, Q1 for one stock location (optionally over a window), plus T3. */
+function computeLocation(loc, settings, now = Date.now(), range = null) {
+  const s = settings || fuel.getSettings(loc.companyId);
+  const chart = fuel.getChart(loc.id);
+  const dips = records.activeDipsForLocation(loc.id, range);
+  const deliveries = records.activeDeliveriesForLocation(loc.id, range, range ? dips.map((d) => d.id) : []);
+  // Linked dips outside the window (a delivery's "before" dip) are needed for T2.
+  const have = new Set(dips.map((d) => d.id));
+  for (const dl of deliveries) {
+    for (const id of [dl.dipBeforeId, dl.dipAfterId]) {
+      if (id && !have.has(id)) {
+        const d = records.getDip(id);
+        if (d && !d.voided) { dips.push(d); have.add(id); }
+      }
+    }
+  }
+  const fills = records.activeFillsForLocation(loc.id, range);
+  const transfers = records.activeTransfersForLocation(loc.id, range);
+  const resets = fuel.listResets({ locationId: loc.id });
+  // M2 continuity across the window's start edge.
+  const meterFills = fills.slice();
+  const meterTransfers = transfers.slice();
+  if (range) {
+    const prev = records.lastPumpEventBefore(loc.id, range.from);
+    if (prev?.fill) meterFills.unshift(prev.fill);
+    if (prev?.transfer) meterTransfers.unshift(prev.transfer);
+  }
+  const t1 = rules.tankReconciliation({ location: loc, chart, dips, deliveries, fills, transfers, settings: s });
+  const t2 = rules.shortDeliveries({ location: loc, chart, deliveries, dips, fills, transfers, settings: s });
+  const m = rules.meterRules({ location: loc, fills: meterFills, transfers: meterTransfers, resets, settings: s });
+  const f1 = rules.transferLoss({ location: loc, transfers, settings: s });
+  const q1 = rules.locationQueuedNotes({ location: loc, dips, deliveries, transfers, settings: s });
+  return {
+    flags: [...t1.flags, ...t2.flags, ...m.flags, ...f1.flags, ...q1.flags],
+    t3: missedDipFlags(loc, s, now),
+    intervals: t1.intervals,
+    checks: t2.checks,
+  };
+}
+
+/** T3 needs only the latest dip. */
+function missedDipFlags(loc, settings, now) {
+  const last = getDb().prepare('SELECT * FROM fuel_dips WHERE location_id = ? AND voided_at IS NULL ORDER BY taken_at DESC LIMIT 1').get(loc.id);
+  const dips = last ? [records.getDip(last.id)] : [];
+  return rules.missedDips({ location: loc, dips, now, settings }).flags;
+}
+
+/**
+ * The stretch of a tank's history a change at `times` can affect: from the
+ * dip before the earliest change to the dip after the latest one. Every flag
+ * whose time falls in (dip before, dip after] is rewritten; nothing else.
+ */
+function locationWindow(loc, times) {
+  const db = getDb();
+  const tMin = Math.min(...times);
+  const tMax = Math.max(...times);
+  const d0 = db.prepare('SELECT MAX(taken_at) AS t FROM fuel_dips WHERE location_id = ? AND voided_at IS NULL AND taken_at < ?').get(loc.id, tMin).t;
+  const d1 = db.prepare('SELECT MIN(taken_at) AS t FROM fuel_dips WHERE location_id = ? AND voided_at IS NULL AND taken_at > ?').get(loc.id, tMax).t;
+  return { load: d0 ?? -FAR, from: d0 == null ? -FAR : d0 + 1, to: d1 ?? FAR };
+}
+
+function recomputeLocation(locationId, settings, now = Date.now(), times = null) {
+  const loc = fuel.getLocation(locationId);
+  if (!loc) return null;
+  const s = settings || fuel.getSettings(loc.companyId);
+  const ts = (times || []).filter((t) => Number.isFinite(t));
+  let res;
+  if (!ts.length) {
+    const out = computeLocation(loc, s, now);
+    res = storeScope(loc.companyId, `location:${loc.id}`, out.flags);
+    storeScope(loc.companyId, `tankdip:${loc.id}`, out.t3);
+  } else {
+    const w = locationWindow(loc, ts);
+    const out = computeLocation(loc, s, now, { from: w.load, to: w.to });
+    res = storeScope(loc.companyId, `location:${loc.id}`, out.flags, { from: w.from, to: w.to });
+    storeScope(loc.companyId, `tankdip:${loc.id}`, out.t3);
+  }
+  return res;
+}
+
+/**
+ * Recompute what a saved/changed record touches. `times` are the record's
+ * time(s) — old and new for a correction; when given, only that window of
+ * history is read and rewritten (a save stays fast however long the history
+ * is). Best-effort: a rule failure must never undo or fail the save itself.
+ */
+function recomputeForRecord({ assetIds = [], locationIds = [], times = null } = {}) {
   const out = { assets: 0, locations: 0, errors: 0 };
   for (const id of new Set(assetIds.filter(Boolean))) {
-    try { if (recomputeAsset(id)) out.assets += 1; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] asset rules failed for ${id}: ${err.message}\n`); }
+    try { if (recomputeAsset(id, null, times)) out.assets += 1; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] asset rules failed for ${id}: ${err.message}\n`); }
   }
   for (const id of new Set(locationIds.filter(Boolean))) {
-    try { if (recomputeLocation(id)) out.locations += 1; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] tank rules failed for ${id}: ${err.message}\n`); }
+    try { if (recomputeLocation(id, null, Date.now(), times)) out.locations += 1; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] tank rules failed for ${id}: ${err.message}\n`); }
   }
   return out;
 }
 
-/** The full pass: every asset and location of one company (or all companies). */
-function recomputeAll({ companyId = null, now = Date.now() } = {}) {
+function scopesOf(companyId) {
   const db = getDb();
   const companyIds = companyId ? [companyId] : db.prepare('SELECT id FROM companies').all().map((r) => r.id);
+  return companyIds.map((cid) => ({
+    cid,
+    assetIds: db.prepare('SELECT id FROM fuel_assets WHERE company_id = ?').all(cid).map((r) => r.id),
+    locIds: db.prepare('SELECT id FROM fuel_stock_locations WHERE company_id = ?').all(cid).map((r) => r.id),
+  })).filter((c) => c.assetIds.length || c.locIds.length);
+}
+
+/** The full pass, synchronously (tests, small data). Prefer recomputeAllAsync in the app. */
+function recomputeAll({ companyId = null, now = Date.now() } = {}) {
   const out = { companies: 0, assets: 0, locations: 0, opened: 0, errors: 0 };
-  for (const cid of companyIds) {
-    const settings = fuel.getSettings(cid);
-    const assetIds = db.prepare('SELECT id FROM fuel_assets WHERE company_id = ?').all(cid).map((r) => r.id);
-    const locIds = db.prepare('SELECT id FROM fuel_stock_locations WHERE company_id = ?').all(cid).map((r) => r.id);
-    if (!assetIds.length && !locIds.length) continue;
+  for (const c of scopesOf(companyId)) {
     out.companies += 1;
-    for (const id of assetIds) {
+    const settings = fuel.getSettings(c.cid);
+    for (const id of c.assetIds) {
       try { const r = recomputeAsset(id, settings); out.assets += 1; out.opened += r?.opened ?? 0; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] asset rules failed for ${id}: ${err.message}\n`); }
     }
-    for (const id of locIds) {
+    for (const id of c.locIds) {
       try { const r = recomputeLocation(id, settings, now); out.locations += 1; out.opened += r?.opened ?? 0; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] tank rules failed for ${id}: ${err.message}\n`); }
+    }
+  }
+  return out;
+}
+
+/**
+ * The full pass, one asset or tank at a time with a yield to the event loop
+ * between them, so a long history never blocks the server (phones and client
+ * Macs keep being answered while it runs).
+ */
+async function recomputeAllAsync({ companyId = null, now = Date.now() } = {}) {
+  const out = { companies: 0, assets: 0, locations: 0, opened: 0, errors: 0 };
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  for (const c of scopesOf(companyId)) {
+    out.companies += 1;
+    const settings = fuel.getSettings(c.cid);
+    for (const id of c.assetIds) {
+      try { const r = recomputeAsset(id, settings); out.assets += 1; out.opened += r?.opened ?? 0; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] asset rules failed for ${id}: ${err.message}\n`); }
+      await tick();
+    }
+    for (const id of c.locIds) {
+      try { const r = recomputeLocation(id, settings, now); out.locations += 1; out.opened += r?.opened ?? 0; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] tank rules failed for ${id}: ${err.message}\n`); }
+      await tick();
     }
   }
   return out;
@@ -190,6 +373,12 @@ function getFlag(id) { return rowToFlag(getDb().prepare('SELECT * FROM fuel_flag
 function flagsForFill(rootId) {
   return getDb().prepare(`SELECT * FROM fuel_flags WHERE (subject = ? OR (subject_kind = 'fill' AND subject_id = ?)) ORDER BY resolved_at IS NOT NULL, at DESC`)
     .all(`fill:${rootId}`, rootId).map(rowToFlag);
+}
+
+/** Unresolved flags about one dip (the reconciliation it closes or opens, a queued-entry note). */
+function flagsForDip(dipId) {
+  return getDb().prepare(`SELECT * FROM fuel_flags WHERE resolved_at IS NULL AND (subject_id = ? OR subject = ? OR subject LIKE ? OR subject LIKE ?)
+    ORDER BY at DESC`).all(dipId, `dip:${dipId}`, `dips:${dipId}:%`, `dips:%:${dipId}`).map(rowToFlag);
 }
 
 /** Explained / confirmed / dismissed / back to open, with a note. Audited. */
@@ -228,6 +417,7 @@ function overview(companyId, now = Date.now()) {
 
 module.exports = {
   STATUSES,
-  rowToFlag, storeScope, computeAsset, computeLocation, recomputeAsset, recomputeLocation, recomputeForRecord, recomputeAll,
-  listFlags, getFlag, flagsForFill, reviewFlag, overview,
+  rowToFlag, storeScope, worsened, computeAsset, computeLocation, recomputeAsset, recomputeLocation, recomputeForRecord,
+  recomputeAll, recomputeAllAsync, assetWindow, locationWindow,
+  listFlags, getFlag, flagsForFill, flagsForDip, reviewFlag, overview,
 };

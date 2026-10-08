@@ -249,9 +249,14 @@ const NO_USER = '@local';
  * never copied onto an audit row — HANDOFF, "An account's name is looked up
  * from the id"), so a deleted product is found by what changed, not its name.
  */
-function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null } = {}) {
+/** Fuel F1: staff and fuel rows are only for callers with fuel.manage (see main/ipc/audit.js). */
+const FUEL_ENTITY_SQL = "entity_type <> 'employee' AND substr(entity_type, 1, 5) <> 'fuel_'";
+function isFuelEntityType(t) { return t === 'employee' || (typeof t === 'string' && t.startsWith('fuel_')); }
+
+function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
   const wheres = [];
   const params = {};
+  if (hideFuel) wheres.push(FUEL_ENTITY_SQL);
   if (entityType) { wheres.push('entity_type = @entityType'); params.entityType = entityType; }
   if (userId === NO_USER) wheres.push('user_id IS NULL');
   else if (userId) { wheres.push('user_id = @userId'); params.userId = userId; }
@@ -276,11 +281,11 @@ function recentWhere({ entityType = null, userId = null, since = null, until = n
   return { whereSql: wheres.length ? `WHERE ${wheres.join(' AND ')}` : '', params };
 }
 
-function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null } = {}) {
+function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
   const db = getDb();
   const cappedLimit  = Math.min(Math.max(1, Number(limit)  || 100), 500);
   const cappedOffset = Math.max(0, Number(offset) || 0);
-  const built = recentWhere({ entityType, userId, since, until, q });
+  const built = recentWhere({ entityType, userId, since, until, q, hideFuel });
   const params = { ...built.params, limit: cappedLimit, offset: cappedOffset };
   const whereSql = built.whereSql;
   const rows = db
@@ -356,9 +361,9 @@ function attachEntityNames(db, entries) {
  * Total count for the global history feed. Used by the History page
  * to render "Showing 1–50 of 12,847" pagination labels.
  */
-function countRecent({ entityType = null, userId = null, since = null, until = null, q = null } = {}) {
+function countRecent({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
   const db = getDb();
-  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q });
+  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q, hideFuel });
   const row = db
     .prepare(`SELECT COUNT(*) AS n FROM audit_log ${whereSql}`)
     .get(params);
@@ -406,6 +411,7 @@ function clearOlderThan(days) {
 module.exports = {
   NO_USER,
   recentWhere,
+  isFuelEntityType,
   log,
   logUpdate,
   diffPatch,

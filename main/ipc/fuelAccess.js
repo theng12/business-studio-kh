@@ -53,12 +53,17 @@ function inCompany(entity, kind) {
   return entity;
 }
 
+let _writeVersion = 0;
+/** Bumped on every fuel write; caches keyed on it (the overview's monthly figure) go stale with it. */
+function fuelWriteVersion() { return _writeVersion; }
+
 /** Live-update event. Ids only — never the record itself — so every listener may receive it. */
 function emitFuelChange(kind, op, id, companyId) {
+  _writeVersion += 1;
   try {
     const { broadcast } = require('../events');
     broadcast('fuel:changed', { kind, op, id: id ?? null, companyId: companyId ?? null, originUserId: getCallerUserId() });
   } catch (_) { /* best effort */ }
 }
 
-module.exports = { callerCaps, callerCanManage, activeCompanyId, inCompany, emitFuelChange, getCallerUserId };
+module.exports = { callerCaps, callerCanManage, activeCompanyId, inCompany, emitFuelChange, fuelWriteVersion, getCallerUserId };

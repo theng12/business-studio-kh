@@ -419,20 +419,33 @@ bad arguments are `Bad request: <reason>`.
 
 **Capabilities.** **R** = `fuel.record` *or* `fuel.manage`; **M** = `fuel.manage` only. Neither is in
 the Editor preset. Local calls on the server Mac's own window are not gated (as everywhere).
-Recorders get narrowed answers: staff come back as tiles (no phone / notes / account), photos only for
-asset tiles and records they entered, `voidMyRecord` only for their own unreviewed record < 24 h old.
+Recorders get narrowed answers: staff come back as tiles (no phone / notes / account; a search never
+matches phone numbers), photos only for asset tiles and records they entered, `voidMyRecord` only for
+their own unreviewed record < 24 h old, flags without `details` / review notes, and the History page
+(`audit:*`) hides `employee` and `fuel_*` rows from anyone without `fuel.manage`. Staff History entries
+never contain the phone number or notes themselves.
 
-**Conventions.** Times are epoch ms (the server clock for `source: 'phone'`; a Mac entry may pass the
-paper slip's `at`, never in the future). Money is whole numbers in the smallest unit:
+**Conventions.** Times are epoch ms. A caller **without `fuel.manage` cannot set the time**: `at` is
+ignored and `source` forced to `'phone'` — the server clock decides. A phone that was offline sends
+`queuedForMs` (how long the record waited on the phone; capped at 48 h): the record is placed at
+"arrival − wait" but **never before** the tank's latest dip, the vehicle's latest fill or that account's
+previous record; the reported wait is stored (`queuedForMs`) and a wait over 15 min raises an info flag
+**Q1** for the reviewer. Only a manager entering a paper slip on the Mac may pass the slip's own `at`
+(never in the future). Staff marked **left** cannot be chosen on a new record (plain error). Money is whole numbers in the smallest unit:
 `amountPaidMinor` / `priceMinorPerL` in riel (or US cents) with `currency` `KHR|USD`. Litres and meter
 readings are numbers. `clientRef` (6–100 chars `[A-Za-z0-9_.:-]`, e.g. `<phone-id>:<uuid>`) makes a
-record upload idempotent: a retry returns the saved record with `duplicate: true`. Photos are
+record upload idempotent: a retry returns the saved record with `duplicate: true` — to the account that
+saved it or a manager only; the same `clientRef` with different content is refused ("already used for
+a different entry"). A phone record never sends
+`at`; one that waited offline sends `queuedForMs` (how long it waited, measured on the phone as a
+difference) and the server dates it from its own clock (`recordTime` in main/db/fuelRecords.js). Photos are
 `photos: [{ kind, bytes }]` (bytes = ArrayBuffer/Uint8Array locally, `{ __bin: true, b64 }` over HTTP);
-max 6 per record, 15 MB each before resizing; stored resized to 1600 px JPEG + sha256 under
+max 6 per upload and 12 per record in all (`fuel:addPhoto` included), 15 MB each before resizing; stored resized to 1600 px JPEG + sha256 under
 `<dataDir>/fuel/<yyyy-mm>/`; read only via `fuel:getPhoto`. Photo kinds — fill: `meter, fill,
 pump_display, receipt, pump_meter_before, pump_meter_after, other`; dip: `stick, other`; delivery:
 `invoice, stick, truck, other`; transfer: `containers, seals, pump_meter_before, pump_meter_after,
-received, other`. A record-saving channel returns the record and, for fills/dips, its current flags.
+received, other`. A record-saving channel returns the record and, for fills/dips, the flags about THAT
+record (for a dip: the reconciliations it closes or opens).
 
 ### Staff (thin list — seed of HR)
 | Channel | Args | Returns | Cap |
@@ -440,6 +453,7 @@ received, other`. A record-saving channel returns the record and, for fills/dips
 | `staff:list` | `{ status?: 'active'\|'left', role?: 'driver'\|'attendant', q? }` | `Employee[]` (tiles for R) | R |
 | `staff:get` | `id` | `Employee` (tile for R) | R |
 | `staff:getPhoto` | `{ id, thumb?: bool }` | `{ bytes, mime, sha256, intact }` or `null` | R |
+| `staff:me` | — | the staff tile linked to the calling account, or `null` (the phone pre-selects "my" vehicle) | R |
 | `staff:create` | `{ staffCode, nameEn?, nameKm?, phone?, position?, isDriver?, isFuelAttendant?, userId?, notes? }` | `Employee` | M |
 | `staff:update` | `{ id, patch }` (same fields; `expectedUpdatedAt` optional) | `Employee` | M |
 | `staff:markLeft` | `{ id, leftOn?: 'YYYY-MM-DD', reason? }` | `Employee` (never deleted) | M |
@@ -467,7 +481,7 @@ a phone account makes that person the default driver (cash fills) / attendant (t
 | `fuel:getChart` | `locationId` | `[{ dipCm, litres }]` | R |
 | `fuel:setChart` | `{ locationId, points: [{ dipCm, litres }] }` (≥2, one direction) | chart; old chart kept in History | M |
 | `fuel:getDipLitres` | `{ locationId, dipCm }` | `{ litres, outOfRange, hasChart }` | R |
-| `fuel:getChartSuggestion` | `{ locationId, anchor?: { dipCm, litres }, stepCm? }` | `{ points, observations, coveredFromCm, coveredToCm }` from dipped deliveries | M |
+| `fuel:getChartSuggestion` | `{ locationId, anchor?: { dipCm, litres }, stepCm? }` | `{ points, observations, coveredFromCm, coveredToCm, estimate: true, basedOnInvoices, note }` — litres between the dip levels = after − before when the dips were measured without a chart, else invoice − fuel drawn between the dips | M |
 | `fuel:listStations` | `{ includeArchived? }` | `Station[]`, most recently used first | R |
 | `fuel:createStation` / `fuel:updateStation` | `{ name, area? }` / `{ id, patch }` | `Station` | M |
 | `fuel:listPrices` | `{ fuelType?, includeVoided? }` | `Price[]` | R |
@@ -482,10 +496,10 @@ a phone account makes that person the default driver (cash fills) / attendant (t
 | `fuel:recordFill` | `{ kind: 'warehouse_tank'\|'farm_store'\|'cash_station', assetId, locationId (tank/farm) \| stationId \| stationName (cash), driverEmployeeId?, attendantEmployeeId?, litres?, cansCount?, canSizeL?, pumpMeterBefore?, pumpMeterAfter?, meterReading?, fullTank?, amountPaidMinor (cash), currency?, litresShownOnPump?, note?, at?, source?, clientRef?, photos? }` | `{ fill, duplicate, flags }` | R |
 | `fuel:recordDip` | `{ locationId, dipCm (litres? when the tank has no chart), takenByEmployeeId?, witnessEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ dip, duplicate, flags }` | R |
 | `fuel:recordDelivery` | `{ locationId, litresInvoiced, supplier?, invoiceNo?, priceMinorPerL?, amountMinor?, currency?, dipBeforeId?, dipAfterId?, receivedByEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ delivery, duplicate }` | R |
-| `fuel:setDeliveryDips` | `{ id, dipBeforeId?, dipAfterId? }` | `Delivery` | R |
+| `fuel:setDeliveryDips` | `{ id, dipBeforeId?, dipAfterId? }` — a field not passed keeps its link; `null` clears it | `Delivery` | **M** (the phone passes `dipBeforeId`/`dipAfterId` when it records the delivery) |
 | `fuel:recordTransfer` | `{ fromLocationId, toLocationId?, litresSent?, pumpMeterBefore?, pumpMeterAfter?, containers?, containerNote?, sentByEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ transfer, duplicate }` | R |
-| `fuel:receiveTransfer` | `{ id, litresReceived, receivedByEmployeeId?, note?, at?, source?, photos? }` | `{ transfer, duplicate }` (a repeat returns it unchanged) | R |
-| `fuel:addPhoto` | `{ ownerKind: 'fill'\|'dip'\|'delivery'\|'transfer', ownerId, kind, bytes }` | photo meta (own records only for R) | R |
+| `fuel:receiveTransfer` | `{ id, litresReceived, receivedByEmployeeId?, note?, at?, source?, queuedForMs?, photos? }` | `{ transfer, duplicate }` (a repeat returns it unchanged). For R, the account that recorded the send, or the sender, cannot confirm the receipt | R |
+| `fuel:addPhoto` | `{ ownerKind: 'fill'\|'dip'\|'delivery'\|'transfer', ownerId, kind, bytes }` | photo meta (own records only for R; at most 12 per record) | R |
 | `fuel:getPhoto` | `{ photoId, thumb?: bool }` (thumb = 320 px) | `{ bytes, mime, sha256, intact, kind, uploadedAt }` | R |
 | `fuel:listMyRecent` | `{ days?: 1–60 }` (default 7) | `{ fills, dips, deliveries, transfers }` the caller entered | R |
 | `fuel:listPendingTransfers` | `{ locationId? }` | transfers sent and not yet received | R |
@@ -518,19 +532,33 @@ locationId, employeeId, stationId, period, at, measured, expected, threshold, un
 details, status, reviewNote, reviewedByUserId, reviewedAt, firstSeenAt, lastSeenAt, resolved }`.
 Rules: T1 tank reconciliation, T2 short delivery, T3 missed dip, A1 high use (full-to-full), A2 meter
 not moving, A3 meter backwards, A4 impossible jump, A5 more than the tank, A6 refilled too soon, A7
-missing evidence, C1 above posted price, C2 paid for more than the tank, C5 reviewer ≠ typed, M1 pump
-meter ≠ typed, M2 pump meter gap. Flags are recomputed after every save and in a full pass 30 s after
-start and every 12 h; UNIQUE(rule, subject) — a re-run never duplicates a flag or loses its review; a
-flag that stops firing is `resolved` (kept), and comes back with its review if it fires again.
+missing evidence, C0 (info) no published price / exchange rate to compare a cash fill with, C1 above
+posted price, C2 paid for more than the tank, C5 reviewer ≠ typed, M1 pump meter ≠ typed (for a
+transfer: the typed litres), M2 pump meter gap, F1 transfer loss (sent − received > 2 % amber, > 5 %
+red), Q1 (info) entered on the phone long before it arrived. USD cash is compared with a KHR price at
+the server's `exchangeRateKhrPerUsd` (Settings, default 4,100). A delivery linked to its dips counts
+inside them (at min(delivered_at, after-dip − 1 ms)), so typing it in after the "after" dip raises no
+false T1. Flags are recomputed after every save — only the window of history the save touched (dip
+before → dip after; full fill before → next full fill), a few ms however long the history — and in a
+full pass 30 s after start and every 12 h that yields between assets/tanks. UNIQUE(rule, subject): a
+re-run never duplicates a flag or loses its review; a flag that stops firing is `resolved` (kept) and
+comes back with its review if it fires again — except that an `explained`/`dismissed` flag that gets
+materially worse (severity rises, or measured − expected grows by more than half) is **reopened**, the
+old review kept in History.
 
 **Settings defaults** (`fuel:getSettings`): `dipAllowedCm 1`, `tankTolerancePct 0.5`, `missedDipDays 2`,
 `shortDeliveryRedMultiple 2`, `a1AmberRatio 1.2`, `a1RedRatio 1.35`, `baselineSamples 8`,
 `baselineWindowDays 120`, `baselineMinSamples 3`, `maxKmPerDayDefault 600`, `maxHoursPerDay 24`,
 `tankOverfillRatio 1.05`, `refillTooSoonPct 25`, `c1PriceRatio 1.02`, `c1RedRatio 1.1`,
 `c5TolerancePct 1`, `meterTolerancePct 1`, `meterToleranceL 0.5`, `meterGapToleranceL 0.5`,
-`photoRetentionMonths 24`, `canSizeL 20`, `defaultCurrency 'KHR'`.
+`photoRetentionMonths 24`, `canSizeL 20`, `defaultCurrency 'KHR'`, `transferLossAmberPct 2`,
+`transferLossRedPct 5`, `queuedNoteMinutes 15`.
 
 **Not deletable, by design.** No channel deletes a fill, dip, delivery, transfer, reset, price, staff
 member, asset or tank: void (with reason), correct (new revision), mark left, retire. `companies:remove`
-refuses while the company has staff or fuel history. Photos older than `photoRetentionMonths` move to
-Recently deleted (kind `fuel-photo`, restorable) and from there to the Trash.
+refuses while the company has staff or fuel history; a company with only fuel configuration can be
+removed and its photo files (vehicle tiles) go to the Trash. Photos older than `photoRetentionMonths`
+move to Recently deleted (kind `fuel-photo`, restorable) and from there to the Trash — except evidence
+for a record with an open or confirmed flag, which is kept. `fuel:voidPrice` gives the period before
+the voided price its end back. Dates (`effectiveFrom`, `leftOn`) must be real calendar dates.
+Backups and server bundles carry and restore `fuel/` and `hr/`.

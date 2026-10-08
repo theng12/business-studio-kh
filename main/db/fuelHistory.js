@@ -40,4 +40,20 @@ function assertCompanyRemovable(companyId) {
   throw err;
 }
 
-module.exports = { companyHistoryCounts, assertCompanyRemovable, HISTORY_TABLES };
+/** Absolute paths of the photo files a company's fuel configuration holds. */
+function companyPhotoFiles(companyId) {
+  const path = require('node:path');
+  const { getDataDir } = require('./index');
+  let rows;
+  try { rows = getDb().prepare('SELECT rel_path FROM fuel_photos WHERE company_id = ?').all(companyId); } catch (_) { rows = []; }
+  return rows.map((r) => path.join(getDataDir(), r.rel_path));
+}
+
+/** Hand those files to the macOS Trash (main/util/fileTrash.js — left in place if the Trash refuses). */
+function trashCompanyPhotoFiles(files) {
+  const fs = require('node:fs');
+  const { trashPathInBackground } = require('../util/fileTrash');
+  for (const f of files) if (fs.existsSync(f)) trashPathInBackground(f);
+}
+
+module.exports = { companyHistoryCounts, assertCompanyRemovable, companyPhotoFiles, trashCompanyPhotoFiles, HISTORY_TABLES };
