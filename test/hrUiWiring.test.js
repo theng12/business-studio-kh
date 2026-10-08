@@ -303,3 +303,24 @@ test('L8 and live alerts: re-confirm asks first; unlocks and alerts announce the
   assert.match(code('main/ipc/hr.js'), /people\.unlockPin\(id\);\s*emitHrChange\('staff', 'update', id, e\.companyId\);/);
   assert.match(code('main/db/attendance.js'), /emitHrChange\('alert', 'create', id, companyId\);/);
 });
+
+/* ── verification fixes (2026-10-08) ────────────────────────────────────── */
+
+test('verification: shared lookups, batched review photos, review order, clearer buttons', () => {
+  const hooks = code('renderer/modules/People/hrHooks.js');
+  assert.match(hooks, /const lookups = createLookupCache\(/);
+  assert.match(hooks, /if \(LOOKUP_KINDS\.has\(evt\?\.kind\)\) lookups\.invalidate\(evt\?\.companyId \|\| null\);/);
+  assert.doesNotMatch(hooks.slice(hooks.indexOf('export function useHrLookups'), hooks.indexOf('/* ─── photos')), /window\.api\.staff\.list/, 'pages read the cache, not the API');
+  assert.match(hooks, /window\.api\.attendance\.getPhotos\(chunk, 'thumb'\)/);
+  assert.match(hooks, /\.catch\(\(\) => window\.api\.attendance\.getPhoto\(id, true\)\)/, 'falls back per photo');
+  const review = code('renderer/modules/People/Review.jsx');
+  assert.match(review, /if \(canManage\) primeAttendanceThumbs\(res\?\.items\);\s*setData\(/, 'thumbnails are primed before the list renders');
+  assert.match(review, /const \[order, setOrder\] = useState\('attention'\);/);
+  assert.match(review, /listReview\(\{ status, source: source \|\| undefined, order,/);
+  assert.match(read('main/server/hrValidators.js'), /\['attention', 'oldest', 'newest'\]\.includes\(a\.order\)/);
+  assert.match(code('renderer/modules/People/LeaveModals.jsx'), /confirmLabel="Cancel leave"\s*cancelLabel="Keep it"/);
+  assert.match(code('renderer/modules/People/LeaveModals.jsx'), /fmtWorkDate\(l\.date, \{ year: true \}\)/);
+  assert.match(code('renderer/modules/People/Overtime.jsx'), /const pay = payableOvertime\(r\);/);
+  assert.match(code('renderer/modules/People/Overtime.jsx'), /label=\{`\$\{c\.label\} \(h:mm\)`\}/);
+  assert.match(code('renderer/modules/Kiosk/KioskMe.jsx'), /monthRows\(month\.totals, month\.lateness\)/);
+});

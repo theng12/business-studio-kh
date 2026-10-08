@@ -114,12 +114,17 @@ const HR_VALIDATORS = {
   'attendance:monthSummary': optObj((a) => first(optMonth(a.month) ? true : 'month must look like 2026-10', strings(a, ['employeeId'], 200), bools(a, ['withDays']))),
   'attendance:listEvents': optObj((a) => first(strings(a, ['employeeId'], 200), dates(a, ['from', 'to']), bools(a, ['includeVoided']), LIST_PAGE(a))),
   'attendance:getPhoto': obj((a) => first(need(a, 'eventId'), bools(a, ['thumb']))),
+  'attendance:getPhotos': obj((a) => first(
+    Array.isArray(a.eventIds) && a.eventIds.length >= 1 && a.eventIds.length <= 60 && a.eventIds.every(isId) ? true : 'eventIds must be a list of 1 to 60 ids',
+    a.size == null || a.size === 'thumb' || a.size === 'small' ? true : "size must be 'thumb' or 'small'",
+  )),
   'attendance:addManual': obj((a) => first(need(a, 'employeeId'), a.kind === 'in' || a.kind === 'out' ? true : 'kind must be in or out', isNum(a.at) ? true : 'at must be a time in milliseconds', need(a, 'reason'), dates(a, ['workDate']), strings(a, ['companyId'], 200))),
   'attendance:void': obj((a) => first(need(a, 'id'), need(a, 'reason'))),
   'attendance:listReview': optObj((a) => first(
     a.status == null || ['pending', 'accepted', 'rejected', 'all'].includes(a.status) ? true : 'status must be pending, accepted, rejected or all',
     a.source == null || ['kiosk', 'phone', 'supervisor', 'manual', 'correction'].includes(a.source) ? true : 'source must be kiosk, phone, supervisor, manual or correction',
     strings(a, ['employeeId'], 200), numbers(a, ['from', 'to']), LIST_PAGE(a),
+    a.order == null || ['attention', 'oldest', 'newest'].includes(a.order) ? true : 'order must be attention, oldest or newest',
   )),
   'attendance:listAlerts': optObj((a) => first(a.status == null || ['open', 'seen', 'all'].includes(a.status) ? true : 'status must be open, seen or all', numbers(a, ['limit']))),
   'attendance:ackAlert': obj((a) => need(a, 'id')),

@@ -18,6 +18,7 @@
  *                      kiosk): code, names, photo flag, position, status.
  */
 
+const { userError } = require('../util/userError');
 const { callerCaps } = require('./fuelAccess');
 const { getCallerUserId } = require('../db/_util');
 const { SENSITIVE_FIELDS } = require('../db/employees');
@@ -72,7 +73,7 @@ function callerEmployee(companyId, { required = true } = {}) {
   const uid = getCallerUserId();
   const e = uid ? require('../db/employees').getByUserId(companyId, uid) : null;
   if (!e && required) {
-    const err = new Error('This account is not linked to a staff record in this company — ask the office to link it');
+    const err = userError('This account is not linked to a staff record in this company — ask the office to link it');
     err.code = 'NOT_LINKED';
     throw err;
   }

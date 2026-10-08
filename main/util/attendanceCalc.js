@@ -44,7 +44,10 @@
  *                break): arriving late and staying late is not overtime.
  *                A day's overtime under otMinMinutes (15) counts as none; each
  *                category is rounded DOWN to otRoundMinutes (15).
- *   suspended    a day inside a suspension is `suspended`: never absent, never late.
+ *   suspended    a day inside a suspension is `suspended`: never absent, never late;
+ *                one WITH clock entries is `suspended_with_events` (counted, flagged).
+ *   incomplete   an open in, or entries that pair with nothing (only an out):
+ *                `oddEntries` says so.
  *   regular      worked − overtime.
  *
  * Overtime and lateness are only COMPUTED here. Payroll (HR2) pays approved
@@ -271,7 +274,7 @@ function calcDay({ date, schedule = null, events = [], holiday = null, leave = n
   const res = {
     date, workDay: false, holiday: holiday || null, leave: leave || null, status: 'off',
     firstIn: null, lastOut: null, grossMin: 0, breakMin: 0, workedMin: 0, regularMin: 0,
-    lateMin: 0, earlyLeaveMin: 0, absentDays: 0, missingOut: false,
+    lateMin: 0, earlyLeaveMin: 0, absentDays: 0, missingOut: false, oddEntries: false,
     overtime: { ...empty }, flags: [], scheduled: null,
   };
   const employed = (!employment?.from || date >= employment.from) && (!employment?.to || date <= employment.to);
@@ -371,9 +374,15 @@ function calcDay({ date, schedule = null, events = [], holiday = null, leave = n
   else if (!anyEvent) {
     if (!dayOver) res.status = 'future';
     else { res.status = 'absent'; res.absentDays = leave?.half ? 0.5 : 1; }
-  } else if (openIn) res.status = 'incomplete';
+  } else if (suspended) {
+    // Clock entries on a suspended day are kept and counted, but the day says so.
+    res.status = 'suspended_with_events';
+    res.flags.push({ code: 'suspended_with_events', eventId: null, at: null });
+  } else if (openIn || !pairs.length) res.status = 'incomplete'; // an open in, or only odd entries (an out with no in)
   else if (res.lateMin > 0) res.status = 'late';
   else res.status = 'present';
+  // Entries that pair with nothing (an out with no in, a second in) — shown in the grid.
+  res.oddEntries = res.flags.some((f) => f.code === 'orphan_out' || f.code === 'duplicate_in');
   return res;
 }
 
@@ -394,8 +403,11 @@ function summarizeDays(days, { approvedByDate = new Map(), settings = DEFAULT_SE
   const t = {
     days: days.length, daysWorked: 0, workedMin: 0, regularMin: 0, lateDays: 0, lateMin: 0,
     earlyLeaveDays: 0, earlyLeaveMin: 0, absentDays: 0, leaveDays: 0, holidays: 0, offDays: 0,
-    missingOutDays: 0, suspendedDays: 0, overtimeComputed: zeroOt(), overtimeApproved: zeroOt(), overtimePending: zeroOt(),
+    missingOutDays: 0, suspendedDays: 0, suspendedWithEventsDays: 0, overtimeComputed: zeroOt(), overtimeApproved: zeroOt(), overtimePending: zeroOt(),
     approvalsExceedingAttendance: [], approvalsNeedingReapproval: [],
+    // Approved minutes by the rate (%) stored on the approval when it was given
+    // (overtime rates are dated by their approvals); computed / pending use otRates (current).
+    overtimeApprovedByRate: { normal: {}, night: {}, restDay: {}, holiday: {} }, overtimeApprovedWeightedMin: 0,
     otRates: { ...(settings?.otRates || DEFAULT_SETTINGS.otRates) },
   };
   for (const d of days) {
@@ -409,6 +421,7 @@ function summarizeDays(days, { approvedByDate = new Map(), settings = DEFAULT_SE
     if (d.holiday) t.holidays += 1;
     if (d.status === 'off') t.offDays += 1;
     if (d.status === 'suspended') t.suspendedDays += 1;
+    if (d.status === 'suspended_with_events') t.suspendedWithEventsDays += 1;
     if (d.missingOut) t.missingOutDays += 1;
     const ap = approvedByDate.get(d.date) || zeroOt();
     let exceeds = false;
@@ -419,12 +432,19 @@ function summarizeDays(days, { approvedByDate = new Map(), settings = DEFAULT_SE
       // before the attendance changed cannot pay minutes that are no longer there.
       if (approved > computed) exceeds = true;
       t.overtimeComputed[k] += computed;
-      t.overtimeApproved[k] += Math.min(approved, computed);
+      const used = Math.min(approved, computed);
+      t.overtimeApproved[k] += used;
+      if (used > 0) {
+        const rate = Number(ap.rates?.[k]) || t.otRates[k];
+        t.overtimeApprovedByRate[k][rate] = (t.overtimeApprovedByRate[k][rate] || 0) + used;
+        t.overtimeApprovedWeightedMin += (used * rate) / 100;
+      }
       t.overtimePending[k] += Math.max(0, computed - approved);
     }
     if (exceeds) t.approvalsExceedingAttendance.push(d.date);
     if (ap.needsReapproval) t.approvalsNeedingReapproval.push(d.date);
   }
+  t.overtimeApprovedWeightedMin = Math.round(t.overtimeApprovedWeightedMin * 100) / 100;
   return t;
 }
 

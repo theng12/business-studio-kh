@@ -58,6 +58,7 @@ export const STRINGS = {
     days_worked: 'ថ្ងៃធ្វើការ',
     late_days: 'ថ្ងៃមកយឺត',
     late_minutes: 'នាទីមកយឺត',
+    late_after_review: '{n} ក្រោយការពិនិត្យ',
     absent_days: 'ថ្ងៃអវត្តមាន',
     missing_out_days: 'ថ្ងៃភ្លេចចុចចេញ',
     leave_days: 'ថ្ងៃឈប់សម្រាក',
@@ -120,6 +121,7 @@ export const STRINGS = {
     pin_label: 'លេខសម្ងាត់',
     preview_exit: 'បិទការមើលជាមុន',
     err_wrong_pin: 'លេខសម្ងាត់មិនត្រឹមត្រូវ។ នៅសល់ {n} ដងទៀត។',
+    err_wrong_pin_one: 'លេខសម្ងាត់មិនត្រឹមត្រូវ។ នៅសល់ 1 ដងទៀត។',
     err_wrong_pin_plain: 'លេខសម្ងាត់មិនត្រឹមត្រូវ។',
     err_locked: 'លេខសម្ងាត់នេះត្រូវបានចាក់សោ។ សូមព្យាយាមម្តងទៀតក្នុង {n} នាទី ឬសួរអ្នកគ្រប់គ្រង។',
     err_locked_manager: 'លេខសម្ងាត់នេះត្រូវបានចាក់សោ។ មានតែអ្នកគ្រប់គ្រងទេដែលអាចដោះសោបាន។',
@@ -136,6 +138,7 @@ export const STRINGS = {
     recovery_hint: 'វាយលេខកូដ ១២ តួ ដែលបានសរសេរទុក នៅពេលបើករបៀបកត់ត្រាវត្តមាន។ វានឹងបិទរបៀបកត់ត្រាវត្តមាននៅលើ Mac នេះ។',
     recovery_submit: 'បិទរបៀបកត់ត្រាវត្តមាន',
     err_recovery_wrong: 'លេខកូដមិនត្រឹមត្រូវ។ នៅសល់ {n} ដងទៀត។',
+    err_recovery_wrong_one: 'លេខកូដមិនត្រឹមត្រូវ។ នៅសល់ 1 ដងទៀត។',
     err_recovery_locked: 'លេខកូដខុសច្រើនដងពេក។ សូមព្យាយាមម្តងទៀតក្នុង {n} នាទី។',
     err_recovery_reachable: 'Mac នៅការិយាល័យអាចទាក់ទងបាន — អ្នកគ្រប់គ្រងប្រើលេខសម្ងាត់របស់ខ្លួនជំនួសវិញ។',
     err_recovery_none: 'កុំព្យូទ័រនេះគ្មានលេខកូដសង្គ្រោះទេ។ នៅពេល Mac នៅការិយាល័យដំណើរការវិញ អ្នកគ្រប់គ្រងប្រើលេខសម្ងាត់របស់ខ្លួន។',
@@ -188,6 +191,7 @@ export const STRINGS = {
     days_worked: 'Days worked',
     late_days: 'Late days',
     late_minutes: 'Late minutes',
+    late_after_review: '{n} after review',
     absent_days: 'Absent days',
     missing_out_days: 'Missing clock-outs',
     leave_days: 'Leave days',
@@ -250,6 +254,7 @@ export const STRINGS = {
     pin_label: 'PIN',
     preview_exit: 'Close preview',
     err_wrong_pin: 'Wrong PIN. {n} tries left.',
+    err_wrong_pin_one: 'Wrong PIN. 1 try left.',
     err_wrong_pin_plain: 'Wrong PIN.',
     err_locked: 'This PIN is locked. Try again in {n} min, or ask a manager.',
     err_locked_manager: 'This PIN is locked. Only a manager can unlock it.',
@@ -266,6 +271,7 @@ export const STRINGS = {
     recovery_hint: 'Type the 12-character code that was written down when kiosk mode was turned on. It turns kiosk mode off on this Mac.',
     recovery_submit: 'Turn kiosk mode off',
     err_recovery_wrong: 'Wrong code. {n} tries left.',
+    err_recovery_wrong_one: 'Wrong code. 1 try left.',
     err_recovery_locked: 'Too many wrong codes. Try again in {n} min.',
     err_recovery_reachable: 'The office Mac can be reached — a manager uses their PIN instead.',
     err_recovery_none: 'This kiosk has no recovery code. When the office Mac is back, a manager uses their PIN.',
@@ -539,13 +545,13 @@ export function errorText(err, lang) {
     case 'lockedManager': return t(lang, 'err_locked_manager');
     case 'locked': return t(lang, 'err_locked', { n: c.n });
     case 'paused': return t(lang, 'err_paused', { n: c.n });
-    case 'wrongPin': return c.n == null ? t(lang, 'err_wrong_pin_plain') : t(lang, 'err_wrong_pin', { n: c.n });
+    case 'wrongPin': return c.n == null ? t(lang, 'err_wrong_pin_plain') : t(lang, Number(c.n) === 1 ? 'err_wrong_pin_one' : 'err_wrong_pin', { n: c.n });
     case 'noPin': return t(lang, 'err_no_pin');
     case 'sessionEnded': return t(lang, 'err_session');
     case 'notManager': return t(lang, 'err_not_manager');
     case 'cannotClock': return t(lang, 'err_cannot_clock');
     case 'offline': return t(lang, 'err_offline');
-    case 'recoveryWrong': return t(lang, 'err_recovery_wrong', { n: c.n });
+    case 'recoveryWrong': return t(lang, Number(c.n) === 1 ? 'err_recovery_wrong_one' : 'err_recovery_wrong', { n: c.n });
     case 'recoveryLocked': return t(lang, 'err_recovery_locked', { n: c.n });
     case 'recoveryReachable': return t(lang, 'err_recovery_reachable');
     case 'recoveryNone': return t(lang, 'err_recovery_none');
@@ -627,9 +633,15 @@ export function initials(person) {
 
 /* ── own records ──────────────────────────────────────────────────── */
 
-/** The figures shown for one month, in order. Missing totals → no rows. */
-export function monthRows(totals) {
+/**
+ * The figures shown for one month, in order. Missing totals → no rows.
+ * `lateness` (kiosk:me's month.lateness): once the office has confirmed the
+ * month, the late-minutes row also carries the figure after review
+ * (`afterReview`, what payroll may deduct) — null until then.
+ */
+export function monthRows(totals, lateness = null) {
   if (!totals) return [];
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   return [
     ['days_worked', totals.daysWorked],
     ['late_days', totals.lateDays],
@@ -637,7 +649,22 @@ export function monthRows(totals) {
     ['absent_days', totals.absentDays],
     ['missing_out_days', totals.missingOutDays],
     ['leave_days', totals.leaveDays],
-  ].map(([key, value]) => ({ key, value: Number.isFinite(Number(value)) ? Number(value) : 0 }));
+  ].map(([key, value]) => {
+    const row = { key, value: num(value) };
+    if (key === 'late_minutes') {
+      const after = lateness?.reviewed ? lateness.lateAfterReviewMin : null;
+      row.afterReview = after == null ? null : num(after);
+    }
+    return row;
+  });
+}
+
+/** "45" — or "45 (30 after review)" once the month is confirmed and the figure differs. */
+export function lateMinutesText(lang, row) {
+  if (!row) return '';
+  const base = String(row.value);
+  if (row.afterReview == null || row.afterReview === row.value) return base;
+  return `${base} (${t(lang, 'late_after_review', { n: row.afterReview })})`;
 }
 
 export function daysText(lang, n) {

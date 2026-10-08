@@ -216,7 +216,7 @@ test('the phone page\'s attendance calls work against the real server', { skip: 
   assert.ok(bPhoto && bPhoto.bytes, 'their crew member\'s face');
   for (const other of [X, P, S]) {
     const r = await call(supUser.token, 'staff:getPhoto', { id: other.id, thumb: true });
-    assert.equal(r.status, 500, `${other.nameEn}: ${r.status}`);
+    assert.equal(r.status, 422, `${other.nameEn}: ${r.status}`);
     assert.match(r.error, /only see the photos of your own crew/);
   }
   assert.equal((await call(selfOnly.token, 'staff:getPhoto', { id: P.id })).status, 403, 'attendance.self alone: no staff photos');

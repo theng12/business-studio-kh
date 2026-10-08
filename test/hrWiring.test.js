@@ -157,3 +157,13 @@ test('the schema is additive: no SCHEMA_VERSION change, only IF NOT EXISTS / add
   for (const m of schema.matchAll(/CREATE (?:UNIQUE )?(?:TABLE|INDEX) (?!IF NOT EXISTS)/g)) assert.fail(`not idempotent: ${m[0]}`);
   assert.match(read('main/db/index.js'), /const SCHEMA_VERSION = 2;/);
 });
+
+test('a refusal thrown on purpose is HTTP 422 over /api/rpc; anything else stays 500', () => {
+  const { isUserFacing, userError, USER_ERROR_STATUS } = require('../main/util/userError');
+  assert.equal(USER_ERROR_STATUS, 422);
+  assert.equal(isUserFacing(userError('Only a manager can leave kiosk mode')), true);
+  assert.equal(isUserFacing(Object.assign(new Error('That time is in the future'), { code: 'BAD_REQUEST' })), true);
+  assert.equal(isUserFacing(new Error('SQLITE_BUSY: database is locked')), false);
+  assert.equal(isUserFacing(new TypeError('x is not a function')), false);
+  assert.match(read('main/server/index.js'), /isUserFacing\(err\) \? USER_ERROR_STATUS : 500/);
+});

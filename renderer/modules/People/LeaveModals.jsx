@@ -12,7 +12,7 @@ import { Badge, Button, Field, Input, Modal, Select, Textarea } from '../../comp
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { ReasonModal } from '../Fuel/FuelShared.jsx';
 import {
-  LEDGER_KINDS, errText, fmtDays, leaveTypeName, negativeBalanceQuestion, personName, ppDateKey, validateAdjustForm,
+  LEDGER_KINDS, errText, fmtDays, fmtWorkDate, leaveTypeName, negativeBalanceQuestion, personName, ppDateKey, validateAdjustForm,
   validateLeaveRequestForm,
 } from './hrModel.js';
 
@@ -191,6 +191,7 @@ export function useLeaveDecisions(onDone) {
         title="Cancel this leave?"
         message={cancelling?.status === 'approved' ? 'The days go back to their balance. Kept in the ledger with your reason.' : 'The request is withdrawn.'}
         confirmLabel="Cancel leave"
+        cancelLabel="Keep it"
         danger
         onCancel={() => setCancelling(null)}
         onConfirm={async (reason) => {
@@ -214,7 +215,7 @@ export function LedgerTable({ rows, types }) {
         <tbody>
           {rows.map((l, i) => (
             <tr key={l.id || `${l.date}-${i}`}>
-              <td>{l.date}</td>
+              <td className="hr-nowrap">{fmtWorkDate(l.date, { year: true })}</td>
               <td>{leaveTypeName(types?.get?.(l.leaveTypeId))}</td>
               <td>{LEDGER_KINDS[l.kind] || l.kind}{l.period ? <span className="muted"> · {l.period}</span> : null}</td>
               <td className="is-num">{l.days > 0 ? <Badge tone="emerald">+{fmtDays(l.days)}</Badge> : <Badge tone="slate">{fmtDays(l.days)}</Badge>}</td>

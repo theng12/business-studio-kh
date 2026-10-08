@@ -144,7 +144,7 @@ export function StaffProfile({ id, onBack }) {
             {profile.userId ? <Badge tone="slate">App account linked</Badge> : null}
           </div>
           {profile.status === 'suspended' && fields.statusReason && profile.statusReason ? <p className="muted">Suspended: {profile.statusReason}</p> : null}
-          {profile.status === 'left' ? <p className="muted">Left on {profile.leftOn}{profile.leftReason ? ` — ${profile.leftReason}` : ''}.</p> : null}
+          {profile.status === 'left' ? <p className="muted">Left on {fmtWorkDate(profile.leftOn, { year: true })}{profile.leftReason ? ` — ${profile.leftReason}` : ''}.</p> : null}
         </div>
         <div className="toolbar__spacer" />
         <div className="segments" role="tablist" aria-label="Section">
@@ -278,7 +278,7 @@ function DetailsSection({ profile, draft, errors, fields, lookups, canManage, on
               <tbody>
                 {[...profile.schedules].reverse().map((h) => (
                   <tr key={h.id || `${h.scheduleId}-${h.effectiveFrom}`} className={current && current.effectiveFrom === h.effectiveFrom ? 'is-selected' : ''}>
-                    <td>{h.effectiveFrom}</td>
+                    <td className="hr-nowrap">{fmtWorkDate(h.effectiveFrom, { year: true })}</td>
                     <td>{h.scheduleName}</td>
                     <td className="muted">{scheduleLine(lookups.maps.schedules.get(h.scheduleId))}</td>
                   </tr>
@@ -298,8 +298,8 @@ function DetailsSection({ profile, draft, errors, fields, lookups, canManage, on
               <tbody>
                 {profile.suspensions.map((s, i) => (
                   <tr key={s.id || i}>
-                    <td>{s.fromDate}</td>
-                    <td>{s.toDate || <Badge tone="rose">Open</Badge>}</td>
+                    <td className="hr-nowrap">{fmtWorkDate(s.fromDate, { year: true })}</td>
+                    <td className="hr-nowrap">{s.toDate ? fmtWorkDate(s.toDate, { year: true }) : <Badge tone="rose">Open</Badge>}</td>
                     {'reason' in s ? <td className="hr-cell-text">{s.reason}</td> : null}
                   </tr>
                 ))}

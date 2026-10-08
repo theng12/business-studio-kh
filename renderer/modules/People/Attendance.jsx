@@ -155,7 +155,7 @@ export function Attendance() {
                       {r.holiday ? <Badge tone="slate">{r.holiday.nameEn || r.holiday.nameKm || 'Holiday'}</Badge> : null}
                       {r.leave ? <Badge tone="blue">Leave{r.leave.half ? ' ½' : ''}</Badge> : null}
                       {r.missingOut ? <Badge tone="amber">No clock-out</Badge> : null}
-                      {(r.flags || []).length ? <Badge tone="amber">Odd entries</Badge> : null}
+                      {r.oddEntries ? <Badge tone="amber">Odd entries</Badge> : null}
                     </div>
                   </td>
                 </tr>

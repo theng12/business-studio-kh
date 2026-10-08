@@ -14,6 +14,7 @@
  * themselves are edited through hr:updateProfile (hr.manage).
  */
 
+const { userError } = require('../util/userError');
 const employees = require('../db/employees');
 const fuelPhotos = require('../fuelPhotos');
 const { activeCompanyId, inCompany, emitFuelChange, getCallerUserId, callerCaps } = require('./fuelAccess');
@@ -28,7 +29,7 @@ function assertPhotoAllowed(e) {
   if (!caps || caps.has('*') || ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage'].some((k) => caps.has(k))) return;
   const me = callerEmployee(e.companyId, { required: false });
   if (!me || e.supervisorEmployeeId !== me.id || e.status !== 'active' || e.id === me.id) {
-    throw new Error('You can only see the photos of your own crew');
+    throw userError('You can only see the photos of your own crew');
   }
 }
 
@@ -40,7 +41,7 @@ function assertPhotoAllowed(e) {
 function guardStaffInput(input, existing = null) {
   const out = { ...(input || {}) };
   if ('userId' in out && (out.userId ?? null) !== (existing?.userId ?? null) && !canManageHr()) {
-    throw new Error('Only someone who manages HR (hr.manage) can link a staff record to an app account');
+    throw userError('Only someone who manages HR (hr.manage) can link a staff record to an app account');
   }
   if ('notes' in out && !canViewHr()) delete out.notes;
   return out;

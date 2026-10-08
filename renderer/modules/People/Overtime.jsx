@@ -20,7 +20,7 @@ import { LoadError, ReasonModal } from '../Fuel/FuelShared.jsx';
 import { useHrCaps, useHrLookups, useHrTick } from './hrHooks.js';
 import { DayDetailModal, HrPermissionNote, MonthSelect, PersonCell, ToneBadge } from './HrShared.jsx';
 import {
-  OT_CATEGORIES, OT_STATE, errText, fmtHours, fmtMinutes, fmtWorkDate, otTotal, overtimeAdjustForm, overtimeFieldLocked, overtimeNeedsLook, overtimeRows, personName,
+  OT_CATEGORIES, OT_STATE, errText, fmtHours, fmtMinutes, fmtWorkDate, otTotal, overtimeAdjustForm, overtimeFieldLocked, overtimeNeedsLook, overtimeRows, payableOvertime, personName,
   ppMonthKey, ratesLine, validateOvertimeAdjust,
 } from './hrModel.js';
 
@@ -156,7 +156,18 @@ export function Overtime() {
                       {r.approved && r.approved[c.key] !== r.computed[c.key] ? <div className="muted">approved {fmtHours(r.approved[c.key] || 0)}</div> : null}
                     </td>
                   ))}
-                  <td className="is-num">{r.approved ? fmtHours(otTotal(r.approved)) : '—'}</td>
+                  <td className="is-num">
+                    {(() => {
+                      const pay = payableOvertime(r);
+                      if (!pay) return '—';
+                      return (
+                        <>
+                          {fmtHours(pay.payable)}
+                          {pay.raw !== pay.payable ? <div className="muted" title="Payroll pays at most what the attendance shows now">approved {fmtHours(pay.raw)}</div> : null}
+                        </>
+                      );
+                    })()}
+                  </td>
                   <td title={r.approval?.note ? `Note: ${r.approval.note}` : undefined}>
                     <ToneBadge meta={OT_STATE[r.state]} />
                     {r.approval?.needsReapprovalReason ? <div className="muted">{r.approval.needsReapprovalReason}</div> : null}
@@ -233,10 +244,10 @@ function AdjustOvertimeModal({ open, row, onClose, onDone }) {
       title={`Adjust overtime — ${row?.name || ''}, ${row ? fmtWorkDate(row.date) : ''}`}
       footer={<><Button onClick={onClose} disabled={busy}>Cancel</Button><Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Approve these minutes'}</Button></>}
     >
-      <p className="fuel-modal-text">Approve less than the attendance shows (never more). 0 approves none of that kind.</p>
+      <p className="fuel-modal-text">Approve less than the attendance shows (never more), as hours:minutes like the table. 0:00 approves none of that kind.</p>
       <div className="form-grid">
         {OT_CATEGORIES.map((c) => (
-          <Field key={c.key} label={`${c.label} (min)`} error={errors[c.key]} hint={`The attendance shows ${row?.computed?.[c.key] || 0} min`}>
+          <Field key={c.key} label={`${c.label} (h:mm)`} error={errors[c.key]} hint={`The attendance shows ${fmtHours(row?.computed?.[c.key] || 0)}. Minutes work too, e.g. 90.`}>
             {({ id }) => <Input id={id} inputMode="numeric" value={form[c.key] ?? ''} invalid={!!errors[c.key]} disabled={overtimeFieldLocked(form, row?.computed, c.key)} onChange={(e) => setForm((f) => ({ ...f, [c.key]: e.target.value }))} />}
           </Field>
         ))}

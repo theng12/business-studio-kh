@@ -30,7 +30,7 @@ test('every attendance word is in both languages (including the ones picked by a
   const dynamic = ['st_in', 'st_out', 'st_none', 'st_leave', 'st_holiday', 'st_off', 'st_absent',
     'reason_forgot', 'reason_battery', 'reason_network', 'half_am', 'half_pm', 'same_day',
     'home_clock_in', 'home_clock_out', 'clocked_in', 'clocked_out', 'marked_in', 'marked_out',
-    'kind_in', 'kind_out', 'this_month', 'last_month', 'm_days', 'm_late', 'm_missing', 'm_absent', 'm_leave', 'leave_title', 'app_title_hr'];
+    'kind_in', 'kind_out', 'this_month', 'last_month', 'm_days', 'm_late', 'late_reviewed', 'late_unreviewed', 'm_missing', 'm_absent', 'm_leave', 'leave_title', 'app_title_hr'];
   for (const k of dynamic) {
     assert.ok(L.STRINGS.km[k] && L.STRINGS.en[k], `missing word: ${k}`);
     assert.match(L.STRINGS.km[k], /[ក-៿]/, `km.${k} is not Khmer`);
@@ -233,4 +233,29 @@ test('screens: the selfie uses the front camera and cannot be skipped; times sho
   assert.equal((app.match(/request: true/g) || []).length, 2);
   // A second tap on Save while saving does nothing.
   assert.match(app, /if \(screen\.name !== 'flow'\) return; \/\/ a second tap/);
+});
+
+test('My attendance: late minutes, and what is left after the office reviewed the month', () => {
+  assert.deepEqual(L.lateLine({ lateMin: 45, lateAfterReviewMin: 30, reviewed: true }, { lateMin: 45 }), { key: 'late_reviewed', vars: { min: 45, after: 30 } });
+  assert.equal(L.t('en', 'late_reviewed', { min: 45, after: 30 }), '45 min (30 min after review)');
+  assert.deepEqual(L.lateLine({ lateMin: 45, lateAfterReviewMin: null, reviewed: false }, { lateMin: 45 }), { key: 'late_unreviewed', vars: { min: 45 } });
+  assert.equal(L.t('en', 'late_unreviewed', { min: 45 }), '45 min (not reviewed yet)');
+  assert.equal(L.lateLine({ lateMin: 10, lateAfterReviewMin: 0, reviewed: true }).vars.after, 0, 'a full waiver shows 0');
+  assert.deepEqual(L.lateLine(null, { lateMin: 7 }), { key: 'late_unreviewed', vars: { min: 7 } }, 'an older server without `lateness`');
+  assert.match(app, /\['m_late', t \? lateText\(m\) : '—'\]/);
+});
+
+test('a deliberate refusal (422) waits for a person and the person sees the server\'s words', async () => {
+  assert.equal(L.classifyError({ status: 422, message: 'There is already a correction waiting for that day' }), 'fail');
+  const box = L.createOutbox({
+    store: L.memoryStore(), ctx: () => ({ userId: 'u1', companyId: 'c1', now: 1 }), encode: null,
+    send: () => Promise.reject(Object.assign(new Error('There is already a correction waiting for that day'), { status: 422 })),
+  });
+  const out = await box.add({ channel: 'attendance:requestCorrectionSelf', clientRef: 'f:dev:r42201', companyId: 'c1', userId: 'u1', args: { workDate: '2026-10-07', reason: 'x' } });
+  assert.equal(out.status, 'failed');
+  assert.equal(out.error.message, 'There is already a correction waiting for that day');
+  assert.equal((await box.list())[0].lastError, 'There is already a correction waiting for that day', 'shown on the waiting list too');
+  // The page shows that message as-is in its toast (body.error → err.message).
+  assert.match(app, /var err = new Error\(\(body && body\.error\) \|\| \('HTTP ' \+ res\.status\)\);/);
+  assert.match(app, /toast\(tr\('save_failed', \{ error: errorText\(outcome\.error && outcome\.error\.message\) \}\)\)/);
 });
