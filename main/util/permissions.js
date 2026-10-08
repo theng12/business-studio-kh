@@ -114,6 +114,7 @@ function allowedByCaps(caps, channel) {
   const cap = channelCapability(channel);
   if (cap === 'baseline') return true;
   if (cap === ADMIN_ONLY) return false; // admin returned true above; nobody else
+  if (Array.isArray(cap)) return cap.some((c) => caps.has(c)); // any-of rule (fuel F1)
   if (cap) return caps.has(cap);     // gated → authoritative for a known role
   return null;                       // unmapped channel → legacy fallback
 }

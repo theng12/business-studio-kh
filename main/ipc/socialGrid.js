@@ -45,6 +45,60 @@ const {
  *  the base64 payload over IPC reasonable, large enough to judge the layout. */
 const PREVIEW_MAX = 560;
 
+/**
+ * 0.1.95: running Social Grid exports that may be cancelled, keyed by the
+ * run id the renderer chose (`social-…`). The export checks its entry between
+ * images, so Cancel stops after the image in progress and keeps what was
+ * already written. The same registry serves the client path: a client Mac's
+ * `socialGrid:exportBytes` call registers the same id here on the server, and
+ * its Cancel is proxied to `socialGrid:cancelExport` on this Mac.
+ */
+const SOCIAL_RUN_ID_RE = /^social-[A-Za-z0-9-]{1,64}$/;
+const activeExports = new Map();
+/* A Cancel can arrive before its run is registered — the renderer shows the
+ * button while it is still flushing the post, and the export itself first
+ * reads the products and makes the folder (on a client Mac the request is
+ * also in flight). Such a cancel is remembered for a minute and the run, when
+ * it starts, stops before its first image. Finished ids are remembered for the
+ * same minute, so a late Cancel stays a no-op instead of arming a pre-cancel.
+ * Both maps are bounded. */
+const EARLY_CANCEL_TTL_MS = 60_000;
+const MAX_REMEMBERED = 200;
+const earlyCancels = new Map();     // runId → expiresAt
+const finishedExports = new Map();  // runId → expiresAt
+function isSocialRunId(runId) { return typeof runId === 'string' && SOCIAL_RUN_ID_RE.test(runId); }
+function remember(map, runId, now) {
+  for (const [id, expiresAt] of map) if (expiresAt <= now) map.delete(id);
+  while (map.size >= MAX_REMEMBERED) map.delete(map.keys().next().value);
+  map.set(runId, now + EARLY_CANCEL_TTL_MS);
+}
+function startExport(runId, now = Date.now()) {
+  const run = { cancelled: false };
+  if (!isSocialRunId(runId)) return run;
+  const early = earlyCancels.get(runId);
+  if (early != null) {
+    earlyCancels.delete(runId);
+    if (early > now) run.cancelled = true;
+  }
+  activeExports.set(runId, run);
+  return run;
+}
+function endExport(runId, run, now = Date.now()) {
+  if (activeExports.get(runId) === run) {
+    activeExports.delete(runId);
+    remember(finishedExports, runId, now);
+  }
+}
+function cancelExport(runId, now = Date.now()) {
+  if (!isSocialRunId(runId)) return { ok: false };
+  const run = activeExports.get(runId);
+  if (run) { run.cancelled = true; return { ok: true }; }
+  const finished = finishedExports.get(runId);
+  if (finished != null && finished > now) return { ok: false };
+  remember(earlyCancels, runId, now);
+  return { ok: true, early: true };
+}
+
 /** Everything one run needs: the company's products, its brands, and the
  *  normalized config. */
 function contextFor(rawConfig) {
@@ -249,17 +303,21 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     // only (isOwnSocialProgress); an unnamed or odd id gets a fresh one.
     const opId = typeof runId === 'string' && /^social-[A-Za-z0-9-]{1,64}$/.test(runId) ? runId : `social-${Date.now()}`;
     const made = [];
-    events.broadcast('progress:event', { id: opId, kind: 'socialGrid', done: 0, total: pages.length, phase: 'rendering', label: slug });
+    const run = startExport(opId);
+    let cancelled = false;
+    events.broadcast('progress:event', { id: opId, kind: 'socialGrid', done: 0, total: pages.length, phase: 'rendering', label: slug, cancellable: true });
     try {
       for (let i = 0; i < pages.length; i += 1) {
+        if (run.cancelled) { cancelled = true; break; }
         const bytes = await renderPageBytes(pages[i], ctx.brands, ctx.config, i, pages.length, ctx.config.format, ctx.config.quality);
         const target = path.join(outputFolder, fileNameFor(slug, i, pages.length, ext));
         // 'wx': refuse rather than overwrite if something appeared meanwhile.
         await fs.promises.writeFile(target, bytes, { flag: 'wx' });
         made.push(target);
-        events.broadcast('progress:event', { id: opId, kind: 'socialGrid', done: i + 1, total: pages.length, phase: 'rendering', label: slug });
+        events.broadcast('progress:event', { id: opId, kind: 'socialGrid', done: i + 1, total: pages.length, phase: 'rendering', label: slug, cancellable: true });
       }
-      if (presetId) {
+      // A cancelled run is not "exported": the preset keeps its old date.
+      if (presetId && !cancelled) {
         const row = presets.get(presetId);
         if (row) {
           presets.markExported(presetId);
@@ -269,16 +327,22 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
           emitCatalogChange('socialGrid', 'update', presetId);
         }
       }
-      return { outputPaths: made, pageCount: pages.length, productCount: ctx.selected.length };
+      return { outputPaths: made, pageCount: pages.length, productCount: ctx.selected.length, written: made.length, cancelled };
     } finally {
+      endExport(opId, run);
       events.broadcast('progress:event', { id: opId, complete: true });
     }
   });
 
+  /** 0.1.95: stop a running Social Grid export after the image in progress.
+   *  Exposed (not local) because a client Mac's export renders HERE inside
+   *  `socialGrid:exportBytes`; the id is the one the renderer chose. */
+  expose('socialGrid:cancelExport', ({ runId } = {}) => cancelExport(runId));
+
   /** Same export, but the bytes come back instead of landing on this Mac's
    *  disk. A client Mac cannot render (no images, no database), but it can
    *  write a file — so the server renders and the client saves. */
-  expose('socialGrid:exportBytes', async ({ config } = {}) => {
+  expose('socialGrid:exportBytes', async ({ config, runId } = {}) => {
     const ctx = contextFor(config);
     if (!ctx.selected.length) throw new Error('No products match these filters — nothing to export');
     const pages = paginate(ctx.selected, ctx.config);
@@ -287,11 +351,28 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
     // title if there is one, otherwise the first product's name.
     const slug = seriesSlug(pages[0], ctx.config);
     const files = [];
-    for (let i = 0; i < pages.length; i += 1) {
-      const bytes = await renderPageBytes(pages[i], ctx.brands, ctx.config, i, pages.length, ctx.config.format, ctx.config.quality);
-      files.push({ bytes, fileName: fileNameFor(slug, i, pages.length, ext) });
+    // 0.1.95: a named run (the client's renderer chose the id) is cancellable
+    // between images and reports per-image progress — the client Mac receives
+    // these over the WebSocket, so its bar moves too. The images rendered
+    // before a cancel come back, flagged, and the client writes those.
+    const named = isSocialRunId(runId);
+    const run = startExport(named ? runId : null);
+    let cancelled = false;
+    if (named) events.broadcast('progress:event', { id: runId, kind: 'socialGrid', done: 0, total: pages.length, phase: 'rendering', label: slug, cancellable: true });
+    try {
+      for (let i = 0; i < pages.length; i += 1) {
+        if (run.cancelled) { cancelled = true; break; }
+        const bytes = await renderPageBytes(pages[i], ctx.brands, ctx.config, i, pages.length, ctx.config.format, ctx.config.quality);
+        files.push({ bytes, fileName: fileNameFor(slug, i, pages.length, ext) });
+        if (named) events.broadcast('progress:event', { id: runId, kind: 'socialGrid', done: i + 1, total: pages.length, phase: 'rendering', label: slug, cancellable: true });
+      }
+    } finally {
+      if (named) {
+        endExport(runId, run);
+        events.broadcast('progress:event', { id: runId, complete: true });
+      }
     }
-    return { files, pageCount: pages.length, productCount: ctx.selected.length };
+    return { files, pageCount: pages.length, productCount: ctx.selected.length, cancelled };
   });
 
   /** Called by a client once it has written the files, so "last exported"
@@ -305,4 +386,4 @@ function register({ expose, exposeLocal, emitCatalogChange, assertEntityInActive
   });
 }
 
-module.exports = { register };
+module.exports = { register, cancelExport, startExport, endExport, isSocialRunId };

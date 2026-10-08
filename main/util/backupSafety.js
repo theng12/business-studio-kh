@@ -50,7 +50,9 @@ const BACKUP_DIR_NAME = 'backups';
 // in this list (notably the backups/ folder and dotfiles) is left out.
 // database.sqlite's -wal / -shm sidecars are handled separately by the
 // snapshot step (db.backup() produces a single consistent file).
-const BACKUP_DATA_ENTRIES = ['database.sqlite', 'assets', 'processed', 'ai-gallery', 'overlays'];
+// Fuel F1: `fuel` (evidence photos) and `hr` (staff photos) travel too — they
+// are not under assets/ on purpose (read only through permission-checked calls).
+const BACKUP_DATA_ENTRIES = ['database.sqlite', 'assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr'];
 
 /** Resolve existing symlinks while preserving any not-yet-created suffix. */
 function canonicalizeExistingPath(inputPath) {

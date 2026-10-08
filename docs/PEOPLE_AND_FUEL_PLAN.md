@@ -1,6 +1,6 @@
 # People & Fuel — design plan (2026-10-08)
 
-**Status: plan for review — nothing built.** Written for the owner (Theng) after he asked for employee
+**Status: approved by the owner on 2026-10-08 with the decisions in §7a; being built stage by stage (F1 first).** Written for the owner (Theng) after he asked for employee
 management (20+ staff on paper today) and reported fuel theft. §0 is the short version; the rest is
 the spec an implementation would follow.
 
@@ -340,7 +340,26 @@ attendance events, fills and dips are voided or reversed; departing staff become
 account is stopped, never deleted. Every new channel follows AGENTS.md §15 (expose/exposeLocal, validator,
 client proxy, preload, `CHANNEL_RULES`).
 
-## 7. Open questions for the owner
+## 7a. Owner decisions (2026-10-08)
+
+| Topic | Decision |
+|---|---|
+| Order | Fuel F1 first, then HR1 (staff, attendance, leave, kiosk), HR2 (payroll, NSSF/tax, loans, payslips), F2 (fuel analysis), HR3 (tasks). |
+| Company scope | **Per company** — each company in the app has its own staff, vehicles, tanks and fuel records. |
+| Tanks | The owner **creates and names his own tanks** (and farm stores) with their capacities; a dip chart can be entered or built from deliveries. |
+| Warehouse litres | **A pump flow meter will be bought** — fills record meter readings before/after (`has_flow_meter`), with dips as the cross-check. Tanks without a meter still work (litres typed, dips reconcile). |
+| Driver phones | **Some drivers** have smartphones with data: phone page for them, paper slip + receipt photo entered on the Mac for the rest. |
+| Shop Mac | **Runs as a client** of the main Mac with a kiosk-only account (`attendance.kiosk`). |
+| Pay cycle | **Mixed** — monthly staff plus daily-wage workers (weekly or daily pay). |
+| Salary currency | **Mixed** — USD or KHR per employee; salary tax computed in riel at a per-run exchange rate. |
+| Loan interest | **Per month**, on the balance still owed (declining balance); rate set per loan and changeable with history. |
+| NSSF / salary tax | **Calculated by the app**, switchable per employee and per run; figures entered/confirmed with the accountant. |
+| Overtime | **Calculated from attendance with rates the owner sets**, approved before payroll. |
+| Leave | **Rules the owner configures** (types, accrual, carry-over). |
+| Photo retention | **24 months**, then Recently deleted → Trash. |
+| Backup encryption | **No** — rely on FileVault and a private backup drive. |
+
+## 7. Open questions for the owner (remaining)
 
 1. **Which Mac is the shop Mac?** If it is the server or a single standalone Mac, staff logins there are
    only as strong as the kiosk lock. Can it run as a client of an office Mac?
@@ -388,3 +407,130 @@ The calculations live in small, unit-tested helpers (`payrollCalc.js`, `loanCalc
 - **First release (start of F1):** dips + calibration + tank reconciliation (T1/T2), Mac entry of fills
   from paper, fuel prices + cash checks (C1/C2/A5) — that alone puts a number on the missing litres. Then
   the phone page, then the monthly reports.
+
+## 9. Fuel API (F1 backend, built 2026-10-08)
+
+For the Mac screens and the phone page. Every channel below is `expose()`d (works locally, from a
+client Mac and over `/api/rpc` from the phone with a token) unless marked **local**. All act on the
+caller's **active company**; an id from another company is refused. Renderer: `window.api.staff.*` /
+`window.api.fuel.*` (main/preload.js); live updates: `window.api.fuel.onChanged(cb)` receives
+`fuel:changed { kind, op, id, companyId, originUserId }` (ids only). Errors are plain sentences;
+bad arguments are `Bad request: <reason>`.
+
+**Capabilities.** **R** = `fuel.record` *or* `fuel.manage`; **M** = `fuel.manage` only. Neither is in
+the Editor preset. Local calls on the server Mac's own window are not gated (as everywhere).
+Recorders get narrowed answers: staff come back as tiles (no phone / notes / account), photos only for
+asset tiles and records they entered, `voidMyRecord` only for their own unreviewed record < 24 h old.
+
+**Conventions.** Times are epoch ms (the server clock for `source: 'phone'`; a Mac entry may pass the
+paper slip's `at`, never in the future). Money is whole numbers in the smallest unit:
+`amountPaidMinor` / `priceMinorPerL` in riel (or US cents) with `currency` `KHR|USD`. Litres and meter
+readings are numbers. `clientRef` (6–100 chars `[A-Za-z0-9_.:-]`, e.g. `<phone-id>:<uuid>`) makes a
+record upload idempotent: a retry returns the saved record with `duplicate: true`. Photos are
+`photos: [{ kind, bytes }]` (bytes = ArrayBuffer/Uint8Array locally, `{ __bin: true, b64 }` over HTTP);
+max 6 per record, 15 MB each before resizing; stored resized to 1600 px JPEG + sha256 under
+`<dataDir>/fuel/<yyyy-mm>/`; read only via `fuel:getPhoto`. Photo kinds — fill: `meter, fill,
+pump_display, receipt, pump_meter_before, pump_meter_after, other`; dip: `stick, other`; delivery:
+`invoice, stick, truck, other`; transfer: `containers, seals, pump_meter_before, pump_meter_after,
+received, other`. A record-saving channel returns the record and, for fills/dips, its current flags.
+
+### Staff (thin list — seed of HR)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `staff:list` | `{ status?: 'active'\|'left', role?: 'driver'\|'attendant', q? }` | `Employee[]` (tiles for R) | R |
+| `staff:get` | `id` | `Employee` (tile for R) | R |
+| `staff:getPhoto` | `{ id, thumb?: bool }` | `{ bytes, mime, sha256, intact }` or `null` | R |
+| `staff:create` | `{ staffCode, nameEn?, nameKm?, phone?, position?, isDriver?, isFuelAttendant?, userId?, notes? }` | `Employee` | M |
+| `staff:update` | `{ id, patch }` (same fields; `expectedUpdatedAt` optional) | `Employee` | M |
+| `staff:markLeft` | `{ id, leftOn?: 'YYYY-MM-DD', reason? }` | `Employee` (never deleted) | M |
+| `staff:reactivate` | `id` | `Employee` | M |
+| `staff:setPhoto` | `{ id, bytes }` | `Employee` | M |
+
+`Employee = { id, companyId, staffCode, nameEn, nameKm, phone, hasPhoto, photoSha256, position, isDriver,
+isFuelAttendant, status, leftOn, leftReason, userId, notes, createdAt, updatedAt }`. Linking `userId` to
+a phone account makes that person the default driver (cash fills) / attendant (tank fills, dips).
+
+### Set-up: thresholds, types, vehicles, tanks, stations, prices, meter resets
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `fuel:getSettings` | — | settings (defaults below) | R |
+| `fuel:updateSettings` | `{ <key>: number, … }` | settings; re-runs all rules | M |
+| `fuel:listAssetTypes` | `{ includeArchived? }` | `AssetType[]` (8 built-ins seeded per company) | R |
+| `fuel:createAssetType` / `fuel:updateAssetType` | `{ name, nameKm?, meterUnit: 'km'\|'hours'\|'none', defaultFuel, maxPerDay? }` / `{ id, patch }` (`archived: true` hides) | `AssetType` | M |
+| `fuel:listAssets` | `{ status?: 'active'\|'retired'\|'all', q? }` | `Asset[]` | R |
+| `fuel:getAsset` | `id` | `Asset` | R |
+| `fuel:createAsset` / `fuel:updateAsset` | `{ typeId, name, plateOrSerial?, fuelType?, meterUnit?, tankCapacityL?, baselineRate?, baselineSource?: 'manual'\|'learned', assignedEmployeeId?, homeLocation?, notes? }` / `{ id, patch }` (`status: 'retired'`) | `Asset` | M |
+| `fuel:setAssetPhoto` | `{ id, bytes }` | `Asset` (`photoId` → `fuel:getPhoto`) | M |
+| `fuel:listLocations` | `{ status? }` | `Location[]` (`hasChart`, `hasFlowMeter`) | R |
+| `fuel:getLocation` | `id` | `Location & { chart }` | R |
+| `fuel:createLocation` / `fuel:updateLocation` | `{ name, kind: 'tank'\|'farm_store', fuelType?, capacityL?, hasFlowMeter?, notes? }` / `{ id, patch }` | `Location` | M |
+| `fuel:getChart` | `locationId` | `[{ dipCm, litres }]` | R |
+| `fuel:setChart` | `{ locationId, points: [{ dipCm, litres }] }` (≥2, one direction) | chart; old chart kept in History | M |
+| `fuel:getDipLitres` | `{ locationId, dipCm }` | `{ litres, outOfRange, hasChart }` | R |
+| `fuel:getChartSuggestion` | `{ locationId, anchor?: { dipCm, litres }, stepCm? }` | `{ points, observations, coveredFromCm, coveredToCm }` from dipped deliveries | M |
+| `fuel:listStations` | `{ includeArchived? }` | `Station[]`, most recently used first | R |
+| `fuel:createStation` / `fuel:updateStation` | `{ name, area? }` / `{ id, patch }` | `Station` | M |
+| `fuel:listPrices` | `{ fuelType?, includeVoided? }` | `Price[]` | R |
+| `fuel:setPrice` | `{ fuelType, priceMinorPerL, currency?, effectiveFrom: 'YYYY-MM-DD', sourceNote? }` | `Price` (previous period closed the day before) | M |
+| `fuel:voidPrice` | `{ id, reason }` | `Price` | M |
+| `fuel:listMeterResets` | `{ assetId? \| locationId?, includeVoided? }` | `Reset[]` | M |
+| `fuel:recordMeterReset` | `{ assetId? \| locationId?, oldReading, newReading, reason, at? }` | `Reset` | M |
+
+### Records (phone + Mac)
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `fuel:recordFill` | `{ kind: 'warehouse_tank'\|'farm_store'\|'cash_station', assetId, locationId (tank/farm) \| stationId \| stationName (cash), driverEmployeeId?, attendantEmployeeId?, litres?, cansCount?, canSizeL?, pumpMeterBefore?, pumpMeterAfter?, meterReading?, fullTank?, amountPaidMinor (cash), currency?, litresShownOnPump?, note?, at?, source?, clientRef?, photos? }` | `{ fill, duplicate, flags }` | R |
+| `fuel:recordDip` | `{ locationId, dipCm (litres? when the tank has no chart), takenByEmployeeId?, witnessEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ dip, duplicate, flags }` | R |
+| `fuel:recordDelivery` | `{ locationId, litresInvoiced, supplier?, invoiceNo?, priceMinorPerL?, amountMinor?, currency?, dipBeforeId?, dipAfterId?, receivedByEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ delivery, duplicate }` | R |
+| `fuel:setDeliveryDips` | `{ id, dipBeforeId?, dipAfterId? }` | `Delivery` | R |
+| `fuel:recordTransfer` | `{ fromLocationId, toLocationId?, litresSent?, pumpMeterBefore?, pumpMeterAfter?, containers?, containerNote?, sentByEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ transfer, duplicate }` | R |
+| `fuel:receiveTransfer` | `{ id, litresReceived, receivedByEmployeeId?, note?, at?, source?, photos? }` | `{ transfer, duplicate }` (a repeat returns it unchanged) | R |
+| `fuel:addPhoto` | `{ ownerKind: 'fill'\|'dip'\|'delivery'\|'transfer', ownerId, kind, bytes }` | photo meta (own records only for R) | R |
+| `fuel:getPhoto` | `{ photoId, thumb?: bool }` (thumb = 320 px) | `{ bytes, mime, sha256, intact, kind, uploadedAt }` | R |
+| `fuel:listMyRecent` | `{ days?: 1–60 }` (default 7) | `{ fills, dips, deliveries, transfers }` the caller entered | R |
+| `fuel:listPendingTransfers` | `{ locationId? }` | transfers sent and not yet received | R |
+| `fuel:voidMyRecord` | `{ kind: 'fill'\|'dip'\|'delivery'\|'transfer', id, reason }` | `{ voided, … }` — own, unreviewed, < 24 h | R |
+
+Fill litres: with pump readings → the meter difference (`litresSource: 'pump_meter'`, typed litres kept
+in `typedLitres`, a disagreement → flag M1); else typed; else `cansCount × canSizeL`; cash: else litres
+shown on the pump; else amount ÷ published price (`derived_from_price`).
+
+### Review, lists, flags, reports
+| Channel | Args | Returns | Cap |
+|---|---|---|---|
+| `fuel:listFills` | `{ from?, to?, assetId?, driverEmployeeId?, attendantEmployeeId?, locationId?, stationId?, kind?, reviewStatus?, includeVoided?, includeSuperseded?, limit? (≤500), offset? }` | `{ items: Fill & { photos, openFlags, hasRedFlag }[], total }` | M |
+| `fuel:getFill` | `id` (any revision or the root) | `Fill & { photos, revisions, flags }` | M |
+| `fuel:listDips` / `fuel:listDeliveries` / `fuel:listTransfers` | `{ locationId?, from?, to?, includeVoided?, limit?, offset? }` | `{ items (with photos), total }` | M |
+| `fuel:reviewFill` | `{ id, status: 'checked'\|'needs_review', note?, reviewedAmountMinor?, reviewedLitres? }` (what the pump photo shows → rule C5) | `{ fill, flags }` | M |
+| `fuel:correctFill` | `{ id, patch, reason }` | `{ fill, flags }` — a new revision; the old one is kept as superseded | M |
+| `fuel:voidRecord` | `{ kind: 'fill'\|'dip'\|'delivery'\|'transfer'\|'meterReset', id, reason }` | `{ voided, already }` | M |
+| `fuel:listFlags` | `{ status?, severity?, ruleKey?, period?: 'YYYY-MM', assetId?, locationId?, employeeId?, stationId?, subject?, includeResolved?, limit?, offset? }` | `{ items: Flag[], total }` | M |
+| `fuel:reviewFlag` | `{ id, status: 'open'\|'explained'\|'confirmed'\|'dismissed', note? }` (note required except confirmed/open) | `Flag` | M |
+| `fuel:recomputeFlags` | — | `{ assets, locations, opened, errors }` | M |
+| `fuel:getOverview` | — | `{ openFlags: { red, amber, info }, fillsToReview: { new, needs_review }, tanks: [{ …, lastDip }], pendingTransfers, month, excessRiel }` | M |
+| `fuel:getMonthlyReport` | `{ month?: 'YYYY-MM' }` (default this month) | `{ month, totals, assets[], drivers[], tanks[], flags[] }` (§4.5) | M |
+| `fuel:getMonthlyWorkbook` | `{ month? }` | `{ filename, bytes }` (.xlsx: Per asset, Per driver, Tanks, Fills, Flags, Notes) | M |
+| `fuel:saveMonthlyWorkbook` **local** | `{ month? }` | saved path or `null` (Save dialog on this Mac) | M |
+| `fuel:sweepPhotoRetention` | — | `{ retired, missing }` | M |
+
+`Flag = { id, ruleKey, severity: 'red'|'amber'|'info', subject, subjectKind, subjectId, assetId,
+locationId, employeeId, stationId, period, at, measured, expected, threshold, unit, explanation,
+details, status, reviewNote, reviewedByUserId, reviewedAt, firstSeenAt, lastSeenAt, resolved }`.
+Rules: T1 tank reconciliation, T2 short delivery, T3 missed dip, A1 high use (full-to-full), A2 meter
+not moving, A3 meter backwards, A4 impossible jump, A5 more than the tank, A6 refilled too soon, A7
+missing evidence, C1 above posted price, C2 paid for more than the tank, C5 reviewer ≠ typed, M1 pump
+meter ≠ typed, M2 pump meter gap. Flags are recomputed after every save and in a full pass 30 s after
+start and every 12 h; UNIQUE(rule, subject) — a re-run never duplicates a flag or loses its review; a
+flag that stops firing is `resolved` (kept), and comes back with its review if it fires again.
+
+**Settings defaults** (`fuel:getSettings`): `dipAllowedCm 1`, `tankTolerancePct 0.5`, `missedDipDays 2`,
+`shortDeliveryRedMultiple 2`, `a1AmberRatio 1.2`, `a1RedRatio 1.35`, `baselineSamples 8`,
+`baselineWindowDays 120`, `baselineMinSamples 3`, `maxKmPerDayDefault 600`, `maxHoursPerDay 24`,
+`tankOverfillRatio 1.05`, `refillTooSoonPct 25`, `c1PriceRatio 1.02`, `c1RedRatio 1.1`,
+`c5TolerancePct 1`, `meterTolerancePct 1`, `meterToleranceL 0.5`, `meterGapToleranceL 0.5`,
+`photoRetentionMonths 24`, `canSizeL 20`, `defaultCurrency 'KHR'`.
+
+**Not deletable, by design.** No channel deletes a fill, dip, delivery, transfer, reset, price, staff
+member, asset or tank: void (with reason), correct (new revision), mark left, retire. `companies:remove`
+refuses while the company has staff or fuel history. Photos older than `photoRetentionMonths` move to
+Recently deleted (kind `fuel-photo`, restorable) and from there to the Trash.

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Field, Input } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
+import { useSaveShortcut } from '../../components/useSaveShortcut.js';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { DesignControls } from './DesignControls.jsx';
 import { CatalogPreview } from './CatalogPreview.jsx';
@@ -186,6 +187,9 @@ export function CatalogTemplateBuilder({ draft, onClose, onSaved, backLabel = 'C
       if (mounted.current) setSaving(false);
     }
   }
+
+  // 0.1.95: ⌘S is the header's Save template / Create template button.
+  useSaveShortcut(() => { if (!saving && name.trim()) void save(); }, true);
 
   /* The dirty state is the §6 pill in the header (slate "Unsaved changes"),
    * not a strip above the panel that pushed the whole editor down. */

@@ -102,6 +102,12 @@ function defaultConfig() {
      * button — the sweep is what makes "gone in 30 days" true rather than
      * aspirational. */
     deletedRetentionDays: 30,
+    /* 0.1.95: the house exchange rate, riel per US dollar ("1 USD = 4,100
+     * KHR"). Settings → General. The Cost Calculator compares KHR prices with
+     * the USD landed cost through it, and the Library's price-column sort
+     * compares USD and KHR prices in one currency with it (display unchanged).
+     * Validated positive by assertKnownConfigKeys, which both modes call. */
+    exchangeRateKhrPerUsd: 4100,
     clientServerUrl: '',                // client mode: e.g. 'http://100.64.0.5:13180'
     clientToken: '',                    // client mode: user token from server admin
     clientUserName: '',                 // client mode: cached display name
@@ -228,6 +234,28 @@ function assertKnownConfigKeys(patch) {
   if (unknown.length) {
     throw new Error(`Unknown setting${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}`);
   }
+  assertValidConfigValues(patch);
+}
+
+/**
+ * 0.1.95: value rules for the settings a USER can write, checked on the same
+ * two paths as the key guard above (both modes call assertKnownConfigKeys).
+ * Restore paths do not come through here, and loadConfig keeps whatever a
+ * backup held; readers fall back to the default for a bad stored value.
+ */
+function assertValidConfigValues(patch) {
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'exchangeRateKhrPerUsd')) {
+    if (validExchangeRate(patch.exchangeRateKhrPerUsd) == null) {
+      throw new Error('Exchange rate must be a number above 0 (riel per US dollar, e.g. 4100)');
+    }
+  }
+}
+
+/** A usable rate (finite, above 0, at most 1e9) as a number, else null. */
+function validExchangeRate(value) {
+  if (value === null || value === '' || typeof value === 'boolean') return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 && n <= 1e9 ? n : null;
 }
 
 module.exports = {
@@ -235,6 +263,8 @@ module.exports = {
   saveConfig,
   updateConfig,
   assertKnownConfigKeys,
+  assertValidConfigValues,
+  validExchangeRate,
   configPath,
   recoveryConfigPath,
   defaultDataDir,

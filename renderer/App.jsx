@@ -10,6 +10,7 @@ import { ProgressOverlay } from './components/ProgressOverlay.jsx';
 // inline — no more blocking modal.
 import { ConflictModalHost } from './components/ConflictModal.jsx';
 import { ShortcutsModal, shortcutBlocked, modalDialogOpen } from './components/ShortcutsModal.jsx';
+import { handleSaveShortcut } from './lib/saveShortcut.js';
 import { SearchPalette } from './components/SearchPalette.jsx';
 // v0.26.44: RemoteChangesBanner removed. Remote events from other
 // Macs now auto-apply silently (debounced via catalogEvents.js so
@@ -205,6 +206,9 @@ export default function App() {
     const onKey = (e) => {
       const cmdOrCtrl = e.metaKey || e.ctrlKey;
       if (!cmdOrCtrl || e.altKey) return;
+      // 0.1.95: ⌘S saves the editor on screen (renderer/lib/saveShortcut.js);
+      // not under a modal dialog. The browser default is always prevented.
+      if (handleSaveShortcut(e, { dialogOpen: modalDialogOpen(document) })) return;
       // v0.18.0: Cmd/Ctrl + ? opens the shortcuts list. The `?` key
       // typically requires Shift on US keyboards, so we accept either
       // with Shift held OR the literal key '?' (some layouts produce
