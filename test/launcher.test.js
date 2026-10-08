@@ -365,7 +365,8 @@ test('badges: a failure is not cached; the cache clears on mount and on change e
   assert.match(home, /useState\(\(\) => \{ clearBadgeCache\(\); return 0; \}\)/, 'cleared when Home mounts');
   assert.match(home, /window\.api\?\.fuel\?\.onChanged\?\.\(\(\) => stale\(BADGE_EVENTS\.fuel\)\)/);
   assert.match(home, /window\.api\?\.events\?\.onCatalogChanged\?\.\(/);
-  assert.match(home, /export const BADGE_EVENTS = \{ fuel: 'fuel', purchaseOrder: 'purchasing' \};/);
+  assert.match(home, /export const BADGE_EVENTS = \{ fuel: 'fuel', purchaseOrder: 'purchasing', hr: 'people' \};/);
+  assert.match(home, /window\.api\?\.hr\?\.onChanged\?\.\(\(\) => stale\(BADGE_EVENTS\.hr\)\)/, 'HR1: People\'s count refreshes on hr:changed');
   // The PO event really is catalog:changed with kind 'purchaseOrder'.
   assert.match(read('renderer/store/catalogEvents.js'), /case 'purchaseOrder':/);
 });

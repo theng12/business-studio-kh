@@ -115,21 +115,32 @@ function register({ expose }) {
     return c;
   });
 
-  /**
-   * Leaving kiosk mode needs a manager: a staff member linked to an account
-   * with hr.manage (or admin) and their own PIN. Wrong tries count against
-   * that manager's PIN lock like any other.
-   */
-  expose('kiosk:verifyManagerPin', async ({ employeeId, pin } = {}) => {
-    const companyId = company();
-    const e = inCompany(employees.get(employeeId), 'Staff member');
-    // The PIN is checked first (same per-person and per-kiosk limits), so the
-    // answer does not reveal who is a manager to someone without the PIN.
-    await people.checkPin(employeeId, pin, { companyId, kioskUserId: getCallerUserId() });
-    if (!people.isManagerEmployee(e)) throw new Error('Only a manager can leave kiosk mode');
-    require('../db/hr').hrAudit('employee', employeeId, 'kiosk:manager-exit', { after: { kiosk: kioskLabel() } });
-    return { ok: true, managerId: e.id };
-  });
+  expose('kiosk:verifyManagerPin', verifyManagerPin);
 }
 
-module.exports = { register };
+/**
+ * Leaving kiosk mode needs a manager: a staff member linked to an account
+ * with hr.manage (or admin) and their own PIN. Wrong tries count against
+ * that manager's PIN lock like any other.
+ *
+ * `purpose` (kiosk screen): 'leave' kiosk mode (the default), 'quit' the app,
+ * or 'no-photo' — a manager lets someone clock while the camera is not
+ * working. Only the History wording differs. Also called in-process by
+ * kioskMode:leave / kioskMode:quit (main/ipc/kioskMode.js) on a standalone or
+ * server Mac; a client Mac reaches it over RPC.
+ */
+async function verifyManagerPin({ employeeId, pin, purpose = 'leave' } = {}) {
+  const companyId = company();
+  const e = inCompany(employees.get(employeeId), 'Staff member');
+  // The PIN is checked first (same per-person and per-kiosk limits), so the
+  // answer does not reveal who is a manager to someone without the PIN.
+  await people.checkPin(employeeId, pin, { companyId, kioskUserId: getCallerUserId() });
+  const noPhoto = purpose === 'no-photo';
+  if (!people.isManagerEmployee(e)) throw new Error(noPhoto ? 'Only a manager can allow this' : 'Only a manager can leave kiosk mode');
+  require('../db/hr').hrAudit('employee', employeeId, noPhoto ? 'kiosk:manager-no-photo' : 'kiosk:manager-exit', {
+    after: { kiosk: kioskLabel(), purpose: purpose || 'leave' },
+  });
+  return { ok: true, managerId: e.id };
+}
+
+module.exports = { register, verifyManagerPin };

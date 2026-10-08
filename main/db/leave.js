@@ -270,8 +270,14 @@ function countDays(companyId, employeeId, type, { fromDate, toDate, halfDay }) {
   });
 }
 
-function createRequest({ companyId, employeeId, leaveTypeId, fromDate, toDate = null, halfDay = null, reason = null, via = 'manager' }) {
+function createRequest({ companyId, employeeId, leaveTypeId, fromDate, toDate = null, halfDay = null, reason = null, via = 'manager', clientRef = null }) {
   hr.ensurePrefilled(companyId);
+  // A resend from the phone's outbox returns the request it already made
+  // (checked first: the overlap rule would refuse it as a clash with itself).
+  const att = require('./attendance');
+  const hash = clientRef ? att.payloadHash({ employeeId, leaveTypeId, fromDate, toDate: toDate || fromDate, halfDay: halfDay ?? null, reason: str(reason, 1000) }) : null;
+  const again = att.requestForRef('leave_requests', clientRef, hash);
+  if (again) return { ...rowToRequest(again), duplicate: true };
   const emp = require('./employees').get(employeeId);
   if (!emp || emp.companyId !== companyId) throw badRequest('Staff member not found');
   if (emp.status === 'left') throw badRequest('This person has left');
@@ -289,9 +295,9 @@ function createRequest({ companyId, employeeId, leaveTypeId, fromDate, toDate = 
   if (clash) throw badRequest(`There is already leave from ${clash.from_date} to ${clash.to_date} that overlaps`);
   const id = uuid();
   const now = Date.now();
-  db.prepare(`INSERT INTO leave_requests (id, company_id, employee_id, leave_type_id, from_date, to_date, half_day, days, reason, status, requested_by_user_id, requested_via, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`)
-    .run(id, companyId, employeeId, leaveTypeId, fromDate, to, halfDay, days, str(reason, 1000), getCallerUserId(), via, now, now);
+  db.prepare(`INSERT INTO leave_requests (id, company_id, employee_id, leave_type_id, from_date, to_date, half_day, days, reason, status, requested_by_user_id, requested_via, created_at, updated_at, client_ref, client_ref_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)`)
+    .run(id, companyId, employeeId, leaveTypeId, fromDate, to, halfDay, days, str(reason, 1000), getCallerUserId(), via, now, now, clientRef, hash);
   const r = getRequest(id);
   hrAudit('leave_request', id, 'request', { after: { employeeId, leaveType: t.code, fromDate, toDate: to, halfDay, days, via } });
   return r;

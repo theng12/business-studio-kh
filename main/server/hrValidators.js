@@ -130,7 +130,7 @@ const HR_VALIDATORS = {
   /* attendance: own (phone) + supervisor */
   'attendance:clockSelf': obj((a) => first(photo(a.photo, { required: true }), clientRef(a), numbers(a, ['queuedForMs']))),
   'attendance:mine': () => true,
-  'attendance:requestCorrectionSelf': obj((a) => first(isString(a.workDate) && DATE_RE.test(a.workDate) ? true : 'workDate must look like 2026-10-08', optHm(a.inTime) && optHm(a.outTime) ? true : 'times must look like 07:30', need(a, 'reason'))),
+  'attendance:requestCorrectionSelf': obj((a) => first(isString(a.workDate) && DATE_RE.test(a.workDate) ? true : 'workDate must look like 2026-10-08', optHm(a.inTime) && optHm(a.outTime) ? true : 'times must look like 07:30', need(a, 'reason'), clientRef(a))),
   'attendance:crew': () => true,
   'attendance:markCrew': obj((a) => first(need(a, 'employeeId'), a.kind == null || a.kind === 'in' || a.kind === 'out' ? true : 'kind must be in or out', photo(a.photo), strings(a, ['note'], 500), clientRef(a), numbers(a, ['queuedForMs']))),
 
@@ -145,7 +145,7 @@ const HR_VALIDATORS = {
   'leave:decide': obj((a) => first(need(a, 'id'), a.decision === 'approve' || a.decision === 'reject' ? true : 'decision must be approve or reject', strings(a, ['note'], 1000), bools(a, ['allowNegative']))),
   'leave:cancel': obj((a) => first(need(a, 'id'), strings(a, ['reason'], 500))),
   'leave:adjust': obj((a) => first(need(a, 'employeeId'), need(a, 'leaveTypeId'), isNum(a.days) ? true : 'days must be a number', dates(a, ['date']), need(a, 'note'))),
-  'leave:requestSelf': obj((a) => first(need(a, 'leaveTypeId'), isString(a.fromDate) && DATE_RE.test(a.fromDate) ? true : 'fromDate must look like 2026-10-08', dates(a, ['toDate']), halfDay(a), strings(a, ['reason'], 1000))),
+  'leave:requestSelf': obj((a) => first(need(a, 'leaveTypeId'), isString(a.fromDate) && DATE_RE.test(a.fromDate) ? true : 'fromDate must look like 2026-10-08', dates(a, ['toDate']), halfDay(a), strings(a, ['reason'], 1000), clientRef(a))),
   'leave:cancelSelf': obj((a) => first(need(a, 'id'), strings(a, ['reason'], 500))),
 
   /* kiosk */
@@ -157,7 +157,22 @@ const HR_VALIDATORS = {
   'kiosk:me': obj((a) => token(a)),
   'kiosk:requestLeave': obj((a) => first(token(a), need(a, 'leaveTypeId'), isString(a.fromDate) && DATE_RE.test(a.fromDate) ? true : 'fromDate must look like 2026-10-08', dates(a, ['toDate']), halfDay(a), strings(a, ['reason'], 1000))),
   'kiosk:requestCorrection': obj((a) => first(token(a), isString(a.workDate) && DATE_RE.test(a.workDate) ? true : 'workDate must look like 2026-10-08', optHm(a.inTime) && optHm(a.outTime) ? true : 'times must look like 07:30', need(a, 'reason'))),
-  'kiosk:verifyManagerPin': obj((a) => first(need(a, 'employeeId'), pin(a))),
+  'kiosk:verifyManagerPin': obj((a) => first(need(a, 'employeeId'), pin(a), purpose(a))),
+
+  /* kioskMode:* — LOCAL channels of the kiosk Mac itself (main/kioskWindow.js):
+   * exposeLocal in main/ipc/kioskMode.js, handleLocal in main/client/index.js.
+   * Same validators on both paths. */
+  'kioskMode:status': () => true,
+  'kioskMode:askCamera': () => true,
+  'kioskMode:newRecoveryCode': () => true,
+  'kioskMode:enable': optObj((a) => bools(a, ['openAtLogin'])),
+  'kioskMode:recover': obj((a) => (isString(a.code) && a.code.length > 0 && a.code.length <= 64 ? true : 'code must be text')),
+  'kioskMode:leave': obj((a) => first(need(a, 'employeeId'), pin(a))),
+  'kioskMode:quit': obj((a) => first(need(a, 'employeeId'), pin(a))),
 };
+
+function purpose(a) {
+  return a.purpose == null || ['leave', 'quit', 'no-photo'].includes(a.purpose) ? true : "purpose must be 'leave', 'quit' or 'no-photo'";
+}
 
 module.exports = { HR_VALIDATORS };

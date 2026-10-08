@@ -472,7 +472,27 @@ contextBridge.exposeInMainWorld('api', {
     me:                (sessionToken)                    => invoke('kiosk:me', { sessionToken }),
     requestLeave:      (args)                            => invoke('kiosk:requestLeave', args),
     requestCorrection: (args)                            => invoke('kiosk:requestCorrection', args),
-    verifyManagerPin:  (employeeId, pin)                 => invoke('kiosk:verifyManagerPin', { employeeId, pin }),
+    /** purpose: 'leave' (default) | 'quit' | 'no-photo' — only the History wording differs. */
+    verifyManagerPin:  (employeeId, pin, purpose)        => invoke('kiosk:verifyManagerPin', { employeeId, pin, purpose }),
+  },
+  /** HR1: THIS Mac as the attendance kiosk (local; main/kioskWindow.js). Leaving
+   *  and quitting need a manager PIN, which main checks with the server. */
+  kioskMode: {
+    status:          ()                    => invoke('kioskMode:status'),
+    askCamera:       ()                    => invoke('kioskMode:askCamera'),
+    /** Step 1 of turning kiosk mode on: a fresh recovery code, shown once (only its hash is kept). */
+    newRecoveryCode: ()                    => invoke('kioskMode:newRecoveryCode'),
+    enable:          (openAtLogin)         => invoke('kioskMode:enable', { openAtLogin }),
+    /** Office Mac unreachable: the recovery code turns kiosk mode off. */
+    recover:         (code)                => invoke('kioskMode:recover', { code }),
+    leave:           (employeeId, pin)     => invoke('kioskMode:leave', { employeeId, pin }),
+    quit:            (employeeId, pin)     => invoke('kioskMode:quit', { employeeId, pin }),
+    /** A quit was refused (Dock, AppleScript, Activity Monitor's Quit): ask for a manager PIN. */
+    onQuitRequested: (cb) => {
+      const fn = () => cb();
+      ipcRenderer.on('kioskMode:quitRequested', fn);
+      return () => ipcRenderer.removeListener('kioskMode:quitRequested', fn);
+    },
   },
   /** v0.49.47: OPERATIONS — Purchase Orders + landed cost + costing helpers.
    *  PO header + lines + cost components live in a single domain. Reads,

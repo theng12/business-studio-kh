@@ -4,6 +4,7 @@
  * All `expose()`d: they act on the shared data, and the phone page needs the
  * driver / attendant tiles. Capabilities (main/util/capabilities.js):
  *   staff:list / staff:get / staff:getPhoto   fuel.record, fuel.manage, hr.view or hr.manage
+ *   staff:getPhoto                             also attendance.supervise — their own crew only
  *   staff:me                                   the same, or attendance.self / attendance.supervise
  *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage or hr.manage
  * HR1: what comes back depends on the caller (main/ipc/hrAccess.js): hr.manage
@@ -15,8 +16,21 @@
 
 const employees = require('../db/employees');
 const fuelPhotos = require('../fuelPhotos');
-const { activeCompanyId, inCompany, emitFuelChange, getCallerUserId } = require('./fuelAccess');
-const { tile, forLevel, staffLevel, canManageHr, canViewHr } = require('./hrAccess');
+const { activeCompanyId, inCompany, emitFuelChange, getCallerUserId, callerCaps } = require('./fuelAccess');
+const { tile, forLevel, staffLevel, canManageHr, canViewHr, callerEmployee } = require('./hrAccess');
+
+/**
+ * A caller who reaches staff:getPhoto only through attendance.supervise may see
+ * the people whose supervisor they are — active crew, never anyone else.
+ */
+function assertPhotoAllowed(e) {
+  const caps = callerCaps();
+  if (!caps || caps.has('*') || ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage'].some((k) => caps.has(k))) return;
+  const me = callerEmployee(e.companyId, { required: false });
+  if (!me || e.supervisorEmployeeId !== me.id || e.status !== 'active' || e.id === me.id) {
+    throw new Error('You can only see the photos of your own crew');
+  }
+}
 
 /**
  * Review fixes M5 / L2: linking a staff record to an app account decides who
@@ -96,7 +110,7 @@ function register({ expose }) {
 
   /** The staff photo as bytes (or a 320 px thumbnail). Null when there is none. */
   expose('staff:getPhoto', async ({ id, thumb = false } = {}) => {
-    inCompany(employees.get(id), 'Staff member');
+    assertPhotoAllowed(inCompany(employees.get(id), 'Staff member'));
     const row = employees.getRow(id);
     if (!row.photo_path) return null;
     const out = await fuelPhotos.readPhotoFile(row.photo_path, { thumb: thumb === true, expectedSha256: row.photo_sha256 });
