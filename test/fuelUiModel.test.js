@@ -419,3 +419,16 @@ test('L1: only the topmost dialog answers Esc and its backdrop', () => {
   assert.match(src, /if \(!isTopmostModal\(backdropRef\.current\)\) return;/);
   assert.match(src, /e\.target === e\.currentTarget && isTopmostModal\(e\.currentTarget\)/);
 });
+
+test('1280 px fit: compact table dates, and litres keep the slip\'s precision', () => {
+  const now = Date.UTC(2026, 9, 8);
+  const s = M.fmtShort(Date.UTC(2026, 6, 2, 0, 0), now); // 07:00 in Phnom Penh
+  assert.match(s, /07:00/);
+  assert.doesNotMatch(s, /2026|AM|PM/, 'no year this year, 24-hour');
+  assert.match(M.fmtShort(Date.UTC(2025, 11, 31, 0, 0), now), /2025/, 'another year shows the year');
+  assert.equal(M.fmtShort(null), '—');
+  assert.equal(M.fmtLitres(2.85), '2.85 L', 'not 2.9 L');
+  assert.equal(M.fmtLitres(120), '120 L');
+  assert.equal(M.fmtLitres(410.125, 1), '410.1 L');
+  assert.equal(M.meterShort('km'), 'Odometer');
+});

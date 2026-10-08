@@ -98,11 +98,15 @@ export function Staff() {
                     <td><code>{e.staffCode}</code></td>
                     <td>{e.position || <span className="muted">—</span>}</td>
                     <td>{e.phone || <span className="muted">—</span>}</td>
-                    <td className="fuel-badges">
-                      {e.isDriver ? <Badge tone="blue">Driver</Badge> : null}
-                      {e.isFuelAttendant ? <Badge tone="blue">Pump attendant</Badge> : null}
-                      {e.userId ? <Badge tone="slate">Phone account</Badge> : null}
-                      {!e.isDriver && !e.isFuelAttendant && !e.userId ? <span className="muted">—</span> : null}
+                    <td>
+                      {/* The flex row lives in a div: `display: flex` on the td
+                          itself took it out of the table and broke the row lines. */}
+                      <div className="fuel-badges">
+                        {e.isDriver ? <Badge tone="blue">Driver</Badge> : null}
+                        {e.isFuelAttendant ? <Badge tone="blue">Pump attendant</Badge> : null}
+                        {e.userId ? <Badge tone="slate">Phone account</Badge> : null}
+                        {!e.isDriver && !e.isFuelAttendant && !e.userId ? <span className="muted">—</span> : null}
+                      </div>
                     </td>
                     <td>{e.status === 'left' ? <Badge tone="slate">Left {e.leftOn || ''}</Badge> : <Badge tone="emerald">Working</Badge>}</td>
                   </tr>

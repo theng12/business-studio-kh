@@ -188,7 +188,7 @@ const FUEL_VALIDATORS = {
   'fuel:recordTransfer': obj((a) => first(
     isNonEmpty(a.fromLocationId) ? true : 'fromLocationId is required',
     numbers(a, ['at', 'queuedForMs', 'litresSent', 'containers', 'pumpMeterBefore', 'pumpMeterAfter']),
-    strings(a, ['toLocationId', 'containerNote', 'sentByEmployeeId', 'note', 'companyId'], 1000),
+    strings(a, ['toLocationId', 'containerNote', 'sentByEmployeeId', 'carriedByEmployeeId', 'note', 'companyId'], 1000),
     clientRef(a), source(a), checkPhotos(a.photos),
   )),
   'fuel:receiveTransfer': obj((a) => first(

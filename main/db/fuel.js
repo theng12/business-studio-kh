@@ -537,6 +537,21 @@ function voidPrice(id, reason) {
   return getPrice(id);
 }
 
+/* ─── exchange rate ───────────────────────────────────────────── */
+
+/**
+ * The server's riel-per-dollar rate (Settings → General, `exchangeRateKhrPerUsd`
+ * in config.json), for comparing or converting a USD cash payment with a KHR
+ * price. 4,100 when there is no config (tests, first launch).
+ */
+function fxKhrPerUsd() {
+  try {
+    const v = require('../config').loadConfig()?.exchangeRateKhrPerUsd;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+  } catch (_) { /* no config outside the app (tests) */ }
+  return 4100;
+}
+
 /* ─── thresholds ──────────────────────────────────────────────── */
 
 function getSettings(companyId) {
@@ -618,6 +633,6 @@ module.exports = {
   getChart, setChart, dipToLitres,
   listStations, getStation, findOrCreateStation, updateStation,
   listPrices, getPrice, priceOn, priceLookup, setPrice, voidPrice,
-  getSettings, updateSettings,
+  getSettings, updateSettings, fxKhrPerUsd,
   listResets, getReset, recordReset,
 };

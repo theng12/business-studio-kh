@@ -25,6 +25,21 @@ const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 export const fmtWhen = (ts) => formatDateTime(ts, { timeZone: FUEL_TZ });
 export const fmtDay = (ts) => formatDate(ts, { timeZone: FUEL_TZ });
 
+/**
+ * Compact date and time for table cells, e.g. "2 Jul, 07:00" ("2 Jul 2025,
+ * 07:00" outside this year) — 24-hour, Phnom Penh. Long forms wrapped to four
+ * lines in a 1280 px window.
+ */
+export function fmtShort(ts, now = Date.now()) {
+  const ms = toMillis(ts);
+  if (!Number.isFinite(ms)) return '—';
+  const sameYear = ppDateKey(ms).slice(0, 4) === ppDateKey(now).slice(0, 4);
+  return new Date(ms).toLocaleString(undefined, {
+    day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }),
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: FUEL_TZ,
+  });
+}
+
 /** 'YYYY-MM-DD' of a moment, in Phnom Penh. */
 export function ppDateKey(ms = Date.now()) {
   const d = new Date(toMillis(ms) + PP_OFFSET_MS);
@@ -97,7 +112,8 @@ export function fmtNumber(n, digits = 0) {
   return n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: digits });
 }
 
-export function fmtLitres(n, digits = 1) {
+/** Litres; two decimals by default so a slip's 2.85 L never reads 2.9 L. */
+export function fmtLitres(n, digits = 2) {
   return isNum(n) ? `${fmtNumber(n, digits)} L` : '—';
 }
 
@@ -156,6 +172,13 @@ export const METER_UNITS = [
   { value: 'hours', label: 'Hours (hour meter)' },
   { value: 'none', label: 'No meter' },
 ];
+/** The meter in a table cell: "Odometer", "Hour meter", "No meter". */
+export function meterShort(meterUnit) {
+  if (meterUnit === 'km') return 'Odometer';
+  if (meterUnit === 'hours') return 'Hour meter';
+  if (meterUnit === 'none') return 'No meter';
+  return meterUnit || '—';
+}
 export function rateUnit(meterUnit) {
   if (meterUnit === 'km') return 'L/100 km';
   if (meterUnit === 'hours') return 'L/h';
@@ -206,6 +229,7 @@ export const RULES = {
   M1: 'Pump meter disagrees',
   M2: 'Pump meter gap',
   F1: 'Lost on the way to the farm',
+  P1: 'Attendant pattern',
   Q1: 'Reached the office late',
 };
 export const ruleTitle = (k) => RULES[k] || k;
@@ -306,6 +330,12 @@ export function flagHeadline(flag, lk = {}) {
     case 'F1': {
       const lost = isNum(flag.expected) && isNum(flag.measured) ? flag.expected - flag.measured : null;
       return lost != null ? `${t}: ${fmtLitres(lost, 1)} lost on the way to the farm` : `${t}: fuel lost on the way to the farm`;
+    }
+    case 'P1': {
+      const who = flag.employeeId ? lk.staff?.get(flag.employeeId) : null;
+      const name = who ? staffName(who) : 'An attendant';
+      const pctP = percentOver(flag.measured, flag.expected);
+      return pctP != null ? `${name}: vehicles they filled used ${pctP}% more than normal` : `${name}: vehicles they filled used more than normal`;
     }
     case 'Q1': return `${t}: a phone entry reached the office late (the phone was offline)`;
     default: return flag.explanation || ruleTitle(flag.ruleKey);
@@ -640,6 +670,9 @@ export const FUEL_SETTING_GROUPS = [
       { key: 'shortDeliveryRedMultiple', label: 'A short delivery turns red at this many times the allowance', unit: '×', def: 2, range: [1, 20], step: 0.5 },
       { key: 'transferLossAmberPct', label: 'Amber when a transfer to the farm loses more than', unit: '%', def: 2, range: [0, 100], step: 0.5 },
       { key: 'transferLossRedPct', label: 'Red when it loses more than', unit: '%', def: 5, range: [0, 100], step: 0.5 },
+      { key: 'typedDipErrorMinL', label: 'A level read without a dip chart may be off by at least', unit: 'L', def: 5, range: [0, 1000], step: 1 },
+      { key: 'typedDipErrorPct', label: '…or this share of the tank, whichever is larger', unit: '%', def: 1, range: [0, 20], step: 0.5 },
+      { key: 't1GraceMinutes', label: 'Wait before flagging "more than recorded" on a fresh dip', unit: 'minutes', def: 120, range: [0, 1440], step: 10 },
     ],
   },
   {
@@ -650,6 +683,8 @@ export const FUEL_SETTING_GROUPS = [
       { key: 'baselineSamples', label: '"Normal" is the median of the last', unit: 'full-to-full fills', def: 8, range: [1, 50], step: 1 },
       { key: 'baselineWindowDays', label: '…within the last', unit: 'days', def: 120, range: [7, 730], step: 1 },
       { key: 'baselineMinSamples', label: 'Use your own figure until there are at least', unit: 'fills', def: 3, range: [1, 50], step: 1 },
+      { key: 'a1MinLitres', label: 'Judge fuel use over at least', unit: 'litres', def: 20, range: [0, 1000], step: 1 },
+      { key: 'a1MinDaysNoMeter', label: 'Machines without a meter: judge over at least', unit: 'days', def: 7, range: [1, 90], step: 1 },
       { key: 'maxKmPerDayDefault', label: 'Most km a vehicle can drive in a day (when its type sets none)', unit: 'km', def: 600, range: [1, 5000], step: 10 },
       { key: 'maxHoursPerDay', label: 'Most hours a machine can run in a day', unit: 'hours', def: 24, range: [1, 24], step: 1 },
       { key: 'tankOverfillRatio', kind: 'pctOver', label: 'A fill may exceed the tank size by', unit: '%', def: 1.05, range: [1, 2], step: 1 },
@@ -661,7 +696,17 @@ export const FUEL_SETTING_GROUPS = [
     fields: [
       { key: 'c1PriceRatio', kind: 'pctOver', label: 'Amber when paid above the posted price by', unit: '%', def: 1.02, range: [1, 5], step: 1 },
       { key: 'c1RedRatio', kind: 'pctOver', label: 'Red when paid above the posted price by', unit: '%', def: 1.1, range: [1, 5], step: 1 },
+      { key: 'usdStreetRatePct', label: 'Extra allowance when dollars are converted to riel', unit: '%', def: 3, range: [0, 50], step: 0.5 },
       { key: 'c5TolerancePct', label: 'Pump photo may differ from the typed figures by', unit: '%', def: 1, range: [0, 50], step: 0.5 },
+    ],
+  },
+  {
+    title: 'Pump attendants',
+    fields: [
+      { key: 'attendantWindowDays', label: 'Compare attendants over the last', unit: 'days', def: 60, range: [14, 365], step: 1 },
+      { key: 'attendantMinIntervals', label: '…with at least this many full-to-full fills each', unit: 'fills', def: 20, range: [3, 500], step: 1 },
+      { key: 'attendantAmberPct', label: "Amber when vehicles an attendant filled use more than others' by", unit: '%', def: 2.5, range: [0, 100], step: 0.5 },
+      { key: 'attendantRedPct', label: 'Red at', unit: '%', def: 5, range: [0, 100], step: 0.5 },
     ],
   },
   {

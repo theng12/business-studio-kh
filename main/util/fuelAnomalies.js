@@ -75,6 +75,17 @@ const DEFAULT_SETTINGS = Object.freeze({
   transferLossAmberPct: 2,      // F1 transfer loss (§4.4): sent − received over 2 % amber…
   transferLossRedPct: 5,        // …over 5 % red
   queuedNoteMinutes: 15,        // Q1: a phone record that waited longer than this is noted for review
+  // Realistic-data review (2026-10-08):
+  typedDipErrorMinL: 5,         // T1/T2: a level read without a chart (sight gauge, typed litres) may be off by
+  typedDipErrorPct: 1,          //   max(this many litres, this % of the tank's capacity)
+  t1GraceMinutes: 120,          // T1: "more fuel than recorded" on a dip this fresh waits for the delivery to be typed in
+  a1MinLitres: 20,              // A1: judge fuel use only over at least this many litres (short intervals are merged)
+  a1MinDaysNoMeter: 7,          // A1: machines without a meter (L/day) are judged over at least this many days
+  usdStreetRatePct: 3,          // C1: a USD payment converted to riel gets this extra allowance (street rate)
+  attendantWindowDays: 60,      // P1: compare attendants over this many days
+  attendantMinIntervals: 20,    // P1: …with at least this many full-to-full fills on each side
+  attendantAmberPct: 2.5,       // P1: amber when an attendant's fills are followed by this much more fuel use…
+  attendantRedPct: 5,           // P1: …red at this much
 });
 
 /** Allowed range per numeric setting: [min, max]. */
@@ -103,6 +114,16 @@ const SETTING_RANGES = {
   transferLossAmberPct: [0, 100],
   transferLossRedPct: [0, 100],
   queuedNoteMinutes: [1, 10080],
+  typedDipErrorMinL: [0, 1000],
+  typedDipErrorPct: [0, 20],
+  t1GraceMinutes: [0, 1440],
+  a1MinLitres: [0, 1000],
+  a1MinDaysNoMeter: [1, 90],
+  usdStreetRatePct: [0, 50],
+  attendantWindowDays: [14, 365],
+  attendantMinIntervals: [3, 500],
+  attendantAmberPct: [0, 100],
+  attendantRedPct: [0, 100],
 };
 
 /** Merge stored settings over the defaults, dropping anything unknown or out of range. */
@@ -425,6 +446,7 @@ function assetRules({ asset, fills, resets = [], priceFor = () => null, settings
         fromFillId: lastFull.rootId || lastFull.id, toFillId: f.rootId || f.id,
         fromAt: lastFull.at, toAt: f.at, litres, distance, rate, unit, litresByDriver,
         startsWithCash: lastFull.kind === 'cash_station', endsWithCash: f.kind === 'cash_station',
+        toKind: f.kind, toAttendantEmployeeId: f.attendantEmployeeId ?? null, toDriverEmployeeId: f.driverEmployeeId ?? null,
       });
     }
     lastFull = f;
@@ -437,17 +459,36 @@ function assetRules({ asset, fills, resets = [], priceFor = () => null, settings
     iv.baseline = base.value;
     iv.baselineSource = base.source;
     iv.ratio = isNum(iv.rate) && isNum(base.value) && base.value > 0 ? iv.rate / base.value : null;
-    if (!isNum(iv.ratio)) continue;
-    const severity = iv.ratio > s.a1RedRatio ? 'red' : iv.ratio > s.a1AmberRatio ? 'amber' : null;
+  }
+  // A1 is judged over runs of consecutive intervals merged until they hold at
+  // least `a1MinLitres` — or half the tank, if smaller — (a 3 L top-up on a
+  // truck says nothing about fuel use) and, for a
+  // machine without a meter (L/day), at least `a1MinDaysNoMeter` days (idle
+  // days decide a short interval's rate). A gap in the readings ends a run.
+  let run = null;
+  for (const iv of intervals) {
+    if (!isNum(iv.distance) || iv.distance <= 0 || !isNum(iv.baseline) || iv.baseline <= 0) { run = null; continue; }
+    run = run
+      ? { ...run, toFillId: iv.toFillId, toAt: iv.toAt, litres: run.litres + iv.litres, distance: run.distance + iv.distance, baseline: iv.baseline, baselineSource: iv.baselineSource, parts: run.parts + 1 }
+      : { fromFillId: iv.fromFillId, toFillId: iv.toFillId, fromAt: iv.fromAt, toAt: iv.toAt, litres: iv.litres, distance: iv.distance, baseline: iv.baseline, baselineSource: iv.baselineSource, parts: 1 };
+    // A small tank (a motorbike's 4 L) never holds 20 L: half a tank is enough there.
+    if (run.litres < Math.min(s.a1MinLitres, capacity ? capacity / 2 : s.a1MinLitres)) continue;
+    if (meterUnit === 'none' && run.distance < s.a1MinDaysNoMeter) continue;
+    const r = run;
+    run = null;
+    const rate = consumptionRate(r.litres, r.distance, meterUnit);
+    const ratio = rate / r.baseline;
+    const severity = ratio > s.a1RedRatio ? 'red' : ratio > s.a1AmberRatio ? 'amber' : null;
     if (!severity) continue;
-    const endFill = byRoot.get(iv.toFillId);
-    flags.push(flag('A1', severity, `interval:${iv.fromFillId}:${iv.toFillId}`, {
-      subjectKind: 'fill', subjectId: iv.toFillId, at: iv.toAt,
+    const endFill = byRoot.get(r.toFillId);
+    flags.push(flag('A1', severity, `interval:${r.fromFillId}:${r.toFillId}`, {
+      subjectKind: 'fill', subjectId: r.toFillId, at: r.toAt,
       assetId: asset.id, employeeId: endFill?.driverEmployeeId ?? null, stationId: endFill?.stationId ?? null,
-      measured: iv.rate, expected: base.value, threshold: base.value * (severity === 'red' ? s.a1RedRatio : s.a1AmberRatio), unit,
-      explanation: `High fuel use: ${fmtL(iv.litres)} over ${fmtNum(iv.distance)} ${meterUnit === 'none' ? 'days' : meterUnit} = ${fmtNum(iv.rate, 2)} ${unit}, `
-        + `${fmtNum((iv.ratio - 1) * 100, 0)}% above the ${base.source === 'learned' ? 'learned' : 'owner\'s'} baseline of ${fmtNum(base.value, 2)} ${unit}.`,
-      details: { litres: iv.litres, distance: iv.distance, fromFillId: iv.fromFillId, toFillId: iv.toFillId, baselineSource: base.source },
+      measured: rate, expected: r.baseline, threshold: r.baseline * (severity === 'red' ? s.a1RedRatio : s.a1AmberRatio), unit,
+      explanation: `High fuel use: ${fmtL(r.litres)} over ${fmtNum(r.distance)} ${meterUnit === 'none' ? 'days' : meterUnit}`
+        + `${r.parts > 1 ? ` (${r.parts} fills taken together)` : ''} = ${fmtNum(rate, 2)} ${unit}, `
+        + `${fmtNum((ratio - 1) * 100, 0)}% above the ${r.baselineSource === 'learned' ? 'learned' : 'owner\'s'} baseline of ${fmtNum(r.baseline, 2)} ${unit}.`,
+      details: { litres: r.litres, distance: r.distance, fromFillId: r.fromFillId, toFillId: r.toFillId, baselineSource: r.baselineSource, intervals: r.parts },
     }));
   }
 
@@ -492,10 +533,17 @@ function assetRules({ asset, fills, resets = [], priceFor = () => null, settings
     if (hasMeter && !kinds.has('meter')) missing.push('meter photo');
     if (f.kind === 'cash_station' && !kinds.has('pump_display')) missing.push('pump display photo');
     if (missing.length) {
-      flags.push(flag('A7', 'amber', subject, {
+      // A paper slip typed in on the Mac (the driver has no phone) cannot carry
+      // a meter or pump photo; with the slip / receipt photographed it is only
+      // noted. Amber when there is no photo at all, a phone entry skipped the
+      // photos, or the meter reading itself is missing.
+      const paperSlip = f.source !== 'phone' && kinds.size > 0 && !missing.includes('meter reading');
+      flags.push(flag('A7', paperSlip ? 'info' : 'amber', subject, {
         ...base, unit: null,
-        explanation: `Missing evidence: no ${missing.join(', no ')}.`,
-        details: { missing },
+        explanation: paperSlip
+          ? `Paper slip entered on the Mac: no ${missing.join(', no ')} (the slip is photographed).`
+          : `Missing evidence: no ${missing.join(', no ')}${kinds.size === 0 ? ' — no photo at all' : ''}.`,
+        details: { missing, paperSlip },
       }));
     }
 
@@ -515,11 +563,14 @@ function assetRules({ asset, fills, resets = [], priceFor = () => null, settings
             : `No published ${f.fuelType || asset.fuelType || 'fuel'} price for ${phnomPenhDate(f.at)}, so the cash checks (C1, C2) could not run. Enter the price under Fuel prices.`,
         }));
       }
-      if (isNum(cash.priceRatio) && cash.priceRatio > s.c1PriceRatio) {
-        const severity = cash.priceRatio > s.c1RedRatio ? 'red' : 'amber';
+      // A USD payment compared at the office rate gets an allowance for the
+      // street rate the station used (usdStreetRatePct).
+      const allow = converted ? 1 + s.usdStreetRatePct / 100 : 1;
+      if (isNum(cash.priceRatio) && cash.priceRatio > s.c1PriceRatio * allow) {
+        const severity = cash.priceRatio > s.c1RedRatio * allow ? 'red' : 'amber';
         flags.push(flag('C1', severity, subject, {
           ...base, measured: cash.impliedPriceMinorPerL, expected: cash.publishedMinorPerL,
-          threshold: cash.publishedMinorPerL * s.c1PriceRatio, unit: `${cash.currency}/L`,
+          threshold: cash.publishedMinorPerL * s.c1PriceRatio * allow, unit: `${cash.currency}/L`,
           explanation: `Paid above the posted price: ${paid}${converted} for ${fmtL(f.litresShownOnPump)} = `
             + `${fmtMoney(cash.impliedPriceMinorPerL, cash.currency)}/L, ${fmtNum((cash.priceRatio - 1) * 100, 0)}% above the posted ${fmtMoney(cash.publishedMinorPerL, cash.currency)}/L.`,
           details: { expectedLitres: cash.expectedLitres },
@@ -584,15 +635,31 @@ function deliveryEffectiveAt(dl, dipById) {
 }
 
 /**
+ * How far one level reading may be off, in litres.
+ *   with a chart:    litres per cm at that level × allowed cm
+ *   without (a sight gauge, or litres typed): max(typedDipErrorMinL, typedDipErrorPct × capacity)
+ */
+function dipReadError(dip, chart, location, s) {
+  if (dip && dip.litresSource !== 'typed' && chart && chart.length >= 2 && isNum(dip.dipCm)) {
+    return dipErrorLitres(chart, dip.dipCm, s.dipAllowedCm);
+  }
+  const cap = isNum(location?.capacityL) ? location.capacityL : 0;
+  return Math.max(s.typedDipErrorMinL, (s.typedDipErrorPct / 100) * cap);
+}
+
+/**
  * T1 between each pair of consecutive dips at one location:
  *   expected_L  = litres(D0) + deliveries + transfers in − tank fills − transfers out
  *   variance_L  = litres(D1) − expected_L           (negative = missing)
- *   tolerance_L = dip_error_L + pct × (tank fills + transfers out)
- *   dip_error_L = litres per cm at D1's level × allowed cm
+ *   tolerance_L = read_error(D0) + read_error(D1) + pct × (tank fills + transfers out)
+ *   read_error  = see dipReadError — BOTH dips can be misread, so both count.
+ * A "more fuel than recorded" result on a dip younger than t1GraceMinutes is
+ * held back: the delivery that explains it is usually typed in just after the
+ * dip that already shows it.
  * One sorted sweep: every movement is bucketed into its dip-to-dip interval
  * once (O(n log n)), not re-filtered per interval.
  */
-function tankReconciliation({ location, chart, dips, deliveries = [], fills = [], transfers = [], settings = DEFAULT_SETTINGS }) {
+function tankReconciliation({ location, chart, dips, deliveries = [], fills = [], transfers = [], settings = DEFAULT_SETTINGS, now = null }) {
   const s = mergeSettings(settings);
   const flags = [];
   const intervals = [];
@@ -627,7 +694,7 @@ function tankReconciliation({ location, chart, dips, deliveries = [], fills = []
     const { delivered, filled, sent, received } = sums;
     const expected = d0.litres + delivered + received - filled - sent;
     const variance = d1.litres - expected;
-    const dipError = chart && chart.length >= 2 ? dipErrorLitres(chart, d1.dipCm, s.dipAllowedCm) : 0;
+    const dipError = dipReadError(d0, chart, location, s) + dipReadError(d1, chart, location, s);
     const tolerance = dipError + (s.tankTolerancePct / 100) * (filled + sent);
     const iv = {
       fromDipId: d0.id, toDipId: d1.id, fromAt: d0.takenAt, toAt: d1.takenAt,
@@ -640,6 +707,7 @@ function tankReconciliation({ location, chart, dips, deliveries = [], fills = []
     if (variance < -tolerance) severity = 'red';
     else if (variance > tolerance) severity = 'amber';
     if (!severity) continue;
+    if (severity === 'amber' && isNum(now) && now - d1.takenAt < s.t1GraceMinutes * 60000) continue;
     const missing = variance < 0;
     flags.push(flag('T1', severity, `dips:${d0.id}:${d1.id}`, {
       subjectKind: 'dip', subjectId: d1.id, at: d1.takenAt, locationId: location.id,
@@ -676,7 +744,7 @@ function drawIndex(location, fills, transfers) {
  * T2: litres actually received by a delivery, from the dips either side:
  *   received_L = litres(dip after) − litres(dip before) + fills/transfers between them
  *   short when received_L < litres_invoiced − tolerance
- *   tolerance  = dip_error_L (at the after level) + pct × litres_invoiced
+ *   tolerance  = read_error(dip before) + read_error(dip after) + pct × litres_invoiced
  */
 function shortDeliveries({ location, chart, deliveries = [], dips = [], fills = [], transfers = [], settings = DEFAULT_SETTINGS }) {
   const s = mergeSettings(settings);
@@ -691,7 +759,7 @@ function shortDeliveries({ location, chart, deliveries = [], dips = [], fills = 
     if (!before || !after || !isNum(before.litres) || !isNum(after.litres) || after.takenAt <= before.takenAt) continue;
     const between = index.between(before.takenAt, after.takenAt);
     const received = after.litres - before.litres + between;
-    const dipError = chart && chart.length >= 2 ? dipErrorLitres(chart, after.dipCm, s.dipAllowedCm) : 0;
+    const dipError = dipReadError(before, chart, location, s) + dipReadError(after, chart, location, s);
     const tolerance = dipError + (s.tankTolerancePct / 100) * dl.litresInvoiced;
     const shortfall = dl.litresInvoiced - received;
     checks.push({ deliveryId: dl.id, invoiced: dl.litresInvoiced, received: round(received, 2), drawnBetween: round(between, 2), shortfall: round(shortfall, 2), tolerance: round(tolerance, 2) });
@@ -706,31 +774,53 @@ function shortDeliveries({ location, chart, deliveries = [], dips = [], fills = 
   return { flags, checks };
 }
 
-/** T3: no dip at a tank for more than N days (counted up to `now`). */
+/**
+ * T3: every stretch without a dip longer than N days — between two dips, and
+ * from the last dip to `now`. Days are counted as calendar days in Phnom Penh
+ * (a dip on Saturday and the next on Monday is 2 days, whatever the hours),
+ * so "dip at least every 2 days" means what it says. Subject = location + the dip the gap starts at,
+ * so the open gap and the same gap once the next dip arrives are ONE flag: it
+ * stays (with its review) instead of vanishing when the tank is dipped again.
+ */
 function missedDips({ location, dips = [], now, settings = DEFAULT_SETTINGS }) {
   const s = mergeSettings(settings);
-  if (location.kind !== 'tank' || location.status === 'retired') return { flags: [] };
-  const last = (dips || []).slice().sort(byTime('takenAt')).pop() || null;
-  const since = last ? last.takenAt : location.createdAt;
-  if (!isNum(since)) return { flags: [] };
-  const days = (now - since) / DAY_MS;
-  if (days <= s.missedDipDays) return { flags: [] };
-  return {
-    flags: [flag('T3', 'amber', `nodip:${location.id}:${last ? last.id : 'none'}`, {
-      subjectKind: 'location', subjectId: location.id, at: since, locationId: location.id,
+  if (location.kind !== 'tank') return { flags: [] };
+  const calDays = (from, to) => Math.round((Date.parse(phnomPenhDate(to)) - Date.parse(phnomPenhDate(from))) / DAY_MS);
+  const tooLong = (from, to) => calDays(from, to) > s.missedDipDays;
+  const list = (dips || []).filter((d) => isNum(d.takenAt)).sort(byTime('takenAt'));
+  const flags = [];
+  const name = location.name || 'Tank';
+  const add = (startId, from, to, open) => {
+    const days = calDays(from, to);
+    flags.push(flag('T3', 'amber', `nodip:${location.id}:${startId}`, {
+      subjectKind: 'location', subjectId: location.id, at: from, locationId: location.id,
       measured: days, expected: s.missedDipDays, threshold: s.missedDipDays, unit: 'days',
-      explanation: last
-        ? `${location.name || 'Tank'} has not been dipped for ${fmtNum(days, 1)} days (last dip ${phnomPenhDate(last.takenAt)}); the rule is every ${s.missedDipDays} days.`
-        : `${location.name || 'Tank'} has never been dipped (added ${phnomPenhDate(since)}); the rule is every ${s.missedDipDays} days.`,
-    })],
+      explanation: open
+        ? (startId === 'none'
+          ? `${name} has never been dipped (added ${phnomPenhDate(from)}); the rule is every ${s.missedDipDays} days.`
+          : `${name} has not been dipped for ${fmtNum(days, 1)} days (last dip ${phnomPenhDate(from)}); the rule is every ${s.missedDipDays} days.`)
+        : `${name} went ${fmtNum(days, 1)} days without a dip, ${phnomPenhDate(from)} to ${phnomPenhDate(to)}; the rule is every ${s.missedDipDays} days.`,
+      details: { from, to: open ? null : to, open },
+    }));
   };
+  if (!list.length) {
+    if (isNum(location.createdAt) && isNum(now) && tooLong(location.createdAt, now) && location.status !== 'retired') add('none', location.createdAt, now, true);
+    return { flags };
+  }
+  if (isNum(location.createdAt) && tooLong(location.createdAt, list[0].takenAt)) add('none', location.createdAt, list[0].takenAt, false);
+  for (let i = 1; i < list.length; i += 1) {
+    if (tooLong(list[i - 1].takenAt, list[i].takenAt)) add(list[i - 1].id, list[i - 1].takenAt, list[i].takenAt, false);
+  }
+  const last = list[list.length - 1];
+  if (location.status !== 'retired' && isNum(now) && tooLong(last.takenAt, now)) add(last.id, last.takenAt, now, true);
+  return { flags };
 }
 
 /**
  * F1 transfer loss (§4.4): litres sent − litres received at the farm.
  *   loss_pct = (sent − received) ÷ sent;  > 2 % amber, > 5 % red (settings)
  */
-function transferLoss({ location, transfers = [], settings = DEFAULT_SETTINGS }) {
+function transferLoss({ location, transfers = [], settings = DEFAULT_SETTINGS, nameOf = () => null }) {
   const s = mergeSettings(settings);
   const flags = [];
   for (const t of transfers) {
@@ -739,10 +829,17 @@ function transferLoss({ location, transfers = [], settings = DEFAULT_SETTINGS })
     const pct = (loss / t.litresSent) * 100;
     if (pct <= s.transferLossAmberPct) continue;
     const severity = pct > s.transferLossRedPct ? 'red' : 'amber';
+    // The fuel passes through the carrier's hands before the receiver counts
+    // it, so both are named; the flag is filed under the carrier when known.
+    const carrier = t.carriedByEmployeeId ? (nameOf(t.carriedByEmployeeId) || 'the carrier') : null;
+    const receiver = t.receivedByEmployeeId ? (nameOf(t.receivedByEmployeeId) || 'the receiver') : null;
+    const who = [carrier && `carried by ${carrier}`, receiver && `received by ${receiver}`].filter(Boolean).join(', ');
     flags.push(flag('F1', severity, `transfer:${t.id}`, {
-      subjectKind: 'transfer', subjectId: t.id, at: t.sentAt, locationId: location.id, employeeId: t.receivedByEmployeeId ?? null,
+      subjectKind: 'transfer', subjectId: t.id, at: t.sentAt, locationId: location.id,
+      employeeId: t.carriedByEmployeeId ?? t.receivedByEmployeeId ?? null,
       measured: t.litresReceived, expected: t.litresSent, threshold: t.litresSent * (1 - s.transferLossAmberPct / 100), unit: 'L',
-      explanation: `Transfer loss: ${fmtL(t.litresSent)} sent, ${fmtL(t.litresReceived)} received — ${fmtL(loss)} (${fmtNum(pct, 1)}%) lost on the way (allowed ${s.transferLossAmberPct}%).`,
+      explanation: `Transfer loss: ${fmtL(t.litresSent)} sent, ${fmtL(t.litresReceived)} received — ${fmtL(loss)} (${fmtNum(pct, 1)}%) lost on the way (allowed ${s.transferLossAmberPct}%)${who ? `; ${who}` : ''}.`,
+      details: { carrierEmployeeId: t.carriedByEmployeeId ?? null, receiverEmployeeId: t.receivedByEmployeeId ?? null, senderEmployeeId: t.sentByEmployeeId ?? null },
     }));
   }
   return { flags };
@@ -780,6 +877,84 @@ function locationQueuedNotes({ location, dips = [], deliveries = [], transfers =
   for (const d of deliveries) if (d.locationId === location.id) add('delivery', d, d.deliveredAt);
   for (const t of transfers) if (t.fromLocationId === location.id) add('transfer', t, t.sentAt);
   return { flags };
+}
+
+/* ─── attendant comparison: P1 ──────────────────────────────────── */
+
+/**
+ * P1 — an attendant who short-fills keeps the tank's books balanced (the
+ * vehicle simply gets less than is written down), so T1 cannot see it. What
+ * shows is that the vehicles he fills come back sooner: their full-to-full
+ * fuel use, for intervals CLOSED by his fills, runs above the same vehicles'
+ * use when other attendants fill them.
+ *
+ * For each month M (window = the `attendantWindowDays` days to M's end, or
+ * to `now` for the current month):
+ *   ratio_i   = interval rate ÷ the vehicle's baseline, for full-to-full
+ *               intervals of vehicles with a meter, closed by a tank/farm fill
+ *   rel_i     = ratio_i ÷ median ratio of that vehicle in the window (so a
+ *               wrong baseline cancels out; only vehicles filled by ≥ 2
+ *               attendants in the window count)
+ *   diff(A)   = median rel of A's intervals ÷ median rel of everyone else's − 1
+ *   flag when diff > attendantAmberPct (amber) / attendantRedPct (red), with at
+ *   least attendantMinIntervals intervals on each side.
+ * Subject = attendant + month; one flag per attendant per month.
+ *
+ * @param {object[]} intervals { toAt, ratio, attendantId, assetId }
+ */
+function attendantComparison({ intervals = [], now, settings = DEFAULT_SETTINGS, nameOf = () => null }) {
+  const s = mergeSettings(settings);
+  const rows = intervals.filter((iv) => isNum(iv.ratio) && iv.ratio > 0 && iv.attendantId && iv.assetId && isNum(iv.toAt) && iv.toAt <= now)
+    .sort((a, b) => a.toAt - b.toAt);
+  const flags = [];
+  if (!rows.length) return { flags, windows: [] };
+  const windows = [];
+  const firstMonth = phnomPenhMonth(rows[0].toAt);
+  const lastMonth = phnomPenhMonth(now);
+  const span = s.attendantWindowDays * DAY_MS;
+  for (let m = firstMonth; m <= lastMonth; m = nextMonth(m)) {
+    const end = Math.min(monthRange(m).end - 1, now);
+    const inWin = rows.filter((r) => r.toAt > end - span && r.toAt <= end);
+    const byAsset = new Map();
+    for (const r of inWin) {
+      if (!byAsset.has(r.assetId)) byAsset.set(r.assetId, []);
+      byAsset.get(r.assetId).push(r);
+    }
+    const rel = [];
+    for (const list of byAsset.values()) {
+      if (new Set(list.map((r) => r.attendantId)).size < 2) continue;
+      const med = median(list.map((r) => r.ratio));
+      for (const r of list) rel.push({ attendantId: r.attendantId, rel: r.ratio / med });
+    }
+    const attendants = [...new Set(rel.map((r) => r.attendantId))];
+    const summary = [];
+    for (const a of attendants) {
+      const mine = rel.filter((r) => r.attendantId === a).map((r) => r.rel);
+      const others = rel.filter((r) => r.attendantId !== a).map((r) => r.rel);
+      const row = { attendantId: a, n: mine.length, nOthers: others.length, median: median(mine), othersMedian: median(others) };
+      row.diffPct = isNum(row.median) && isNum(row.othersMedian) ? (row.median / row.othersMedian - 1) * 100 : null;
+      summary.push(row);
+      if (mine.length < s.attendantMinIntervals || others.length < s.attendantMinIntervals || !isNum(row.diffPct)) continue;
+      if (row.diffPct <= s.attendantAmberPct) continue;
+      const severity = row.diffPct > s.attendantRedPct ? 'red' : 'amber';
+      const who = nameOf(a) || 'This attendant';
+      flags.push(flag('P1', severity, `attendant:${a}:${m}`, {
+        subjectKind: 'employee', subjectId: a, at: end, employeeId: a,
+        measured: row.median, expected: row.othersMedian, threshold: row.othersMedian * (1 + s.attendantAmberPct / 100), unit: '× normal',
+        explanation: `${who}: in the ${s.attendantWindowDays} days to ${phnomPenhDate(end)}, vehicles filled by ${who} used ${fmtNum(row.diffPct, 1)}% more fuel `
+          + `per km or hour before their next full fill than the same vehicles filled by the other attendants (${mine.length} fills vs ${others.length}). `
+          + 'A pattern like this is what short-filling looks like (less fuel goes in than is written down); check his fills against the pump meter.',
+        details: { window: { from: end - span, to: end }, n: mine.length, nOthers: others.length, medianRel: round(row.median, 4), othersMedianRel: round(row.othersMedian, 4), diffPct: round(row.diffPct, 2) },
+      }));
+    }
+    windows.push({ month: m, end, attendants: summary });
+  }
+  return { flags, windows };
+}
+
+function nextMonth(m) {
+  const [y, mo] = m.split('-').map(Number);
+  return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`;
 }
 
 /* ─── pump flow meter rules: M1, M2 ─────────────────────────────── */
@@ -873,6 +1048,8 @@ module.exports = {
   missedDips,
   meterRules,
   transferLoss,
+  attendantComparison,
+  dipReadError,
   queuedNote,
   locationQueuedNotes,
   deliveryEffectiveAt,

@@ -117,3 +117,57 @@ test('the workbook has one sheet per view and the numbers match the report', () 
   const fills = XLSX.utils.sheet_to_json(wb.Sheets.Fills, { header: 1 });
   assert.equal(fills.length, 1 + 42);
 });
+
+/* ─── realistic-data review (2026-10-08) ─── */
+
+test('R1: a vehicle\'s first fill of the month (no full fill before it) adds no excess', () => {
+  const truck = { id: 'tk', name: 'Truck', meterUnit: 'km', baselineRate: 20 };
+  const fills = [
+    { id: 'a', rootId: 'a', kind: 'warehouse_tank', assetId: 'tk', at: OCT1 + DAY, litres: 120, fullTank: true, meterReading: 5000, valueRiel: 480000, driverEmployeeId: 'y' },
+    { id: 'b', rootId: 'b', kind: 'warehouse_tank', assetId: 'tk', at: OCT1 + 5 * DAY, litres: 100, fullTank: true, meterReading: 5500, valueRiel: 400000, driverEmployeeId: 'y' },
+  ];
+  const assetResults = new Map([['tk', rules.assetRules({ asset: truck, fills })]]);
+  const out = buildMonthlyReport({ month: '2026-10', assets: [truck], fills, assetResults });
+  const row = out.assets[0];
+  assert.equal(row.litres, 220, 'all litres are shown');
+  assert.equal(row.expectedLitres, 100, '500 km × 20 L/100 km over the one complete interval');
+  assert.equal(row.excessLitres, 0, 'the opening 120 L is not "excess"');
+});
+
+test('R2: drivers are ranked by suspected loss — cash above the posted price + fuel beyond normal variation', () => {
+  const { out } = report();
+  const x = out.drivers.find((d) => d.employeeId === 'x');
+  // 20 intervals of 3.75 L where 2.5 L is normal: above 2.5 × 1.2 = 3.0 L → 0.75 L each = 15 L at 4,000 KHR/L.
+  assert.equal(x.suspectedExcessLitres, 15);
+  assert.equal(x.suspectedLossRiel, 60000);
+  // A honest driver whose vehicle runs a few % over its owner-set figure adds nothing.
+  const truck = { id: 'tk', name: 'Truck', meterUnit: 'km', baselineRate: 20 };
+  const fills = [];
+  for (let i = 0; i <= 10; i += 1) {
+    fills.push({ id: `t${i}`, rootId: `t${i}`, kind: 'warehouse_tank', assetId: 'tk', at: OCT1 + i * DAY + 1000, litres: 107, fullTank: true, meterReading: 500 * i, valueRiel: 428000, driverEmployeeId: 'heng' });
+  }
+  fills.push({ id: 'c1', rootId: 'c1', kind: 'cash_station', assetId: 'bike', at: OCT1 + 2 * DAY, litres: 2.5, fullTank: false, amountPaidMinor: 15000, currency: 'KHR', litresShownOnPump: 2.5, valueRiel: 15000, overpaidRiel: 5000, driverEmployeeId: 'ratha' });
+  const assetResults = new Map([['tk', rules.assetRules({ asset: truck, fills: fills.filter((f) => f.assetId === 'tk') })]]);
+  const r = buildMonthlyReport({ month: '2026-10', assets: [truck, BIKE], fills, assetResults, employees: [{ id: 'heng', nameEn: 'Heng Sovann' }, { id: 'ratha', nameEn: 'Nhem Ratha' }] });
+  const heng = r.drivers.find((d) => d.employeeId === 'heng');
+  assert.ok(heng.excessLitres > 60, 'the 7 % over the owner\'s figure still shows as excess litres');
+  assert.equal(heng.suspectedLossRiel, 0);
+  assert.equal(r.drivers[0].name, 'Nhem Ratha');
+  assert.equal(r.drivers[0].cashOverpaidRiel, 5000);
+});
+
+test('D2: the month\'s flags are listed whatever their status (a gap closed by a later dip, a reviewed flag)', () => {
+  const r = buildMonthlyReport({
+    month: '2026-10',
+    flags: [
+      { ruleKey: 'T3', severity: 'amber', status: 'open', resolved: false, period: '2026-10', at: OCT1 },
+      { ruleKey: 'T3', severity: 'amber', status: 'explained', resolved: true, period: '2026-10', at: OCT1 + DAY },
+    ],
+  });
+  const t3 = r.flags.find((f) => f.ruleKey === 'T3');
+  assert.equal(t3.total, 2);
+  assert.equal(t3.open, 1);
+  assert.equal(t3.explained, 1);
+  assert.equal(t3.resolved, 1);
+  assert.deepEqual(r.flagList.map((f) => f.status), ['open', 'explained']);
+});

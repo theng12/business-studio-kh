@@ -402,6 +402,11 @@ function ensureFuelSchema(db) {
     addColumnIfMissing(db, t, 'queued_for_ms', 'INTEGER');
     addColumnIfMissing(db, t, 'client_ref_hash', 'TEXT');
   }
+
+  // Realistic-data review: who carried the cans to the farm (rule F1 names
+  // the carrier as well as the receiver).
+  addColumnIfMissing(db, 'fuel_transfers', 'carried_by_employee_id', 'TEXT REFERENCES employees(id) ON DELETE RESTRICT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_fuel_transfers_carried_by ON fuel_transfers(carried_by_employee_id)');
 }
 
 module.exports = { ensureFuelSchema };

@@ -13,7 +13,7 @@ import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { useFuelCaps, useFuelIntent, useFuelLookups, useFuelTick } from './fuelHooks.js';
 import { FuelPhotoThumb, PhotoViewer, ReasonModal, StaffSelect } from './FuelShared.jsx';
 import {
-  FUEL_TYPES, METER_UNITS, fmtLitres, fmtNumber, fmtWhen, fuelTypeLabel, meterWord, parseNumber, parsePpInput,
+  FUEL_TYPES, METER_UNITS, fmtLitres, meterShort, fmtNumber, fmtWhen, fuelTypeLabel, meterWord, parseNumber, parsePpInput,
   ppInputValue, rateUnit, staffName, validateAssetForm, errText,
 } from './fuelModel.js';
 
@@ -113,7 +113,7 @@ export function FuelAssets() {
                       <td><strong>{a.name}</strong>{a.plateOrSerial ? <div className="muted">{a.plateOrSerial}</div> : null}</td>
                       <td>{a.typeName || '—'}</td>
                       <td>{fuelTypeLabel(a.fuelType)}</td>
-                      <td>{METER_UNITS.find((m) => m.value === a.meterUnit)?.label || a.meterUnit}</td>
+                      <td className="fuel-nowrap">{meterShort(a.meterUnit)}</td>
                       <td className="is-num">{fmtLitres(a.tankCapacityL, 0)}</td>
                       <td className="is-num">
                         {a.baselineRate ? `${fmtNumber(a.baselineRate, 2)} ${rateUnit(a.meterUnit)}` : '—'}

@@ -15,7 +15,7 @@ import { LoadError, ManageOnlyNote, SeverityBadge } from './FuelShared.jsx';
 import { FuelPhoneSetupSlot } from './PhoneSetupSlot.jsx';
 import {
   FLAG_ACTIONS, FLAG_STATUS_LABEL, dipAge, flagHeadline, flagReviewError, fmtDay, fmtLitres, fmtNumber, fmtRiel,
-  fmtWhen, monthLabel, ruleTitle, sortFlags, staffName, errText,
+  fmtShort, monthLabel, ruleTitle, sortFlags, staffName, errText,
 } from './fuelModel.js';
 
 const FLAG_VIEWS = [
@@ -197,7 +197,7 @@ export function FuelOverview() {
                       <td><strong>{t.name}</strong>{!t.hasChart && t.kind === 'tank' ? <span className="muted"> · no dip chart</span> : null}</td>
                       <td>{t.kind === 'farm_store' ? 'Farm store' : 'Tank'}{t.hasFlowMeter ? ' · flow meter' : ''}</td>
                       <td>
-                        {t.lastDip ? fmtWhen(t.lastDip.takenAt) : 'Never dipped'}
+                        {t.lastDip ? fmtShort(t.lastDip.takenAt) : 'Never dipped'}
                         {age.stale && t.kind === 'tank' ? <> <Badge tone="amber">{age.never ? 'Dip it' : `${age.days} days ago`}</Badge></> : null}
                       </td>
                       <td className="is-num">{t.lastDip?.dipCm != null ? `${fmtNumber(t.lastDip.dipCm, 1)} cm` : '—'}</td>

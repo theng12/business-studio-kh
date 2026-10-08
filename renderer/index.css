@@ -12314,3 +12314,9 @@ a:hover { text-decoration-thickness: 2px; }
 .fuel-phone-setup__actions { display: flex; justify-content: flex-end; }
 .fuel-load-error { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); border: 1px solid var(--c-rose); border-radius: var(--radius-md); color: var(--c-rose); font-size: var(--fs-md); margin-bottom: var(--s-3); }
 .fuel-when-now { margin: var(--s-2) 0 0; font-size: var(--fs-md); }
+/* 1280 px fit (realistic-data run): dates and figures never wrap mid-value. */
+.fuel-nowrap { white-space: nowrap; }
+.page--fuel .data-table td.is-num, .page--fuel .data-table th.is-num { white-space: nowrap; }
+.fuel-panel__title { flex: 1; min-width: 0; }
+.fuel-recon-table td { vertical-align: top; }
+.fuel-nowrap .fuel-photo-strip { flex-wrap: nowrap; }

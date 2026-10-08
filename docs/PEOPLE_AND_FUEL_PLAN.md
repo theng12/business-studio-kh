@@ -431,7 +431,7 @@ ignored and `source` forced to `'phone'` — the server clock decides. A phone t
 "arrival − wait" but **never before** the tank's latest dip, the vehicle's latest fill or that account's
 previous record; the reported wait is stored (`queuedForMs`) and a wait over 15 min raises an info flag
 **Q1** for the reviewer. Only a manager entering a paper slip on the Mac may pass the slip's own `at`
-(never in the future). Staff marked **left** cannot be chosen on a new record (plain error). Money is whole numbers in the smallest unit:
+(never in the future). Staff marked **left** cannot be chosen on a new record dated after their leaving day (plain error); a slip from on or before that day is accepted. A USD cash slip with no litres is worked out at the server's exchange rate. Money is whole numbers in the smallest unit:
 `amountPaidMinor` / `priceMinorPerL` in riel (or US cents) with `currency` `KHR|USD`. Litres and meter
 readings are numbers. `clientRef` (6–100 chars `[A-Za-z0-9_.:-]`, e.g. `<phone-id>:<uuid>`) makes a
 record upload idempotent: a retry returns the saved record with `duplicate: true` — to the account that
@@ -497,7 +497,7 @@ a phone account makes that person the default driver (cash fills) / attendant (t
 | `fuel:recordDip` | `{ locationId, dipCm (litres? when the tank has no chart), takenByEmployeeId?, witnessEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ dip, duplicate, flags }` | R |
 | `fuel:recordDelivery` | `{ locationId, litresInvoiced, supplier?, invoiceNo?, priceMinorPerL?, amountMinor?, currency?, dipBeforeId?, dipAfterId?, receivedByEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ delivery, duplicate }` | R |
 | `fuel:setDeliveryDips` | `{ id, dipBeforeId?, dipAfterId? }` — a field not passed keeps its link; `null` clears it | `Delivery` | **M** (the phone passes `dipBeforeId`/`dipAfterId` when it records the delivery) |
-| `fuel:recordTransfer` | `{ fromLocationId, toLocationId?, litresSent?, pumpMeterBefore?, pumpMeterAfter?, containers?, containerNote?, sentByEmployeeId?, note?, at?, source?, clientRef?, photos? }` | `{ transfer, duplicate }` | R |
+| `fuel:recordTransfer` | `{ fromLocationId, toLocationId?, litresSent?, pumpMeterBefore?, pumpMeterAfter?, containers?, containerNote?, sentByEmployeeId?, carriedByEmployeeId?, note?, at?, source?, clientRef?, photos? }` (`carriedByEmployeeId`: who takes the cans to the farm — named on rule F1) | `{ transfer, duplicate }` | R |
 | `fuel:receiveTransfer` | `{ id, litresReceived, receivedByEmployeeId?, note?, at?, source?, queuedForMs?, photos? }` | `{ transfer, duplicate }` (the same account repeating the same litres gets it back unchanged; another account, or other litres, is refused: "Someone else already recorded this delivery as received"). For R, the account that recorded the send, or the sender, cannot confirm the receipt | R |
 | `fuel:addPhoto` | `{ ownerKind: 'fill'\|'dip'\|'delivery'\|'transfer', ownerId, kind, bytes }` | photo meta (own records only for R; at most 12 per record) | R |
 | `fuel:getPhoto` | `{ photoId, thumb?: bool }` (thumb = 320 px) | `{ bytes, mime, sha256, intact, kind, uploadedAt }` | R |
@@ -522,7 +522,7 @@ shown on the pump; else amount ÷ published price (`derived_from_price`).
 | `fuel:reviewFlag` | `{ id, status: 'open'\|'explained'\|'confirmed'\|'dismissed', note? }` (note required except confirmed/open) | `Flag` | M |
 | `fuel:recomputeFlags` | — | `{ assets, locations, opened, errors }` | M |
 | `fuel:getOverview` | — | `{ openFlags: { red, amber, info }, fillsToReview: { new, needs_review }, tanks: [{ …, lastDip }], pendingTransfers, month, excessRiel }` | M |
-| `fuel:getMonthlyReport` | `{ month?: 'YYYY-MM' }` (default this month) | `{ month, totals, assets[], drivers[], tanks[], flags[] }` (§4.5) | M |
+| `fuel:getMonthlyReport` | `{ month?: 'YYYY-MM' }` (default this month) | `{ month, totals, assets[], drivers[], tanks[], flags[], flagList[] }` (§4.5). Excess is counted only over full-to-full intervals CLOSED in the month (a vehicle's first fill adds none). Assets and drivers carry `excessLitres`/`excessRiel`, `cashOverpaidRiel` (cash above the posted price), `suspectedExcessLitres` (litres above expected × the A1 amber ratio) and `suspectedLossRiel` = suspected excess in riel + cash overpaid — **both lists are sorted by `suspectedLossRiel`** (screens should rank by it too). `flags[]` counts every flag of the month whatever its status (`open`, `explained`, `confirmed`, `dismissed`, `resolved`); `flagList[]` lists them with status | M |
 | `fuel:getMonthlyWorkbook` | `{ month? }` | `{ filename, bytes }` (.xlsx: Per asset, Per driver, Tanks, Fills, Flags, Notes) | M |
 | `fuel:saveMonthlyWorkbook` **local** | `{ month? }` | saved path or `null` (Save dialog on this Mac) | M |
 | `fuel:sweepPhotoRetention` | — | `{ retired, missing }` | M |
@@ -530,12 +530,23 @@ shown on the pump; else amount ÷ published price (`derived_from_price`).
 `Flag = { id, ruleKey, severity: 'red'|'amber'|'info', subject, subjectKind, subjectId, assetId,
 locationId, employeeId, stationId, period, at, measured, expected, threshold, unit, explanation,
 details, status, reviewNote, reviewedByUserId, reviewedAt, firstSeenAt, lastSeenAt, resolved }`.
-Rules: T1 tank reconciliation, T2 short delivery, T3 missed dip, A1 high use (full-to-full), A2 meter
-not moving, A3 meter backwards, A4 impossible jump, A5 more than the tank, A6 refilled too soon, A7
-missing evidence, C0 (info) no published price / exchange rate to compare a cash fill with, C1 above
-posted price, C2 paid for more than the tank, C5 reviewer ≠ typed, M1 pump meter ≠ typed (for a
-transfer: the typed litres), M2 pump meter gap, F1 transfer loss (sent − received > 2 % amber, > 5 %
-red), Q1 (info) entered on the phone long before it arrived. USD cash is compared with a KHR price at
+Rules: T1 tank reconciliation (tolerance = read error of BOTH dips + 0.5 % of litres moved; a level
+read without a chart may be off by max(5 L, 1 % of capacity); "more than recorded" on a dip younger
+than 2 h waits for the delivery), T2 short delivery (same per-dip errors), T3 missed dip (every gap
+longer than N calendar days, between dips or up to today; subject = tank + the dip the gap starts at, so
+it stays listed after the next dip), A1 high use (full-to-full, judged over runs of at least 20 L — or
+half a small tank — and, for machines without a meter, at least 7 days), A2 meter not moving, A3 meter
+backwards, A4 impossible jump, A5 more than the tank, A6 refilled too soon, A7 missing evidence (a Mac
+paper slip with a photo is `info`; amber with no photo at all or a phone entry without the photos), C0
+(info) no published price / exchange rate to compare a cash fill with, C1 above posted price (USD
+payments get a 3 % street-rate allowance), C2 paid for more than the tank, C5 reviewer ≠ typed, M1 pump
+meter ≠ typed (for a transfer: the typed litres), M2 pump meter gap, F1 transfer loss (sent − received
+> 2 % amber, > 5 % red; names the carrier and the receiver, filed under the carrier), **P1 attendant
+comparison** (each month, over the 60 days to month end: full-to-full intervals of metered vehicles
+closed by an attendant's tank/farm fill, rate ÷ baseline, normalised by that vehicle's median so a wrong
+baseline cancels out; an attendant whose median exceeds the others' by > 2.5 % amber / > 5 % red, with ≥ 20
+intervals on each side; subject = attendant + month; runs in the full pass), Q1 (info) entered on the
+phone long before it arrived. USD cash is compared with a KHR price at
 the server's `exchangeRateKhrPerUsd` (Settings, default 4,100). A delivery linked to its dips counts
 inside them (at min(delivered_at, after-dip − 1 ms)), so typing it in after the "after" dip raises no
 false T1. Flags are recomputed after every save — only the window of history the save touched (dip
@@ -552,7 +563,9 @@ old review kept in History.
 `tankOverfillRatio 1.05`, `refillTooSoonPct 25`, `c1PriceRatio 1.02`, `c1RedRatio 1.1`,
 `c5TolerancePct 1`, `meterTolerancePct 1`, `meterToleranceL 0.5`, `meterGapToleranceL 0.5`,
 `photoRetentionMonths 24`, `canSizeL 20`, `defaultCurrency 'KHR'`, `transferLossAmberPct 2`,
-`transferLossRedPct 5`, `queuedNoteMinutes 15`.
+`transferLossRedPct 5`, `queuedNoteMinutes 15`, `typedDipErrorMinL 5`, `typedDipErrorPct 1`,
+`t1GraceMinutes 120`, `a1MinLitres 20`, `a1MinDaysNoMeter 7`, `usdStreetRatePct 3`,
+`attendantWindowDays 60`, `attendantMinIntervals 20`, `attendantAmberPct 2.5`, `attendantRedPct 5`.
 
 **Not deletable, by design.** No channel deletes a fill, dip, delivery, transfer, reset, price, staff
 member, asset or tank: void (with reason), correct (new revision), mark left, retire. `companies:remove`
