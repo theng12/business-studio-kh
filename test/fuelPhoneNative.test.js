@@ -146,8 +146,13 @@ test('the phone page\'s records are accepted by the real server, once each', { s
 
   // Send to farm, then the FARM phone receives it (the sender may not confirm their own
   // send); twice — the second is answered unchanged.
-  const sent = await send(item('fuel:recordTransfer', { fromLocationId: tank.id, toLocationId: farm.id, litresSent: 200, containers: 10 }, ['containers']));
+  const sendItem = item('fuel:recordTransfer', { fromLocationId: tank.id, toLocationId: farm.id, carriedByEmployeeId: driver.id, litresSent: 200, containers: 10 }, ['containers']);
+  const sent = await send(sendItem);
   assert.equal(sent.transfer.litresSent, 200);
+  assert.equal(sent.transfer.carriedByEmployeeId, driver.id, '"Who is taking it?" is stored');
+  const sentAgain = await send(sendItem);
+  assert.equal(sentAgain.duplicate, true, 'a resend with the carrier is the same record');
+  assert.equal(sentAgain.transfer.id, sent.transfer.id);
   const pending = await rpc('fuel:listPendingTransfers', {}, farmPhone.token);
   assert.deepEqual(pending.map((p) => p.id), [sent.transfer.id]);
   assert.equal(pending[0].recordedByUserId, pump.id, 'the page hides transfers this phone sent itself');

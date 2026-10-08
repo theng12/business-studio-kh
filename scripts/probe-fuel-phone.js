@@ -140,8 +140,15 @@ function fixture() {
         case 'companies:getActiveId': return ok('c1');
         case 'fuel:getSettings': return ok({ canSizeL: 20, defaultCurrency: 'KHR' });
         case 'fuel:listAssets': return ok([{ id: 'truck1', name: 'Truck 1', plateOrSerial: '3A-1234', typeName: 'Truck', meterUnit: 'km', status: 'active', assignedEmployeeId: 'emp1', photoId: null }]);
-        case 'fuel:listLocations': return ok([{ id: 'tank1', name: 'Warehouse tank', kind: 'tank', capacityL: 5000, hasFlowMeter: false, hasChart: true, status: 'active' }]);
-        case 'staff:list': return ok([{ id: 'emp1', nameEn: 'Sok', nameKm: 'សុខ', staffCode: 'D01', isDriver: true, isFuelAttendant: false, status: 'active', hasPhoto: false }]);
+        case 'fuel:listLocations': return ok([
+          { id: 'tank1', name: 'Warehouse tank', kind: 'tank', capacityL: 5000, hasFlowMeter: false, hasChart: true, status: 'active' },
+          ...(state.withFarm ? [{ id: 'farm1', name: 'Farm store', kind: 'farm_store', capacityL: 1000, hasFlowMeter: false, hasChart: false, status: 'active' }] : []),
+        ]);
+        case 'staff:list': return ok([
+          ...(state.withFarm ? [{ id: 'emp2', nameEn: 'Aaron', nameKm: 'អារុណ', staffCode: 'W01', isDriver: false, isFuelAttendant: false, status: 'active', hasPhoto: false }] : []),
+          { id: 'emp1', nameEn: 'Sok', nameKm: 'សុខ', staffCode: 'D01', isDriver: true, isFuelAttendant: false, status: 'active', hasPhoto: false },
+        ]);
+        case 'fuel:recordTransfer': return ok(save('transfer', { fromLocationId: args.fromLocationId, toLocationId: args.toLocationId, litresSent: args.litresSent, carriedByEmployeeId: args.carriedByEmployeeId ?? null, sentAt: Date.now() }));
         case 'staff:me': return ok({ id: 'emp1', nameEn: 'Sok', nameKm: 'សុខ', isDriver: true, isFuelAttendant: true, status: 'active' });
         case 'fuel:listStations': return ok([{ id: 's1', name: 'Tela Kampong Speu', area: null, archived: false }]);
         case 'fuel:getChart': return ok(ULLAGE);
@@ -350,7 +357,37 @@ app.whenReady().then(async () => {
   await screenshot('7-delivery-saved');
   result.checks.push({ name: 'delivery-with-linked-dips' });
 
-  /* 6. A refused token sends the phone back to pairing */
+  /* 6. Send to farm: "Who is taking it?" — drivers first; the pick travels and is confirmed */
+  state.withFarm = true;
+  win.webContents.reload();
+  await waitFor(() => exists('[data-flow="send"]'), 'Send to farm on home once a farm store exists');
+  await click('[data-flow="send"]');
+  await waitFor(() => exists('.tile[data-id="emp1"]'), 'carrier tiles (tank and farm store auto-picked)');
+  assert.equal(await h1(), 'Who is taking it?');
+  const carriers = await js(`Array.from(document.querySelectorAll('.tile')).map((t) => t.dataset.id)`);
+  assert.deepEqual(carriers, ['emp1', 'emp2', ''], 'the driver first, then others, then "Not known"');
+  await click('.tile[data-id="emp1"]');
+  await waitFor(() => exists('[data-value="litres"]'), 'how much');
+  await click('[data-value="litres"]');
+  await waitFor(() => exists('.key[data-key="2"]'), 'litres keypad');
+  await keys(['2', '0', '0']);
+  await clickButton('Next');
+  await waitFor(async () => (await h1()) === 'How many containers?', 'containers');
+  await clickButton('Skip');
+  await waitFor(() => exists('input[type=file]'), 'containers photo');
+  await takePhoto();
+  await waitFor(() => exists('[data-save]'), 'send review');
+  assert.match(await js(`document.querySelector('.facts').textContent`), /Taken bySok/);
+  await click('[data-save]');
+  await waitFor(() => exists('[data-result="sent"]'), 'send saved');
+  const tr = state.calls.find((c) => c.channel === 'fuel:recordTransfer').args;
+  assert.deepEqual({ from: tr.fromLocationId, to: tr.toLocationId, litres: tr.litresSent, carried: tr.carriedByEmployeeId },
+    { from: 'tank1', to: 'farm1', litres: 200, carried: 'emp1' });
+  assert.match(await js(`document.querySelector('.facts').textContent`), /Taken bySok/, 'confirmed from the server answer');
+  await screenshot('8-send-carrier');
+  result.checks.push({ name: 'send-to-farm-carrier' });
+
+  /* 7. A refused token sends the phone back to pairing */
   await js(`localStorage.setItem('mskh.fuel.token', 'revoked')`);
   win.webContents.reload();
   await waitFor(() => js(`!!document.querySelector('.notice--bad') && document.getElementById('barTitle').textContent === 'Connect this phone'`), 'connect screen after a refused token');

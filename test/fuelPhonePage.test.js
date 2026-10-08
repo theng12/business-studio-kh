@@ -145,3 +145,10 @@ test('review fixes: opens in the browser (not a standalone web app), neutral che
   assert.match(setup, /Open as Web App/);
   assert.doesNotMatch(setup, /Keep it on the home screen/);
 });
+
+test('Send to farm asks who is taking it (drivers first, "Not known" allowed) and sends it', () => {
+  assert.match(app, /key: 'carriedByEmployeeId', title: 'pick_carrier', search: true, none: 'carrier_unknown'/);
+  assert.match(app, /if \(d\.carriedByEmployeeId\) args\.carriedByEmployeeId = d\.carriedByEmployeeId;/);
+  assert.match(app, /if \(!!a\.isDriver !== !!b\.isDriver\) return a\.isDriver \? -1 : 1;/);
+  assert.match(app, /\['field_carrier'/);
+});

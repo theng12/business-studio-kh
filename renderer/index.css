@@ -12320,3 +12320,10 @@ a:hover { text-decoration-thickness: 2px; }
 .fuel-panel__title { flex: 1; min-width: 0; }
 .fuel-recon-table td { vertical-align: top; }
 .fuel-nowrap .fuel-photo-strip { flex-wrap: nowrap; }
+.fuel-evidence-note { margin: var(--s-2) 0 0; font-size: var(--fs-sm); padding: var(--s-2) var(--s-3); border-radius: var(--radius-sm); border: 1px solid var(--c-border); }
+.fuel-evidence-note.is-warning { border-color: var(--c-amber); color: var(--c-amber); }
+.fuel-evidence-note.is-ok { color: var(--c-emerald); border-color: var(--c-emerald); }
+.fuel-flag.is-quiet { opacity: 0.75; }
+.fuel-explain { max-width: 900px; line-height: 1.5; }
+.fuel-excess .muted { font-weight: 400; white-space: normal; }
+.fuel-excess .fuel-overpaid { color: var(--c-rose); }

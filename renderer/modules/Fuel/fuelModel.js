@@ -205,9 +205,12 @@ const PHOTO_KIND_LABELS = {
 export const photoKindLabel = (k) => PHOTO_KIND_LABELS[k] || k || 'Photo';
 
 /** Which photo kind a new fill photo defaults to, for the form's kind. */
-export function defaultPhotoKind(fillKind, existing = []) {
+export function defaultPhotoKind(fillKind, existing = [], { paperSlip = false } = {}) {
   const have = new Set(existing.map((p) => p.kind));
-  const order = fillKind === 'cash_station' ? ['pump_display', 'meter', 'receipt', 'fill'] : ['meter', 'fill', 'pump_meter_before', 'pump_meter_after'];
+  // A paper slip typed in on the Mac: the first photo is the slip itself.
+  const order = paperSlip
+    ? ['receipt', ...(fillKind === 'cash_station' ? ['pump_display', 'meter'] : ['meter', 'fill'])]
+    : fillKind === 'cash_station' ? ['pump_display', 'meter', 'receipt', 'fill'] : ['meter', 'fill', 'pump_meter_before', 'pump_meter_after'];
   return order.find((k) => !have.has(k)) || 'other';
 }
 
@@ -306,7 +309,9 @@ export function flagHeadline(flag, lk = {}) {
     case 'A4': return `${a}: the meter jumped further than is possible`;
     case 'A5': return `${a}: more fuel recorded than the tank holds`;
     case 'A6': return `${a} was refilled too soon`;
-    case 'A7': return `${a}: a photo or reading is missing`;
+    case 'A7': return flag.severity === 'info' || flag.details?.paperSlip
+      ? `${a}: paper slip — no meter or pump photo (noted)`
+      : `${a}: a photo or reading is missing`;
     case 'C0': return `${a}: a cash fill could not be checked against a posted price`;
     case 'C1': return pct != null ? `${a}: paid ${pct}% above the posted price${at}` : `${a}: paid above the posted price${at}`;
     case 'C2': return `${a}: paid for more fuel than the tank holds${at}`;
@@ -320,7 +325,16 @@ export function flagHeadline(flag, lk = {}) {
       const short = isNum(flag.expected) && isNum(flag.measured) ? flag.expected - flag.measured : null;
       return short != null ? `${t}: delivery ${fmtLitres(short, 0)} short` : `${t}: delivery short`;
     }
-    case 'T3': return isNum(flag.measured) ? `${t} has not been dipped for ${Math.floor(flag.measured)} days` : `${t} has not been dipped`;
+    case 'T3': {
+      // Every gap is its own flag: an open one runs to today, a closed one
+      // ended with a dip and stays listed (details.from / details.to).
+      const days = isNum(flag.measured) ? Math.floor(flag.measured) : null;
+      const d = flag.details || {};
+      if (d.open === false && d.from && d.to) {
+        return `${t}: no dip for ${days ?? '?'} days (${fmtDay(d.from)} to ${fmtDay(d.to)})`;
+      }
+      return days != null ? `${t} has not been dipped for ${days} days` : `${t} has not been dipped`;
+    }
     case 'M1': return `${t}: pump meter and typed litres disagree`;
     case 'M2': {
       const gap = isNum(flag.measured) && isNum(flag.expected) ? flag.measured - flag.expected : null;
@@ -329,12 +343,16 @@ export function flagHeadline(flag, lk = {}) {
     }
     case 'F1': {
       const lost = isNum(flag.expected) && isNum(flag.measured) ? flag.expected - flag.measured : null;
-      return lost != null ? `${t}: ${fmtLitres(lost, 1)} lost on the way to the farm` : `${t}: fuel lost on the way to the farm`;
+      const carrierId = flag.details?.carrierEmployeeId ?? null;
+      const carrier = carrierId ? lk.staff?.get(carrierId) : null;
+      const by = carrier ? ` (carried by ${staffName(carrier)})` : '';
+      return lost != null ? `${t}: ${fmtLitres(lost, 1)} lost on the way to the farm${by}` : `${t}: fuel lost on the way to the farm${by}`;
     }
     case 'P1': {
       const who = flag.employeeId ? lk.staff?.get(flag.employeeId) : null;
       const name = who ? staffName(who) : 'An attendant';
-      const pctP = percentOver(flag.measured, flag.expected);
+      // The rule's own figure (one decimal), so the headline matches the explanation.
+      const pctP = isNum(flag.details?.diffPct) ? fmtNumber(flag.details.diffPct, 1) : percentOver(flag.measured, flag.expected);
       return pctP != null ? `${name}: vehicles they filled used ${pctP}% more than normal` : `${name}: vehicles they filled used more than normal`;
     }
     case 'Q1': return `${t}: a phone entry reached the office late (the phone was offline)`;
@@ -645,12 +663,43 @@ export function dipAge(lastDip, missedDipDays = 2, now = Date.now()) {
 /* ─── reports ─────────────────────────────────────────────────────────── */
 
 /** Drivers ranked by excess riel, biggest first; unknown excess last. */
+/**
+ * Drivers (or vehicles) ranked like the server ranks them: by suspected loss
+ * (riel of the fuel above normal variation + cash paid above the pump price),
+ * then raw excess riel, then name. Unknown figures go last.
+ */
 export function rankDrivers(drivers) {
-  return (Array.isArray(drivers) ? drivers.slice() : []).sort((a, b) => {
-    const ax = isNum(a.excessRiel) ? a.excessRiel : -Infinity;
-    const bx = isNum(b.excessRiel) ? b.excessRiel : -Infinity;
-    return bx - ax || String(a.name || '').localeCompare(String(b.name || ''));
-  });
+  const v = (n) => (isNum(n) ? n : -Infinity);
+  return (Array.isArray(drivers) ? drivers.slice() : []).sort((a, b) =>
+    v(b.suspectedLossRiel) - v(a.suspectedLossRiel)
+    || v(b.excessRiel) - v(a.excessRiel)
+    || String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+/** Sum of a report's suspected loss (the totals block does not carry it). */
+export function totalSuspectedLoss(rows) {
+  return (Array.isArray(rows) ? rows : []).reduce((t, r) => t + (isNum(r.suspectedLossRiel) ? r.suspectedLossRiel : 0), 0);
+}
+
+/** A flag's status for a badge: reviewed answers, open, or no longer firing. */
+export function flagStatusBadge(flag) {
+  if (flag?.status && flag.status !== 'open') {
+    return { label: FLAG_STATUS_LABEL[flag.status] || flag.status, tone: flag.status === 'confirmed' ? 'rose' : 'emerald' };
+  }
+  if (flag?.resolved) return { label: 'No longer firing', tone: 'slate' };
+  return { label: 'Open', tone: 'amber' };
+}
+
+/**
+ * What the paper-slip form says about evidence (rule A7). With a photo of the
+ * slip and the meter reading, a missing meter / pump photo is only noted
+ * (info); with no photo at all, or no reading, it is an amber flag.
+ */
+export function slipEvidenceNote({ photoCount = 0, meterUnit = 'km', meterReading = '' } = {}) {
+  const needsReading = meterUnit !== 'none' && !String(meterReading ?? '').trim();
+  if (photoCount === 0) return { tone: 'amber', text: 'No photo yet — this fill will get an amber “missing evidence” flag. Attach a photo of the slip (or paste it with ⌘V) and it is only noted.' };
+  if (needsReading) return { tone: 'amber', text: 'Enter the meter reading too — without it the fill is flagged even with the slip photo.' };
+  return { tone: 'ok', text: 'Slip photo attached — a missing meter or pump photo is only noted, not flagged.' };
 }
 
 /* ─── settings → Fuel ─────────────────────────────────────────────────── */
