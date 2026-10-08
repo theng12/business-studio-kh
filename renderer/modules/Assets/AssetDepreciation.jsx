@@ -15,7 +15,7 @@ import { formatDateTime } from '../../lib/format.js';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { ReasonModal } from '../Fuel/FuelShared.jsx';
 import { openAssetPage, useAssetCaps, useAssetLookups, useAssetsTick } from './assetsHooks.js';
-import { LoadError, Money, NeedsCapNote, Notice } from './AssetsShared.jsx';
+import { LoadError, Money, NeedsCapNote, Notice, Segments, openRowProps } from './AssetsShared.jsx';
 import { catchUpExplanation, errText, fmtPeriod, fmtUsd, runStatusOf, runsView } from './assetsModel.js';
 
 const TZ = { timeZone: 'Asia/Phnom_Penh' };
@@ -186,9 +186,7 @@ function PreviewModal({ period, lookups, canManage, companyId, onClose, onPosted
             <div className="stat-card"><div className="stat-card__label">Assets</div><div className="stat-card__value">{(data.rows || []).filter((r) => r.dueMinor).length}</div></div>
           </div>
           <div className="toolbar">
-            <div className="segments" role="tablist" aria-label="Group">
-              {GROUPS.map((g) => <button key={g.key} type="button" className={`segment${group === g.key ? ' is-active' : ''}`} onClick={() => { setGroup(g.key); setPage(0); }}>{g.label}</button>)}
-            </div>
+            <Segments label="Group" value={group} onChange={(v) => { setGroup(v); setPage(0); }} options={GROUPS.map((g) => ({ value: g.key, label: g.label }))} />
           </div>
           {rows.length === 0 ? <p className="muted">Nothing is due for this month.</p> : (
             <>
@@ -202,7 +200,7 @@ function PreviewModal({ period, lookups, canManage, companyId, onClose, onPosted
                   </thead>
                   <tbody>
                     {rows.slice(pageStart, pageEnd).map((r) => (
-                      <tr key={r.key || r.assetId} className={group === 'asset' ? 'is-clickable' : undefined} onClick={group === 'asset' ? () => { onClose(); openAssetPage(r.assetId, companyId); } : undefined}>
+                      <tr key={r.key || r.assetId} className={group === 'asset' ? 'is-clickable' : undefined} {...(group === 'asset' ? openRowProps(() => { onClose(); openAssetPage(r.assetId, companyId); }, `Open ${r.tagCode}`) : {})}>
                         {group === 'asset' ? <><td><strong>{r.tagCode}</strong></td><td>{r.name}</td><td>{r.categoryName}</td></> : <td>{r.label}</td>}
                         <td className="is-num">{fmtUsd(r.monthMinor)}</td>
                         <td className="is-num">{r.catchUpMinor ? fmtUsd(r.catchUpMinor) : '—'}</td>

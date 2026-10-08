@@ -317,6 +317,19 @@ export const DRAFT_FIELDS = [...IDENTITY_FIELDS, 'categoryId', 'quantity', 'acqu
   'branchId', 'custodianEmployeeId', 'status'];
 const DATE_FIELDS = new Set(['insuranceUntil', 'roadTaxUntil', 'warrantyUntil', 'purchaseDate', 'inServiceDate']);
 
+/** "Value at the start date" applies only to an asset already owned at the start (an opening). */
+export const isDeemed = (acquisitionKind, costBasis) => acquisitionKind === 'opening' && costBasis === 'deemed';
+
+/**
+ * Changing "How" on a draft: leaving "Already owned" also leaves "value at the
+ * start date" — a purchase always has an actual cost. Returns the form keys to set.
+ */
+export function acquisitionChange(form, kind) {
+  const out = { acquisitionKind: kind };
+  if (kind !== 'opening' && form?.costBasis === 'deemed') out.costBasis = 'actual';
+  return out;
+}
+
 /** May this field be edited on this asset right now? */
 export function canEditField(asset, key) {
   if (!asset || asset.recordState === 'cancelled') return false;
@@ -398,6 +411,23 @@ export function newAssetForm({ kind = 'purchase', category = null } = {}) {
     knowsCost: 'yes', usefulLifeMonths: category?.defaultLifeMonths ? String(category.defaultLifeMonths) : '',
     salvage: '', depreciate: 'auto', warrantyUntil: '', notes: '',
   };
+}
+
+/**
+ * The cost field's words on "+ New asset": with N separate items the amount
+ * is the cost of EACH (and the total is shown); a group asset takes the cost
+ * of the whole lot. `{ label, hint }`.
+ */
+export function costWording(form) {
+  const deemed = form?.kind === 'opening' && form?.knowsCost === 'no';
+  const qty = parseWhole(form?.quantity, { min: 1, max: 100000 }).value || 1;
+  const base = deemed ? 'Value at the start date' : 'Cost';
+  const cur = deemed ? 'USD' : (form?.costCurrency || 'USD');
+  if (qty <= 1) return { label: base, hint: deemed ? 'Your best estimate is fine.' : 'Net of VAT you can reclaim. Can be added later.' };
+  if (form?.split === 'group') return { label: `${base} of the whole lot`, hint: `All ${qty} together, as one asset.` };
+  const each = parseMoney(form?.cost, cur).minor;
+  const fmt = (m) => fmtMoneyIn(m, cur);
+  return { label: `${base} of each`, hint: each != null ? `${qty} × ${fmt(each)} = ${fmt(each * qty)}` : `Each of the ${qty} gets this amount.` };
 }
 
 /** Most separate assets one "Add" creates (each gets its own tag). */
@@ -495,7 +525,9 @@ export function eventActions(e, { canManage = false } = {}) {
   if (!canManage || !e || e.voided || e.reversedByEventId || e.kind === 'reversal') return [];
   const out = [];
   if (VOIDABLE_EVENTS.has(e.kind)) out.push({ key: 'void', label: 'Void…' });
-  if (REVERSIBLE_EVENTS.has(e.kind) && e.journalEntryId) out.push({ key: 'reverse', label: 'Reverse…' });
+  // Offered whether or not it posted: a tracked-only activation or disposal posts nothing but can
+  // still be undone. The server decides (latest only, nothing posted after it).
+  if (REVERSIBLE_EVENTS.has(e.kind)) out.push({ key: 'reverse', label: 'Reverse…' });
   return out;
 }
 
@@ -627,6 +659,12 @@ export function hasUnconfirmedEstimate(year) {
   return poolRows(year).some((p) => p.openingSource === 'estimate' && !p.confirmedByAccountant && (p.openingWdvKhr || 0) !== 0);
 }
 
+/**
+ * Has this (calendar) tax year ended in Phnom Penh? A year can be marked
+ * filed only after its last day (review LOW 5).
+ */
+export const taxYearEnded = (year, now = Date.now()) => Number(year) < Number(todayKey(now).slice(0, 4));
+
 /** Years a tax view can show: from the register's first year to this year. */
 export function taxYears(startDate, now = Date.now()) {
   const first = Number(String(startDate || '').slice(0, 4)) || Number(todayKey(now).slice(0, 4));
@@ -657,10 +695,17 @@ export function guessMapping(headers, columns) {
   return out;
 }
 
-/** Sheet rows + mapping → `[{ key: text }]` (blank cells left out; a row with nothing is dropped). */
+/**
+ * Sheet rows + mapping → `[{ key: text, sourceRow }]` (blank cells left out; a
+ * row with nothing is dropped). `sourceRow` is the row's number as read
+ * (header = 1), so the review's row numbers still match the sheet after rows
+ * are dropped.
+ */
 export function buildImportRows(rows, mapping) {
   const out = [];
-  for (const r of Array.isArray(rows) ? rows : []) {
+  const list = Array.isArray(rows) ? rows : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const r = list[i];
     const o = {};
     for (const [header, key] of Object.entries(mapping || {})) {
       if (!key) continue;
@@ -668,9 +713,35 @@ export function buildImportRows(rows, mapping) {
       const s = v == null ? '' : String(v).trim();
       if (s) o[key] = s;
     }
-    if (Object.keys(o).length) out.push(o);
+    if (Object.keys(o).length) out.push({ ...o, sourceRow: i + 2 });
   }
   return out;
+}
+
+/** Turn years into months (× 12) in these columns of built import rows; a cell that is not a number is left as typed. */
+export function convertYearsToMonths(rows, keys) {
+  const set = new Set(keys || []);
+  if (!set.size) return rows;
+  return (rows || []).map((r) => {
+    const o = { ...r };
+    for (const k of set) {
+      const n = parseNumber(o[k]);
+      if (o[k] != null && n != null && !Number.isNaN(n)) o[k] = String(Math.round(n * 12));
+    }
+    return o;
+  });
+}
+
+const MONTH_KEYS = /months?$/;
+/**
+ * Columns whose header talks about years but that are matched to a field in
+ * months ("Life (years)" → useful_life_months): `[{ header, key }]`, so the
+ * map step can warn before 8 becomes 8 months.
+ */
+export function yearsIntoMonths(mapping) {
+  return Object.entries(mapping || {})
+    .filter(([header, key]) => key && MONTH_KEYS.test(key) && /\b(years?|yrs?)\b/i.test(String(header)))
+    .map(([header, key]) => ({ header, key }));
 }
 
 /** The first non-empty value of each header, to show beside the mapping. */
@@ -867,6 +938,11 @@ export function rowCost(a) {
 export function rowNbv(a) {
   if (!a || a.recordState !== 'active' || a.accountingTreatment === 'tracked_only' || GONE.has(a.status)) return null;
   return isNum(a.nbvMinor) ? a.nbvMinor : null;
+}
+
+/** The register's banner: "1 vehicle or machine came from Fuel." / "16 vehicles and machines came from Fuel." */
+export function fromFuelTitle(n) {
+  return n === 1 ? '1 vehicle or machine came from Fuel.' : `${n} vehicles and machines came from Fuel.`;
 }
 
 /** The totals row's words: "303 assets · 241 on the books · 34 tracked only". */

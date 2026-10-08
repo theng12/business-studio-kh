@@ -11,9 +11,9 @@ import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Button, Field, Input, Modal, Select, Textarea, cx } from '../../components/ui.jsx';
 import { useAssetCaps } from './assetsHooks.js';
-import { BranchSelect, CategorySelect, Notice, StaffPicker } from './AssetsShared.jsx';
+import { BranchSelect, CategorySelect, Notice, Segments, StaffPicker } from './AssetsShared.jsx';
 import {
-  ACQUISITION_KINDS, DEPRECIATE_CHOICES, MAX_SPLIT, depreciateExplain, depreciateValue, errText, fmtLife, fmtYmd, newAssetForm,
+  ACQUISITION_KINDS, DEPRECIATE_CHOICES, MAX_SPLIT, costWording, depreciateExplain, depreciateValue, errText, fmtLife, fmtYmd, newAssetForm,
   parseMoney, todayKey, validateNewAsset,
 } from './assetsModel.js';
 
@@ -51,6 +51,7 @@ export function NewAssetModal({ open, lookups, onClose, onCreated }) {
   const opening = form.kind === 'opening';
   const deemed = opening && form.knowsCost === 'no';
   const qty = Number(form.quantity) || 1;
+  const wording = costWording(form);
   const costUsd = (deemed || form.costCurrency === 'USD') ? parseMoney(form.cost, 'USD').minor : null;
 
   async function submit() {
@@ -65,9 +66,12 @@ export function NewAssetModal({ open, lookups, onClose, onCreated }) {
       addToast(created.length === 1 ? `Draft ${created[0].tagCode} saved — activate it to put it on the books` : `${created.length} drafts saved, each with its own tag`, 'success');
       onCreated(created);
     } catch (err) {
-      // Some may be made already: say so rather than leaving the user guessing.
-      setFailure(created.length ? `${created.length} of ${inputs.length} were saved (${created.map((a) => a.tagCode).join(', ')}); the next one failed: ${errText(err)}` : errText(err));
-      if (created.length) onCreated(created);
+      // Some may be made already. The dialog closes onto them, so the toast says what was and was
+      // not saved (the dialog's own notice would vanish with it).
+      if (created.length) {
+        addToast(`Saved ${created.length} of ${inputs.length} (${created.map((a) => a.tagCode).join(', ')}); the other ${inputs.length - created.length} were not saved: ${errText(err)}`, 'error');
+        onCreated(created);
+      } else setFailure(errText(err));
     } finally { setBusy(false); }
   }
 
@@ -132,15 +136,13 @@ export function NewAssetModal({ open, lookups, onClose, onCreated }) {
 
       <h3 className="section-title assets-subhead">{opening ? 'Its value' : 'What it cost'}</h3>
       {opening ? (
-        <div className="segments" role="tablist" aria-label="Do you know its cost">
-          <button type="button" className={`segment${form.knowsCost === 'yes' ? ' is-active' : ''}`} onClick={() => set('knowsCost')('yes')}>I know its cost and purchase date</button>
-          <button type="button" className={`segment${form.knowsCost === 'no' ? ' is-active' : ''}`} onClick={() => set('knowsCost')('no')}>I don't — estimate its value</button>
-        </div>
+        <Segments label="Do you know its cost" value={form.knowsCost} onChange={set('knowsCost')}
+          options={[{ value: 'yes', label: 'I know its cost and purchase date' }, { value: 'no', label: "I don't — estimate its value" }]} />
       ) : null}
       <div className="form-grid assets-form">
         {!deemed ? text('purchaseDate', 'Bought on', { type: 'date' }) : null}
         {!deemed ? text('inServiceDate', 'In use since', { type: 'date', hint: 'Blank = not in use yet (no depreciation until it is).' }) : null}
-        <Field label={deemed ? `Value on ${start ? fmtYmd(start) : 'the start date'}` : 'Cost'} error={errors.cost} hint={deemed ? 'Your best estimate is fine.' : 'Net of VAT you can reclaim. Can be added later.'}>
+        <Field label={deemed && qty <= 1 ? `Value on ${start ? fmtYmd(start) : 'the start date'}` : wording.label} error={errors.cost} hint={wording.hint}>
           {({ id }) => (
             <div className="assets-inline">
               <Input id={id} inputMode="decimal" value={form.cost} onChange={(e) => set('cost')(e.target.value)} invalid={!!errors.cost} placeholder="0.00" />

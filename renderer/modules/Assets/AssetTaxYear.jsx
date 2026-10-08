@@ -18,8 +18,8 @@ import { formatDateTime } from '../../lib/format.js';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { ReasonModal } from '../Fuel/FuelShared.jsx';
 import { openAssetPage, useAssetCaps, useAssetLookups, useAssetsTick } from './assetsHooks.js';
-import { LoadError, NeedsCapNote, Notice } from './AssetsShared.jsx';
-import { errText, fmtKhr, fmtUsd, hasUnconfirmedEstimate, parseMoney, poolRows, taxClassLabel, taxYears } from './assetsModel.js';
+import { LoadError, NeedsCapNote, Notice, Segments, openRowProps } from './AssetsShared.jsx';
+import { errText, fmtKhr, taxYearEnded, fmtUsd, hasUnconfirmedEstimate, parseMoney, poolRows, taxClassLabel, taxYears } from './assetsModel.js';
 
 const TZ = { timeZone: 'Asia/Phnom_Penh' };
 
@@ -75,7 +75,7 @@ export function AssetTaxYear() {
             <Select aria-label="Tax year" value={shownYear ? String(shownYear) : ''} onChange={(e) => setYear(Number(e.target.value))}>
               {years.map((y) => <option key={y} value={y}>{y}</option>)}
             </Select>
-            {caps.isAdmin && data && !data.filed ? <Button variant="primary" onClick={markFiled} disabled={unconfirmed} title={unconfirmed ? 'An estimated opening pool must be confirmed by an accountant first' : undefined}>Mark year filed…</Button> : null}
+            {caps.isAdmin && data && !data.filed && taxYearEnded(data.year) ? <Button variant="primary" onClick={markFiled} disabled={unconfirmed} title={unconfirmed ? 'An estimated opening pool must be confirmed by an accountant first' : undefined}>Mark year filed…</Button> : null}
             {caps.isAdmin && data?.filed ? <Button onClick={() => setUnfiling(true)}>Unfile…</Button> : null}
           </>
         )}
@@ -145,7 +145,7 @@ export function AssetTaxYear() {
                   <thead><tr><th>Tag</th><th>Name</th><th>Class</th><th className="is-num">Tax cost</th><th className="is-num">Depreciation</th><th className="is-num">Written-down value</th><th className="is-num">Proceeds</th><th className="is-num">Gain / loss</th></tr></thead>
                   <tbody>
                     {data.perAsset.map((a) => (
-                      <tr key={a.assetId || a.tagCode} className="is-clickable" onClick={() => a.assetId && openAssetPage(a.assetId, activeCompanyId)}>
+                      <tr key={a.assetId || a.tagCode} className={a.assetId ? 'is-clickable' : undefined} {...(a.assetId ? openRowProps(() => openAssetPage(a.assetId, activeCompanyId), `Open ${a.tagCode}`) : {})}>
                         <td><strong>{a.tagCode}</strong></td><td>{a.name}</td><td>{a.taxClass}</td>
                         <td className="is-num">{fmtKhr(a.costKhr)}</td><td className="is-num">{fmtKhr(a.depreciationKhr)}</td><td className="is-num">{fmtKhr(a.wdvKhr)}</td>
                         <td className="is-num">{a.proceedsKhr != null ? fmtKhr(a.proceedsKhr) : '—'}</td><td className="is-num">{a.gainLossKhr != null ? fmtKhr(a.gainLossKhr) : '—'}</td>
@@ -229,10 +229,8 @@ function PoolOpeningModal({ year, pool, onClose, onSaved }) {
     <Modal open onClose={onClose} title={`Opening pool — ${pool.label || `Class ${pool.taxClass}`}, ${year}`} busy={busy}
       footer={<><Button onClick={onClose} disabled={busy}>Cancel</Button><Button variant="primary" onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save opening'}</Button></>}>
       {error ? <Notice tone="rose">{error}</Notice> : null}
-      <div className="segments" role="tablist" aria-label="Where the opening comes from">
-        <button type="button" className={`segment${kind === 'return' ? ' is-active' : ''}`} onClick={() => setKind('return')}>From the last tax return</button>
-        <button type="button" className={`segment${kind === 'estimate' ? ' is-active' : ''}`} onClick={() => setKind('estimate')}>Keep the app's estimate</button>
-      </div>
+      <Segments label="Where the opening comes from" value={kind} onChange={setKind}
+        options={[{ value: 'return', label: 'From the last tax return' }, { value: 'estimate', label: "Keep the app's estimate" }]} />
       <div className="assets-form">
         {kind === 'return' ? (
           <Field label="Written-down value at the start of the year (riel)" hint="The closing pool for this class on the last Tax on Income return.">

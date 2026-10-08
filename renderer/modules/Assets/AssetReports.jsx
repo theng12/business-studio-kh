@@ -12,7 +12,7 @@ import { EmptyState, Field, Input, Pagination, Select, Button, cx, paginate } fr
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { openAssetPage, useAssetCaps, useAssetLookups, useAssetsTick } from './assetsHooks.js';
-import { BranchSelect, CategorySelect, LoadError, NeedsCapNote, Notice } from './AssetsShared.jsx';
+import { BranchSelect, CategorySelect, LoadError, NeedsCapNote, Notice, openRowProps } from './AssetsShared.jsx';
 import { REPORTS, cellText, cellValue, defaultReportArgs, errText, reportArgs, reportDef, reportTable, taxYears, todayKey } from './assetsModel.js';
 
 const NUMERIC = new Set(['usd', 'khr', 'int']);
@@ -114,7 +114,7 @@ export function AssetReports() {
                 {rows.slice(pageStart, pageEnd).map((r, i) => (
                   <tr key={r.assetId ? `${r.assetId}-${r.eventId || r.reason || i}` : (r.key || `${r.period || ''}${r.categoryId || ''}${r.branchId || ''}${r.taxClass || ''}${i}`)}
                     className={r.assetId ? 'is-clickable' : undefined}
-                    onClick={r.assetId ? () => openAssetPage(r.assetId, activeCompanyId) : undefined}>
+                    {...(r.assetId ? openRowProps(() => openAssetPage(r.assetId, activeCompanyId), `Open ${r.tagCode || 'asset'}`) : {})}>
                     {table.columns.map((c) => <td key={c.key} className={NUMERIC.has(c.type) ? 'is-num' : undefined}>{cellText(c, cellValue(c, r)) || (NUMERIC.has(c.type) ? '—' : '')}</td>)}
                   </tr>
                 ))}

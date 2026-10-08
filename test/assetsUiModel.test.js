@@ -163,6 +163,9 @@ test('events: void what posted nothing, reverse what posted; the timeline line r
   assert.deepEqual(k({ kind: 'transfer' }), ['void']);
   assert.deepEqual(k({ kind: 'capex', journalEntryId: 'j' }), ['reverse']);
   assert.deepEqual(k({ kind: 'dispose', journalEntryId: 'j' }), ['reverse']);
+  // M2: a tracked-only activation or disposal posted nothing but can still be reversed.
+  assert.deepEqual(k({ kind: 'acquire', journalEntryId: null }), ['reverse']);
+  assert.deepEqual(k({ kind: 'dispose' }), ['reverse']);
   assert.deepEqual(k({ kind: 'dispose', journalEntryId: 'j', reversedByEventId: 'r' }), []);
   assert.deepEqual(k({ kind: 'transfer', voided: true }), []);
   assert.deepEqual(M.eventActions({ kind: 'transfer' }, { canManage: false }), []);
@@ -236,7 +239,13 @@ test('import: headers are guessed by key, label or alias, each column once; blan
   const map = M.guessMapping(['Tag', 'Asset name', 'In service', 'COST', 'Cost', 'Colour'], columns);
   assert.deepEqual(map, { Tag: 'tag_code', 'Asset name': 'name', 'In service': 'in_service_date', COST: 'cost', Cost: '', Colour: '' });
   const rows = [{ Tag: '', 'Asset name': 'Laptop', COST: 950, Colour: 'red' }, { Tag: ' ', 'Asset name': '' }, { Tag: 'KT-00068', COST: '' }];
-  assert.deepEqual(M.buildImportRows(rows, map), [{ name: 'Laptop', cost: '950' }, { tag_code: 'KT-00068' }]);
+  // LOW 3: each row carries its number in the sheet, so dropped blank rows do not shift the review.
+  assert.deepEqual(M.buildImportRows(rows, map), [{ name: 'Laptop', cost: '950', sourceRow: 2 }, { tag_code: 'KT-00068', sourceRow: 4 }]);
+  // LOW 4: a header in years matched to a months field is caught, and can be converted.
+  const lifeMap = { 'Life (years)': 'useful_life_months', 'Months left': 'remaining_life_months', 'Year bought': 'purchase_date' };
+  assert.deepEqual(M.yearsIntoMonths(lifeMap), [{ header: 'Life (years)', key: 'useful_life_months' }]);
+  assert.deepEqual(M.convertYearsToMonths([{ useful_life_months: '8', sourceRow: 2 }, { useful_life_months: 'about 5' }], ['useful_life_months']),
+    [{ useful_life_months: '96', sourceRow: 2 }, { useful_life_months: 'about 5' }]);
   assert.deepEqual(M.sampleValues(rows, ['Tag', 'COST']), { Tag: 'KT-00068', COST: '950' });
 });
 
@@ -307,4 +316,28 @@ test('Home tile: drafts without a cost and months to post; words beyond the coun
   // Other badges still return a plain number.
   const po = reg.getModule('purchasing');
   assert.deepEqual(await reg.loadBadge(po, { api: { purchaseOrders: { list: async () => [{}] } }, caps: ['*'], companyId: 'c', now: 1 }), { count: 1, label: '1 open order', tone: 'slate' });
+});
+
+
+test('review fixes: deemed only for an opening, cost wording for N items, filing after the year, banner grammar', () => {
+  // M3
+  assert.equal(M.isDeemed('opening', 'deemed'), true);
+  assert.equal(M.isDeemed('purchase', 'deemed'), false, 'a purchase is never "value at the start date"');
+  assert.deepEqual(M.acquisitionChange({ costBasis: 'deemed' }, 'purchase'), { acquisitionKind: 'purchase', costBasis: 'actual' });
+  assert.deepEqual(M.acquisitionChange({ costBasis: 'deemed' }, 'opening'), { acquisitionKind: 'opening' });
+  assert.deepEqual(M.acquisitionChange({ costBasis: 'actual' }, 'gift'), { acquisitionKind: 'gift' });
+  // M4
+  const f = { ...M.newAssetForm(), quantity: '5', cost: '1000' };
+  assert.deepEqual(M.costWording(f), { label: 'Cost of each', hint: '5 × $1,000.00 = $5,000.00' });
+  assert.equal(M.costWording({ ...f, split: 'group' }).label, 'Cost of the whole lot');
+  assert.equal(M.costWording({ ...f, quantity: '1' }).label, 'Cost');
+  assert.equal(M.costWording({ ...f, kind: 'opening', knowsCost: 'no' }).label, 'Value at the start date of each');
+  assert.equal(M.costWording({ ...f, costCurrency: 'KHR', cost: '400000', quantity: '2' }).hint, '2 × ៛400,000 = ៛800,000');
+  // LOW 5
+  const oct2026 = Date.UTC(2026, 9, 8);
+  assert.equal(M.taxYearEnded(2025, oct2026), true);
+  assert.equal(M.taxYearEnded(2026, oct2026), false);
+  // LOW 8
+  assert.equal(M.fromFuelTitle(1), '1 vehicle or machine came from Fuel.');
+  assert.equal(M.fromFuelTitle(16), '16 vehicles and machines came from Fuel.');
 });

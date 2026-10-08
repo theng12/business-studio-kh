@@ -357,6 +357,10 @@ function ensureAssetSchema(db) {
   // A2: when and how it left the register.
   addColumnIfMissing(db, 'fixed_assets', 'disposed_on', 'TEXT');
   addColumnIfMissing(db, 'fixed_assets', 'disposal_event_id', 'TEXT');
+  // A client's operation key (review LOW 6): a retried improvement, impairment, revaluation or partial
+  // disposal with the same key returns the first result instead of posting twice. Per company.
+  addColumnIfMissing(db, 'asset_events', 'operation_key', 'TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_asset_events_operation_key ON asset_events(company_id, operation_key) WHERE operation_key IS NOT NULL');
 
   // §3.1 additive branch columns. HR1 may add employees.branch_id too — the
   // same name and type, so whichever runs second is a no-op.

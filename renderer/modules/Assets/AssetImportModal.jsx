@@ -13,7 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
 import { Badge, Button, Modal, Pagination, Select, paginate } from '../../components/ui.jsx';
 import { Notice } from './AssetsShared.jsx';
-import { IMPORT_ACTION, buildImportRows, errText, eventLabel, guessMapping, sampleValues } from './assetsModel.js';
+import { IMPORT_ACTION, buildImportRows, convertYearsToMonths, errText, eventLabel, guessMapping, sampleValues, yearsIntoMonths } from './assetsModel.js';
 
 export function AssetImportModal({ open, onClose, onDone }) {
   const addToast = useAppStore((s) => s.addToast);
@@ -31,6 +31,7 @@ export function AssetImportModal({ open, onClose, onDone }) {
 
   useEffect(() => {
     if (!open) return;
+    setConvertYears(false);
     setStep('pick'); setWorkbook(null); setSheetIdx(0); setMapping({}); setPlan(null); setResult(null); setError(''); setBusy(false); setPage(0);
     window.api.assets.importColumns().then((c) => setColumns(c || [])).catch((err) => setError(errText(err)));
   }, [open]);
@@ -38,7 +39,13 @@ export function AssetImportModal({ open, onClose, onDone }) {
   const sheet = workbook?.sheets?.[sheetIdx] || null;
   const samples = useMemo(() => (sheet ? sampleValues(sheet.rows, sheet.headers) : {}), [sheet]);
   const mappedCount = Object.values(mapping).filter(Boolean).length;
-  const rows = useMemo(() => (sheet ? buildImportRows(sheet.rows, mapping) : []), [sheet, mapping]);
+  // A header that says years, matched to a months column ("Life (years)" → useful life in months).
+  const yearCols = useMemo(() => yearsIntoMonths(mapping), [mapping]);
+  const [convertYears, setConvertYears] = useState(false);
+  const rows = useMemo(() => {
+    const built = sheet ? buildImportRows(sheet.rows, mapping) : [];
+    return convertYears ? convertYearsToMonths(built, yearCols.map((c) => c.key)) : built;
+  }, [sheet, mapping, convertYears, yearCols]);
 
   async function pick() {
     setError('');
@@ -131,6 +138,15 @@ export function AssetImportModal({ open, onClose, onDone }) {
             <div className="toolbar__spacer" />
             <span className="toolbar__count">{mappedCount} of {sheet.headers.length} columns matched</span>
           </div>
+          {yearCols.length ? (
+            <Notice tone="amber" title="Years or months?">
+              {yearCols.map((c) => `“${c.header}”`).join(', ')} {yearCols.length === 1 ? 'mentions' : 'mention'} years, but {yearCols.length === 1 ? 'goes' : 'go'} into a field counted in MONTHS — 8 would be read as 8 months.
+              <label className="assets-check">
+                <input type="checkbox" checked={convertYears} onChange={(e) => setConvertYears(e.target.checked)} />
+                <span>My file has years — multiply by 12</span>
+              </label>
+            </Notice>
+          ) : null}
           {sheet.looksLikeTitleRow ? <Notice tone="amber">The first row looks like a title, not column names. Put the column names in the first row and pick the file again.</Notice> : null}
           <div className="data-table-wrap">
             <table className="data-table">
