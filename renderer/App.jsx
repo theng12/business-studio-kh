@@ -94,6 +94,16 @@ const FuelTanks = lazy(() => import('./modules/Fuel/FuelTanks.jsx').then((m) => 
 const FuelPrices = lazy(() => import('./modules/Fuel/FuelPrices.jsx').then((m) => ({ default: m.FuelPrices })));
 const FuelReports = lazy(() => import('./modules/Fuel/FuelReports.jsx').then((m) => ({ default: m.FuelReports })));
 const Staff = lazy(() => import('./modules/Staff/index.jsx').then((m) => ({ default: m.Staff })));
+// HR1: People → attendance, review, corrections, overtime, lateness, leave.
+const Attendance = lazy(() => import('./modules/People/Attendance.jsx').then((m) => ({ default: m.Attendance })));
+const AttReview = lazy(() => import('./modules/People/Review.jsx').then((m) => ({ default: m.Review })));
+const AttCorrections = lazy(() => import('./modules/People/Corrections.jsx').then((m) => ({ default: m.Corrections })));
+const Overtime = lazy(() => import('./modules/People/Overtime.jsx').then((m) => ({ default: m.Overtime })));
+const Lateness = lazy(() => import('./modules/People/Lateness.jsx').then((m) => ({ default: m.Lateness })));
+const Leave = lazy(() => import('./modules/People/Leave.jsx').then((m) => ({ default: m.Leave })));
+// HR1: the attendance kiosk screen, previewed inside the app (hidden page; the
+// real kiosk is its own window — renderer/main.jsx #kiosk).
+const KioskPreview = lazy(() => import('./modules/Kiosk/KioskPreview.jsx').then((m) => ({ default: m.KioskPreview })));
 
 const PAGES = {
   home:      Home,
@@ -123,6 +133,13 @@ const PAGES = {
   fuelprices: FuelPrices,
   fuelreports: FuelReports,
   staff: Staff,
+  attendance: Attendance,
+  attreview: AttReview,
+  attcorrections: AttCorrections,
+  overtime: Overtime,
+  lateness: Lateness,
+  leave: Leave,
+  kiosk: KioskPreview,
   history:   History,
   settings:  Settings,
   support:   Support,

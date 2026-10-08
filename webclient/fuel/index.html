@@ -48,7 +48,7 @@ h1 { font-size: 22px; line-height: 1.5; margin: 4px 0 14px; }
 .muted { color: var(--muted); }
 .small { font-size: 14px; }
 .home { display: grid; gap: var(--gap); }
-.home + .flow-tile { margin-top: var(--gap); }
+.home + .home, .notice + .home, .home + .notice, .notice + h1, .notice + .list { margin-top: var(--gap); }
 .flow-tile { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--card); border-radius: var(--radius); padding: 16px; min-height: 84px; }
 .flow-tile svg { flex: none; width: 40px; height: 40px; }
 .flow-tile__t { font-weight: 700; font-size: 19px; display: block; }

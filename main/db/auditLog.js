@@ -41,6 +41,7 @@ function rowToEntry(row) {
     entityId: row.entity_id,
     userId: row.user_id,
     action: row.action,
+    sensitivity: row.sensitivity || 'normal',
     before: parseJson(row.before_json, null),
     after: parseJson(row.after_json, null),
     createdAt: row.created_at,
@@ -94,7 +95,7 @@ function diffPatch(before, patch) {
  *
  * Returns the auto-incremented id of the new row.
  */
-function log({ entityType, entityId, action, before, after, userId }) {
+function log({ entityType, entityId, action, before, after, userId, sensitivity = 'normal' }) {
   if (!entityType || !action) {
     // Audit logging shouldn't break the calling write; just bail.
     return null;
@@ -104,8 +105,8 @@ function log({ entityType, entityId, action, before, after, userId }) {
   try {
     const info = db
       .prepare(`
-        INSERT INTO audit_log (entity_type, entity_id, user_id, action, before_json, after_json, created_at)
-        VALUES (@entityType, @entityId, @userId, @action, @beforeJson, @afterJson, @createdAt)
+        INSERT INTO audit_log (entity_type, entity_id, user_id, action, before_json, after_json, created_at, sensitivity)
+        VALUES (@entityType, @entityId, @userId, @action, @beforeJson, @afterJson, @createdAt, @sensitivity)
       `)
       .run({
         entityType,
@@ -115,6 +116,7 @@ function log({ entityType, entityId, action, before, after, userId }) {
         beforeJson: before == null ? null : JSON.stringify(before),
         afterJson: after == null ? null : JSON.stringify(after),
         createdAt: Date.now(),
+        sensitivity: SENSITIVITIES.includes(sensitivity) ? sensitivity : 'normal',
       });
     return info?.lastInsertRowid ?? null;
   } catch (err) {
@@ -151,9 +153,10 @@ function logUpdate({ entityType, entityId, beforeRow, patch, userId }) {
  * query (no UNION needed) — that's why we use product_id (not the
  * product_images.id) as the entity_id for image events.
  */
-function listForEntity(entityType, entityId, limit = 200) {
+function listForEntity(entityType, entityId, limit = 200, { hide = null } = {}) {
   if (!entityType || !entityId) return [];
   const db = getDb();
+  const extra = hideClauses(hide).map((c) => ` AND ${c}`).join('');
   const cappedLimit = Math.min(Math.max(1, Number(limit) || 200), 1000);
   // For products, also pull image events (entity_type='image',
   // entity_id=<productId>) interleaved by created_at so the modal
@@ -163,8 +166,8 @@ function listForEntity(entityType, entityId, limit = 200) {
     rows = db
       .prepare(`
         SELECT * FROM audit_log
-         WHERE (entity_type = 'product' AND entity_id = @id)
-            OR (entity_type = 'image'   AND entity_id = @id)
+         WHERE ((entity_type = 'product' AND entity_id = @id)
+            OR (entity_type = 'image'   AND entity_id = @id))${extra}
          ORDER BY created_at DESC
          LIMIT @limit
       `)
@@ -173,7 +176,7 @@ function listForEntity(entityType, entityId, limit = 200) {
     rows = db
       .prepare(`
         SELECT * FROM audit_log
-         WHERE entity_type = @type AND entity_id = @id
+         WHERE entity_type = @type AND entity_id = @id${extra}
          ORDER BY created_at DESC
          LIMIT @limit
       `)
@@ -187,23 +190,24 @@ function listForEntity(entityType, entityId, limit = 200) {
  * to say "2 of 142 events shown". For products this includes the
  * interleaved image events the same way listForEntity does.
  */
-function countForEntity(entityType, entityId) {
+function countForEntity(entityType, entityId, { hide = null } = {}) {
   if (!entityType || !entityId) return 0;
   const db = getDb();
+  const extra = hideClauses(hide).map((c) => ` AND ${c}`).join('');
   let row;
   if (entityType === 'product') {
     row = db
       .prepare(`
         SELECT COUNT(*) AS n FROM audit_log
-         WHERE (entity_type = 'product' AND entity_id = @id)
-            OR (entity_type = 'image'   AND entity_id = @id)
+         WHERE ((entity_type = 'product' AND entity_id = @id)
+            OR (entity_type = 'image'   AND entity_id = @id))${extra}
       `)
       .get({ id: entityId });
   } else {
     row = db
       .prepare(`
         SELECT COUNT(*) AS n FROM audit_log
-         WHERE entity_type = @type AND entity_id = @id
+         WHERE entity_type = @type AND entity_id = @id${extra}
       `)
       .get({ type: entityType, id: entityId });
   }
@@ -253,10 +257,40 @@ const NO_USER = '@local';
 const FUEL_ENTITY_SQL = "entity_type <> 'employee' AND substr(entity_type, 1, 5) <> 'fuel_'";
 function isFuelEntityType(t) { return t === 'employee' || (typeof t === 'string' && t.startsWith('fuel_')); }
 
-function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
+/** HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §6): how sensitive a row is. */
+const SENSITIVITIES = ['normal', 'hr', 'hr_private', 'payroll'];
+
+/**
+ * Which rows a caller may not see (main/ipc/audit.js builds it from the
+ * caller's capabilities; null = sees everything — the server Mac's own
+ * window and admins):
+ *   fuel      fuel_* rows                         (needs fuel.manage)
+ *   employee  employee rows                       (fuel.manage, hr.view or hr.manage)
+ *   hr        rows with sensitivity 'hr'          (hr.view or hr.manage)
+ *   hrPrivate rows with sensitivity 'hr_private'  (hr.manage — staff documents)
+ *   payroll   rows with sensitivity 'payroll'     (payroll.manage — HR2)
+ * `hideFuel: true` (the F1 call shape) means { fuel, employee }.
+ */
+function hideClauses(hide) {
+  if (!hide) return [];
+  const out = [];
+  if (hide.fuel) out.push("substr(entity_type, 1, 5) <> 'fuel_'");
+  if (hide.employee) out.push("entity_type <> 'employee'");
+  if (hide.hr) out.push("sensitivity <> 'hr'");
+  if (hide.hrPrivate || hide.hr) out.push("sensitivity <> 'hr_private'");
+  if (hide.payroll) out.push("sensitivity <> 'payroll'");
+  return out;
+}
+function normalizeHide(hide, hideFuel) {
+  const h = hide ? { ...hide } : {};
+  if (hideFuel) { h.fuel = true; h.employee = true; }
+  return Object.values(h).some(Boolean) ? h : null;
+}
+
+function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hide = null } = {}) {
   const wheres = [];
   const params = {};
-  if (hideFuel) wheres.push(FUEL_ENTITY_SQL);
+  wheres.push(...hideClauses(normalizeHide(hide, hideFuel)));
   if (entityType) { wheres.push('entity_type = @entityType'); params.entityType = entityType; }
   if (userId === NO_USER) wheres.push('user_id IS NULL');
   else if (userId) { wheres.push('user_id = @userId'); params.userId = userId; }
@@ -281,11 +315,11 @@ function recentWhere({ entityType = null, userId = null, since = null, until = n
   return { whereSql: wheres.length ? `WHERE ${wheres.join(' AND ')}` : '', params };
 }
 
-function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
+function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hide = null } = {}) {
   const db = getDb();
   const cappedLimit  = Math.min(Math.max(1, Number(limit)  || 100), 500);
   const cappedOffset = Math.max(0, Number(offset) || 0);
-  const built = recentWhere({ entityType, userId, since, until, q, hideFuel });
+  const built = recentWhere({ entityType, userId, since, until, q, hideFuel, hide });
   const params = { ...built.params, limit: cappedLimit, offset: cappedOffset };
   const whereSql = built.whereSql;
   const rows = db
@@ -361,9 +395,9 @@ function attachEntityNames(db, entries) {
  * Total count for the global history feed. Used by the History page
  * to render "Showing 1–50 of 12,847" pagination labels.
  */
-function countRecent({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false } = {}) {
+function countRecent({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hide = null } = {}) {
   const db = getDb();
-  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q, hideFuel });
+  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q, hideFuel, hide });
   const row = db
     .prepare(`SELECT COUNT(*) AS n FROM audit_log ${whereSql}`)
     .get(params);
@@ -390,28 +424,36 @@ function stats() {
 /**
  * v0.33.0: retention sweep / manual clear. Deletes audit_log rows older
  * than `days` (e.g. 15 / 30 / 90). `days <= 0` (or non-numeric) clears the
- * ENTIRE log. Returns the number of rows removed.
+ * whole log — except staff / fuel / HR / payroll rows, which are never
+ * cleared (HR1). Returns { deleted, kept }.
  *
  * Note: SQLite doesn't shrink the DB file on DELETE — the freed pages are
  * reused by future writes. That's fine for a log table; we don't VACUUM
  * (it would lock the DB and isn't worth the stall on a shared server).
  */
 function clearOlderThan(days) {
+  // HR1 (§6, and the F1 gap the HANDOFF named): rows about staff, fuel, HR or
+  // payroll are history that must not be erasable from the History page —
+  // they are kept whatever `days` says, and reported as `kept`.
   const db = getDb();
   const n = Number(days);
-  if (!Number.isFinite(n) || n <= 0) {
-    const info = db.prepare('DELETE FROM audit_log').run();
-    return { deleted: info.changes };
-  }
-  const cutoff = Date.now() - n * 24 * 60 * 60 * 1000;
-  const info = db.prepare('DELETE FROM audit_log WHERE created_at < ?').run(cutoff);
-  return { deleted: info.changes };
+  const cutoff = Number.isFinite(n) && n > 0 ? Date.now() - n * 24 * 60 * 60 * 1000 : null;
+  const age = cutoff == null ? '1 = 1' : 'created_at < @cutoff';
+  const params = cutoff == null ? {} : { cutoff };
+  const kept = db.prepare(`SELECT COUNT(*) AS n FROM audit_log WHERE ${age} AND NOT (${CLEARABLE_SQL})`).get(params).n;
+  const info = db.prepare(`DELETE FROM audit_log WHERE ${age} AND ${CLEARABLE_SQL}`).run(params);
+  return { deleted: info.changes, kept: Number(kept || 0) };
 }
+
+/** Only ordinary catalogue rows can be cleared. */
+const CLEARABLE_SQL = `sensitivity = 'normal' AND ${FUEL_ENTITY_SQL}`;
 
 module.exports = {
   NO_USER,
   recentWhere,
   isFuelEntityType,
+  SENSITIVITIES,
+  hideClauses,
   log,
   logUpdate,
   diffPatch,

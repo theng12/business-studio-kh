@@ -14,7 +14,7 @@ const ROOT = path.join(__dirname, '..');
 async function load() {
   const esbuild = require('esbuild');
   const out = await esbuild.build({
-    stdin: { contents: "export { fuelPhoneUrl, fuelPhoneAccounts, fuelPhoneAddresses } from './renderer/modules/Fuel/FuelPhoneSetup.jsx';", resolveDir: ROOT, loader: 'js' },
+    stdin: { contents: "export { fuelPhoneUrl, fuelPhoneAccounts, phoneAccounts, fuelPhoneAddresses, PhoneSetup, FuelPhoneSetup } from './renderer/modules/Fuel/FuelPhoneSetup.jsx';", resolveDir: ROOT, loader: 'js' },
     bundle: true, write: false, format: 'cjs', platform: 'node', logLevel: 'silent', jsx: 'automatic',
     external: ['react', 'react/jsx-runtime', 'bwip-js'],
   });
@@ -73,4 +73,48 @@ test('addresses: the server Mac lists its own; a client Mac uses its saved serve
   assert.equal(fuelPhoneAddresses({ mode: 'client', clientServerUrl: 'http://office.local:13180/' }).list[0].kind, 'mdns');
   assert.equal(fuelPhoneAddresses({ mode: 'client', clientServerUrl: '' }).error, 'no-server-url');
   assert.equal(fuelPhoneAddresses({ mode: 'standalone' }).error, 'standalone');
+});
+
+test('HR1: "Set up a phone" lists fuel AND attendance accounts, with each one\'s staff link', async () => {
+  const { phoneAccounts, PhoneSetup, FuelPhoneSetup } = await load();
+  assert.equal(FuelPhoneSetup, PhoneSetup, 'the Fuel slot and People mount the same screen');
+  const roles = [
+    { key: 'admin', name: 'Admin', permissions: ['*'] },
+    { key: 'pump', name: 'Pump phone', permissions: ['fuel.record'] },
+    { key: 'staff', name: 'Clock-in phone', permissions: ['attendance.self'] },
+    { key: 'driver', name: 'Driver', permissions: ['fuel.record', 'attendance.self'] },
+    { key: 'sup', name: 'Supervisor', permissions: ['attendance.supervise', 'attendance.self'] },
+    { key: 'kiosk', name: 'Shop kiosk', permissions: ['attendance.kiosk'] },
+  ];
+  const users = [
+    { id: 'a', name: 'Owner', role: 'admin', token: 't-a' },
+    { id: 'p', name: 'Pump', role: 'pump', token: 't-p' },
+    { id: 's', name: 'Sophal', role: 'staff', token: 't-s' },
+    { id: 'd', name: 'Dara', role: 'driver', token: 't-d' },
+    { id: 'v', name: 'Visal', role: 'sup', token: 't-v' },
+    { id: 'k', name: 'Kiosk', role: 'kiosk', token: 't-k' },
+  ];
+  const staff = [
+    { id: 'e1', nameEn: 'Keo Sophal', userId: 's', status: 'active' },
+    { id: 'e2', nameEn: 'Sok Dara', userId: 'd', status: 'suspended' },
+    { id: 'e3', nameEn: 'Old Visal', userId: 'v', status: 'left' },
+  ];
+  const all = phoneAccounts(users, roles, { staff });
+  assert.deepEqual(all.map((a) => a.id), ['d', 'p', 's', 'v', 'a'], 'the kiosk account is not a phone account');
+  const by = Object.fromEntries(all.map((a) => [a.id, a]));
+  assert.deepEqual(by.d.uses.map((u) => u.key), ['fuel', 'self'], 'a driver: fuel and clock-in');
+  assert.deepEqual(by.v.uses.map((u) => u.key), ['self', 'crew']);
+  assert.deepEqual(by.s.link, { name: 'Keo Sophal', suspended: false });
+  assert.deepEqual(by.d.link, { name: 'Sok Dara', suspended: true });
+  assert.equal(by.v.link, null, 'a record that has left does not count: not linked');
+  assert.equal(by.p.link, null, 'a fuel-only account needs no link');
+  assert.equal(by.p.attendance, false);
+  assert.equal(by.a.admin, true);
+  assert.equal(by.a.attendance, false, 'the owner is not nagged about a link');
+  // Only attendance accounts (People), only fuel accounts (the old list).
+  assert.deepEqual(phoneAccounts(users, roles, { only: 'attendance', staff }).map((a) => a.id), ['d', 's', 'v', 'a']);
+  assert.deepEqual(phoneAccounts(users, roles, { only: 'fuel', staff }).map((a) => a.id), ['d', 'p', 'a']);
+  // A staff list without account ids (tiles) or none at all: the link is unknown, not "not linked".
+  assert.equal(phoneAccounts(users, roles, { staff: [{ id: 'e1', nameEn: 'Keo' }] }).find((a) => a.id === 's').link, undefined);
+  assert.equal(phoneAccounts(users, roles, { staff: null }).find((a) => a.id === 's').link, undefined);
 });

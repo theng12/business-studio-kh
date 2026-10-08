@@ -1097,6 +1097,21 @@ const PROXIED_CHANNELS = [
   'fuel:listPendingTransfers','fuel:listMyRecent','fuel:reviewFill','fuel:correctFill','fuel:voidRecord','fuel:voidMyRecord',
   'fuel:listFlags','fuel:reviewFlag','fuel:recomputeFlags','fuel:getOverview',
   'fuel:getMonthlyReport','fuel:getMonthlyWorkbook','fuel:sweepPhotoRetention',
+  // HR1: staff profiles, attendance, leave and the kiosk all live with the data
+  // on the server — straight RPC. hr:saveMonthWorkbook is handleLocal below.
+  'hr:getSettings','hr:updateSettings','hr:listPositions','hr:createPosition','hr:updatePosition',
+  'hr:listSchedules','hr:createSchedule','hr:updateSchedule','hr:assignSchedule','hr:listEmployeeSchedules',
+  'hr:listHolidays','hr:createHoliday','hr:updateHoliday','hr:getProfile','hr:updateProfile','hr:setStatus',
+  'hr:setPin','hr:clearPin','hr:unlockPin','hr:listDocuments','hr:addDocument','hr:readDocument','hr:voidDocument',
+  'hr:runJobs','hr:getMonthWorkbook',
+  'attendance:day','attendance:monthSummary','attendance:listEvents','attendance:getPhoto','attendance:getPhotos','attendance:addManual','attendance:void',
+  'attendance:listReview','attendance:listAlerts','attendance:ackAlert','attendance:review','attendance:listCorrections','attendance:requestCorrection','attendance:decideCorrection',
+  'attendance:listOvertime','attendance:approveOvertime','attendance:revokeOvertime','attendance:listLateness','attendance:confirmLateness',
+  'attendance:clockSelf','attendance:mine','attendance:requestCorrectionSelf','attendance:crew','attendance:markCrew',
+  'leave:listTypes','leave:createType','leave:updateType','leave:balances','leave:ledger','leave:listRequests',
+  'leave:request','leave:decide','leave:cancel','leave:adjust','leave:requestSelf','leave:cancelSelf',
+  'kiosk:tiles','kiosk:tilePhoto','kiosk:signIn','kiosk:signOut','kiosk:clock','kiosk:me','kiosk:requestLeave',
+  'kiosk:requestCorrection','kiosk:verifyManagerPin',
   // Pure math — could run client-side, but proxying keeps the formula
   // logic centralised + lets us patch it server-side without re-shipping
   // the client.
@@ -1459,6 +1474,43 @@ function registerClientProxies(loadConfigFn) {
      the `client:rpcActivity` push channel (see broadcastRpcActivity). */
   handleLocal('client:syncStats', () => getSyncStats());
 
+  /* HR1: this Mac as the shop's attendance kiosk — the client half of the
+   * kioskMode:* channels (standalone half: main/ipc/kioskMode.js; both from
+   * makeKioskModeHandlers in main/kioskWindow.js). The manager PIN is checked
+   * by the SERVER over RPC; enabling needs this Mac's account to hold
+   * attendance.kiosk or hr.manage (from /api/whoami). */
+  {
+    const kioskModeHandlers = require('../kioskWindow').makeKioskModeHandlers({
+      verifyManagerPin: (args) => rpc('kiosk:verifyManagerPin', args),
+      getCaps: async () => {
+        await ensureWhoami();
+        return _connectionState.user?.caps || null;
+      },
+      // The recovery code is accepted only while the office Mac cannot answer
+      // for this account: /api/whoami must fail (down, unreachable, or the
+      // kiosk account's token no longer accepted).
+      isServerReachable: async () => {
+        const url = baseUrl();
+        const auth = authHeader();
+        if (!url || !auth) return false;
+        try {
+          const res = await fetch(`${url}/api/whoami`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(5000) });
+          return res.ok;
+        } catch (_) {
+          return false;
+        }
+      },
+    });
+    handleLocal('kioskMode:status', () => kioskModeHandlers.status());
+    handleLocal('kioskMode:askCamera', () => kioskModeHandlers.askCamera());
+    handleLocal('kioskMode:newRecoveryCode', () => kioskModeHandlers.newRecoveryCode());
+    handleLocal('kioskMode:enable', (args) => kioskModeHandlers.enable(args || {}));
+    handleLocal('kioskMode:recover', (args) => kioskModeHandlers.recover(args));
+    handleLocal('kioskMode:leave', (args) => kioskModeHandlers.leave(args));
+    handleLocal('kioskMode:quit', (args) => kioskModeHandlers.quit(args));
+    handleLocal('kioskMode:logError', (args) => kioskModeHandlers.logError(args));
+  }
+
   /* ─── v0.16.0: client-mode local handlers ──────────────────────
    * These channels run on the client's own Mac (the OS dialog is its
    * dialog, the disk scan is its disk). They don't talk to the server
@@ -1590,6 +1642,23 @@ function registerClientFileHandlers() {
       defaultPath: res?.filename || `fuel-${month}.xlsx`,
       filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
     });
+    if (out.canceled || !out.filePath) return null;
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return out.filePath;
+  });
+
+  // HR1: same shape for the attendance workbook.
+  handleLocal('hr:saveMonthWorkbook', async ({ month } = {}) => {
+    const res = await rpc('hr:getMonthWorkbook', { month });
+    const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);
+    // Parented to the window the user is in (a sheet on that window, not a loose dialog).
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
+    const opts = {
+      title: 'Save attendance workbook',
+      defaultPath: res?.filename || `attendance-${month || 'month'}.xlsx`,
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
+    };
+    const out = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts);
     if (out.canceled || !out.filePath) return null;
     require('node:fs').writeFileSync(out.filePath, bytes);
     return out.filePath;
