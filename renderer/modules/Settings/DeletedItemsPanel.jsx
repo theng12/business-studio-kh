@@ -36,6 +36,18 @@ function SettingRow({ label, hint, children }) {
  *   - that restoring a backup replaces this list too (the recycle bin is not
  *     part of a backup — the same rule as the duplicate-merge quarantine).
  */
+/**
+ * What a recently-deleted row is, in one word or two. Fuel F1 added
+ * `fuel-photo` (evidence photos past their retention, main/deletedItems.js);
+ * it used to fall through to "Product".
+ */
+export function deletedKindLabel(kind) {
+  if (kind === 'image') return 'Photo';
+  if (kind === 'fuel-photo') return 'Fuel photo';
+  if (kind === 'product') return 'Product';
+  return 'Item';
+}
+
 export function DeletedItemsPanel({ config, addToast }) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const companyName = useAppStore((s) => s.companies.find((c) => c.id === s.activeCompanyId)?.name || null);
@@ -143,7 +155,9 @@ export function DeletedItemsPanel({ config, addToast }) {
       addToast?.(
         res?.kind === 'image'
           ? `Restored ${res.label} to its product.`
-          : `Restored ${res.label} — ${res.images === 1 ? '1 photo' : `${res.images} photos`} back in place.`,
+          : res?.kind === 'fuel-photo'
+            ? `Restored the fuel photo ${res.label}.`
+            : `Restored ${res.label} — ${res.images === 1 ? '1 photo' : `${res.images} photos`} back in place.`,
         'success',
       );
     } catch (err) {
@@ -303,7 +317,7 @@ export function DeletedItemsPanel({ config, addToast }) {
                   />
                   <div className="deleted-row__main">
                     <div className="deleted-row__title">
-                      <span className="deleted-row__kind">{item.kind === 'image' ? 'Photo' : 'Product'}</span>
+                      <span className="deleted-row__kind">{deletedKindLabel(item.kind)}</span>
                       <span className="deleted-row__label">{item.label}</span>
                       <span className="muted deleted-row__when"> · {timeAgo(item.deletedAt)}</span>
                     </div>

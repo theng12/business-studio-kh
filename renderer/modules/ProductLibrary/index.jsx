@@ -48,6 +48,10 @@ import { entryIdsFrom, undoProductDeletes } from './undoDelete.js';
 import { PROCESS_STATUS_OPTIONS, STATUS_OPTIONS } from './libraryConstants.js';
 // v0.1.72: pure directional hover-intent test for the bulk menu's submenus.
 import { pointsTowardRect } from './menuIntent.mjs';
+import { orderedSelectionIds } from './useInHandoff.js';
+import { UseInCatalogModal } from './UseInCatalogModal.jsx';
+import { useUserCaps } from '../../components/Sidebar.jsx';
+import { hasAnyCap } from '../../lib/capabilities.js';
 
 /**
  * v0.26.23: persist the Table/Grid view toggle across navigation.
@@ -272,6 +276,7 @@ export function ProductLibrary() {
   // ids; the toolbar appears as soon as the set is non-empty.
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [useInCatalogOpen, setUseInCatalogOpen] = useState(false);
   // v0.1.66: the bulk edit table modal.
   const [bulkTableOpen, setBulkTableOpen] = useState(false);
   // v0.22.0: bulk AI run modal + bulk delete confirm state.
@@ -512,18 +517,20 @@ export function ProductLibrary() {
   // when the company, a filter, the sort, the page or the page size changes,
   // and on Refresh (orderEpoch). The default sort itself is unchanged.
   const [orderEpoch, setOrderEpoch] = useState(0);
-  const orderKey = JSON.stringify([activeCompanyId, filters, sort, page, pageSize, orderEpoch]);
+  // 0.1.95: the house rate converts KHR prices for the price-column sort.
+  const houseKhrPerUsd = useAppStore((s) => s.houseKhrPerUsd);
+  const orderKey = JSON.stringify([activeCompanyId, filters, sort, page, pageSize, orderEpoch, houseKhrPerUsd]);
   const shownOrder = useRef({ key: null, ids: null });
   const filteredAndSorted = useMemo(() => {
     let arr = products;
     if (filters.hasImages === 'with')    arr = arr.filter((p) => Number(p.imageCount ?? 0) > 0);
     if (filters.hasImages === 'without') arr = arr.filter((p) => Number(p.imageCount ?? 0) === 0);
-    const sorted = sortProducts(arr, sort, brandsById, categoriesById);
+    const sorted = sortProducts(arr, sort, brandsById, categoriesById, { khrPerUsd: houseKhrPerUsd });
     const previous = shownOrder.current.key === orderKey ? shownOrder.current.ids : null;
     const out = stableOrder(previous, sorted);
     shownOrder.current = { key: orderKey, ids: out.map((p) => p.id) };
     return out;
-  }, [products, filters.hasImages, sort, brandsById, categoriesById, orderKey]);
+  }, [products, filters.hasImages, sort, brandsById, categoriesById, orderKey, houseKhrPerUsd]);
   orderedIdsRef.current = shownOrder.current.ids ?? [];
   const listed = useMemo(
     () => (showSelectedOnly ? filteredAndSorted.filter((p) => selectedIds.has(p.id)) : filteredAndSorted),
@@ -543,6 +550,36 @@ export function ProductLibrary() {
   function selectAllMatching() {
     setManySelected(filteredAndSorted.map((p) => p.id), true);
   }
+  // 0.1.95: "Use in ▾" — send the selection (in the order the list shows it)
+  // to another screen. Each item is offered only where this role may go.
+  const userCaps = useUserCaps();
+  const isModuleAvailableFn = useAppStore((s) => s.isModuleAvailable);
+  const isModuleAvailable = (name) => (typeof isModuleAvailableFn === 'function' ? isModuleAvailableFn(name) : true);
+  const sendProductsToLabels = useAppStore((s) => s.sendProductsToLabels);
+  const sendProductsToExport = useAppStore((s) => s.sendProductsToExport);
+  const selectionInListOrder = () => orderedSelectionIds(selectedIds, filteredAndSorted.map((p) => p.id));
+  const useInItems = [
+    hasAnyCap(userCaps, ['labels.use']) && isModuleAvailable('labelgenerate') ? {
+      label: 'Generate & Print labels',
+      hint: 'Open Generate & Print with these products already ticked.',
+      onClick: () => { void sendProductsToLabels(selectionInListOrder()); },
+    } : null,
+    hasAnyCap(userCaps, ['catalog.design']) && isModuleAvailable('catalogprojects') ? {
+      label: 'Catalog…',
+      hint: 'Add these products to a catalog project, or start a new catalog with them.',
+      onClick: () => setUseInCatalogOpen(true),
+    } : null,
+    hasAnyCap(userCaps, ['export.run']) && isModuleAvailable('export') ? {
+      label: 'Export Center',
+      hint: 'Replace the Export Center queue with these products and open it.',
+      onClick: () => {
+        const ids = selectionInListOrder();
+        void sendProductsToExport(ids).then((ok) => {
+          if (ok) useAppStore.getState().addToast(`${ids.length} product${ids.length === 1 ? '' : 's'} queued for export`, 'success');
+        });
+      },
+    } : null,
+  ].filter(Boolean);
   // A selection the list no longer shows can't be narrowed to.
   useEffect(() => {
     if (showSelectedOnly && selectedIds.size === 0) setShowSelectedOnly(false);
@@ -1109,6 +1146,15 @@ export function ProductLibrary() {
                       },
                     ]}
                   />
+                  {useInItems.length ? (
+                    <BulkActionsMenu
+                      variant="default"
+                      searchable={false}
+                      label="Use in ▾"
+                      disabled={bulkDeleting}
+                      sections={[{ label: 'Send the selection to', items: useInItems }]}
+                    />
+                  ) : null}
                   <Button onClick={() => setBulkEditOpen(true)} disabled={bulkDeleting} title="Bulk-update metadata fields (brand, category, status, etc.) — doesn’t touch the image bytes.">
                     Edit fields…
                   </Button>
@@ -1211,6 +1257,12 @@ export function ProductLibrary() {
       <AutoMatchModal open={autoMatchOpen} onClose={() => setAutoMatchOpen(false)} />
       <DuplicateMergeModal open={dedupOpen} onClose={() => setDedupOpen(false)} />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} />
+
+      <UseInCatalogModal
+        open={useInCatalogOpen}
+        productIds={useInCatalogOpen ? selectionInListOrder() : []}
+        onClose={() => setUseInCatalogOpen(false)}
+      />
 
       <BulkEditModal
         open={bulkEditOpen}

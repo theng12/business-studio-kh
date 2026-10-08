@@ -86,6 +86,21 @@ export function LabelGenerate() {
     // addToast is a Zustand action — a stable reference, so listing it cannot
     // make this effect re-run.
     [companyId, addToast]);
+  // 0.1.95: Library "Use in ▾ → Generate & Print". Declared AFTER the company
+  // effect above (which clears the selection), so on mount the hand-off wins;
+  // subscribed through the store, so it also applies while this screen is open.
+  const pendingLabelProducts = useAppStore((s) => s.pendingLabelProducts);
+  const clearPendingLabelProducts = useAppStore((s) => s.clearPendingLabelProducts);
+  useEffect(() => {
+    if (!pendingLabelProducts) return;
+    clearPendingLabelProducts?.();
+    if (pendingLabelProducts.companyId !== companyId) return;
+    const known = new Set((Array.isArray(productsRef.current) ? productsRef.current : []).map((p) => p.id));
+    const ids = known.size ? pendingLabelProducts.ids.filter((id) => known.has(id)) : pendingLabelProducts.ids;
+    setSearch(''); setBrandFilter(''); setCategoryFilter(''); setProductPage(0);
+    setSelected(ids);
+    addToast(`${ids.length} product${ids.length === 1 ? '' : 's'} from the Library selected — pick a template and generate.`, 'info');
+  }, [pendingLabelProducts, clearPendingLabelProducts, companyId, addToast]);
   useEffect(() => {
     if (!companyId) return;
     if (!(Array.isArray(productsRef.current) && productsRef.current.length)) refreshAllProducts?.();

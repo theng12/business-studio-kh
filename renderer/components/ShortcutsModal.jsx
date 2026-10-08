@@ -74,6 +74,7 @@ const GROUPS = (mod, caps) => [
     rows: [
       ...navShortcutRows(NAV, caps, mod),
       { keys: [`${mod}K`], action: 'Global search palette' },
+      { keys: [`${mod}S`], action: 'Save the open editor (anywhere with a Save button; not while a dialog is open)' },
       { keys: [`${mod}?`], action: 'Show this shortcuts list' },
     ],
   },

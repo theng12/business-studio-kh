@@ -731,8 +731,11 @@ const VALIDATORS = {
   'socialGrid:exportBytes':  (a) => {
     if (!isObject(a)) return 'expected an object with config';
     if (a.config != null && !isObject(a.config)) return 'config must be an object';
+    if (a.runId != null && !isString(a.runId)) return 'runId must be a string';
     return true;
   },
+  // 0.1.95: Cancel for a running Social Grid export (renderer-chosen run id).
+  'socialGrid:cancelExport': requireNonEmptyStringFields('runId'),
 
   // Bulk table column sets (v0.1.71) --------------------------------
   // `columns` is an ordered array of catalogue keys; the DB module normalizes
@@ -1127,8 +1130,11 @@ const VALIDATORS = {
   },
 };
 
+// Fuel F1: the staff:* and fuel:* validators live in their own file.
+const { FUEL_VALIDATORS } = require('./fuelValidators');
+
 function getValidator(channel) {
-  return VALIDATORS[channel] ?? null;
+  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? null;
 }
 
 module.exports = {

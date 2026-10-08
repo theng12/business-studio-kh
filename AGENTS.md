@@ -140,6 +140,12 @@ For desktop apps:
   sharp-made WebP cached in `<userData>/thumb-cache/` (not the data folder, so backups
   and data-folder moves never see it; capped at 256 MB). Any failure serves the
   original. Full-size viewers (Lightbox, editors) omit `w`.
+- **Fuel and staff photos are NOT assets** (verified 2026-10-08): they live under
+  `<dataDir>/fuel/<yyyy-mm>/` and `<dataDir>/hr/employees/`, are listed in the `fuel_photos`
+  table, and are read only through the permission-checked `fuel:getPhoto` / `staff:getPhoto`
+  channels — never `app-image://` or `/assets/`. Both folders are in `BACKUP_DATA_ENTRIES` and
+  `ARCHIVE_TOP_LEVEL_DIRS` (`main/util/backupSafety.js`); a new top-level data folder needs
+  both, or every backup containing it becomes unrestorable.
 - Auto-import-on-pick: when a user picks a file in a form, copy it to assets immediately. Form state stores the *relative* path returned by the importer, not the absolute pick path.
 
 ## 10. Pagination on long lists
@@ -299,8 +305,8 @@ Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
 **Note on styling (corrected 2026-09-19).** This table used to say Tailwind
 CSS and Puppeteer. Neither is true of this app and hasn't been for a long
 time: there is no `tailwindcss` dependency and no Tailwind or PostCSS config,
-and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~11.7k
-lines; verified 2026-10-06) plus small per-feature CSS blocks in the same file, and PDFs are
+and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~12.3k
+lines; verified 2026-10-08) plus small per-feature CSS blocks in the same file, and PDFs are
 produced by Electron's own `webContents.printToPDF()` in
 `main/renderWindow.js` — no bundled Chromium, no extra download. Both
 replacements are deliberate: the print path costs nothing extra, and the CSS
@@ -309,7 +315,7 @@ per-app choice, not the house default.
 
 ## 17. File layout (Electron apps)
 
-*(Counts re-verified 2026-10-06.)*
+*(Counts re-verified 2026-10-08.)*
 
 The shape below is what this app actually uses. Two things to note, because
 they're the parts newcomers get wrong: `db` and `ipc` are **directories with
@@ -322,10 +328,10 @@ main/                    # main process — CommonJS (require/module.exports)
   config.js              # config.json read/write (userData, not the DB)
   preload.js             # contextBridge surface — the ONLY api entry point
   ipc.js                 # barrel: registers every domain module in ipc/
-  ipc/                   # 25 files, one per domain (products.js, images.js, …)
-  db/                    # 30 files: index.js owns the schema + migrations,
+  ipc/                   # 28 files, one per domain (products.js, images.js, …)
+  db/                    # 38 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 33 helpers (slug, capabilities, landedCost,
+  util/                  # 41 helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode
@@ -342,7 +348,7 @@ renderer/                # React + Vite — ESM (import/export)
   index.css              # ALL styling lives here — one hand-written file
   store/                 # Zustand: index.js composes 13 slice files
   lib/                   # renderer-only helpers (imageUrl, presets…)
-  components/            # shared UI (22 files)
+  components/            # shared UI (25 files)
     ui.jsx               # Button Input Textarea Select Field Badge
                          # SliderField Modal EmptyState Pagination paginate
     Toast.jsx            # toasts (own file, NOT in ui.jsx)
@@ -351,10 +357,12 @@ renderer/                # React + Vite — ESM (import/export)
     Sidebar.jsx          # nav config + footer (version, What's new, Support)
     WhatsNewModal.jsx    # the §3 changelog array
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
-  modules/<Name>/        # 18 feature modules, one folder each
+  modules/<Name>/        # 20 feature modules, one folder each
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 179 files — `node --test test/**/*.test.js`
-scripts/                 # 13 files: build-icon.js, build-webclient.js,
+test/                    # 211 files — `node --test test/**/*.test.js`
+scripts/                 # 15 files: build-icon.js, build-webclient.js (/m + /f),
+                         # seed-realistic.js (--fuel adds staff + 6 months of fuel),
+                         # probe-fuel-phone.js (the /f phone page in Chromium),
                          # prune-dmgs.js           (`npm run dmgs:prune`)
                          # probe-render-paint.js  (`npm run check:render`)
                          # probe-app-image-cors.js (`npm run check:images`)

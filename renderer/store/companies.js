@@ -46,6 +46,8 @@ function companyContextPatch(id) {
     pendingCatalogProjectId: null,
     pendingCatalogTemplateId: null,
     pendingLibraryProductId: null,
+    pendingLabelProducts: null,
+    pendingCatalogProducts: null,
   };
 }
 

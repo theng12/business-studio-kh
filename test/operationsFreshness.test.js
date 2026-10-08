@@ -28,6 +28,10 @@ function hookHarness() {
     memo: (component) => component,
     // 0.1.94: the Library's list views render ConnImg, a forwardRef component.
     forwardRef: (render) => render,
+    // Fuel F1: Settings lazy-loads its Fuel tab. The harness never mounts a
+    // lazy child, so a placeholder component is enough.
+    lazy: () => function LazyPlaceholder() { return null; },
+    Suspense: function Suspense(props) { return props.children; },
     useState(initial) {
       const index = cursor++;
       if (!hooks[index]) hooks[index] = { value: typeof initial === 'function' ? initial() : initial };

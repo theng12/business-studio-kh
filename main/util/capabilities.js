@@ -43,7 +43,14 @@ const CAPABILITIES = [
   { key: 'history.view',     group: 'System',      label: 'View edit history',             description: 'See the audit log of who changed what.' },
   { key: 'users.manage',     group: 'System',      label: 'Manage users & roles',          description: 'Add/remove users, assign roles, and edit roles on this screen.' },
   { key: 'system.manage',    group: 'System',      label: 'System & data settings',        description: 'Server mode, data folder, backups, app preferences, relaunch. Powerful.' },
+  // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §6). Neither is in the Editor preset
+  // (main/db/roles.js excludes them): fuel and staff data are granted on purpose.
+  { key: 'fuel.record',      group: 'Fuel',        label: 'Record fuel',                   description: 'Phone fuel page: record fills, tank dips, deliveries and transfers; see vehicle and staff tiles; photos of your own records.' },
+  { key: 'fuel.manage',      group: 'Fuel',        label: 'Manage fuel & staff list',      description: 'Vehicles, tanks, dip charts, prices, thresholds, staff list; review, correct and void records; flags, reports and all fuel photos.' },
 ];
+
+/** Capabilities that are never part of a preset by default (granted per role on purpose). */
+const OPT_IN_CAPABILITIES = new Set(['fuel.record', 'fuel.manage']);
 
 const CAPABILITY_KEYS = new Set(CAPABILITIES.map((c) => c.key));
 
@@ -159,12 +166,26 @@ const CHANNEL_RULES = [
   [/^companies:remove$/,                                ADMIN_ONLY],
   [/^companies:(create|update)$/,                       'system.manage'],
   [/^app:(relaunch|clearCache)$/,                       'system.manage'],
+
+  // — Fuel F1. A rule value may be a LIST: any one of those capabilities allows
+  //   the channel. The phone-page channels (record + read the tiles + own
+  //   records) are open to fuel.record OR fuel.manage; everything else under
+  //   staff:/fuel: is fuel.manage. Handlers still narrow what a recorder sees
+  //   (photos: only their own records' — main/ipc/fuelAccess.js).
+  //   fuel:setDeliveryDips is manage-only: the phone links a delivery's dips
+  //   when it records the delivery (dipBeforeId / dipAfterId), so re-linking an
+  //   existing delivery afterwards is a manager's correction.
+  [/^staff:(list|get|getPhoto|me)$/,                       ['fuel.record', 'fuel.manage']],
+  [/^fuel:(getSettings|listAssetTypes|listAssets|getAsset|listLocations|getLocation|getChart|getDipLitres|listStations|listPrices|recordFill|recordDip|recordDelivery|recordTransfer|receiveTransfer|addPhoto|getPhoto|listMyRecent|listPendingTransfers|voidMyRecord)$/, ['fuel.record', 'fuel.manage']],
+  [/^staff:/,                                           'fuel.manage'],
+  [/^fuel:/,                                            'fuel.manage'],
 ];
 
 /**
  * Resolve a channel to one of:
  *   'baseline'      — always allowed
  *   <capability>    — requires that capability
+ *   [<cap>, …]      — requires ANY ONE of those capabilities
  *   null            — unmapped (caller falls back to legacy logic)
  */
 function channelCapability(channel) {
@@ -182,4 +203,5 @@ module.exports = {
   CHANNEL_RULES,
   channelCapability,
   ADMIN_ONLY,
+  OPT_IN_CAPABILITIES,
 };

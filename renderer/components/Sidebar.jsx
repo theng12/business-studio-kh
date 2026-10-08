@@ -4,6 +4,7 @@ import { useAppStore } from '../store/index.js';
 // v0.1.22: shared with Settings — see renderer/lib/capabilities.js.
 import { hasCap, hasAnyCap } from '../lib/capabilities.js';
 import { WhatsNewModal } from './WhatsNewModal.jsx';
+import { hasUnseenWhatsNew, loadLastSeenVersion, saveLastSeenVersion } from '../lib/whatsNewSeen.js';
 import { PresenceModal } from './PresenceModal.jsx';
 import { ConnectionLegendModal } from './ConnectionLegendModal.jsx';
 import { timeAgo } from '../lib/format.js';
@@ -106,6 +107,27 @@ export const NAV = [
     ],
   },
   {
+    // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §5). The record-keeping screens are
+    // open to fuel.record too (they show only what a recorder may do: add
+    // slips, dips, deliveries); review, flags and reports are fuel.manage.
+    label: 'Fuel',
+    items: [
+      { id: 'fueloverview', name: 'Fuel overview',       icon: IconFuel,        caps: ['fuel.manage'] },
+      { id: 'fuelassets',   name: 'Vehicles & machines', icon: IconVehicle,     caps: ['fuel.record', 'fuel.manage'] },
+      { id: 'fuelfills',    name: 'Fill-ups',            icon: IconFillUp,      caps: ['fuel.record', 'fuel.manage'] },
+      { id: 'fueltanks',    name: 'Tanks & dips',        icon: IconTank,        caps: ['fuel.record', 'fuel.manage'] },
+      { id: 'fuelprices',   name: 'Fuel prices',         icon: IconFuelPrice,   caps: ['fuel.record', 'fuel.manage'] },
+      { id: 'fuelreports',  name: 'Fuel reports',        icon: IconFuelReport,  caps: ['fuel.manage'] },
+    ],
+  },
+  {
+    // The thin staff list F1 needs; HR1 grows it (and this section) later.
+    label: 'People',
+    items: [
+      { id: 'staff', name: 'Staff', icon: IconStaff, caps: ['fuel.manage'] },
+    ],
+  },
+  {
     label: 'System',
     // UI pass, 2026-10 (§5): pinned under the scrolling list, above the
     // footer, so Settings is on screen at any window height — on a
@@ -181,6 +203,13 @@ export function Sidebar({ onSearch }) {
   const presence = useAppStore((s) => s.presence);
   const isModuleAvailable = useAppStore((s) => s.isModuleAvailable);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  // 0.1.95: a dot on What's new after an update, until it is opened.
+  const [whatsNewSeen, setWhatsNewSeen] = useState(() => loadLastSeenVersion());
+  const whatsNewUnseen = hasUnseenWhatsNew(version, whatsNewSeen);
+  function openWhatsNew() {
+    setWhatsNewOpen(true);
+    if (version) { saveLastSeenVersion(version); setWhatsNewSeen(version); }
+  }
   // v0.22.11: clickable presence + connection chip → modals.
   const [presenceOpen, setPresenceOpen] = useState(false);
   const [connLegendOpen, setConnLegendOpen] = useState(false);
@@ -352,10 +381,13 @@ export function Sidebar({ onSearch }) {
           <button
             type="button"
             className="sidebar__footer-btn"
-            onClick={() => setWhatsNewOpen(true)}
+            onClick={openWhatsNew}
+            aria-label={whatsNewUnseen ? `What's new — new in version ${version}` : undefined}
+            title={whatsNewUnseen ? `New in version ${version}` : undefined}
           >
             <IconSparkles className="sidebar__footer-btn-icon" />
             <span>What's new</span>
+            {whatsNewUnseen ? <i className="sidebar__new-dot" aria-hidden="true" /> : null}
           </button>
           <button
             type="button"
@@ -700,6 +732,78 @@ function NetworkChip() {
 }
 
 /* ─── Inline SVG icons ─────────────────────────────────────────── */
+
+/* Fuel F1 + People — inline, stroke-based, 18px like the rest (§1). */
+function IconFuel({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <rect x="3" y="2.5" width="7.5" height="13" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M4.8 6h3.9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M10.5 7.5h1.6a1 1 0 0 1 1 1v4.3a1.2 1.2 0 0 0 2.4 0V6.4L13.6 4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function IconVehicle({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M1.8 12.5V6.2a1 1 0 0 1 1-1h7.4v7.3" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M10.2 7.5h3l2.3 2.6v2.4" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <circle cx="5" cy="13.2" r="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="12.8" cy="13.2" r="1.5" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function IconFillUp({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M9 2.5S4.5 7.6 4.5 10.7a4.5 4.5 0 0 0 9 0C13.5 7.6 9 2.5 9 2.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M7 11.2a2 2 0 0 0 2 2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconTank({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <ellipse cx="9" cy="4.5" rx="5.5" ry="2" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M3.5 4.5v9c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2v-9" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M9 8v6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M8 10h2M8 12h2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconFuelPrice({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M2.5 9.6V3.5a1 1 0 0 1 1-1h6.1l6 6a1 1 0 0 1 0 1.4l-5.7 5.7a1 1 0 0 1-1.4 0l-6-6Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <circle cx="6" cy="6" r="1.2" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
+function IconFuelReport({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M3 15.5h12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="4" y="9" width="2.4" height="4.5" rx=".6" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="7.8" y="5.5" width="2.4" height="8" rx=".6" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="11.6" y="2.5" width="2.4" height="11" rx=".6" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
+function IconStaff({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <circle cx="6.8" cy="6" r="2.6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2 15c.4-2.7 2.4-4.4 4.8-4.4s4.4 1.7 4.8 4.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M12 3.6a2.5 2.5 0 0 1 0 4.8M13.6 10.9c1.3.6 2.2 2 2.4 4.1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 function IconDashboard({ className }) {
   return (

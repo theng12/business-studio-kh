@@ -9,6 +9,7 @@
  * "AV-M81" < "AV-M8101" < "AV-M8200" read the way a person does.
  */
 import { priceEntry } from '../../lib/prices.js';
+import { comparableUsd } from '../../lib/exchangeRate.js';
 
 const SORT_GETTERS = {
   sku:       (p) => p.sku ?? '',
@@ -21,8 +22,11 @@ const SORT_GETTERS = {
   // 0.1.94: the optional data columns. Missing values return null and always
   // sort LAST, whichever way the column is sorted.
   barcode:   (p) => p.barcode || null,
-  retail:    (p) => priceEntry(p, 'retail').amount,
-  wholesale: (p) => priceEntry(p, 'wholesale').amount,
+  // 0.1.95: prices compare in one currency — a KHR price is divided by the
+  // house rate (renderer/lib/exchangeRate.js), so 41,000 KHR sorts with $10,
+  // not above $9,999. The cells still show each price in its own currency.
+  retail:    (p, ix) => comparableUsd(priceEntry(p, 'retail'), ix.khrPerUsd),
+  wholesale: (p, ix) => comparableUsd(priceEntry(p, 'wholesale'), ix.khrPerUsd),
   stock:     (p) => (p.stockQty == null || p.stockQty === '' ? null : Number(p.stockQty)),
 };
 
@@ -30,7 +34,7 @@ function getterFor(key) {
   if (SORT_GETTERS[key]) return SORT_GETTERS[key];
   if (typeof key === 'string' && key.startsWith('price:')) {
     const group = key.slice('price:'.length);
-    return (p) => priceEntry(p, group).amount;
+    return (p, ix) => comparableUsd(priceEntry(p, group), ix.khrPerUsd);
   }
   return null;
 }
@@ -40,10 +44,10 @@ function getterFor(key) {
  * and ~3.5 ms with this one. Same ordering: numeric, case/accent-insensitive. */
 const SORT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
-export function sortProducts(rows, sort, brandsById = new Map(), categoriesById = new Map()) {
+export function sortProducts(rows, sort, brandsById = new Map(), categoriesById = new Map(), { khrPerUsd } = {}) {
   const getter = getterFor(sort?.key);
   if (!getter) return rows;
-  const ix = { brand: brandsById, category: categoriesById };
+  const ix = { brand: brandsById, category: categoriesById, khrPerUsd };
   const dir = sort.dir === 'desc' ? -1 : 1;
   // Slice first because Array#sort mutates in place — and our caller passes
   // the store's products array which must stay immutable for React.

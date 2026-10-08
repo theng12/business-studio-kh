@@ -155,6 +155,25 @@ export function SliderField({ label, value, min, max, step = 1, suffix = '', hin
   );
 }
 
+/**
+ * Fuel F1 review (L1): modals stack — a dialog opened from a dialog (a reason
+ * prompt over an editor, a confirm over a form). Only the TOPMOST one may
+ * answer Esc or a backdrop click; before this, one Esc closed every open
+ * dialog at once, losing the editor underneath.
+ *
+ * "Topmost" is the last `.modal-backdrop` in document order. That is also
+ * what is drawn on top (same z-index, later wins), it is right for a dialog
+ * nested inside another's body (a descendant comes after its ancestor), and
+ * for `confirm()`, whose host is appended to <body>. An open-order registry
+ * was not: React runs a child's effects before its parent's, so a nested pair
+ * opened in one render would register in the wrong order.
+ */
+export function isTopmostModal(backdrop, doc = typeof document !== 'undefined' ? document : null) {
+  if (!backdrop || !doc) return true;
+  const all = doc.querySelectorAll('.modal-backdrop');
+  return all.length === 0 || all[all.length - 1] === backdrop;
+}
+
 export function Modal({
   open,
   onClose,
@@ -171,6 +190,7 @@ export function Modal({
   busy = false,
 }) {
   const dialogRef = useRef(null);
+  const backdropRef = useRef(null);
   const busyRef = useRef(busy);
   busyRef.current = busy;
 
@@ -180,6 +200,8 @@ export function Modal({
       // A control inside the dialog that already used this Esc (a popover,
       // a picker's list) marks it defaultPrevented; that Esc is not ours.
       if (e.key === 'Escape' && !e.defaultPrevented) {
+        // A dialog stacked above this one owns the Esc (L1).
+        if (!isTopmostModal(backdropRef.current)) return;
         e.stopPropagation();
         if (busyRef.current) return;
         onClose?.();
@@ -218,7 +240,7 @@ export function Modal({
 
   const handleBackdropClick = (e) => {
     if (!closeOnBackdrop || busy) return;
-    if (e.target === e.currentTarget) onClose?.();
+    if (e.target === e.currentTarget && isTopmostModal(e.currentTarget)) onClose?.();
   };
 
   const cls = ['modal'];
@@ -237,7 +259,7 @@ export function Modal({
   if (size === 'xxl') cls.push('modal--xxl');
 
   return (
-    <div className="modal-backdrop" onMouseDown={handleBackdropClick}>
+    <div ref={backdropRef} className="modal-backdrop" onMouseDown={handleBackdropClick}>
       <div
         ref={dialogRef}
         className={cls.join(' ')}

@@ -582,6 +582,14 @@ app.whenReady().then(() => {
     logEvent('backup:auto-scheduler-failed', err.message);
   }
 
+  /* Fuel F1: full anomaly pass + photo-retention sweep, 30 s after start and
+   * every 12 hours (missed dips only show up with time). Best-effort. */
+  try {
+    require('./fuelScheduler').startFuelScheduler({ log: logEvent });
+  } catch (err) {
+    logEvent('fuel:scheduler-failed', err.message);
+  }
+
   // v0.14.2: in server mode, boot the HTTP server after IPC handlers
   // have registered themselves in the registry. Don't block app startup
   // on it — if the port is taken, log and continue (the UI will show
