@@ -17,7 +17,7 @@ import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { formatDateTime } from '../../lib/format.js';
 import { ReasonModal } from '../Fuel/FuelShared.jsx';
 import { useAssetCaps, useAssetsTick } from './assetsHooks.js';
-import { Notice } from './AssetsShared.jsx';
+import { Notice, Segments } from './AssetsShared.jsx';
 import {
   BOOK_METHODS, CONVENTIONS, TAX_CLASSES, addMonths, errText, fmtLife, fmtPeriod, fmtUsd, fmtYmd, lastEndedPeriod, minorToInput,
   parseMoney, parseWhole, taxClassLabel, todayKey,
@@ -321,10 +321,7 @@ function RatesSection() {
         <span className="section-hint">Riel per US dollar. The house rate goes on journal entries; the official rate (GDT) is used for tax.</span>
         <div className="section-head__actions"><Button variant="primary" onClick={() => setAdding(true)}>+ Add rate</Button></div>
       </div>
-      <div className="segments" role="tablist" aria-label="Rate">
-        <button type="button" className={`segment${source === 'house' ? ' is-active' : ''}`} onClick={() => setSource('house')}>House</button>
-        <button type="button" className={`segment${source === 'official' ? ' is-active' : ''}`} onClick={() => setSource('official')}>Official (tax)</button>
-      </div>
+      <Segments label="Rate" value={source} onChange={setSource} options={[{ value: 'house', label: 'House' }, { value: 'official', label: 'Official (tax)' }]} />
       {!rates ? <p className="muted">Loading…</p> : !rates.length ? (
         <EmptyState title="No rates yet" body={source === 'house' ? 'The first entry that needs one takes the rate from Settings → General, dated the register start.' : 'Without an official rate the tax view uses the house rate and says so.'} action={<Button variant="primary" onClick={() => setAdding(true)}>+ Add rate</Button>} />
       ) : (

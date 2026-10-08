@@ -782,7 +782,7 @@ updatedAt }`.
 | `assets:setCustodian` | `{ id, employeeId \| null, date?, reason? }` | `{ asset, eventId }` | M |
 | `assets:setStatus` | `{ id, status ('in_use'\|'in_storage'\|'in_repair'), date?, reason? }` | `{ asset, eventId }` | M |
 | `assets:recordRepair` | `{ id, reason, date?, amountMinor?, currency?, vendor?, supplierId?, documentFileIds? }` | `{ asset, event }` — history only, **no journal** | M |
-| `assets:recordCapex` | `{ id, reason, amountMinor, currency?, fxKhrPerUsd?, extendsLifeMonths?, date?, supplierId?, documentFileIds? }` | `{ asset, event, entry }` — at or above the threshold only (below it: "use Record repair") | M |
+| `assets:recordCapex` | `{ id, reason, amountMinor, operationKey?, currency?, fxKhrPerUsd?, extendsLifeMonths?, date?, supplierId?, documentFileIds? }` | `{ asset, event, entry }` — at or above the threshold only (below it: "use Record repair") | M |
 | `assets:changeLife` | `{ id, newLifeMonths (months LEFT from that month), reason, date? }` | `{ asset, event }` — prospective | M |
 | `assets:changeSalvage` | `{ id, newSalvageMinor (US cents), reason, date? }` | `{ asset, event }` — prospective | M |
 | `assets:addNote` | `{ id, text, date? }` | `{ asset, event }` | M |
@@ -805,11 +805,17 @@ updatedAt }`.
 |---|---|---|---|
 | `assets:previewDisposal` | `{ id, date?, kind? ('sale'\|'scrap'\|'donation'\|'lost'), proceedsMinor?, currency?, fxKhrPerUsd? }` | `{ lastPeriod, entryDate (later than the date for a late disposal), proceedsUsdMinor, nbvMinor, gainMinor, depreciationDueMinor, posts, lines }` — writes nothing | M |
 | `assets:dispose` | same + `buyer?`, `reason?` | `{ asset, event, entry }` | M |
-| `assets:partialDispose` | `{ id, qty, date?, kind?, proceedsMinor?, currency?, buyer?, reason? }` | `{ asset, event (detail: costShareMinor, accumShareMinor, nbvShareMinor, gainMinor), entry }` | M |
+| `assets:partialDispose` | `{ id, qty, operationKey?, date?, kind?, proceedsMinor?, currency?, buyer?, reason? }` | `{ asset, event (detail: costShareMinor, accumShareMinor, nbvShareMinor, gainMinor), entry }` | M |
 | `assets:markLost` | `{ id, reason, date?, stocktakeResultId? }` | `{ asset, event, entry }` | M |
 | `assets:markFound` | `{ id, date?, reason? }` | `{ asset, event, entry }` | M |
-| `assets:impair` | `{ id, amountMinor (US cents), reason, date? }` | `{ asset, event, entry }` | M |
-| `assets:revalue` | `{ id, newValueMinor (US cents), reason, date? }` — land and buildings only | `{ asset, event (detail: surplusMinor, lossMinor, method 'elimination'), entry }` | M |
+| `assets:impair` | `{ id, amountMinor (US cents), reason, date?, operationKey? }` | `{ asset, event, entry }` | M |
+| `assets:revalue` | `{ id, newValueMinor (US cents), reason, date?, operationKey? }` — land and buildings only | `{ asset, event (detail: surplusMinor, lossMinor, method 'elimination'), entry }` | M |
+
+**Idempotency (review LOW 6).** `assets:recordCapex`, `assets:partialDispose`, `assets:impair` and
+`assets:revalue` take an optional client `operationKey` (8–100 of `A–Z a–z 0–9 - _ :`; the screens send
+one per dialog). It is stored on the event (`asset_events.operation_key`, UNIQUE per company where set); a
+retry with the same key returns the first result with `replayed: true` instead of posting again, and the
+same key for another asset or another action is refused.
 
 `assets:reverseEvent` also undoes the asset's **latest** disposal, partial disposal, impairment or
 revaluation (mirror entry today; a sale's asset back in use, a partial sale's quantity back). A
@@ -848,7 +854,7 @@ name, plate or driver are mirrored into the register (a driver change on an acti
 | Channel | Args | Returns | Cap |
 |---|---|---|---|
 | `assets:importColumns` | — | `[{ key, label, aliases, accepts, draftOnly }]` — the canonical columns for auto-mapping | M |
-| `assets:importPlan` | `{ rows: [{ <column key>: value }] }` (≤ 5,000; the file is read with `files:parseWorkbook`) | `{ rows: [{ rowNo, action ('create'\|'update'\|'skip'\|'error'), assetId, tagCode, values, events, link, warnings, errors }], summary: { total, create, update, skip, error, warnings } }` — writes nothing | M |
+| `assets:importPlan` | `{ rows: [{ <column key>: value, sourceRow? }] }` (≤ 5,000; the file is read with `files:parseWorkbook`; `sourceRow` = the row's number in the sheet, so `rowNo` points at the right line when blank rows were dropped — else counted from 2) | `{ rows: [{ rowNo, action ('create'\|'update'\|'skip'\|'error'), assetId, tagCode, values, events, link, warnings, errors }], summary: { total, create, update, skip, error, warnings } }` — writes nothing | M |
 | `assets:importApply` | `{ rows }` | `{ created, updated, skipped, failed, rows: [{ rowNo, action, assetId, tagCode, warnings, errors }] }` — rows with errors are skipped; each row is its own savepoint | M |
 | `assets:getImportSample` | — | `{ filename, bytes }` — sheets Assets, Instructions, Categories, Branches | M |
 | `assets:saveImportSample` | — | saved path or `null` (Save dialog) | M, **local** |

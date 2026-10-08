@@ -746,12 +746,12 @@ function insertEvent(e) {
       from_branch_id, to_branch_id, from_employee_id, to_employee_id, from_status, to_status,
       amount_minor, currency, fx_khr_per_usd, amount_usd_minor, proceeds_minor, buyer, qty, new_life_months, new_salvage_minor,
       extends_life_months, vendor, supplier_id, reason, detail_json, document_file_ids, journal_entry_id, reverses_event_id, stocktake_result_id,
-      recorded_by_user_id, created_at)
+      recorded_by_user_id, created_at, operation_key)
     VALUES (@id, @companyId, @assetId, @batchId, @eventDate, @effectivePeriod, @kind,
       @fromBranchId, @toBranchId, @fromEmployeeId, @toEmployeeId, @fromStatus, @toStatus,
       @amountMinor, @currency, @fx, @amountUsdMinor, @proceedsMinor, @buyer, @qty, @newLifeMonths, @newSalvageMinor,
       @extendsLifeMonths, @vendor, @supplierId, @reason, @detail, @documentFileIds, @journalEntryId, @reversesEventId, @stocktakeResultId,
-      @by, @now)
+      @by, @now, @operationKey)
   `).run({
     id, companyId: e.companyId, assetId: e.assetId, batchId: e.batchId ?? null, eventDate: e.eventDate,
     effectivePeriod: e.effectivePeriod ?? e.eventDate.slice(0, 7), kind: e.kind,
@@ -764,9 +764,36 @@ function insertEvent(e) {
     detail: e.detail ? JSON.stringify(e.detail) : null,
     documentFileIds: e.documentFileIds && e.documentFileIds.length ? JSON.stringify(e.documentFileIds) : null,
     journalEntryId: e.journalEntryId ?? null, reversesEventId: e.reversesEventId ?? null, stocktakeResultId: e.stocktakeResultId ?? null,
-    by: getCallerUserId(), now: Date.now(),
+    by: getCallerUserId(), now: Date.now(), operationKey: operationKeyOf(e.operationKey),
   });
   return id;
+}
+
+/** A client's operation key: 8–100 letters, digits, `-`, `_`, `:`; blank = none. */
+function operationKeyOf(v) {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  if (!/^[A-Za-z0-9:_-]{8,100}$/.test(s)) throw badRequest('operationKey must be 8–100 letters, digits, "-", "_" or ":"');
+  return s;
+}
+
+/**
+ * Idempotency for the money events a person can double-click (review LOW 6):
+ * when an event with this `operationKey` already exists in the asset's
+ * company, return what the first call returned (`replayed: true`) instead of
+ * posting again. The same key on another asset or another kind of action is
+ * refused. Null when there is no key or it is new.
+ */
+function replayOperation(assetId, kind, operationKey) {
+  const key = operationKeyOf(operationKey);
+  if (!key) return null;
+  const a = get(assetId);
+  if (!a) return null;
+  const r = getDb().prepare('SELECT id FROM asset_events WHERE company_id = ? AND operation_key = ?').get(a.companyId, key);
+  if (!r) return null;
+  const e = getEvent(r.id);
+  if (e.assetId !== assetId || e.kind !== kind) throw badRequest('That operation key was already used for another action — try again');
+  return { asset: get(assetId), event: e, entry: e.journalEntryId ? ledger.getEntry(e.journalEntryId) : null, replayed: true };
 }
 
 function rowToEvent(r) {
@@ -1013,7 +1040,9 @@ function assertDepreciating(a) {
  * improving or extending life. Posts Dr Cost / Cr Purchases clearing; the
  * schedule re-runs from that month with the extra cost (and months).
  */
-function recordCapex({ id, date, amountMinor, currency, fxKhrPerUsd, extendsLifeMonths, supplierId, reason, documentFileIds } = {}) {
+function recordCapex({ id, date, amountMinor, currency, fxKhrPerUsd, extendsLifeMonths, supplierId, reason, documentFileIds, operationKey } = {}) {
+  const again = replayOperation(id, 'capex', operationKey);
+  if (again) return again;
   const a = liveAsset(id, { activeOnly: true });
   assertDepreciating(a);
   const why = str(reason, 1000);
@@ -1053,7 +1082,7 @@ function recordCapex({ id, date, amountMinor, currency, fxKhrPerUsd, extendsLife
     insertEvent({
       id: eventId, companyId: a.companyId, assetId: id, kind: 'capex', eventDate: d, reason: why, amountMinor: amount, currency: cur,
       fxKhrPerUsd: entry.fxKhrPerUsd, amountUsdMinor: usd, extendsLifeMonths: extra, supplierId: checkSupplier(a.companyId, supplierId),
-      journalEntryId: entry.id, documentFileIds: fileIds,
+      journalEntryId: entry.id, documentFileIds: fileIds, operationKey,
     });
     require('./assetDepreciation').refreshSnapshot(id);
   })();
@@ -1346,7 +1375,7 @@ module.exports = {
   get, getByTag, list, create, update, cancelDraft,
   allocateTag, claimTag, tagUsed,
   planActivation, previewActivation, activate,
-  insertEvent, getEvent, listEvents, transfer, setCustodian, setStatus, recordRepair, recordCapex, changeLife, changeSalvage, addNote,
+  insertEvent, getEvent, listEvents, replayOperation, operationKeyOf, transfer, setCustodian, setStatus, recordRepair, recordCapex, changeLife, changeSalvage, addNote,
   voidEvent, reverseEvent, scheduleSpec, getSchedule, rowToAsset, checkEmployee,
   postedDepreciation, lastDepreciationPeriod, assertAfterPosted, eventDateFor, eventDate, branchAt, assertNoLaterMove, liveAsset, touch, pastDateOrNull, assertDepreciating, amountInUsd,
 };

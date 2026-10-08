@@ -145,7 +145,7 @@ test('§6: the asset editor autosaves after 500 ms and keeps an explicit Save; �
 test('the tax view says "estimate — confirm with an accountant" and filing is the admin\'s', () => {
   const tax = code(`${DIR}/AssetTaxYear.jsx`);
   assert.match(tax, /Estimate — confirm with an accountant\./);
-  assert.match(tax, /caps\.isAdmin && data && !data\.filed \?/);
+  assert.match(tax, /caps\.isAdmin && data && !data\.filed && taxYearEnded\(data\.year\) \?/);
   assert.match(tax, /disabled=\{unconfirmed\}/);
 });
 
@@ -173,4 +173,32 @@ test('backend gaps the screens needed: filtered totals, staff tiles for asset ro
   const levelFn = read('main/ipc/hrAccess.js').match(/function staffLevel\(\) \{[\s\S]*?\n\}/)[0];
   assert.ok(!/assets\./.test(levelFn), 'asset roles never get a fuller level');
   assert.match(read('main/assetScheduler.js'), /emitAssetChange\('run', 'post', period, companyId\)/);
+});
+
+
+test('review fixes are wired: save before an action, fresh previews, operation keys, keyboard rows', () => {
+  const page = code(`${DIR}/AssetPage.jsx`);
+  // M1: every action waits for the details to be saved, and Activate re-reads its preview when the asset changes.
+  assert.match(page, /if \(editable && !\(await editor\.flush\(\)\)\) \{/);
+  assert.doesNotMatch(page, /onClick=\{\(\) => setAction\(/, 'no action opens without the flush');
+  const actions = code(`${DIR}/AssetActions.jsx`);
+  assert.match(actions, /\}, \[asset\.id, asset\.updatedAt\]\);/);
+  // LOW 2: a stale disposal preview is cleared before the next one is asked for.
+  assert.match(actions, /setPreview\(null\);\s*setPreviewError\(''\);\s*if \(money\.error \|\| !date\) return undefined;/);
+  // LOW 6: one operation key per dialog on the four money events.
+  for (const call of ['recordCapex', 'impair', 'revalue', 'partialDispose']) {
+    assert.match(actions, new RegExp(`api\\(\\)\\.${call}\\(\\{[^}]*operationKey`), `${call} sends an operationKey`);
+  }
+  assert.equal((actions.match(/const operationKey = useOperationKey\(\);/g) || []).length, 4);
+  // LOW 7: rows that open something are reachable by Tab and open on Enter / Space.
+  for (const f of ['AssetRegister.jsx', 'AssetDepreciation.jsx', 'AssetTaxYear.jsx', 'AssetReports.jsx']) {
+    assert.match(code(`${DIR}/${f}`), /openRowProps\(/, `${f} rows open from the keyboard`);
+  }
+  for (const f of screenFiles()) {
+    const src = code(f);
+    for (const m of src.matchAll(/<div className="segments[^"]*" role="tablist"[\s\S]*?<\/div>/g)) {
+      assert.match(m[0], /role="tab"/, `${f}: a tab list has tabs`);
+    }
+  }
+  assert.match(code(`${DIR}/AssetTaxYear.jsx`), /taxYearEnded\(data\.year\)/);
 });

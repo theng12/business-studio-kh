@@ -214,7 +214,9 @@ function markFound({ id, date, reason } = {}) {
 }
 
 /** Sell or scrap part of a group asset (quantity > 1). */
-function partialDispose({ id, date, qty, kind = 'sale', proceedsMinor = 0, currency = 'USD', fxKhrPerUsd = null, buyer, reason } = {}) {
+function partialDispose({ id, date, qty, kind = 'sale', proceedsMinor = 0, currency = 'USD', fxKhrPerUsd = null, buyer, reason, operationKey } = {}) {
+  const again = fixedAssets.replayOperation(id, 'partial_dispose', operationKey);
+  if (again) return again;
   const a = fixedAssets.liveAsset(id, { activeOnly: true });
   const n = Number(qty);
   if (!(a.quantity > 1)) throw badRequest(`${a.tagCode} is a single item — dispose of it instead`);
@@ -263,7 +265,7 @@ function partialDispose({ id, date, qty, kind = 'sale', proceedsMinor = 0, curre
     fixedAssets.insertEvent({
       id: eventId, companyId: a.companyId, assetId: a.id, kind: 'partial_dispose', eventDate: d, effectivePeriod: book.addMonths(lastPeriod, 1),
       reason: str(reason, 1000), qty: n, proceedsMinor: p.amount, currency: p.currency, fxKhrPerUsd: p.rate || entry?.fxKhrPerUsd || null,
-      amountUsdMinor: p.usd, buyer: str(buyer, 200), journalEntryId: entry ? entry.id : null, detail,
+      amountUsdMinor: p.usd, buyer: str(buyer, 200), journalEntryId: entry ? entry.id : null, detail, operationKey,
     });
     fixedAssets.touch(a.id, ['quantity = @q'], { q: a.quantity - n });
     require('./assetDepreciation').refreshSnapshot(a.id);
@@ -273,7 +275,9 @@ function partialDispose({ id, date, qty, kind = 'sale', proceedsMinor = 0, curre
 }
 
 /** An impairment: the value falls by `amountMinor` (US cents) from that month. */
-function impair({ id, date, amountMinor, reason } = {}) {
+function impair({ id, date, amountMinor, reason, operationKey } = {}) {
+  const again = fixedAssets.replayOperation(id, 'impair', operationKey);
+  if (again) return again;
   const a = fixedAssets.liveAsset(id, { activeOnly: true });
   fixedAssets.assertDepreciating(a);
   const why = str(reason, 1000);
@@ -293,7 +297,7 @@ function impair({ id, date, amountMinor, reason } = {}) {
     entry = ledger.post({ companyId: a.companyId, entryDate: d, sourceKind: 'asset_impair', sourceId: a.id, idempotencyKey: `evt:${eventId}`,
       memo: `Impairment: ${a.tagCode} ${a.name} — ${why}`,
       lines: [{ accountKey: 'fa.impairment_loss', debitMinor: amount, lineRole: 'loss', ...dims }, { accountKey: 'fa.impairment', creditMinor: amount, lineRole: 'impairment', ...dims }] });
-    fixedAssets.insertEvent({ id: eventId, companyId: a.companyId, assetId: a.id, kind: 'impair', eventDate: d, reason: why, amountMinor: amount, currency: 'USD', amountUsdMinor: amount, journalEntryId: entry.id });
+    fixedAssets.insertEvent({ id: eventId, companyId: a.companyId, assetId: a.id, kind: 'impair', eventDate: d, reason: why, amountMinor: amount, currency: 'USD', amountUsdMinor: amount, journalEntryId: entry.id, operationKey });
     require('./assetDepreciation').refreshSnapshot(a.id);
   })();
   audit('asset_event', eventId, 'impair', { after: { assetId: a.id, date: d, amountMinor: amount, entryNo: entry.entryNo } });
@@ -304,7 +308,9 @@ function impair({ id, date, amountMinor, reason } = {}) {
  * Revalue land or a building to `newValueMinor` (US cents) from that month.
  * Use with your accountant: the plan keeps it for land and buildings only.
  */
-function revalue({ id, date, newValueMinor, reason } = {}) {
+function revalue({ id, date, newValueMinor, reason, operationKey } = {}) {
+  const again = fixedAssets.replayOperation(id, 'revalue', operationKey);
+  if (again) return again;
   const a = fixedAssets.liveAsset(id, { activeOnly: true });
   const category = categoryOf(a);
   if (!REVALUE_KEYS.includes(category.builtinKey) && !['land', '1', '1b'].includes(String(a.taxClass))) {
@@ -360,7 +366,7 @@ function revalue({ id, date, newValueMinor, reason } = {}) {
     }
     detail = { previousNbvMinor: nbv, eliminatedAccumMinor: accum, eliminatedImpairmentMinor: t.impairmentMinor, surplusMinor: toSurplus, lossMinor: toLoss, method: 'elimination' };
     fixedAssets.insertEvent({ id: eventId, companyId: a.companyId, assetId: a.id, kind: 'revalue', eventDate: d, reason: why, amountMinor: value, currency: 'USD',
-      amountUsdMinor: value, journalEntryId: entry ? entry.id : null, detail });
+      amountUsdMinor: value, journalEntryId: entry ? entry.id : null, detail, operationKey });
     require('./assetDepreciation').refreshSnapshot(a.id);
   })();
   audit('asset_event', eventId, 'revalue', { after: { assetId: a.id, date: d, newValueMinor: value, ...detail, entryNo: entry?.entryNo ?? null } });

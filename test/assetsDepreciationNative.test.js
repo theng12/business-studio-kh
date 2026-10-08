@@ -324,3 +324,44 @@ test('the register list carries posted totals for the WHOLE filtered set (the sc
   assert.equal(computers.totals.nbvMinor, byId.get(imac.id).nbvMinor);
   assert.deepEqual(assets.list(C, { q: 'nothing like this' }).totals.nbvMinor, 0);
 });
+
+test('a retried money event with the same operationKey posts once (capex, impairment, revaluation, partial disposal)', { skip: skipReason }, () => {
+  const { C, cat, assets, disp, ledger, oldTruck } = fixture();
+  const truck = oldTruck();
+  const count = (kind) => assets.listEvents(C, { assetId: truck.id }).filter((e) => e.kind === kind && !e.voided).length;
+  const entries = () => ledger.entriesForAsset(truck.id).length;
+  const capex = { id: truck.id, reason: 'New engine', amountMinor: 200_000, operationKey: 'ui:capex-0001' };
+  const first = assets.recordCapex(capex);
+  const before = entries();
+  const again = assets.recordCapex(capex);
+  assert.equal(again.replayed, true);
+  assert.equal(again.event.id, first.event.id);
+  assert.equal(again.entry.id, first.entry.id);
+  assert.equal(count('capex'), 1);
+  assert.equal(entries(), before, 'nothing posted twice');
+  const imp = { id: truck.id, reason: 'Dent', amountMinor: 10_000, operationKey: 'ui:impair-0001' };
+  assert.equal(disp.impair(imp).event.id, disp.impair(imp).event.id);
+  assert.equal(count('impair'), 1);
+  assert.throws(() => disp.impair({ ...imp, operationKey: 'ui:capex-0001' }), /already used for another action/);
+  assert.throws(() => assets.recordCapex({ ...capex, operationKey: 'bad key!' }), /operationKey must be/);
+  const shed = assets.activate(assets.create({ companyId: C, categoryId: cat('building'), name: 'Shed', purchaseDate: '2026-01-05', inServiceDate: '2026-01-05', costMinor: 1_000_000 }).id).asset;
+  const rev = { id: shed.id, newValueMinor: 1_200_000, reason: 'Valuation', operationKey: 'ui:reval-0001' };
+  assert.equal(disp.revalue(rev).event.id, disp.revalue(rev).event.id);
+  const stands = assets.activate(assets.create({ companyId: C, categoryId: cat('shelving'), name: 'Stands', quantity: 10, purchaseDate: '2026-01-05', inServiceDate: '2026-01-05', costMinor: 500_000 }).id).asset;
+  const part = { id: stands.id, qty: 2, kind: 'sale', proceedsMinor: 50_000, operationKey: 'ui:part-0001' };
+  const p1 = disp.partialDispose(part);
+  const p2 = disp.partialDispose(part);
+  assert.equal(p2.event.id, p1.event.id);
+  assert.equal(assets.get(stands.id).quantity, 8, 'two sold, once');
+  // Without a key every call is its own event, as before.
+  assets.recordCapex({ ...capex, operationKey: undefined, amountMinor: 50_000 });
+  assert.equal(count('capex'), 2);
+});
+
+test('import: each row keeps its number in the sheet (sourceRow), else counts from 2', { skip: skipReason }, () => {
+  const { C } = fixture();
+  const imp = require('../main/db/assetImport');
+  const plan = imp.planImport(C, [{ name: 'A', category: 'Trucks', sourceRow: 7 }, { name: '', category: 'Nope', sourceRow: 9 }, { name: 'C', category: 'Trucks' }]);
+  assert.deepEqual(plan.rows.map((r) => r.rowNo), [7, 9, 4]);
+  assert.equal(plan.rows[1].action, 'error');
+});

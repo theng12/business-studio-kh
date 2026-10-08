@@ -267,3 +267,48 @@ export function EntryLines({ lines, accountName }) {
 export function NeedsCapNote({ what = 'the asset register' }) {
   return <p className="muted">This needs the “View fixed assets” or “Manage fixed assets” permission to see {what}. Ask an admin to add it to your role.</p>;
 }
+
+/**
+ * A segmented switch (the house `.segments`) that is also a real tab list for
+ * a screen reader and the keyboard: role="tab", aria-selected, ← → to move.
+ * `options` = `[{ value, label }]`.
+ */
+export function Segments({ label, options, value, onChange, className }) {
+  const onKeyDown = (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const i = options.findIndex((o) => o.value === value);
+    const next = options[(i + (e.key === 'ArrowRight' ? 1 : options.length - 1)) % options.length];
+    if (!next) return;
+    e.preventDefault();
+    onChange(next.value);
+    const btns = e.currentTarget.querySelectorAll('[role="tab"]');
+    btns[options.indexOf(next)]?.focus();
+  };
+  return (
+    <div className={`segments${className ? ` ${className}` : ''}`} role="tablist" aria-label={label} onKeyDown={onKeyDown}>
+      {options.map((o) => (
+        <button key={o.value} type="button" role="tab" aria-selected={value === o.value} tabIndex={value === o.value ? 0 : -1}
+          className={`segment${value === o.value ? ' is-active' : ''}`} onClick={() => onChange(o.value)}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Props for a table row that opens something: click, or Tab to it and press
+ * Enter / Space. The row keeps its table role (its cells are still read);
+ * `label` becomes the tooltip.
+ */
+export function openRowProps(open, label) {
+  return {
+    tabIndex: 0,
+    title: label,
+    onClick: open,
+    onKeyDown: (e) => {
+      if (e.target !== e.currentTarget) return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    },
+  };
+}

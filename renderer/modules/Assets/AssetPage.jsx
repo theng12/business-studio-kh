@@ -22,12 +22,12 @@ import { formatDateTime } from '../../lib/format.js';
 import { ReasonModal } from '../Fuel/FuelShared.jsx';
 import { useAssetCaps, useAssetsTick } from './assetsHooks.js';
 import {
-  ActionsMenu, AssetFileThumb, BranchSelect, CategorySelect, FileViewer, LoadError, Money, Notice, StaffPicker, StateBadges, StatusBadge,
+  ActionsMenu, AssetFileThumb, BranchSelect, CategorySelect, FileViewer, LoadError, Money, Notice, Segments, StaffPicker, StateBadges, StatusBadge,
 } from './AssetsShared.jsx';
 import { AssetActionModal } from './AssetActions.jsx';
 import {
   ACQUISITION_KINDS, DEPRECIATE_CHOICES, FILE_KINDS, SCHEDULE_STATE, SETTABLE_STATUSES, TAX_CLASSES,
-  assetActions, assetToForm, canEditField, depreciateExplain, depreciateValue, errText, eventActions, eventLabel,
+  acquisitionChange, assetActions, assetToForm, canEditField, depreciateExplain, isDeemed, depreciateValue, errText, eventActions, eventLabel,
   eventSummary, fileKindLabel, fmtKhr, fmtLife, fmtMoneyIn, fmtPeriod, fmtPeriodShort, fmtUsd, fmtYmd, formPatch, lastEndedPeriod,
   lineRoleLabel, parseMoney, scheduleChangeText, scheduleView, sourceKindLabel, statusOf, taxClassLabel, treatmentLabel,
 } from './assetsModel.js';
@@ -89,6 +89,18 @@ export function AssetPage({ id, lookups, onBack }) {
   const primary = actions.filter((a) => a.primary);
   const rest = actions.filter((a) => !a.primary);
   const editable = caps.canManage && asset.recordState !== 'cancelled';
+  /**
+   * Every action works on the asset as SAVED (review M1): write what is still
+   * being typed first, and refuse while the form has an error or the save
+   * failed — otherwise Activate could post figures other than the ones on screen.
+   */
+  const openAction = async (kind, event = null) => {
+    if (editable && !(await editor.flush())) {
+      addToast('Fix the details first — the last change is not saved (see the fields marked in red, or press Save).', 'error');
+      return;
+    }
+    setAction({ kind, event });
+  };
   const done = (message) => {
     setAction(null);
     if (message) addToast(message, 'success');
@@ -104,8 +116,8 @@ export function AssetPage({ id, lookups, onBack }) {
         actions={(
           <>
             {editable ? <SaveStatus state={editor.save.state} savedAt={editor.save.savedAt} error={editor.save.error} onSave={editor.flush} /> : null}
-            <ActionsMenu label="Actions" items={rest} onPick={(k) => setAction({ kind: k })} />
-            {primary.map((a) => <Button key={a.key} variant="primary" onClick={() => setAction({ kind: a.key })}>{a.label}</Button>)}
+            <ActionsMenu label="Actions" items={rest} onPick={(k) => openAction(k)} />
+            {primary.map((a) => <Button key={a.key} variant="primary" disabled={editor.save.state === 'saving'} onClick={() => openAction(a.key)}>{a.label}</Button>)}
           </>
         )}
       />
@@ -125,10 +137,10 @@ export function AssetPage({ id, lookups, onBack }) {
         ))}
       </div>
 
-      {tab === 'details' ? <DetailsTab asset={asset} lookups={lookups} editor={editor} editable={editable} caps={caps} onAction={(kind) => setAction({ kind })} onChanged={done} /> : null}
+      {tab === 'details' ? <DetailsTab asset={asset} lookups={lookups} editor={editor} editable={editable} caps={caps} onAction={(kind) => openAction(kind)} onChanged={done} /> : null}
       {tab === 'files' ? <FilesTab asset={asset} settings={lookups.settings} canManage={editable} onChanged={() => setRetry((n) => n + 1)} /> : null}
       {tab === 'schedule' ? <ScheduleTab asset={asset} version={version} /> : null}
-      {tab === 'history' ? <HistoryTab asset={asset} lookups={lookups} version={version} canManage={caps.canManage} onEventAction={(kind, event) => setAction({ kind, event })} /> : null}
+      {tab === 'history' ? <HistoryTab asset={asset} lookups={lookups} version={version} canManage={caps.canManage} onEventAction={(kind, event) => openAction(kind, event)} /> : null}
       {tab === 'journal' ? <JournalTab asset={asset} lookups={lookups} version={version} /> : null}
 
       {action ? (
@@ -166,24 +178,26 @@ function useAssetEditor({ asset, setAsset, addToast }) {
     clearTimeout(timer.current);
     if (inFlight.current) { await inFlight.current; }
     const a = assetRef.current;
-    if (!a || !dirty.current.size) return;
+    if (!a || !dirty.current.size) return true;
     const keys = [...dirty.current];
     const { patch, errors: errs } = formPatch(formRef.current, keys, a);
     setErrors(errs);
-    if (Object.keys(errs).length) { setSave((s) => ({ ...s, state: 'dirty' })); return; }
+    if (Object.keys(errs).length) { setSave((s) => ({ ...s, state: 'dirty' })); return false; }
     for (const k of keys) dirty.current.delete(k);
-    if (!Object.keys(patch).length) { setSave((s) => ({ ...s, state: s.savedAt ? 'saved' : 'idle' })); return; }
+    if (!Object.keys(patch).length) { setSave((s) => ({ ...s, state: s.savedAt ? 'saved' : 'idle' })); return true; }
     setSave((s) => ({ ...s, state: 'saving', error: null }));
     const p = window.api.assets.update(a.id, patch).then((next) => {
       setAsset((cur) => (cur && cur.id === next.id ? { ...cur, ...next } : cur));
       setSave({ state: dirty.current.size ? 'dirty' : 'saved', savedAt: Date.now(), error: null });
+      return dirty.current.size === 0;
     }).catch((err) => {
       for (const k of keys) dirty.current.add(k);
       setSave((s) => ({ ...s, state: 'error', error: errText(err) }));
       addToast(`Couldn't save: ${errText(err)}`, 'error');
+      return false;
     }).finally(() => { inFlight.current = null; });
     inFlight.current = p;
-    await p;
+    return p;
   }, [addToast, setAsset]);
 
   useEffect(() => registerCompanySwitchFlusher(flush), [flush]);
@@ -225,8 +239,9 @@ function DetailsTab({ asset, lookups, editor, editable, caps, onAction, onChange
     thresholdMinor: settings.capitalizationThresholdMinor ?? 30000,
     bookMethod: category?.bookMethod,
   });
-  const opening = (draft ? form.acquisitionKind : asset.acquisitionKind) === 'opening';
-  const deemed = (draft ? form.costBasis : asset.costBasis) === 'deemed';
+  const kindNow = draft ? form.acquisitionKind : asset.acquisitionKind;
+  const opening = kindNow === 'opening';
+  const deemed = isDeemed(kindNow, draft ? form.costBasis : asset.costBasis);
 
   return (
     <div className="assets-details">
@@ -286,7 +301,7 @@ function DetailsTab({ asset, lookups, editor, editable, caps, onAction, onChange
         <div className="form-grid">
           <Field label="How" hint={ACQUISITION_KINDS.find((k) => k.value === form.acquisitionKind)?.hint}>
             {({ id }) => (
-              <Select id={id} value={form.acquisitionKind} onChange={(e) => change('acquisitionKind', e.target.value)} disabled={!can('acquisitionKind')}>
+              <Select id={id} value={form.acquisitionKind} onChange={(e) => { for (const [k, v] of Object.entries(acquisitionChange(form, e.target.value))) change(k, v); }} disabled={!can('acquisitionKind')}>
                 {ACQUISITION_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
               </Select>
             )}
@@ -674,17 +689,16 @@ function ScheduleTab({ asset, version }) {
   const view = useMemo(() => (basis === 'book' && data ? scheduleView(data, lastEnded) : null), [basis, data, lastEnded]);
   // Open on the page that holds the last ended month.
   const rows = view?.rows || [];
-  const nowIdx = Math.max(0, rows.findIndex((r) => r.period >= lastEnded));
+  // The month just ended — or, for an asset fully depreciated before it, the last month of the schedule.
+  const found = rows.findIndex((r) => r.period >= lastEnded);
+  const nowIdx = found >= 0 ? found : Math.max(0, rows.length - 1);
   const effectivePage = page ?? Math.floor(nowIdx / pageSize);
   const { currentPage, maxPage, pageStart, pageEnd } = paginate(rows.length, effectivePage, pageSize);
 
   return (
     <div className="assets-schedule">
       <div className="toolbar">
-        <div className="segments" role="tablist" aria-label="Basis">
-          <button type="button" className={`segment${basis === 'book' ? ' is-active' : ''}`} onClick={() => { setBasis('book'); setPage(null); }}>Book (monthly, USD)</button>
-          <button type="button" className={`segment${basis === 'tax' ? ' is-active' : ''}`} onClick={() => setBasis('tax')}>Tax (yearly, riel)</button>
-        </div>
+        <Segments label="Basis" value={basis} onChange={(v) => { setBasis(v); setPage(null); }} options={[{ value: 'book', label: 'Book (monthly, USD)' }, { value: 'tax', label: 'Tax (yearly, riel)' }]} />
       </div>
       {error ? <LoadError message={error} /> : !data ? <p className="muted">Loading…</p> : basis === 'book' ? (
         !rows.length ? <EmptyState title="No book schedule" body={data.note || (asset.recordState === 'draft' ? 'A draft has no schedule until it is activated.' : 'This item is not depreciated.')} /> : (

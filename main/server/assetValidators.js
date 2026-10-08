@@ -63,6 +63,8 @@ function checkBytes(v) {
   return true;
 }
 
+/** A client operation key (idempotency, review LOW 6): optional, 8–100 of A–Z a–z 0–9 - _ : */
+const OPKEY = (a) => (a.operationKey == null || (isString(a.operationKey) && /^[A-Za-z0-9:_-]{8,100}$/.test(a.operationKey)) ? true : 'operationKey must be 8–100 letters, digits, "-", "_" or ":"');
 const EVENT_BASE = (a) => first(req(a, 'id', 'id'), dates(a, ['date']));
 const DISPOSAL = (a) => first(
   a.kind == null || ['sale', 'scrap', 'donation'].includes(a.kind) ? true : 'kind must be sale, scrap or donation',
@@ -128,7 +130,7 @@ const ASSET_VALIDATORS = {
   'assets:setStatus': obj((a) => first(EVENT_BASE(a), ['in_use', 'in_storage', 'in_repair'].includes(a.status) ? true : 'status must be in_use, in_storage or in_repair', strings(a, ['reason'], 1000))),
   'assets:recordRepair': obj((a) => first(EVENT_BASE(a), reason(a), nums(a, ['amountMinor']), strings(a, ['currency', 'vendor'], 200), ids(a, ['supplierId']),
     a.documentFileIds == null || (Array.isArray(a.documentFileIds) && a.documentFileIds.every(isId)) ? true : 'documentFileIds must be a list of ids')),
-  'assets:recordCapex': obj((a) => first(EVENT_BASE(a), reason(a), nums(a, ['amountMinor', 'fxKhrPerUsd', 'extendsLifeMonths']), strings(a, ['currency'], 10), ids(a, ['supplierId']),
+  'assets:recordCapex': obj((a) => first(OPKEY(a), EVENT_BASE(a), reason(a), nums(a, ['amountMinor', 'fxKhrPerUsd', 'extendsLifeMonths']), strings(a, ['currency'], 10), ids(a, ['supplierId']),
     a.documentFileIds == null || (Array.isArray(a.documentFileIds) && a.documentFileIds.every(isId)) ? true : 'documentFileIds must be a list of ids')),
   'assets:changeLife': obj((a) => first(EVENT_BASE(a), reason(a), optNumLike(a.newLifeMonths) && a.newLifeMonths != null ? true : 'newLifeMonths is required')),
   'assets:changeSalvage': obj((a) => first(EVENT_BASE(a), reason(a), optNumLike(a.newSalvageMinor) && a.newSalvageMinor != null ? true : 'newSalvageMinor is required')),
@@ -149,11 +151,11 @@ const ASSET_VALIDATORS = {
   // 'lost' previews a write-off (review 2).
   'assets:previewDisposal': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL({ ...a, kind: a.kind === 'lost' ? null : a.kind }))),
   'assets:dispose': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL(a), strings(a, ['reason', 'buyer'], 1000))),
-  'assets:partialDispose': obj((a) => first(req(a, 'id'), dates(a, ['date']), DISPOSAL(a), optNumLike(a.qty) && a.qty != null ? true : 'qty is required', strings(a, ['reason', 'buyer'], 1000))),
+  'assets:partialDispose': obj((a) => first(OPKEY(a), req(a, 'id'), dates(a, ['date']), DISPOSAL(a), optNumLike(a.qty) && a.qty != null ? true : 'qty is required', strings(a, ['reason', 'buyer'], 1000))),
   'assets:markLost': obj((a) => first(req(a, 'id'), dates(a, ['date']), reason(a), strings(a, ['stocktakeResultId'], 200))),
   'assets:markFound': obj((a) => first(req(a, 'id'), dates(a, ['date']), strings(a, ['reason'], 1000))),
-  'assets:impair': obj((a) => first(req(a, 'id'), dates(a, ['date']), reason(a), optNumLike(a.amountMinor) && a.amountMinor != null ? true : 'amountMinor is required')),
-  'assets:revalue': obj((a) => first(req(a, 'id'), dates(a, ['date']), reason(a), optNumLike(a.newValueMinor) && a.newValueMinor != null ? true : 'newValueMinor is required')),
+  'assets:impair': obj((a) => first(OPKEY(a), req(a, 'id'), dates(a, ['date']), reason(a), optNumLike(a.amountMinor) && a.amountMinor != null ? true : 'amountMinor is required')),
+  'assets:revalue': obj((a) => first(OPKEY(a), req(a, 'id'), dates(a, ['date']), reason(a), optNumLike(a.newValueMinor) && a.newValueMinor != null ? true : 'newValueMinor is required')),
 
   /* A2: tax year */
   'assets:getTaxYear': obj((a) => YEAR(a)),

@@ -304,7 +304,10 @@ function planImport(companyId, rows) {
   const settings = config.getSettings(companyId);
   const L = lookups(companyId);
   const seen = new Set();
-  const plan = rows.map((r, i) => planRow(companyId, r, i + 2, L, settings, seen)); // row 1 is the header
+  // `sourceRow` (optional) is the row's number in the user's sheet: the screen drops blank rows before
+  // sending, so counting from 2 would point an error at the wrong line. Row 1 is the header.
+  const rowNoOf = (r, i) => (Number.isInteger(r?.sourceRow) && r.sourceRow >= 2 && r.sourceRow <= 1_000_000 ? r.sourceRow : i + 2);
+  const plan = rows.map((r, i) => planRow(companyId, r, rowNoOf(r, i), L, settings, seen));
   const count = (a) => plan.filter((p) => p.action === a).length;
   return { rows: plan, summary: { total: plan.length, create: count('create'), update: count('update'), skip: count('skip'), error: count('error'), warnings: plan.reduce((t, p) => t + p.warnings.length, 0) } };
 }

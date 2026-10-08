@@ -10,13 +10,25 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Field, Input, Modal, Select, Textarea } from '../../components/ui.jsx';
-import { EntryLines, Notice, StaffPicker } from './AssetsShared.jsx';
+import { EntryLines, Notice, Segments, StaffPicker } from './AssetsShared.jsx';
 import {
   DISPOSAL_KINDS, SETTABLE_STATUSES, accountLabel, assetTitle, eventLabel, errText, fmtLife, fmtPeriod, fmtUsd, fmtYmd,
   parseMoney, parseWhole, statusOf, todayKey, treatmentLabel, lineRoleLabel,
 } from './assetsModel.js';
 
 const api = () => window.api.assets;
+
+/** On the books (posts, has a gain or loss), or tracked only. */
+const onBooks = (a) => a?.accountingTreatment === 'capitalised' || a?.accountingTreatment === 'not_depreciated';
+
+/**
+ * One key per dialog, sent with a money event (review LOW 6): a double click
+ * or a retry after a dropped reply returns the first result, never a second post.
+ */
+function useOperationKey() {
+  const [key] = useState(() => `ui:${(typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`}`);
+  return key;
+}
 
 /** The dialog every action uses: title, body, Cancel + the action's button. */
 function ActionDialog({ open, title, onClose, busy, error, confirmLabel, onConfirm, danger = false, disabled = false, children, size }) {
@@ -148,11 +160,15 @@ function ActivateModal({ asset, lookups, onClose, onDone }) {
   const [preview, setPreview] = useState(null);
   const [loadError, setLoadError] = useState('');
   const r = useRunner(onDone);
+  // The preview is of the asset as saved: worked out again whenever it changes (another Mac, a late
+  // autosave), and Activate stays off until the fresh one is in — what posts is what was shown.
   useEffect(() => {
     let alive = true;
+    setPreview(null);
+    setLoadError('');
     api().previewActivation(asset.id).then((p) => { if (alive) setPreview(p); }).catch((err) => { if (alive) setLoadError(errText(err)); });
     return () => { alive = false; };
-  }, [asset.id]);
+  }, [asset.id, asset.updatedAt]);
   const accountName = (l) => `${accountLabel(l.account, lookups.accounts)}${l.lineRole ? ` · ${lineRoleLabel(l.lineRole)}` : ''}`;
   return (
     <ActionDialog open size="lg" title={`Activate ${assetTitle(asset)}`} onClose={onClose} busy={r.busy} error={r.error || loadError}
@@ -291,6 +307,7 @@ function RepairModal({ asset, onClose, onDone }) {
 }
 
 function CapexModal({ asset, lookups, onClose, onDone }) {
+  const operationKey = useOperationKey();
   const [reason, setReason] = useState('');
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('USD');
@@ -304,7 +321,7 @@ function CapexModal({ asset, lookups, onClose, onDone }) {
     if (!reason.trim()) { r.setError('Say what the improvement is'); return; }
     if (money.error || money.minor == null) { r.setError(money.error || 'Type what it cost'); return; }
     if (months.error) { r.setError(months.error); return; }
-    r.run(() => api().recordCapex({ id: asset.id, reason: reason.trim(), amountMinor: money.minor, currency, extendsLifeMonths: months.value || undefined, date }), 'Improvement posted');
+    r.run(() => api().recordCapex({ id: asset.id, reason: reason.trim(), amountMinor: money.minor, currency, extendsLifeMonths: months.value || undefined, date, operationKey }), 'Improvement posted');
   }
   return (
     <ActionDialog open title={`Improvement — ${assetTitle(asset)}`} onClose={onClose} busy={r.busy} error={r.error} confirmLabel="Post improvement" onConfirm={submit}>
@@ -339,10 +356,7 @@ function LifeModal({ asset, onClose, onDone }) {
   return (
     <ActionDialog open title={`Change life or salvage — ${assetTitle(asset)}`} onClose={onClose} busy={r.busy} error={r.error} confirmLabel="Change it" onConfirm={submit}>
       <p className="assets-modal-text">Only the months from the change on are worked out again. Months already posted never change.</p>
-      <div className="segments" role="tablist" aria-label="What to change">
-        <button type="button" className={`segment${what === 'life' ? ' is-active' : ''}`} onClick={() => setWhat('life')}>Life left</button>
-        <button type="button" className={`segment${what === 'salvage' ? ' is-active' : ''}`} onClick={() => setWhat('salvage')}>Salvage value</button>
-      </div>
+      <Segments label="What to change" value={what} onChange={setWhat} options={[{ value: 'life', label: 'Life left' }, { value: 'salvage', label: 'Salvage value' }]} />
       {what === 'life' ? (
         <Field label="Months left, from the change month" hint={`Now ${fmtLife(asset.scheduleLifeMonths)} in total from ${fmtPeriod(asset.depreciationStartPeriod)}.`} error={lifeR.error}>
           {({ id }) => <Input id={id} inputMode="numeric" value={life} onChange={(e) => setLife(e.target.value)} />}
@@ -359,6 +373,7 @@ function LifeModal({ asset, onClose, onDone }) {
 /* ─── value changes ───────────────────────────────────────────────────── */
 
 function ImpairModal({ asset, onClose, onDone }) {
+  const operationKey = useOperationKey();
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [date, setDate] = useState(todayKey());
@@ -367,7 +382,7 @@ function ImpairModal({ asset, onClose, onDone }) {
   return (
     <ActionDialog open title={`Impair ${assetTitle(asset)}`} onClose={onClose} busy={r.busy} error={r.error} confirmLabel="Post impairment"
       onConfirm={() => (money.error || money.minor == null ? r.setError(money.error || 'Type the amount') : !reason.trim() ? r.setError('A reason is required')
-        : r.run(() => api().impair({ id: asset.id, amountMinor: money.minor, reason: reason.trim(), date }), 'Impairment posted'))}>
+        : r.run(() => api().impair({ id: asset.id, amountMinor: money.minor, reason: reason.trim(), date, operationKey }), 'Impairment posted'))}>
       <p className="assets-modal-text">For damage or a fall in value: the book value drops by this amount (an impairment loss) and the rest is depreciated over the life left. Book value now {fmtUsd(asset.nbvMinor)}.</p>
       <MoneyField label="Reduce the value by" required value={amount} onChange={setAmount} currency="USD" error={money.error} />
       <DateField value={date} onChange={setDate} />
@@ -377,6 +392,7 @@ function ImpairModal({ asset, onClose, onDone }) {
 }
 
 function RevalueModal({ asset, onClose, onDone }) {
+  const operationKey = useOperationKey();
   const [value, setValue] = useState('');
   const [reason, setReason] = useState('');
   const [date, setDate] = useState(todayKey());
@@ -385,7 +401,7 @@ function RevalueModal({ asset, onClose, onDone }) {
   return (
     <ActionDialog open title={`Revalue ${assetTitle(asset)}`} onClose={onClose} busy={r.busy} error={r.error} confirmLabel="Post revaluation"
       onConfirm={() => (money.error || money.minor == null ? r.setError(money.error || 'Type the new value') : !reason.trim() ? r.setError('A reason is required')
-        : r.run(() => api().revalue({ id: asset.id, newValueMinor: money.minor, reason: reason.trim(), date }), 'Revaluation posted'))}>
+        : r.run(() => api().revalue({ id: asset.id, newValueMinor: money.minor, reason: reason.trim(), date, operationKey }), 'Revaluation posted'))}>
       <Notice tone="amber" title="Use this with an accountant.">Land and buildings only. A rise goes to the revaluation surplus; a fall comes off this asset's surplus first, then is a loss. Book value now {fmtUsd(asset.nbvMinor)}.</Notice>
       <MoneyField label="New value" required value={value} onChange={setValue} currency="USD" error={money.error} hint="From a valuation report." />
       <DateField value={date} onChange={setDate} />
@@ -410,9 +426,11 @@ function DisposeModal({ asset, lookups, onClose, onDone }) {
   const args = useMemo(() => ({ id: asset.id, date, kind, proceedsMinor: kind === 'sale' ? (money.minor ?? 0) : 0, currency }), [asset.id, date, kind, money.minor, currency]);
   const argsKey = JSON.stringify(args);
   useEffect(() => {
-    if (money.error || !date) { setPreview(null); return undefined; }
-    let alive = true;
+    // A stale preview must never sit under new inputs: Dispose stays off until the fresh one is in.
+    setPreview(null);
     setPreviewError('');
+    if (money.error || !date) return undefined;
+    let alive = true;
     const t = setTimeout(() => {
       api().previewDisposal(args).then((p) => { if (alive) setPreview(p); }).catch((err) => { if (alive) { setPreview(null); setPreviewError(errText(err)); } });
     }, 250);
@@ -427,15 +445,13 @@ function DisposeModal({ asset, lookups, onClose, onDone }) {
     if (!preview) { r.setError(previewError || 'Wait for the preview'); return; }
     r.run(() => api().dispose({ ...args, buyer: buyer.trim() || undefined, reason: reason.trim() || undefined }), (res) => {
       const g = res?.event?.detail?.gainMinor;
-      return `${kindLabel}${typeof g === 'number' ? ` — ${g >= 0 ? `gain ${fmtUsd(g)}` : `loss ${fmtUsd(-g)}`}` : ''}`;
+      return `${kindLabel}${typeof g === 'number' && onBooks(asset) ? ` — ${g >= 0 ? `gain ${fmtUsd(g)}` : `loss ${fmtUsd(-g)}`}` : ''}`;
     });
   }
   const gain = preview?.gainMinor;
   return (
     <ActionDialog open size="lg" title={`Dispose of ${assetTitle(asset)}`} onClose={onClose} busy={r.busy} error={r.error} confirmLabel="Dispose of it" danger disabled={!preview} onConfirm={submit}>
-      <div className="segments" role="tablist" aria-label="How it left">
-        {DISPOSAL_KINDS.map((k) => <button key={k.value} type="button" className={`segment${kind === k.value ? ' is-active' : ''}`} onClick={() => setKind(k.value)}>{k.label}</button>)}
-      </div>
+      <Segments label="How it left" value={kind} onChange={setKind} options={DISPOSAL_KINDS} />
       <DateField value={date} onChange={setDate} />
       {kind === 'sale' ? <MoneyField label="Sold for" value={proceeds} onChange={setProceeds} currency={currency} onCurrency={setCurrency} error={money.error} /> : null}
       {kind === 'sale' ? <Field label="Buyer (optional)">{({ id }) => <Input id={id} value={buyer} onChange={(e) => setBuyer(e.target.value)} />}</Field> : null}
@@ -444,14 +460,16 @@ function DisposeModal({ asset, lookups, onClose, onDone }) {
         <h3 className="section-title">What will be posted</h3>
         {previewError ? <Notice tone="rose">{previewError}</Notice> : !preview ? <p className="muted">Working it out…</p> : (
           <>
+            {!onBooks(asset) ? <p className="assets-modal-text">No gain or loss (not on the books): it is tracked only, so it is simply marked {kind === 'sale' ? 'sold' : 'gone'}.</p> : (
             <dl className="assets-dl">
               {preview.depreciationDueMinor ? <><dt>Depreciation still due</dt><dd>{fmtUsd(preview.depreciationDueMinor)} (posted with the disposal{preview.lastPeriod ? `, through ${fmtPeriod(preview.lastPeriod)}` : ''})</dd></> : null}
               <dt>Book value on {fmtYmd(date)}</dt><dd>{fmtUsd(preview.nbvMinor)}</dd>
               <dt>{kind === 'sale' ? 'Price' : 'Received'}</dt><dd>{fmtUsd(preview.proceedsUsdMinor)}</dd>
               <dt>{gain >= 0 ? 'Gain' : 'Loss'}</dt><dd><strong className={gain < 0 ? 'assets-loss' : 'assets-gain'}>{fmtUsd(Math.abs(gain || 0))}</strong></dd>
             </dl>
+            )}
             {asset.fuelAssetId ? <p className="muted">The linked Fuel vehicle is retired in Fuel too. Its fuel history is kept.</p> : null}
-            <EntryLines lines={preview.lines} accountName={accountName} />
+            {onBooks(asset) ? <EntryLines lines={preview.lines} accountName={accountName} /> : null}
           </>
         )}
       </div>
@@ -460,6 +478,7 @@ function DisposeModal({ asset, lookups, onClose, onDone }) {
 }
 
 function PartialDisposeModal({ asset, onClose, onDone }) {
+  const operationKey = useOperationKey();
   const [qty, setQty] = useState('1');
   const [kind, setKind] = useState('sale');
   const [date, setDate] = useState(todayKey());
@@ -474,15 +493,13 @@ function PartialDisposeModal({ asset, onClose, onDone }) {
   function submit() {
     if (q.error || q.value == null) { r.setError(q.error || 'How many?'); return; }
     if (money.error) { r.setError(money.error); return; }
-    r.run(() => api().partialDispose({ id: asset.id, qty: q.value, kind, date, proceedsMinor: money.minor ?? 0, currency, buyer: buyer.trim() || undefined, reason: reason.trim() || undefined }),
+    r.run(() => api().partialDispose({ id: asset.id, qty: q.value, kind, date, proceedsMinor: money.minor ?? 0, currency, buyer: buyer.trim() || undefined, reason: reason.trim() || undefined, operationKey }),
       (res) => { const g = res?.event?.detail?.gainMinor; return `${q.value} of ${asset.quantity} disposed of${typeof g === 'number' ? ` — ${g >= 0 ? `gain ${fmtUsd(g)}` : `loss ${fmtUsd(-g)}`}` : ''}`; });
   }
   return (
     <ActionDialog open title={`Dispose of part of ${assetTitle(asset)}`} onClose={onClose} busy={r.busy} error={r.error} confirmLabel="Dispose of them" danger onConfirm={submit}>
       <p className="assets-modal-text">A group of {asset.quantity}. The same share of its cost and depreciation goes with the ones that leave; the rest carry on.</p>
-      <div className="segments" role="tablist" aria-label="How they left">
-        {DISPOSAL_KINDS.map((k) => <button key={k.value} type="button" className={`segment${kind === k.value ? ' is-active' : ''}`} onClick={() => setKind(k.value)}>{k.label}</button>)}
-      </div>
+      <Segments label="How they left" value={kind} onChange={setKind} options={DISPOSAL_KINDS} />
       <Field label="How many" error={q.error} hint={share != null ? `About ${fmtUsd(share)} of book value (worked out exactly when posted).` : undefined}>{({ id }) => <Input id={id} inputMode="numeric" value={qty} onChange={(e) => setQty(e.target.value)} />}</Field>
       <DateField value={date} onChange={setDate} />
       {kind === 'sale' ? <MoneyField label="Sold for (all of them)" value={proceeds} onChange={setProceeds} currency={currency} onCurrency={setCurrency} error={money.error} /> : null}
@@ -497,9 +514,11 @@ function LostModal({ asset, onClose, onDone }) {
   const [date, setDate] = useState(todayKey());
   const r = useRunner(onDone);
   return (
-    <ActionDialog open title={`Mark ${assetTitle(asset)} as lost`} onClose={onClose} busy={r.busy} error={r.error} confirmLabel="Write it off" danger
+    <ActionDialog open title={`Mark ${assetTitle(asset)} as lost`} onClose={onClose} busy={r.busy} error={r.error} confirmLabel={onBooks(asset) ? 'Write it off' : 'Mark lost'} danger
       onConfirm={() => (reason.trim() ? r.run(() => api().markLost({ id: asset.id, reason: reason.trim(), date }), 'Written off as lost') : r.setError('A reason is required'))}>
-      <p className="assets-modal-text">Its book value ({fmtUsd(asset.nbvMinor)}, plus any depreciation still due) is written off as a loss. If it turns up, “Mark found” reverses the write-off.</p>
+      <p className="assets-modal-text">{onBooks(asset)
+        ? `Its book value (${fmtUsd(asset.nbvMinor)}, plus any depreciation still due) is written off as a loss. If it turns up, “Mark found” reverses the write-off.`
+        : 'It is tracked only — not on the books — so nothing is written off: it is just marked lost. If it turns up, use “Mark found”.'}</p>
       <DateField value={date} onChange={setDate} />
       <ReasonField value={reason} onChange={setReason} placeholder="Not found at the yearly count…" />
     </ActionDialog>

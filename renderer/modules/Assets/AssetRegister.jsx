@@ -13,12 +13,12 @@ import { Badge, Button, EmptyState, Pagination, Select, cx, paginate } from '../
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { useAssetCaps, useAssetIntent, useAssetLookups, useAssetsTick } from './assetsHooks.js';
-import { BranchSelect, CategorySelect, LoadError, MainPhoto, Money, NeedsCapNote, Notice, StaffPicker, StateBadges, StatusBadge, FileViewer } from './AssetsShared.jsx';
+import { BranchSelect, CategorySelect, LoadError, MainPhoto, Money, NeedsCapNote, Notice, StaffPicker, StateBadges, StatusBadge, FileViewer, openRowProps } from './AssetsShared.jsx';
 import { AssetPage } from './AssetPage.jsx';
 import { NewAssetModal } from './NewAssetModal.jsx';
 import { AssetImportModal } from './AssetImportModal.jsx';
 import {
-  ATTENTION, EMPTY_FILTERS, STATUSES, errText, filtersActive, fmtMoneyIn, listArgs, rowCost, rowNbv, totalsCaption, todayKey,
+  ATTENTION, EMPTY_FILTERS, STATUSES, errText, filtersActive, fmtMoneyIn, fromFuelTitle, listArgs, rowCost, rowNbv, totalsCaption, todayKey,
 } from './assetsModel.js';
 
 const EMPTY_DATA = { items: [], total: 0, counts: {}, totals: null };
@@ -123,7 +123,7 @@ export function AssetRegister() {
       {data.counts.fromFuelNeedsCost > 0 && filters.attention !== 'needs_cost' ? (
         <Notice
           tone="amber"
-          title={`${data.counts.fromFuelNeedsCost} vehicle${data.counts.fromFuelNeedsCost === 1 ? '' : 's'} and machines came from Fuel.`}
+          title={fromFuelTitle(data.counts.fromFuelNeedsCost)}
           action={<Button size="sm" onClick={() => setFilters({ ...EMPTY_FILTERS, attention: 'needs_cost' })}>Show them</Button>}
         >
           Add their cost and purchase date (or an opening value) to start depreciating them.
@@ -201,7 +201,7 @@ export function AssetRegister() {
                   const nbv = rowNbv(a);
                   const gone = a.status === 'disposed' || a.status === 'lost' || a.recordState === 'cancelled';
                   return (
-                    <tr key={a.id} className={cx('is-clickable', gone && 'is-muted')} onClick={() => setOpenId(a.id)}>
+                    <tr key={a.id} className={cx('is-clickable', gone && 'is-muted')} {...openRowProps(() => setOpenId(a.id), `Open ${a.tagCode || ''} ${a.name}`)}>
                       <td onClick={(e) => e.stopPropagation()}><MainPhoto asset={a} onOpen={() => setViewPhoto(a)} /></td>
                       <td className="assets-nowrap"><strong>{a.tagCode || '—'}</strong></td>
                       <td>
