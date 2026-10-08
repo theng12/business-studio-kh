@@ -16,6 +16,13 @@ function load(file, stubs, timers = {}) {
   }, mod, mod.exports, timers.setTimeout || setTimeout, timers.clearTimeout || clearTimeout);
   return mod.exports;
 }
+/** The real module registry (pure), for the palette's "Go to" rows. */
+function realModules() {
+  const out = esbuild.buildSync({ entryPoints: [path.join(root, 'renderer/lib/modules.js')], bundle: true, write: false, format: 'cjs', platform: 'node', logLevel: 'silent' });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(require, mod, mod.exports);
+  return mod.exports;
+}
 function hooks() {
   let cursor = 0; const values = []; const effects = [];
   const changed = (a, b) => !a || a.length !== b.length || b.some((v, i) => !Object.is(v, a[i]));
@@ -91,7 +98,7 @@ test('palette ignores obsolete companies and closed searches, and opens saved re
   const requests = []; const opened = []; let closed = 0; let allowNavigation = false; let caps = ['catalog.design'];
   const state = { activeCompanyId: 'a', openLibraryProduct: async (...args) => { opened.push(['product', ...args]); return allowNavigation; }, openCatalogProject: async (...args) => { opened.push(['project', ...args]); return allowNavigation; }, openCatalogTemplate: async (...args) => { opened.push(['template', ...args]); return allowNavigation; } };
   const useAppStore = (select) => select(state); useAppStore.getState = () => state;
-  const Component = load('renderer/components/SearchPalette.jsx', { react: hook.React, 'react/jsx-runtime': hook.runtime, '../store/index.js': { useAppStore }, './Sidebar.jsx': { useUserCaps: () => caps }, '../lib/capabilities.js': { hasCap: (values, cap) => values.includes(cap) } }, timers).SearchPalette;
+  const Component = load('renderer/components/SearchPalette.jsx', { react: hook.React, 'react/jsx-runtime': hook.runtime, '../store/index.js': { useAppStore }, './Sidebar.jsx': { useUserCaps: () => caps }, '../lib/capabilities.js': { hasCap: (values, cap) => values.includes(cap) }, '../lib/modules.js': realModules() }, timers).SearchPalette;
   global.window = { api: { search: { global: (...args) => { const gate = deferred(); requests.push({ args, gate }); return gate.promise; } } } };
   const props = { open: true, onClose: () => { closed++; } }; let output;
   const render = () => { output = hook.render(Component, props); };

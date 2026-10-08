@@ -22,10 +22,11 @@ const SCREEN_DIRS = ['renderer/modules/Fuel', 'renderer/modules/Staff'];
 const screenFiles = () => SCREEN_DIRS.flatMap((d) => fs.readdirSync(path.join(ROOT, d))
   .filter((f) => /\.(jsx?|mjs)$/.test(f)).map((f) => `${d}/${f}`));
 
-test('the sidebar has a Fuel section and a People section, gated by the fuel capabilities', () => {
-  const src = read('renderer/components/Sidebar.jsx');
-  assert.match(src, /label: 'Fuel',/);
-  assert.match(src, /label: 'People',/);
+test('the registry has a Fuel module and a People module, gated by the fuel capabilities', () => {
+  // 2026-10-08: the nav moved from Sidebar.jsx to the module registry.
+  const src = read('renderer/lib/modules.js');
+  assert.match(src, /name: 'Fuel',/);
+  assert.match(src, /name: 'People',/);
   const item = (id) => {
     const m = src.match(new RegExp(`\\{ id: '${id}',[^}]*\\}`));
     assert.ok(m, `nav item ${id}`);
@@ -38,8 +39,9 @@ test('the sidebar has a Fuel section and a People section, gated by the fuel cap
     assert.match(item(id), /caps: \['fuel\.record', 'fuel\.manage'\]/, `${id} is open to recorders`);
   }
   // Inline SVG icons, no icon library (§1).
+  const icons = read('renderer/components/navIcons.jsx');
   for (const icon of ['IconFuel', 'IconVehicle', 'IconFillUp', 'IconTank', 'IconFuelPrice', 'IconFuelReport', 'IconStaff']) {
-    assert.match(src, new RegExp(`function ${icon}\\(`), icon);
+    assert.match(icons, new RegExp(`function ${icon}\\(`), icon);
   }
 });
 

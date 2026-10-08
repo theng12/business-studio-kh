@@ -2,6 +2,16 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.96', date: '2026-10-08',
+    items: [
+      'NEW — Home: the app now opens on a grid of modules — Products, Media Studio, Labels & Catalogs, Purchasing, Fuel, People and System. Open one and the sidebar shows only that module\'s pages, with Home at the top. New modules (Assets, Finance) will appear here as more squares.',
+      'NEW — Each square opens the page you last used in that module. Fuel shows its red alerts and Purchasing its open orders right on the square.',
+      'NEW — ⌘⇧H goes Home from anywhere. ⌘K search also finds modules ("Go to Fuel"); product and order matches still come first. ⌘1–9 shortcuts are unchanged.',
+      'POLISH — A new install opens on Home with "Create your first company". Settings, What\'s new and Support stay at the bottom of the sidebar on every screen.',
+      'Internal — Module registry renderer/lib/modules.js (APP_MODULES; module derived from the page id, never stored), Home page renderer/modules/Home, nav icons moved to components/navIcons.jsx, last page per module in localStorage, badge cache cleared on Home mount and fuel/PO changes. AGENTS.md §1 rewritten for the Home grid.',
+    ],
+  },
+  {
     version: '0.1.95', date: '2026-10-08',
     items: [
       'NEW — Fuel (new FUEL section in the sidebar): your own named tanks and farm stores, vehicles and machines (including your own types), fill-ups, tank dips, deliveries, fuel sent to the farm, stations and pump prices. Everything is per company.',
