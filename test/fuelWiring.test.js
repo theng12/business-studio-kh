@@ -52,13 +52,19 @@ test('the Editor preset does NOT get the fuel capabilities (§2 gap 3)', () => {
 
 test('every fuel/staff channel maps to a fuel capability (none fall through to legacy)', () => {
   assert.ok(ALL_EXPOSED.length > 50, `expected the full channel set, saw ${ALL_EXPOSED.length}`);
+  // HR1: the staff directory is shared with HR (hr.view / hr.manage), and
+  // staff:me also answers a phone that clocks itself in (attendance.self /
+  // attendance.supervise). fuel:* stays fuel-only.
+  const HR = ['hr.view', 'hr.manage', 'attendance.self', 'attendance.supervise'];
   for (const ch of [...ALL_EXPOSED, ...FUEL.local]) {
     const cap = channelCapability(ch);
     const list = Array.isArray(cap) ? cap : [cap];
     // Fixed Assets: an asset's custodian picker reads the staff list and one record (as tiles),
     // so staff:list / staff:get are also open to the asset roles — and to nothing else.
-    const allowed = ['fuel.record', 'fuel.manage', ...(/^staff:(list|get)$/.test(ch) ? ['assets.view', 'assets.manage'] : [])];
-    assert.ok(list.some((c) => c === 'fuel.record' || c === 'fuel.manage') && list.every((c) => allowed.includes(c)), `${ch} → ${JSON.stringify(cap)}`);
+    const assetCaps = /^staff:(list|get)$/.test(ch) ? ['assets.view', 'assets.manage'] : [];
+    const ok = (c) => c === 'fuel.record' || c === 'fuel.manage' || (ch.startsWith('staff:') && HR.includes(c)) || assetCaps.includes(c);
+    assert.ok(list.every(ok), `${ch} → ${JSON.stringify(cap)}`);
+    assert.ok(list.some((c) => c === 'fuel.record' || c === 'fuel.manage'), `${ch} must stay reachable with a fuel capability`);
   }
 });
 

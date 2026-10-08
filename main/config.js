@@ -108,6 +108,20 @@ function defaultConfig() {
      * compares USD and KHR prices in one currency with it (display unchanged).
      * Validated positive by assertKnownConfigKeys, which both modes call. */
     exchangeRateKhrPerUsd: 4100,
+    /* HR1: this Mac is the shop's attendance kiosk (docs/PEOPLE_AND_FUEL_PLAN.md
+     * §5.2). Machine-local: NOT in PORTABLE_CONFIG_KEYS, so a backup or bundle
+     * restore never turns another Mac into a kiosk. Only the kioskMode:* channels
+     * (main/kioskWindow.js) write these — the generic settings setters refuse
+     * them, because leaving kiosk mode needs a manager PIN (or, with the office
+     * Mac unreachable, the recovery code: only its scrypt hash + salt are kept,
+     * plus the wrong-try counters — main/util/kioskRecovery.js). */
+    kioskMode: false,
+    kioskOpenAtLogin: true,
+    kioskRecoveryHash: null,
+    kioskRecoverySalt: null,
+    kioskRecoveryFailures: 0,
+    kioskRecoveryLockedUntil: 0,
+    kioskRecoveryLockCount: 0,
     clientServerUrl: '',                // client mode: e.g. 'http://100.64.0.5:13180'
     clientToken: '',                    // client mode: user token from server admin
     clientUserName: '',                 // client mode: cached display name
@@ -244,12 +258,27 @@ function assertKnownConfigKeys(patch) {
  * backup held; readers fall back to the default for a bad stored value.
  */
 function assertValidConfigValues(patch) {
-  if (patch && Object.prototype.hasOwnProperty.call(patch, 'exchangeRateKhrPerUsd')) {
+  /* HR1: kiosk mode is switched only through kioskMode:enable / kioskMode:leave
+   * (the second needs a manager PIN checked by the server). A generic setter
+   * that could write `kioskMode: false` would be a way out of the kiosk without
+   * one. Both modes call this, so the client and standalone setters agree. */
+  for (const key of KIOSK_CONFIG_KEYS) {
+    if (patch && Object.prototype.hasOwnProperty.call(patch, key)) {
+      throw new Error('Kiosk mode is turned on in Settings → Multi-Mac → Attendance kiosk, and turned off from the kiosk screen with a manager PIN.');
+    }
+  }
+  if (patch &&Object.prototype.hasOwnProperty.call(patch, 'exchangeRateKhrPerUsd')) {
     if (validExchangeRate(patch.exchangeRateKhrPerUsd) == null) {
       throw new Error('Exchange rate must be a number above 0 (riel per US dollar, e.g. 4100)');
     }
   }
 }
+
+/** HR1: config keys only the kioskMode:* channels may write. */
+const KIOSK_CONFIG_KEYS = [
+  'kioskMode', 'kioskOpenAtLogin',
+  'kioskRecoveryHash', 'kioskRecoverySalt', 'kioskRecoveryFailures', 'kioskRecoveryLockedUntil', 'kioskRecoveryLockCount',
+];
 
 /** A usable rate (finite, above 0, at most 1e9) as a number, else null. */
 function validExchangeRate(value) {
@@ -265,6 +294,7 @@ module.exports = {
   assertKnownConfigKeys,
   assertValidConfigValues,
   validExchangeRate,
+  KIOSK_CONFIG_KEYS,
   configPath,
   recoveryConfigPath,
   defaultDataDir,

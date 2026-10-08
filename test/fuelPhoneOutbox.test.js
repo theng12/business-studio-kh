@@ -144,6 +144,9 @@ test('classifyError: only network, timeouts, busy and rate limit retry by themse
   assert.equal(L.classifyError(httpErr(400, 'Bad request: litres must be a number')), 'fail');
   assert.equal(L.classifyError(httpErr(403, 'Your account doesn\'t have permission')), 'fail');
   assert.equal(L.classifyError(httpErr(500, 'Enter both pump meter readings')), 'fail');
+  // A refusal a handler throws on purpose now comes as 422 (main/util/userError.js): never retried by itself.
+  assert.equal(L.classifyError(httpErr(422, 'That time is in the future')), 'fail');
+  assert.equal(L.classifyError(httpErr(422, 'database is locked')), 'fail', 'only a 500 can be a busy database');
 });
 
 test('a refusal is not retried by itself; "Send now" retries with the same client_ref', async () => {

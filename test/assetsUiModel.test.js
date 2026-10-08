@@ -292,12 +292,12 @@ test('Home tile: drafts without a cost and months to post; words beyond the coun
   assert.equal(reg.assetsBadge({ needsCost: 0 }, { months: [{ status: 'posted' }] }), null);
   assert.deepEqual(reg.assetsBadge({ needsCost: 1 }, { months: [{ status: 'due' }, { status: 'due' }, { status: 'open' }] }), { count: 3, label: '1 needs a cost · 2 months to post' });
   assert.deepEqual(reg.assetsBadge({ needsCost: 2 }, null), { count: 2, label: '2 need a cost' });
-  assert.equal(reg.draftsWithoutCost({ items: [{ recordState: 'draft', costMinor: null }, { recordState: 'draft', costMinor: 5 }], total: 2 }), 1);
-  assert.equal(reg.draftsWithoutCost({ items: [], total: 900, counts: { needsCost: 16 } }), 16, 'more than a page: the flagged ones are a floor');
   const mod = reg.getModule('assets');
   let calls = 0;
   const api = { assets: {
-    list: async (f) => { calls += 1; assert.equal(f.recordState, 'draft'); return { items: [{ recordState: 'draft', costMinor: null }], total: 1 }; },
+    // The badge counts the backend's needs_cost flag (counts.needsCost) — the
+    // register's "Needs a cost" filter — not every cost-less draft on a page.
+    list: async (f) => { calls += 1; assert.equal(f.limit, 1); return { items: [{ recordState: 'draft', costMinor: null }], total: 3, counts: { needsCost: 1 } }; },
     listRuns: async () => ({ months: [{ status: 'due' }] }),
   } };
   reg.clearBadgeCache();

@@ -216,7 +216,7 @@ test('M5 / L6: closed-through locks and their limits', { skip: skipReason }, () 
   assert.equal(ledger.lockPeriod(other.id, '2026-06').closedThrough, '2026-06');
 });
 
-test('M6: History hides asset and ledger rows from callers without assets.view; Clear keeps them; sensitivity kept when the column exists', { skip: skipReason }, () => {
+test('M6: History hides asset and ledger rows from callers without assets.view; Clear keeps them; asset rows tagged finance', { skip: skipReason }, () => {
   const { C, cat, assets, audit, branches } = fixture();
   branches.create({ companyId: C, code: 'PP1', nameEn: 'Phnom Penh' });
   assets.activate(assets.create({ companyId: C, categoryId: cat('computer'), name: 'Mac', purchaseDate: '2026-02-01', costMinor: 120_000, usefulLifeMonths: 36 }).id);
@@ -232,8 +232,9 @@ test('M6: History hides asset and ledger rows from callers without assets.view; 
   assert.ok(res.kept >= before);
   assert.equal(db.getDb().prepare("SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'fixed_asset'").get().n, before, 'History clear keeps asset rows');
   assert.equal(db.getDb().prepare("SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'branch'").get().n, 0, 'other rows are cleared');
-  // HR1's audit_log.sensitivity column (added on another branch): the value is kept when it exists.
-  db.getDb().exec('ALTER TABLE audit_log ADD COLUMN sensitivity TEXT');
+  // HR1's audit_log.sensitivity column: asset rows are tagged 'finance', branch rows stay 'normal'.
   assets.create({ companyId: C, categoryId: cat('computer'), name: 'Mac 2' });
   assert.equal(db.getDb().prepare("SELECT sensitivity FROM audit_log WHERE entity_type = 'fixed_asset' ORDER BY id DESC LIMIT 1").get().sensitivity, 'finance');
+  branches.create({ companyId: C, code: 'SR1', nameEn: 'Siem Reap' });
+  assert.equal(db.getDb().prepare("SELECT sensitivity FROM audit_log WHERE entity_type = 'branch' ORDER BY id DESC LIMIT 1").get().sensitivity, 'normal');
 });

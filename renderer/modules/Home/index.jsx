@@ -8,8 +8,11 @@ import { clearBadgeCache, entryPage, loadBadge, loadLastPages, noCompanyReason, 
 import { gridLayout, moveFocus } from './layout.js';
 import { noCompanyState } from './noCompany.js';
 
-/** Which badges a change event makes stale: fuel records, purchase orders, fixed assets. */
-export const BADGE_EVENTS = { fuel: 'fuel', purchaseOrder: 'purchasing', assets: 'assets' };
+/**
+ * Which badges a change event makes stale: fuel records, purchase orders, HR
+ * (People's waiting count), fixed assets.
+ */
+export const BADGE_EVENTS = { fuel: 'fuel', purchaseOrder: 'purchasing', hr: 'people', assets: 'assets' };
 const BADGE_DEBOUNCE_MS = 400;
 
 /** Height kept under the grid for the one-line keyboard hint. */
@@ -80,12 +83,14 @@ export function Home() {
       timer = setTimeout(() => setBadgeTick((t) => t + 1), BADGE_DEBOUNCE_MS);
     };
     const offFuel = window.api?.fuel?.onChanged?.(() => stale(BADGE_EVENTS.fuel));
+    // HR1: a clock-in to review, a correction or a leave request changes People's count.
+    const offHr = window.api?.hr?.onChanged?.(() => stale(BADGE_EVENTS.hr));
     const offAssets = window.api?.assets?.onChanged?.(() => stale(BADGE_EVENTS.assets));
     const offCatalog = window.api?.events?.onCatalogChanged?.((evt) => {
       const moduleId = BADGE_EVENTS[evt?.kind];
-      if (moduleId && moduleId !== 'fuel' && moduleId !== 'assets') stale(moduleId);
+      if (moduleId && moduleId !== 'fuel' && moduleId !== 'people' && moduleId !== 'assets') stale(moduleId);
     });
-    return () => { clearTimeout(timer); offFuel?.(); offAssets?.(); offCatalog?.(); };
+    return () => { clearTimeout(timer); offFuel?.(); offHr?.(); offAssets?.(); offCatalog?.(); };
   }, []);
 
   /* Geometry from the room the grid actually has (lib: ./layout.js). */

@@ -3,30 +3,57 @@
  *
  * All `expose()`d: they act on the shared data, and the phone page needs the
  * driver / attendant tiles. Capabilities (main/util/capabilities.js):
- *   staff:list / staff:get / staff:getPhoto / staff:me   fuel.record or fuel.manage
- *   staff:list / staff:get also assets.view / assets.manage (an asset's custodian
- *                                    picker) — as tiles, like a recorder
- *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage
- * HR1 will move the edits under hr.manage.
+ *   staff:list / staff:get / staff:getPhoto   fuel.record, fuel.manage, hr.view or hr.manage
+ *   staff:list / staff:get                     also assets.view / assets.manage (an asset's
+ *                                              custodian picker) — as tiles, like a recorder
+ *   staff:getPhoto                             also attendance.supervise — their own crew only
+ *   staff:me                                   the same, or attendance.self / attendance.supervise
+ *   staff:create / update / markLeft / reactivate / setPhoto   fuel.manage or hr.manage
+ * HR1: what comes back depends on the caller (main/ipc/hrAccess.js): hr.manage
+ * the full record, hr.view the directory (no ID / NSSF / bank / date of birth /
+ * address), fuel.manage the F1 record without notes, a recorder (or an assets.*
+ * caller) the tile. Only hr.manage may link a record to an app account (userId).
+ * The HR profile fields themselves are edited through hr:updateProfile (hr.manage).
  */
 
+const { userError } = require('../util/userError');
 const employees = require('../db/employees');
 const fuelPhotos = require('../fuelPhotos');
-const { activeCompanyId, inCompany, emitFuelChange, callerCanManage, getCallerUserId } = require('./fuelAccess');
+const { activeCompanyId, inCompany, emitFuelChange, getCallerUserId, callerCaps } = require('./fuelAccess');
+const { tile, forLevel, staffLevel, canManageHr, canViewHr, callerEmployee } = require('./hrAccess');
 
-/** What a recorder (pump / driver phone) needs for a tile — no phone number, notes or account link. */
-function tile(e) {
-  return {
-    id: e.id, companyId: e.companyId, staffCode: e.staffCode, nameEn: e.nameEn, nameKm: e.nameKm,
-    hasPhoto: e.hasPhoto, photoSha256: e.photoSha256, position: e.position, isDriver: e.isDriver,
-    isFuelAttendant: e.isFuelAttendant, status: e.status,
-  };
+/**
+ * A caller who reaches staff:getPhoto only through attendance.supervise may see
+ * the people whose supervisor they are — active crew, never anyone else.
+ */
+function assertPhotoAllowed(e) {
+  const caps = callerCaps();
+  if (!caps || caps.has('*') || ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage'].some((k) => caps.has(k))) return;
+  const me = callerEmployee(e.companyId, { required: false });
+  if (!me || e.supervisorEmployeeId !== me.id || e.status !== 'active' || e.id === me.id) {
+    throw userError('You can only see the photos of your own crew');
+  }
+}
+
+/**
+ * Review fixes M5 / L2: linking a staff record to an app account decides who
+ * a phone clocks in as, so only hr.manage may set or change `userId`; a caller
+ * who cannot see the notes (fuel.manage alone) cannot overwrite them either.
+ */
+function guardStaffInput(input, existing = null) {
+  const out = { ...(input || {}) };
+  if ('userId' in out && (out.userId ?? null) !== (existing?.userId ?? null) && !canManageHr()) {
+    throw userError('Only someone who manages HR (hr.manage) can link a staff record to an app account');
+  }
+  if ('notes' in out && !canViewHr()) delete out.notes;
+  return out;
 }
 
 function register({ expose }) {
   expose('staff:list', (filters = {}) => {
     const companyId = activeCompanyId(filters?.companyId);
-    if (callerCanManage()) return employees.list(companyId, filters || {});
+    const level = staffLevel();
+    if (level !== 'tile') return employees.list(companyId, filters || {}).map((e) => forLevel(e, level));
     return employees.list(companyId, { ...(filters || {}), status: 'active', searchPhone: false }).map(tile);
   });
 
@@ -45,35 +72,35 @@ function register({ expose }) {
 
   expose('staff:get', (id) => {
     const e = inCompany(employees.get(id), 'Staff member');
-    return callerCanManage() ? e : tile(e);
+    return forLevel(e);
   });
 
   expose('staff:create', (input = {}) => {
     const companyId = activeCompanyId(input.companyId);
-    const created = employees.create({ ...input, companyId });
+    const created = employees.create({ ...guardStaffInput(input), companyId });
     emitFuelChange('staff', 'create', created.id, companyId);
-    return created;
+    return forLevel(created);
   });
 
   expose('staff:update', ({ id, patch } = {}) => {
     const e = inCompany(employees.get(id), 'Staff member');
-    const next = employees.update(id, patch || {});
+    const next = employees.update(id, guardStaffInput(patch, e));
     emitFuelChange('staff', 'update', id, e.companyId);
-    return next;
+    return forLevel(next);
   });
 
   expose('staff:markLeft', ({ id, leftOn = null, reason = null } = {}) => {
     const e = inCompany(employees.get(id), 'Staff member');
     const next = employees.markLeft(id, { leftOn, reason });
     emitFuelChange('staff', 'update', id, e.companyId);
-    return next;
+    return forLevel(next);
   });
 
   expose('staff:reactivate', (id) => {
     const e = inCompany(employees.get(id), 'Staff member');
     const next = employees.reactivate(id);
     emitFuelChange('staff', 'update', id, e.companyId);
-    return next;
+    return forLevel(next);
   });
 
   expose('staff:setPhoto', async ({ id, bytes } = {}) => {
@@ -81,12 +108,12 @@ function register({ expose }) {
     const saved = await fuelPhotos.saveStaffPhoto(id, bytes);
     const next = employees.setPhoto(id, saved);
     emitFuelChange('staff', 'update', id, e.companyId);
-    return next;
+    return forLevel(next);
   });
 
   /** The staff photo as bytes (or a 320 px thumbnail). Null when there is none. */
   expose('staff:getPhoto', async ({ id, thumb = false } = {}) => {
-    inCompany(employees.get(id), 'Staff member');
+    assertPhotoAllowed(inCompany(employees.get(id), 'Staff member'));
     const row = employees.getRow(id);
     if (!row.photo_path) return null;
     const out = await fuelPhotos.readPhotoFile(row.photo_path, { thumb: thumb === true, expectedSha256: row.photo_sha256 });

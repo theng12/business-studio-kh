@@ -34,8 +34,11 @@ test('the page is one self-contained document, far smaller than /m', () => {
   const gz = zlib.gzipSync(html).length;
   assert.ok(bytes < 200 * 1024, `page is ${bytes} bytes`);
   assert.ok(gz < 50 * 1024, `gzipped page is ${gz} bytes`);
+  // HR1 added the attendance screens (and ~100 words in two languages — Khmer
+  // is 3 bytes a letter), so the page is no longer under half of /m; it still
+  // travels gzipped at well under 50 KB.
   const viewer = require('../main/webclientHtml.js');
-  assert.ok(bytes < Buffer.byteLength(viewer) / 2);
+  assert.ok(bytes < Buffer.byteLength(viewer) * 0.6, `page is ${bytes} bytes, /m ${Buffer.byteLength(viewer)}`);
 });
 
 test('Khmer first, with a font stack phones already have', () => {
@@ -45,7 +48,8 @@ test('Khmer first, with a font stack phones already have', () => {
 });
 
 test('plain-HTTP rules: camera via a file input, nothing that needs a secure context, no location', () => {
-  assert.match(app, /type: 'file', accept: 'image\/\*', capture: 'environment'/);
+  // The back camera for evidence; the FRONT camera for a clock-in selfie.
+  assert.match(app, /type: 'file', accept: 'image\/\*', capture: st\.selfie \? 'user' : 'environment'/);
   const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   assert.doesNotMatch(code, /navigator\.share|getUserMedia|randomUUID|geolocation|serviceWorker/);
   // Photos are shrunk on the phone before upload.

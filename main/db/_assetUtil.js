@@ -1,16 +1,19 @@
 /**
  * Small shared helpers for the fixed-asset, branch and ledger DB modules
  * (docs/ASSETS_AND_BRANCHES_PLAN.md). Most come from the fuel helpers; the
- * audit wrapper tags rows `sensitivity: 'finance'` so that, once HR1's
- * audit_log.sensitivity column lands, History can hide them from callers
- * without assets.view (§7). Until then the tag is simply ignored.
+ * audit wrapper tags rows about asset values and the books (auditLog's
+ * ASSET_ENTITY_TYPES) `sensitivity: 'finance'`, so History hides them from
+ * callers without assets.view (§7) and Clear keeps them. Branch rows stay
+ * 'normal' — branch names are not sensitive.
  */
 
 const { uuid, str, num, int, badRequest, isCalendarDate, getCallerUserId } = require('./_fuelUtil');
 
 function audit(entityType, entityId, action, { before = null, after = null } = {}) {
   try {
-    require('./auditLog').log({ entityType, entityId, action, before, after, sensitivity: 'finance' });
+    const auditLog = require('./auditLog');
+    const sensitivity = auditLog.isAssetEntityType(entityType) ? 'finance' : 'normal';
+    auditLog.log({ entityType, entityId, action, before, after, sensitivity });
   } catch (_) { /* audit must never break the write it records */ }
 }
 

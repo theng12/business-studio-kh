@@ -1136,9 +1136,11 @@ Object.assign(VALIDATORS, require('./assetValidators').ASSET_VALIDATORS);
 
 // Fuel F1: the staff:* and fuel:* validators live in their own file.
 const { FUEL_VALIDATORS } = require('./fuelValidators');
+// HR1: hr:*, attendance:*, leave:* and kiosk:* (main/server/hrValidators.js).
+const { HR_VALIDATORS } = require('./hrValidators');
 
 function getValidator(channel) {
-  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? null;
+  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? null;
 }
 
 module.exports = {

@@ -453,6 +453,9 @@ function initDb(dataDir) {
   // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §3): staff list + fuel tables.
   // Additive only — CREATE TABLE IF NOT EXISTS, no SCHEMA_VERSION bump.
   require('./fuelSchema').ensureFuelSchema(db);
+  // HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §3.1–3.2): profiles, attendance, leave,
+  // kiosk PINs, audit sensitivity. Additive only, no SCHEMA_VERSION bump.
+  require('./hrSchema').ensureHrSchema(db);
 
   // v0.49.51: seed the built-in roles (admin/editor/photographer/viewer)
   // if missing. Idempotent + non-destructive (won't clobber edited presets).

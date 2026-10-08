@@ -1,8 +1,11 @@
 /**
- * Fuel F1: set up a phone for the fuel page (`/f`, docs/PEOPLE_AND_FUEL_PLAN.md §5.3).
+ * Set up a phone for the phone page (`/f`, docs/PEOPLE_AND_FUEL_PLAN.md §5.3, §7b):
+ * fuel records (Fuel F1) and, since HR1, clocking in with a selfie, my
+ * attendance, leave and "I forgot", and a supervisor's crew.
  *
- * Pick the phone's account (one whose role has "Record fuel" or "Manage
- * fuel"), pick the address the phone uses, and show a QR code that opens
+ * Pick the phone's account (one whose role has "Record fuel", "Manage fuel",
+ * "Clock in on my phone" or "Mark my crew"), pick the address the phone uses,
+ * and show a QR code that opens
  * `http://<server>/f#t=<token>`. The token rides in the FRAGMENT — a browser
  * never sends that part to the server, and the page removes it from the address
  * bar at once (same as the catalogue viewer's pairing, Settings → Multi-Mac).
@@ -18,14 +21,26 @@
  * drawn here with bwip-js (already used for the viewer's pairing code); the
  * token never leaves this Mac except as the picture on screen.
  *
- * Self-contained: mounted by PhoneSetupSlot.jsx; styles are the
- * `.fuel-phone-setup` block at the end of renderer/index.css.
+ * Attendance accounts must be linked to a staff record (Staff profile, by
+ * someone with "Manage staff & attendance" — the link decides who the phone
+ * clocks in as). This screen only SHOWS the link, from `staff:list` of the
+ * active company; it never sets it.
+ *
+ * Self-contained: mounted by PhoneSetupSlot.jsx (Fuel) and usable anywhere as
+ * `<PhoneSetup only="attendance" onDone={…} />` (People); styles are the
+ * `.fuel-phone-setup` blocks at the end of renderer/index.css.
  */
 import { useEffect, useMemo, useState } from 'react';
 import bwipjs from 'bwip-js';
 import { Button, Select } from '../../components/ui.jsx';
 
 const FUEL_CAPS = ['fuel.record', 'fuel.manage'];
+const ATTENDANCE_CAPS = ['attendance.self', 'attendance.supervise'];
+const USES = [
+  ['fuel', 'Fuel records', FUEL_CAPS],
+  ['self', 'Clock in', ['attendance.self']],
+  ['crew', 'Mark a crew', ['attendance.supervise']],
+];
 
 /** The phone's sign-in address for one account. Pure, for tests. */
 export function fuelPhoneUrl(origin, token) {
@@ -33,22 +48,42 @@ export function fuelPhoneUrl(origin, token) {
 }
 
 /**
- * Accounts that can use the fuel page: active, with a token, and a role that
- * has a fuel capability. Admin accounts can too, but are listed last and
- * marked — a pump phone should not carry full access. Pure, for tests.
+ * Accounts that can use the phone page: active, with a token, and a role that
+ * has a fuel or a phone-attendance capability (`only: 'fuel' | 'attendance'`
+ * narrows it). Admin accounts can too, but are listed last and marked — a pump
+ * phone should not carry full access. `staff` (staff:list of the active
+ * company, or null when it could not be read) gives each attendance account
+ * its linked staff record: `link` = { name } | null, or undefined when unknown.
+ * Pure, for tests.
  */
-export function fuelPhoneAccounts(users, roles) {
+export function phoneAccounts(users, roles, { only = null, staff = null } = {}) {
   const perms = new Map((roles ?? []).map((r) => [r.key, Array.isArray(r.permissions) ? r.permissions : []]));
+  const wanted = only === 'fuel' ? FUEL_CAPS : only === 'attendance' ? ATTENDANCE_CAPS : [...FUEL_CAPS, ...ATTENDANCE_CAPS];
+  // The link is only knowable when the list carries account ids (Manage staff /
+  // Manage fuel / this Mac's own window); a tile-only list does not.
+  const linkKnown = Array.isArray(staff) && (staff.length === 0 || staff.some((e) => 'userId' in e));
   return (users ?? [])
     .filter((u) => u && u.token && !u.deactivatedAt)
     .map((u) => {
       const p = perms.get(u.role) ?? [];
       const admin = p.includes('*');
       const role = (roles ?? []).find((r) => r.key === u.role);
-      return { id: u.id, name: u.name, token: u.token, roleName: role?.name ?? u.role, admin, ok: admin || FUEL_CAPS.some((c) => p.includes(c)) };
+      const uses = USES.filter(([, , caps]) => admin || caps.some((c) => p.includes(c))).map(([key, label]) => ({ key, label }));
+      const attendance = !admin && ATTENDANCE_CAPS.some((c) => p.includes(c));
+      const linked = linkKnown ? staff.find((e) => e.userId === u.id && e.status !== 'left') : null;
+      return {
+        id: u.id, name: u.name, token: u.token, roleName: role?.name ?? u.role, admin, uses, attendance,
+        link: !attendance ? null : linkKnown ? (linked ? { name: linked.nameEn || linked.nameKm || linked.staffCode, suspended: linked.status === 'suspended' } : null) : undefined,
+        ok: admin || wanted.some((c) => p.includes(c)),
+      };
     })
     .filter((a) => a.ok)
     .sort((a, b) => Number(a.admin) - Number(b.admin) || String(a.name).localeCompare(String(b.name)));
+}
+
+/** Fuel F1's name for the same list (fuel accounts only). */
+export function fuelPhoneAccounts(users, roles) {
+  return phoneAccounts(users, roles, { only: 'fuel' });
 }
 
 /** Where a phone can reach the server, for this Mac's mode. Pure, for tests. */
@@ -79,7 +114,11 @@ const PROBLEM = {
   'no-server-url': 'This Mac has no server address saved. Set it in Settings → Multi-Mac → Client connection.',
 };
 
-export function FuelPhoneSetup({ onDone } = {}) {
+/**
+ * The set-up screen. Props: `onDone` (shows a Done button), `only` ('fuel' |
+ * 'attendance' — which accounts are listed; default both).
+ */
+export function PhoneSetup({ onDone, only = null } = {}) {
   const [loading, setLoading] = useState(true);
   const [problem, setProblem] = useState('');
   const [accounts, setAccounts] = useState([]);
@@ -108,8 +147,11 @@ export function FuelPhoneSetup({ onDone } = {}) {
           setProblem(`Only someone who can manage users can show a phone's code. (${err?.message || err})`);
           return;
         }
+        // Who each attendance account clocks in as. Read-only; may be refused
+        // (then the link just shows as unknown).
+        const staff = await window.api.staff.list({}).catch(() => null);
         if (!alive) return;
-        setAccounts(fuelPhoneAccounts(users, roles));
+        setAccounts(phoneAccounts(users, roles, { only, staff }));
       } catch (err) {
         if (alive) setProblem(err?.message || String(err));
       } finally {
@@ -117,7 +159,7 @@ export function FuelPhoneSetup({ onDone } = {}) {
       }
     })();
     return () => { alive = false; };
-  }, []);
+  }, [only]);
 
   const account = accounts.find((a) => a.id === accountId) || accounts[0] || null;
   const address = addresses.find((a) => a.key === addressKey) || addresses.find((a) => a.kind === 'tailscale') || addresses[0] || null;
@@ -150,8 +192,9 @@ export function FuelPhoneSetup({ onDone } = {}) {
     <div className="fuel-phone-setup">
       {accounts.length === 0 ? (
         <p className="fuel-phone-setup__problem">
-          No account can use the fuel page yet. In Settings → Multi-Mac, add a role with only “Record fuel”,
-          then add a user such as “Pump phone” or the driver&rsquo;s name with that role. Each phone gets its own account.
+          No account can use the phone page yet. In Settings → Multi-Mac, add a role with only what the phone
+          needs — “Record fuel” for a pump phone, “Clock in on my phone” for staff, “Mark my crew” for a
+          supervisor (a driver can have both fuel and clock-in) — then add a user with that role. Each phone gets its own account.
         </p>
       ) : (
         <>
@@ -160,7 +203,7 @@ export function FuelPhoneSetup({ onDone } = {}) {
               <span>Phone&rsquo;s account</span>
               <Select value={account?.id ?? ''} onChange={choose(setAccountId)} aria-label="Phone's account">
                 {accounts.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name} — {a.roleName}{a.admin ? ' (full access)' : ''}</option>
+                  <option key={a.id} value={a.id}>{a.name} — {a.roleName}{a.admin ? ' (full access)' : ''}{a.attendance && a.link === null ? ' · not linked' : ''}</option>
                 ))}
               </Select>
             </label>
@@ -172,15 +215,33 @@ export function FuelPhoneSetup({ onDone } = {}) {
             </label>
             <Button variant="primary" onClick={() => setShown((v) => !v)}>{shown ? 'Hide QR' : 'Show QR'}</Button>
           </div>
+          {account ? (
+            <p className="fuel-phone-setup__uses">
+              Opens: {account.uses.map((u) => u.label).join(' · ')}
+              {account.attendance && account.link ? <> · clocks in as <strong>{account.link.name}</strong></> : null}
+            </p>
+          ) : null}
+          {account?.attendance && account.link === null ? (
+            <p className="fuel-phone-setup__warn" data-not-linked="1">
+              This account is not linked to a staff record in this company, so the phone cannot clock in yet.
+              Link it in the person&rsquo;s staff profile (needs “Manage staff &amp; attendance”).
+            </p>
+          ) : null}
+          {account?.attendance && account.link?.suspended ? (
+            <p className="fuel-phone-setup__warn">{account.link.name} is suspended, so this phone cannot clock in until they are active again.</p>
+          ) : null}
+          {account?.attendance && account.link === undefined ? (
+            <p className="fuel-phone-setup__hint">Could not check which staff record this account is linked to from this account. The phone shows a notice if it is not linked.</p>
+          ) : null}
           {account?.admin ? (
-            <p className="fuel-phone-setup__warn">This account has full access to everything. A phone left at the pump should have its own account with only “Record fuel”.</p>
+            <p className="fuel-phone-setup__warn">This account has full access to everything. A phone left at the pump should have its own account with only “Record fuel”; a staff phone only “Clock in on my phone”.</p>
           ) : null}
           {shown && qr.svg ? (
             <div className="fuel-phone-setup__show">
-              <div className="fuel-phone-setup__code" role="img" aria-label={`Fuel page code for ${account?.name}`}
+              <div className="fuel-phone-setup__code" role="img" aria-label={`Phone page code for ${account?.name}`}
                 dangerouslySetInnerHTML={{ __html: qr.svg }} />
               <div className="fuel-phone-setup__link">
-                <div className="fuel-phone-setup__label">Fuel page</div>
+                <div className="fuel-phone-setup__label">Phone page</div>
                 <code>{address.origin}/f</code>
                 <p className="fuel-phone-setup__hint">The code also signs the phone in as <strong>{account.name}</strong>. Show it only to that person.</p>
               </div>
@@ -197,15 +258,16 @@ export function FuelPhoneSetup({ onDone } = {}) {
         <ol lang="km">
           <li>ភ្ជាប់ទូរស័ព្ទទៅ Tailscale (ឬ Wi-Fi ដូចគ្នានឹង Mac)។</li>
           <li>បើកកាមេរ៉ាទូរស័ព្ទ ហើយស្កេនកូដ QR។</li>
-          <li>ទំព័រប្រេងបើកក្នុង Safari (iPhone) ឬ Chrome (Android) ដោយចូលគណនីរួចហើយ។ ត្រូវបើកវាក្នុងកម្មវិធីរុករកនោះជានិច្ច៖ រក្សាទុកជាចំណាំ (bookmark)។ បើបន្ថែមទៅអេក្រង់ដើមលើ iPhone ត្រូវបិទ «បើកជាកម្មវិធីគេហទំព័រ» (Open as Web App) — បើមិនដូច្នោះ វានឹងចាកចេញពីគណនី ហើយកំណត់ត្រាដែលមិនទាន់ផ្ញើនឹងមើលមិនឃើញ។</li>
+          <li>ទំព័រនេះបើកក្នុង Safari (iPhone) ឬ Chrome (Android) ដោយចូលគណនីរួចហើយ។ ត្រូវបើកវាក្នុងកម្មវិធីរុករកនោះជានិច្ច៖ រក្សាទុកជាចំណាំ (bookmark)។ បើបន្ថែមទៅអេក្រង់ដើមលើ iPhone ត្រូវបិទ «បើកជាកម្មវិធីគេហទំព័រ» (Open as Web App) — បើមិនដូច្នោះ វានឹងចាកចេញពីគណនី ហើយកំណត់ត្រាដែលមិនទាន់ផ្ញើនឹងមើលមិនឃើញ។</li>
         </ol>
         <ol lang="en">
           <li>Put the phone on Tailscale (or the same Wi-Fi as the Mac).</li>
           <li>Open the phone&rsquo;s camera and scan the QR code.</li>
-          <li>The fuel page opens in Safari (iPhone) or Chrome (Android), already signed in. Always open it in that same browser — keep it as a bookmark. On an iPhone, an Add to Home Screen icon must have “Open as Web App” switched off; a web app is signed out and cannot see records waiting to send.</li>
+          <li>The page opens in Safari (iPhone) or Chrome (Android), already signed in. Always open it in that same browser — keep it as a bookmark. On an iPhone, an Add to Home Screen icon must have “Open as Web App” switched off; a web app is signed out and cannot see records waiting to send.</li>
         </ol>
         <p className="fuel-phone-setup__hint">
-          A phone without a connection keeps what it records and sends it when it is back, while the page stays open.
+          A phone without a connection keeps what it records — fuel records and clock-ins — and sends them when it is back,
+          while the page stays open. A clock-in that reaches this Mac more than 15 minutes late waits for a manager to accept it.
           To stop a lost phone, use Stop access on its account in Settings → Multi-Mac.
         </p>
       </div>
@@ -214,4 +276,7 @@ export function FuelPhoneSetup({ onDone } = {}) {
   );
 }
 
-export default FuelPhoneSetup;
+/** Fuel F1's name, kept for PhoneSetupSlot.jsx and older imports. */
+export const FuelPhoneSetup = PhoneSetup;
+
+export default PhoneSetup;

@@ -3178,6 +3178,13 @@ const PAGE_LABELS = [
   ['assettax', 'Tax year', 'assets'],
   ['assetreports', 'Reports', 'assets'],
   ['staff', 'Staff', 'people'],
+  // HR1: People.
+  ['attendance', 'Attendance', 'people'],
+  ['attreview', 'Review', 'people'],
+  ['attcorrections', 'Corrections', 'people'],
+  ['overtime', 'Overtime', 'people'],
+  ['lateness', 'Lateness', 'people'],
+  ['leave', 'Leave', 'people'],
   ['history', 'History', 'system'],
 ];
 /* Labels are unique except across modules; the deep flows name pages by

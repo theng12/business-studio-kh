@@ -475,6 +475,127 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('fuel:changed', fn);
     },
   },
+  /** HR1: staff profiles, schedules, holidays, kiosk PINs, documents, the month
+   *  workbook. Full list: docs/PEOPLE_AND_FUEL_PLAN.md §10 "HR1 API". */
+  hr: {
+    getSettings:           ()                         => invoke('hr:getSettings'),
+    updateSettings:        (patch)                    => invoke('hr:updateSettings', patch),
+    listPositions:         (opts)                     => invoke('hr:listPositions', opts),
+    createPosition:        (input)                    => invoke('hr:createPosition', input),
+    updatePosition:        (id, patch)                => invoke('hr:updatePosition', { id, patch }),
+    listSchedules:         (opts)                     => invoke('hr:listSchedules', opts),
+    createSchedule:        (input)                    => invoke('hr:createSchedule', input),
+    updateSchedule:        (id, patch)                => invoke('hr:updateSchedule', { id, patch }),
+    assignSchedule:        (employeeId, scheduleId, effectiveFrom) => invoke('hr:assignSchedule', { employeeId, scheduleId, effectiveFrom }),
+    listEmployeeSchedules: (employeeId)               => invoke('hr:listEmployeeSchedules', employeeId),
+    /** HR1 review fix L1: many people at once → { byEmployee: { id: history }, errors: { id: message } }. */
+    listEmployeeSchedulesFor: (employeeIds)           => invoke('hr:listEmployeeSchedules', { employeeIds }),
+    listHolidays:          (opts)                     => invoke('hr:listHolidays', opts),
+    createHoliday:         (input)                    => invoke('hr:createHoliday', input),
+    updateHoliday:         (id, patch)                => invoke('hr:updateHoliday', { id, patch }),
+    getProfile:            (id)                       => invoke('hr:getProfile', id),
+    updateProfile:         (id, patch)                => invoke('hr:updateProfile', { id, patch }),
+    setStatus:             (args)                     => invoke('hr:setStatus', args),
+    setPin:                (id, pin)                  => invoke('hr:setPin', { id, pin }),
+    clearPin:              (id)                       => invoke('hr:clearPin', id),
+    unlockPin:             (id)                       => invoke('hr:unlockPin', id),
+    listDocuments:         (employeeId, includeVoided) => invoke('hr:listDocuments', { employeeId, includeVoided }),
+    addDocument:           (args)                     => invoke('hr:addDocument', args),
+    readDocument:          (id, thumb)                => invoke('hr:readDocument', { id, thumb }),
+    voidDocument:          (id, reason)               => invoke('hr:voidDocument', { id, reason }),
+    runJobs:               ()                         => invoke('hr:runJobs'),
+    getMonthWorkbook:      (month)                    => invoke('hr:getMonthWorkbook', { month }),
+    saveMonthWorkbook:     (month)                    => invoke('hr:saveMonthWorkbook', { month }),
+    onChanged: (cb) => {
+      const fn = (_e, data) => cb(data);
+      ipcRenderer.on('hr:changed', fn);
+      return () => ipcRenderer.removeListener('hr:changed', fn);
+    },
+  },
+  /** HR1: attendance — figures, review list, corrections, overtime, lateness,
+   *  and the phone's own (attendance.self) and supervisor (attendance.supervise) calls. */
+  attendance: {
+    day:                   (date)                     => invoke('attendance:day', { date }),
+    monthSummary:          (args)                     => invoke('attendance:monthSummary', args),
+    listEvents:            (filters)                  => invoke('attendance:listEvents', filters),
+    getPhoto:              (eventId, thumb)           => invoke('attendance:getPhoto', { eventId, thumb }),
+    getPhotos:             (eventIds, size)           => invoke('attendance:getPhotos', { eventIds, size }),
+    addManual:             (input)                    => invoke('attendance:addManual', input),
+    voidEvent:             (id, reason)               => invoke('attendance:void', { id, reason }),
+    listReview:            (filters)                  => invoke('attendance:listReview', filters),
+    listAlerts:            (opts)                     => invoke('attendance:listAlerts', opts),
+    ackAlert:              (id)                       => invoke('attendance:ackAlert', { id }),
+    review:                (id, decision, reason)     => invoke('attendance:review', { id, decision, reason }),
+    listCorrections:       (filters)                  => invoke('attendance:listCorrections', filters),
+    requestCorrection:     (args)                     => invoke('attendance:requestCorrection', args),
+    decideCorrection:      (args)                     => invoke('attendance:decideCorrection', args),
+    listOvertime:          (filters)                  => invoke('attendance:listOvertime', filters),
+    approveOvertime:       (args)                     => invoke('attendance:approveOvertime', args),
+    revokeOvertime:        (id, reason)               => invoke('attendance:revokeOvertime', { id, reason }),
+    listLateness:          (filters)                  => invoke('attendance:listLateness', filters),
+    confirmLateness:       (args)                     => invoke('attendance:confirmLateness', args),
+    clockSelf:             (args)                     => invoke('attendance:clockSelf', args),
+    mine:                  ()                         => invoke('attendance:mine'),
+    requestCorrectionSelf: (args)                     => invoke('attendance:requestCorrectionSelf', args),
+    crew:                  ()                         => invoke('attendance:crew'),
+    markCrew:              (args)                     => invoke('attendance:markCrew', args),
+  },
+  /** HR1: leave types, balances, ledger and requests. */
+  leave: {
+    listTypes:    (opts)                         => invoke('leave:listTypes', opts),
+    createType:   (input)                        => invoke('leave:createType', input),
+    updateType:   (id, patch)                    => invoke('leave:updateType', { id, patch }),
+    balances:     (employeeId)                   => invoke('leave:balances', { employeeId }),
+    /** HR1 review fix L1: many people at once → { byEmployee: { id: Balance[] }, errors: { id: message } }. */
+    balancesFor:  (employeeIds)                  => invoke('leave:balances', { employeeIds }),
+    ledger:       (employeeId, leaveTypeId)      => invoke('leave:ledger', { employeeId, leaveTypeId }),
+    listRequests: (filters)                      => invoke('leave:listRequests', filters),
+    request:      (args)                         => invoke('leave:request', args),
+    decide:       (id, decision, note, allowNegative) => invoke('leave:decide', { id, decision, note, allowNegative }),
+    cancel:       (id, reason)                   => invoke('leave:cancel', { id, reason }),
+    adjust:       (args)                         => invoke('leave:adjust', args),
+    requestSelf:  (args)                         => invoke('leave:requestSelf', args),
+    cancelSelf:   (id, reason)                   => invoke('leave:cancelSelf', { id, reason }),
+  },
+  /** HR1: the shop-Mac kiosk (account with attendance.kiosk). After signIn every
+   *  call carries the sessionToken, never an employee id. */
+  kiosk: {
+    tiles:             ()                                => invoke('kiosk:tiles'),
+    tilePhoto:         (id)                              => invoke('kiosk:tilePhoto', { id }),
+    /** preview: the in-app dry run (owner / hr.manage) — nothing is written, wrong PINs are not counted. */
+    signIn:            (employeeId, pin, preview)        => invoke('kiosk:signIn', { employeeId, pin, preview }),
+    signOut:           (sessionToken)                    => invoke('kiosk:signOut', { sessionToken }),
+    /** noPhoto: only after a manager allowed it on this session (verifyManagerPin purpose 'no-photo'). */
+    clock:             (sessionToken, photo, noPhoto)    => invoke('kiosk:clock', { sessionToken, photo, noPhoto }),
+    me:                (sessionToken)                    => invoke('kiosk:me', { sessionToken }),
+    requestLeave:      (args)                            => invoke('kiosk:requestLeave', args),
+    requestCorrection: (args)                            => invoke('kiosk:requestCorrection', args),
+    /** purpose: 'leave' (default) | 'quit' | 'no-photo' — only the History wording differs. */
+    verifyManagerPin:  (employeeId, pin, purpose, sessionToken, preview) => invoke('kiosk:verifyManagerPin', { employeeId, pin, purpose, sessionToken, preview }),
+  },
+  /** HR1: THIS Mac as the attendance kiosk (local; main/kioskWindow.js). Leaving
+   *  and quitting need a manager PIN, which main checks with the server. */
+  kioskMode: {
+    /** True only in the locked-down kiosk window (main passes --mskh-kiosk-window); renderer/main.jsx mounts only the kiosk there. */
+    isKioskWindow:   process.argv.includes('--mskh-kiosk-window'),
+    status:          ()                    => invoke('kioskMode:status'),
+    /** The kiosk screen crashed: one line to this Mac's crash.log. */
+    logError:        (message, stack)      => invoke('kioskMode:logError', { message, stack }),
+    askCamera:       ()                    => invoke('kioskMode:askCamera'),
+    /** Step 1 of turning kiosk mode on: a fresh recovery code, shown once (only its hash is kept). */
+    newRecoveryCode: ()                    => invoke('kioskMode:newRecoveryCode'),
+    enable:          (openAtLogin)         => invoke('kioskMode:enable', { openAtLogin }),
+    /** Office Mac unreachable: the recovery code turns kiosk mode off. */
+    recover:         (code)                => invoke('kioskMode:recover', { code }),
+    leave:           (employeeId, pin)     => invoke('kioskMode:leave', { employeeId, pin }),
+    quit:            (employeeId, pin)     => invoke('kioskMode:quit', { employeeId, pin }),
+    /** A quit was refused (Dock, AppleScript, Activity Monitor's Quit): ask for a manager PIN. */
+    onQuitRequested: (cb) => {
+      const fn = () => cb();
+      ipcRenderer.on('kioskMode:quitRequested', fn);
+      return () => ipcRenderer.removeListener('kioskMode:quitRequested', fn);
+    },
+  },
   /** v0.49.47: OPERATIONS — Purchase Orders + landed cost + costing helpers.
    *  PO header + lines + cost components live in a single domain. Reads,
    *  CRUD, and pure math helpers all use the `pos:` / `costing:` channels. */
