@@ -1,0 +1,413 @@
+/**
+ * HR1 desktop screens — the pure view model (renderer/modules/People/hrModel.js):
+ * Phnom Penh times, the month grid cells, event badges, the overtime and
+ * lateness states, the form rules, PINs, which profile fields a caller sees,
+ * and the Settings → People fields. Where the backend owns a rule (PIN rules,
+ * setting ranges, the narrowed record, the 2027 holiday note) the test reads
+ * the backend's own module or source so a drift fails here.
+ */
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const esbuild = require('esbuild');
+
+const ROOT = path.join(__dirname, '..');
+const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+
+function load(rel) {
+  const out = esbuild.buildSync({
+    entryPoints: [path.join(ROOT, rel)], bundle: true, write: false, format: 'cjs', platform: 'node', logLevel: 'silent',
+  });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(require, mod, mod.exports);
+  return mod.exports;
+}
+
+const M = load('renderer/modules/People/hrModel.js');
+const calc = require('../main/util/attendanceCalc');
+const kioskPin = require('../main/util/kioskPin');
+const holidays = require('../main/util/cambodiaHolidays');
+
+const PP = 7 * 3600 * 1000;
+const at = (date, hm) => Date.parse(`${date}T${hm}:00Z`) - PP; // a Phnom Penh wall time
+
+test('times are Phnom Penh wall times; a night-shift clock-out says +1', () => {
+  assert.equal(M.fmtHm(at('2026-10-08', '07:52')), '07:52');
+  assert.equal(M.fmtHm(null), '—');
+  assert.equal(M.fmtHmOn(at('2026-10-09', '06:10'), '2026-10-08'), '06:10 +1');
+  assert.equal(M.fmtHmOn(at('2026-10-08', '17:00'), '2026-10-08'), '17:00');
+  assert.equal(M.hmToMs('2026-10-08', '07:30'), at('2026-10-08', '07:30'));
+  assert.equal(M.hmToMs('2026-10-08', '06:10', { nextDay: true }), at('2026-10-09', '06:10'));
+  assert.equal(M.hmToMs('2026-10-08', '7:30'), null);
+  assert.equal(M.hmToMs('2026-10-31', '23:59', { nextDay: true }), at('2026-11-01', '23:59'), 'month roll-over');
+  assert.equal(M.ppDateKey(at('2026-10-08', '23:30')), '2026-10-08', 'late evening is still that day in Phnom Penh');
+});
+
+test('minutes read as hours and minutes', () => {
+  assert.equal(M.fmtMinutes(0), '0 min');
+  assert.equal(M.fmtMinutes(45), '45 min');
+  assert.equal(M.fmtMinutes(425), '7 h 05 min');
+  assert.equal(M.fmtMinutes(-30), '−30 min');
+  assert.equal(M.fmtMinutes(undefined), '—');
+  assert.equal(M.fmtHours(545), '9:05');
+});
+
+test('month dates and weekdays agree with the backend', () => {
+  assert.deepEqual(M.monthDates('2026-02'), calc.monthDates('2026-02'));
+  assert.equal(M.monthDates('2028-02').length, 29);
+  for (const d of ['2026-10-05', '2026-10-08', '2026-10-11', '2027-01-01']) assert.equal(M.weekdayMon0(d), calc.weekdayMon0(d), d);
+  assert.equal(M.prevMonth('2026-01'), '2025-12');
+  assert.equal(M.monthEnded('2026-09', at('2026-10-08', '09:00')), true);
+  assert.equal(M.monthEnded('2026-10', at('2026-10-08', '09:00')), false);
+  assert.equal(M.addDays('2026-12-31', 1), '2027-01-01');
+});
+
+test('every status the calculation can return has a label, tone and grid letter', () => {
+  // The statuses calcDay sets (main/util/attendanceCalc.js).
+  const src = read('main/util/attendanceCalc.js');
+  const statuses = new Set([...src.matchAll(/res\.status = '([a-z_]+)'/g)].map((m) => m[1]));
+  assert.ok(statuses.size >= 9, [...statuses].join(','));
+  for (const s of statuses) {
+    assert.ok(M.DAY_STATUS[s], `label for ${s}`);
+    assert.ok(['emerald', 'amber', 'rose', 'blue', 'slate'].includes(M.DAY_STATUS[s].tone));
+  }
+  assert.equal(M.dayStatusOf('nonsense').letter, '?');
+  for (const k of M.GRID_LEGEND) assert.ok(M.DAY_STATUS[k], k);
+});
+
+test('a month-grid cell: letter, tone and a tooltip that says the figures', () => {
+  const day = {
+    date: '2026-10-08', status: 'late', firstIn: at('2026-10-08', '07:20'), lastOut: at('2026-10-08', '18:00'),
+    lateMin: 15, overtime: { normal: 45, night: 0, restDay: 0, holiday: 0 },
+  };
+  const c = M.gridCell(day);
+  assert.equal(c.letter, 'L');
+  assert.equal(c.tone, 'amber');
+  assert.match(c.title, /in 07:20/);
+  assert.match(c.title, /15 min late/);
+  assert.match(c.title, /45 min overtime/);
+  const half = M.gridCell({ date: '2026-10-09', status: 'present', leave: { half: 'pm' } });
+  assert.equal(half.letter, 'P½', 'a half day of leave beside work is marked');
+  assert.match(half.title, /Leave \(afternoon\)/);
+  assert.equal(M.gridCell({ date: '2026-10-10', status: 'holiday', holiday: { nameEn: 'Pchum Ben' } }).letter, 'H');
+  assert.match(M.gridCell({ date: '2026-10-10', status: 'holiday', holiday: { nameEn: 'Pchum Ben' } }).title, /Pchum Ben/);
+  assert.equal(M.gridCell({ date: '2026-10-10', status: 'not_employed' }).letter, '');
+  assert.equal(M.gridCell({ date: '2026-10-10', status: 'suspended' }).tone, 'rose');
+});
+
+test('event badges: voided, rejected, replaced, held, sent late, waiting', () => {
+  const labels = (ev) => M.eventBadges(ev).map((b) => b.label);
+  assert.deepEqual(labels({ voided: true, reviewStatus: 'none' }), ['Voided']);
+  assert.deepEqual(labels({ voided: true, reviewStatus: 'rejected' }), ['Rejected']);
+  assert.deepEqual(labels({ supersededById: 'x', reviewStatus: 'none' }), ['Replaced by a correction']);
+  assert.deepEqual(labels({ reviewStatus: 'pending', held: true, queuedLong: true }), ['Waiting for review', 'Held — not counted']);
+  assert.deepEqual(labels({ reviewStatus: 'accepted', queuedLong: true }), ['Accepted', 'Sent late']);
+  const sorted = M.sortDayEvents([
+    { id: 'v', at: 1, voided: true }, { id: 'b', at: 3 }, { id: 'a', at: 2 }, { id: 's', at: 0, supersededById: 'x' },
+  ]).map((e) => e.id);
+  assert.deepEqual(sorted, ['a', 'b', 's', 'v'], 'live entries first, by time; voided / replaced last');
+  for (const s of ['kiosk', 'phone', 'supervisor', 'manual', 'correction']) assert.notEqual(M.sourceLabel(s), s, `source ${s} has words`);
+});
+
+test('overtime rows: one per person per day with overtime or an approval, with its state', () => {
+  const summary = {
+    rows: [{
+      employeeId: 'e1', nameEn: 'Dara', staffCode: 'D01',
+      days: [
+        { date: '2026-10-01', overtime: { normal: 60, night: 0, restDay: 0, holiday: 0 } },
+        { date: '2026-10-02', overtime: { normal: 0, night: 0, restDay: 0, holiday: 0 } },
+        { date: '2026-10-03', overtime: { normal: 30, night: 30, restDay: 0, holiday: 0 } },
+        { date: '2026-10-04', overtime: { normal: 0, night: 0, restDay: 240, holiday: 0 } },
+        { date: '2026-10-05', overtime: { normal: 15, night: 0, restDay: 0, holiday: 0 } },
+        { date: '2026-10-06', overtime: { normal: 0, night: 0, restDay: 0, holiday: 0 } },
+      ],
+    }],
+  };
+  const approvals = [
+    { id: 'a3', employeeId: 'e1', workDate: '2026-10-03', minutes: { normal: 30, night: 30, restDay: 0, holiday: 0 } },
+    { id: 'a4', employeeId: 'e1', workDate: '2026-10-04', minutes: { normal: 0, night: 0, restDay: 120, holiday: 0 } },
+    { id: 'a5', employeeId: 'e1', workDate: '2026-10-05', minutes: { normal: 15, night: 0, restDay: 0, holiday: 0 }, needsReapproval: true },
+    { id: 'a6', employeeId: 'e1', workDate: '2026-10-06', minutes: { normal: 60, night: 0, restDay: 0, holiday: 0 } },
+    { id: 'old', employeeId: 'e1', workDate: '2026-10-01', minutes: { normal: 60 }, voided: true },
+  ];
+  const rows = M.overtimeRows(summary, approvals);
+  assert.deepEqual(rows.map((r) => [r.date, r.state]), [
+    ['2026-10-01', 'pending'], // the voided approval does not count
+    ['2026-10-03', 'approved'],
+    ['2026-10-04', 'partial'],
+    ['2026-10-05', 'reapprove'],
+    ['2026-10-06', 'exceeds'], // approved 60, the attendance now shows none
+  ]);
+  assert.deepEqual(M.overtimeNeedsLook(rows).map((r) => r.date), ['2026-10-01', '2026-10-05', '2026-10-06']);
+  for (const s of Object.keys(M.OT_STATE)) assert.ok(M.OT_STATE[s].label);
+  assert.equal(M.otTotal(rows[1].computed), 60);
+  assert.equal(M.ratesLine({ normal: 150, night: 200, restDay: 200, holiday: 200 }), 'Normal 150 % · Night 200 % · Day off 200 % · Holiday 200 %');
+  // The categories are the backend's.
+  assert.deepEqual(M.OT_CATEGORIES.map((c) => c.key), calc.OT_KEYS);
+});
+
+test('adjusting overtime never goes above what the attendance shows', () => {
+  const computed = { normal: 60, night: 30, restDay: 0, holiday: 0 };
+  const ok = M.validateOvertimeAdjust({ normal: '0:45', night: '30', restDay: '', holiday: '0:00' }, computed);
+  assert.deepEqual(ok.errors, {});
+  assert.deepEqual(ok.minutes, { normal: 45, night: 30, restDay: 0, holiday: 0 });
+  const bad = M.validateOvertimeAdjust({ normal: '90', night: '-1', restDay: '1.5', holiday: '0' }, computed);
+  assert.match(bad.errors.normal, /At most 1:00/);
+  assert.ok(bad.errors.night && bad.errors.restDay);
+  // h:mm like the table, or plain minutes (verification 2026-10-08).
+  assert.equal(M.parseDuration('1:30'), 90);
+  assert.equal(M.parseDuration('90'), 90);
+  assert.equal(M.parseDuration(' '), 0);
+  for (const bad2 of ['1:75', '1.5', '-5', 'abc', '1:5']) assert.ok(Number.isNaN(M.parseDuration(bad2)), bad2);
+});
+
+test('lateness: state of a month, and a waiver needs a note', () => {
+  assert.equal(M.latenessState({ totals: { lateMin: 0, earlyLeaveMin: 0 } }), 'none');
+  assert.equal(M.latenessState({ totals: { lateMin: 20, earlyLeaveMin: 0 } }), 'open');
+  assert.equal(M.latenessState({ totals: { lateMin: 20 }, lateness: { confirmedLateMin: 20 } }), 'confirmed');
+  assert.equal(M.latenessState({ totals: { lateMin: 20 }, lateness: { needsReapproval: true } }), 'reapprove');
+  assert.equal(M.latenessState({ totals: { lateMin: 5 }, lateness: { exceedsAttendance: true } }), 'exceeds');
+  const computed = { lateMin: 40, earlyLeaveMin: 10 };
+  assert.deepEqual(M.validateLatenessForm({ lateMinutes: '40', earlyLeaveMinutes: '10', note: '' }, computed), {});
+  assert.match(M.validateLatenessForm({ lateMinutes: '30', earlyLeaveMinutes: '10', note: ' ' }, computed).note, /waived/);
+  assert.deepEqual(M.validateLatenessForm({ lateMinutes: '30', earlyLeaveMinutes: '10', note: 'Flat tyre' }, computed), {});
+  assert.match(M.validateLatenessForm({ lateMinutes: '41', earlyLeaveMinutes: '10', note: '' }, computed).lateMinutes, /At most 40/);
+});
+
+test('leave forms and the not-enough-balance question', () => {
+  assert.deepEqual(Object.keys(M.validateLeaveRequestForm({ employeeId: '', leaveTypeId: '', fromDate: '' })).sort(), ['employeeId', 'fromDate', 'leaveTypeId']);
+  assert.match(M.validateLeaveRequestForm({ employeeId: 'e', leaveTypeId: 't', fromDate: '2026-10-08', toDate: '2026-10-01' }).toDate, /before/);
+  assert.match(M.validateLeaveRequestForm({ employeeId: 'e', leaveTypeId: 't', fromDate: '2026-10-08', toDate: '2026-10-09', halfDay: 'am' }).halfDay, /one day/);
+  assert.deepEqual(M.validateLeaveRequestForm({ employeeId: 'e', leaveTypeId: 't', fromDate: '2026-10-08', toDate: '', halfDay: 'pm' }), {});
+  assert.ok(M.validateAdjustForm({ leaveTypeId: 't', days: '0', note: 'x' }).days);
+  assert.ok(M.validateAdjustForm({ leaveTypeId: 't', days: '2', note: '' }).note);
+  assert.deepEqual(M.validateAdjustForm({ leaveTypeId: 't', days: '-1.5', note: 'Opening balance', date: '2026-10-01' }), {});
+  // The backend's sentence (main/db/leave.js decide) becomes a plain question.
+  const src = read('main/db/leave.js');
+  assert.match(src, /Not enough \$\{t\.nameEn \|\| t\.code\}: balance \$\{bal\} day\(s\), request \$\{days\}\. Approve anyway with allowNegative if agreed\./);
+  const q = M.negativeBalanceQuestion('Bad request: Not enough Annual leave: balance 1.5 day(s), request 3. Approve anyway with allowNegative if agreed.');
+  assert.equal(q, 'Not enough Annual leave: balance 1.5 day(s), request 3 day(s). Approve anyway and let the balance go below zero?');
+  assert.doesNotMatch(q, /allowNegative/);
+  assert.equal(M.negativeBalanceQuestion('This request is already approved'), null);
+  assert.equal(M.fmtDays(1.333333), '1.33');
+  assert.equal(M.fmtDateRange('2026-10-08', '2026-10-08'), M.fmtDateRange('2026-10-08'));
+});
+
+test('schedules: work days, the line, the form and the one in force on a date', () => {
+  assert.equal(M.workDaysLabel('1111110'), 'Mon–Sat');
+  assert.equal(M.workDaysLabel('1111111'), 'Every day');
+  assert.equal(M.workDaysLabel('1010100'), 'Mon, Wed, Fri');
+  assert.equal(M.workDaysLabel('0000000'), 'No work days');
+  assert.equal(M.scheduleLine({ startTime: '22:00', endTime: '06:00', crossesMidnight: true, breakMin: 30, workDays: '1111100' }),
+    '22:00–06:00 (next day) · 30 min break · Mon–Fri');
+  assert.deepEqual(M.validateScheduleForm(M.emptyScheduleForm({ name: 'Standard day' })), {});
+  const bad = M.validateScheduleForm({ ...M.emptyScheduleForm(), name: ' ', startTime: '07:00', endTime: '07:00', breakMin: 'x', workDays: '0000000' });
+  assert.deepEqual(Object.keys(bad).sort(), ['breakMin', 'endTime', 'name', 'workDays']);
+  assert.deepEqual(M.scheduleInput(M.emptyScheduleForm({ name: 'A', breakMin: 45 })).breakMin, 45);
+  const hist = [{ scheduleName: 'Day', effectiveFrom: '2026-01-01' }, { scheduleName: 'Night', effectiveFrom: '2026-10-01' }];
+  assert.equal(M.scheduleOn(hist, '2026-09-30').scheduleName, 'Day');
+  assert.equal(M.scheduleOn(hist, '2026-10-01').scheduleName, 'Night');
+  assert.equal(M.scheduleOn(hist, '2025-12-31'), null, 'before any: the company default');
+});
+
+test('holidays: the prefilled 2027 dates are flagged for checking, 2026 ones are not', () => {
+  assert.equal(M.holidayNeedsCheck({ sourceNote: holidays.SOURCE_2027_FIXED }), true);
+  assert.equal(M.holidayNeedsCheck({ sourceNote: holidays.SOURCE_2026 }), false);
+  assert.equal(M.holidayNeedsCheck({}), false);
+  assert.ok(M.validateHolidayForm({ date: '', nameEn: '' }).date);
+  assert.deepEqual(M.validateHolidayForm({ date: '2027-01-07', nameKm: 'ទិវា' }), {});
+});
+
+test('PIN rules match the server (main/util/kioskPin.js pinProblem)', () => {
+  for (const pin of ['', '12', '123', '1234', '4321', '0000', '1111', '1357', '2580', '12345678', '123456789', '987654', '90210', '0123', 'abcd', '12a4']) {
+    assert.equal(M.pinProblem(pin), kioskPin.pinProblem(pin), `PIN "${pin}"`);
+  }
+  assert.equal(M.pinStatus({ hasPin: false }).label, 'No PIN yet');
+  assert.equal(M.pinStatus({ hasPin: true }).locked, false);
+  const now = at('2026-10-08', '14:00');
+  assert.equal(M.pinStatus({ hasPin: true, pinLockedUntil: at('2026-10-08', '14:05') }, now).label, 'Locked until 14:05');
+  assert.equal(M.pinStatus({ hasPin: true, pinLockedUntil: at('2026-10-08', '13:55') }, now).locked, false, 'a lock that ran out');
+  assert.match(M.pinStatus({ hasPin: true, pinManagerOnly: true }, now).label, /only a manager/);
+  // The record carries the manager-only flag (main/db/employees.js).
+  assert.match(read('main/db/employees.js'), /pinManagerOnly: !!row\.pin_manager_only,/);
+});
+
+test('a field the backend leaves out is not shown (never as an empty field)', () => {
+  const emp = read('main/db/employees.js');
+  const sensitive = JSON.parse(emp.match(/const SENSITIVE_FIELDS = (\[[^\]]*\]);/)[1].replace(/'/g, '"'));
+  assert.deepEqual([...M.PRIVATE_FIELDS].sort(), [...sensitive].sort(), 'the UI hides exactly what hr.view loses');
+  const access = read('main/ipc/hrAccess.js');
+  const fuelFields = JSON.parse(access.match(/const FUEL_FIELDS = (\[[\s\S]*?\]);/)[1].replace(/'/g, '"').replace(/\s+/g, ' '));
+  const keys = [...emp.matchAll(/^\s{4}([a-zA-Z0-9]+): /gm)].map((m) => m[1]);
+  const full = Object.fromEntries(keys.map((k) => [k, null]));
+  assert.ok('notes' in full && 'nationalIdNo' in full && 'employmentType' in full, 'read the record shape');
+  const directory = { ...full };
+  for (const k of sensitive) delete directory[k];
+  const fuel = Object.fromEntries(fuelFields.map((k) => [k, null]));
+  assert.deepEqual(M.visibleFields(full), { notes: true, private: true, hr: true, statusReason: true });
+  assert.deepEqual(M.visibleFields(directory), { notes: true, private: false, hr: true, statusReason: true });
+  assert.deepEqual(M.visibleFields(fuel), { notes: false, private: false, hr: false, statusReason: false }, 'fuel.manage: no notes (review fix L2)');
+  assert.ok(!Object.keys(M.profileForm(directory)).some((k) => sensitive.includes(k)), 'the details form has no private keys for hr.view');
+  assert.ok(sensitive.every((k) => k in M.profileForm({ ...full, dob: '1990-01-02' })));
+  assert.deepEqual(M.profilePatch({ gender: '', hireDate: '2026-01-01' }, { gender: 'female', hireDate: '2026-01-01' }), { gender: 'female' });
+  assert.deepEqual(M.profilePatch({ bankName: 'ABA' }, { bankName: '' }), { bankName: null }, 'clearing writes null');
+  assert.match(M.validateProfileForm({ hireDate: '2026-05-01', endDate: '2026-04-01' }).endDate, /before/);
+  assert.ok(M.validateSuspendForm({ fromDate: '2026-10-08', reason: '' }).reason);
+  assert.deepEqual(M.validateSuspendForm({ fromDate: '2026-10-08', toDate: '', reason: 'Inquiry' }), {});
+});
+
+test('Settings → People: every field is a backend setting, with its default and range', () => {
+  const keys = M.HR_SETTING_FIELDS.filter((f) => !f.rate).map((f) => f.key);
+  for (const f of M.HR_SETTING_FIELDS) {
+    if (f.rate) {
+      assert.equal(f.def, calc.DEFAULT_SETTINGS.otRates[f.key], `${f.key} rate default`);
+      assert.deepEqual([f.min, f.max], [100, 500]);
+    } else {
+      assert.equal(f.def, calc.DEFAULT_SETTINGS[f.key], `${f.key} default`);
+      assert.deepEqual([f.min, f.max], calc.SETTING_RANGES[f.key], `${f.key} range`);
+    }
+  }
+  assert.deepEqual([...keys].sort(), Object.keys(calc.SETTING_RANGES).sort(), 'every ranged setting is on the screen');
+  assert.deepEqual(M.parseHrSetting(M.HR_SETTING_FIELDS[0], '175'), { value: 175 });
+  assert.ok(M.parseHrSetting(M.HR_SETTING_FIELDS[0], '90').error);
+  assert.ok(M.parseHrSetting(M.HR_SETTING_FIELDS[0], '1.5').error);
+  assert.deepEqual(M.settingsPatch({ 'otRates.night': 250, otMinMinutes: 30 }, { otRates: { normal: 150, night: 200, restDay: 200, holiday: 200 } }),
+    { otRates: { normal: 150, night: 250, restDay: 200, holiday: 200 }, otMinMinutes: 30 });
+  // The reset writes only what the server accepts.
+  const reset = M.settingsPatch(M.defaultSettingsPending(), calc.DEFAULT_SETTINGS);
+  assert.doesNotThrow(() => calc.mergeSettings({}, reset));
+  assert.deepEqual(calc.mergeSettings({}, reset), calc.mergeSettings({}, {}), 'reset = the defaults');
+});
+
+test('capabilities and error text', () => {
+  assert.deepEqual(M.hrCapsOf(['*']), { canView: true, canManage: true, fuelManage: true, canSeeStaff: true });
+  assert.deepEqual(M.hrCapsOf(['hr.view']), { canView: true, canManage: false, fuelManage: false, canSeeStaff: true });
+  assert.deepEqual(M.hrCapsOf(['hr.manage']).canView, true);
+  assert.deepEqual(M.hrCapsOf(['fuel.manage']), { canView: false, canManage: false, fuelManage: true, canSeeStaff: true });
+  assert.deepEqual(M.hrCapsOf([]), { canView: false, canManage: false, fuelManage: false, canSeeStaff: false });
+  assert.equal(M.errText(new Error('Bad request: Say why the entry is rejected')), 'Say why the entry is rejected');
+  assert.match(M.errText(new Error('CONFLICT|{}')), /Someone else changed this/);
+});
+
+/* ── review fixes (2026-10-08) ──────────────────────────────────────────── */
+
+test('M1: a day / ledger dialog shows only what was loaded for its current person and day', () => {
+  const loaded = { key: 'co|A|2026-10-01', events: [{ id: 'a-event' }], day: null, error: null };
+  assert.equal(M.loadedFor(loaded, 'co|A|2026-10-01', M.EMPTY_DAY_LOAD), loaded);
+  assert.equal(M.loadedFor(loaded, 'co|B|2026-10-01', M.EMPTY_DAY_LOAD), M.EMPTY_DAY_LOAD, 'the next person never sees A\'s entries');
+  assert.equal(M.loadedFor(loaded, 'co|A|2026-10-02', M.EMPTY_DAY_LOAD), M.EMPTY_DAY_LOAD, 'nor the next day');
+  assert.equal(M.loadedFor(loaded, null, M.EMPTY_DAY_LOAD), M.EMPTY_DAY_LOAD, 'a closed dialog shows nothing');
+  assert.deepEqual(M.EMPTY_DAY_LOAD.events, []);
+});
+
+test('L1: batch answers merge without flicker; one failed row never blanks the others', () => {
+  let b = M.mergeBatch(M.EMPTY_BATCH, { byEmployee: { a: [1], b: [2] }, errors: { x: 'Staff member not found' } });
+  assert.deepEqual(b, { values: { a: [1], b: [2] }, errors: { x: 'Staff member not found' } });
+  // A refresh of page 2 keeps page 1's values on screen until they are asked again.
+  b = M.mergeBatch(b, { byEmployee: { c: [3] }, errors: {} });
+  assert.deepEqual(Object.keys(b.values).sort(), ['a', 'b', 'c']);
+  // A row that now fails drops its stale value; one that recovers drops its error.
+  b = M.mergeBatch(b, { byEmployee: { x: [9] }, errors: { a: 'boom' } });
+  assert.equal(b.values.a, undefined);
+  assert.equal(b.errors.a, 'boom');
+  assert.deepEqual(b.values.x, [9]);
+  assert.equal(b.errors.x, undefined);
+  assert.deepEqual(M.mergeBatch(b, null), b, 'an empty answer changes nothing');
+});
+
+test('L2: an emptied correction time is sent as null (remove), an untouched empty one is left out', () => {
+  const c = { proposedInAt: at('2026-10-01', '07:00'), proposedOutAt: at('2026-10-01', '17:00') };
+  assert.deepEqual(M.correctionDecision(c, { inTime: '07:00', outTime: '17:10', note: '' }), { inTime: '07:00', outTime: '17:10' });
+  assert.deepEqual(M.correctionDecision(c, { inTime: '', outTime: '17:00', note: ' ok ' }), { inTime: null, outTime: '17:00', note: 'ok' });
+  const outOnly = { proposedInAt: null, proposedOutAt: at('2026-10-01', '17:00') };
+  const d = M.correctionDecision(outOnly, { inTime: '', outTime: '17:00', note: '' });
+  assert.equal(d.inTime, undefined, 'never asked for: nothing to remove');
+  assert.ok(!('note' in d));
+  assert.match(read('main/db/attendance.js'), /null REMOVES it/, 'the server treats null as "remove"');
+});
+
+test('L3: Adjust starts at min(approved, computed) and never locks a field holding a value', () => {
+  const row = { computed: { normal: 30, night: 0, restDay: 0, holiday: 0 }, approved: { normal: 90, night: 15, restDay: 0, holiday: 0 }, approval: { note: 'x' } };
+  const f = M.overtimeAdjustForm(row);
+  assert.deepEqual([f.normal, f.night, f.restDay, f.holiday, f.note], ['0:30', '0:00', '0:00', '0:00', 'x'], 'an approval that outgrew the day starts at what can still be approved');
+  assert.deepEqual(M.overtimeAdjustForm({ computed: { normal: 45, night: 15, restDay: 0, holiday: 0 } }).night, '0:15', 'no approval yet: the computed minutes');
+  assert.equal(M.overtimeFieldLocked({ night: '0:00' }, row.computed, 'night'), true, 'nothing to approve and empty: locked');
+  assert.equal(M.overtimeFieldLocked({ night: '0:15' }, row.computed, 'night'), false, 'a value is never locked away');
+  assert.equal(M.overtimeFieldLocked({ normal: '0' }, row.computed, 'normal'), false);
+});
+
+test('L8: re-confirming a month keeps the earlier waiver as minutes waived', () => {
+  assert.equal(M.reconfirmLateness({ totals: { lateMin: 30 } }), null, 'never confirmed: nothing to keep');
+  const plain = M.reconfirmLateness({ totals: { lateMin: 50, earlyLeaveMin: 0 }, lateness: { computedLateMin: 40, confirmedLateMin: 40, computedEarlyLeaveMin: 0, confirmedEarlyLeaveMin: 0 } });
+  assert.deepEqual(plain, { args: {}, waived: { late: 0, early: 0 } }, 'no waiver: today\'s computed minutes');
+  const waived = M.reconfirmLateness({
+    totals: { lateMin: 55, earlyLeaveMin: 5 },
+    lateness: { computedLateMin: 40, confirmedLateMin: 25, computedEarlyLeaveMin: 10, confirmedEarlyLeaveMin: 10, note: 'Flat tyre on the 12th' },
+  });
+  assert.deepEqual(waived, { args: { lateMinutes: 40, earlyLeaveMinutes: 5, note: 'Flat tyre on the 12th' }, waived: { late: 15, early: 0 } });
+  const shrunk = M.reconfirmLateness({ totals: { lateMin: 10, earlyLeaveMin: 0 }, lateness: { computedLateMin: 40, confirmedLateMin: 25, note: 'x' } });
+  assert.equal(shrunk.args.lateMinutes, 0, 'never below zero');
+});
+
+test('verification fixes: date ranges keep their month, payable overtime, ledger dates', () => {
+  const r = M.fmtDateRange('2026-10-26', '2026-10-30');
+  assert.doesNotMatch(r, /^26 – /, 'the first day is never left without its month');
+  assert.match(r, /Oct/);
+  assert.match(r, /26/);
+  assert.match(r, /30/);
+  assert.match(M.fmtDateRange('2026-10-26', '2026-11-03'), /Oct[^–]*–[^–]*Nov|Nov[^–]*–/, 'two months: both named');
+  assert.match(M.fmtDateRange('2026-12-30', '2027-01-02'), /2026[\s\S]*2027/, 'two years: both named');
+  assert.equal(M.fmtDateRange('2026-10-08', '2026-10-08'), M.fmtDateRange('2026-10-08'));
+  assert.equal(M.fmtDateRange(''), '—');
+  // en-US, as the tests run: the exact strings.
+  if (new Intl.DateTimeFormat().resolvedOptions().locale.startsWith('en-US')) {
+    const plain = (x) => x.replace(/\s+/g, ' '); // Intl uses thin / no-break spaces around the dash
+    assert.equal(plain(r), 'Oct 26 – 30, 2026');
+    assert.equal(plain(M.fmtDateRange('2026-10-26', '2026-11-03')), 'Oct 26 – Nov 3, 2026');
+  }
+  assert.equal(M.payableOvertime({ computed: { normal: 30 } }), null);
+  assert.deepEqual(M.payableOvertime({ computed: { normal: 30, night: 15 }, approved: { normal: 90, night: 15, restDay: 0, holiday: 0 } }), { payable: 45, raw: 105 });
+});
+
+test('lookup cache: one load per company, reused across pages, dropped on a change or a switch', async () => {
+  const { createLookupCache, LOOKUP_KINDS } = load('renderer/modules/People/lookupCache.js');
+  let calls = 0;
+  let fail = false;
+  const cache = createLookupCache(async (key) => { calls += 1; if (fail) throw new Error('offline'); return { key, n: calls }; });
+  const [a, b] = await Promise.all([cache.get('co1|m'), cache.get('co1|m')]);
+  assert.equal(calls, 1, 'two pages asking at once share one load');
+  assert.equal(a, b);
+  assert.equal(cache.peek('co1|m'), a, 'the next page starts from the cache, no refetch');
+  await cache.get('co1|m');
+  assert.equal(calls, 1);
+  let told = 0;
+  const off = cache.subscribe(() => { told += 1; });
+  cache.invalidate('co2');
+  assert.equal(told, 0, 'another company\'s change leaves this one');
+  cache.invalidate('co1');
+  assert.equal(told, 1);
+  assert.equal(cache.peek('co1|m'), null);
+  await cache.get('co1|m');
+  assert.equal(calls, 2);
+  await cache.get('co2|m');
+  assert.equal(cache.peek('co1|m'), null, 'a company switch replaces the entry');
+  // A load that lands after its entry was dropped is not cached.
+  let release;
+  const slow = createLookupCache(() => new Promise((r) => { release = r; }));
+  const pending = slow.get('k');
+  slow.invalidate();
+  await new Promise((r) => setImmediate(r)); // the fetcher starts on the next tick
+  release({ stale: true });
+  await pending;
+  assert.equal(slow.peek('k'), null);
+  fail = true;
+  cache.invalidate();
+  await assert.rejects(cache.get('co1|m'), /offline/);
+  fail = false;
+  assert.ok(await cache.get('co1|m'), 'a failure is not cached');
+  off();
+  for (const k of ['staff', 'position', 'schedule', 'leaveType', 'settings']) assert.ok(LOOKUP_KINDS.has(k));
+  assert.ok(!LOOKUP_KINDS.has('attendance'), 'a clock-in does not reload the lookups');
+});

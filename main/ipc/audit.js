@@ -15,27 +15,54 @@
  */
 
 const auditLog = require('../db/auditLog');
-const { callerCanManage } = require('./fuelAccess');
+const { callerCaps } = require('./fuelAccess');
 
 /**
- * Fuel F1: staff (`employee`) and `fuel_*` history is shown only to callers
- * with fuel.manage — history.view alone (an Editor on another Mac) must not
- * read who filled what, or staff details, through the History page. The
- * server Mac's own window (no caller) is not gated, as everywhere.
+ * Which History rows the caller may not see (main/db/auditLog.js hideClauses).
+ * The server Mac's own window (no caller) and admins see everything.
+ *   fuel_*            needs fuel.manage                      (Fuel F1)
+ *   employee          needs fuel.manage, hr.view or hr.manage (F1 + HR1)
+ *   sensitivity 'hr'  needs hr.view or hr.manage              (HR1, §6)
+ *   'hr_private'      needs hr.manage (staff documents)
+ *   'payroll'         needs payroll.manage (HR2 — until then admin only)
+ * history.view alone (an Editor on another Mac) never reads who filled what,
+ * staff details, attendance or leave through the History page.
  */
-function hideFuel() { return !callerCanManage(); }
+function hideSpec() {
+  const caps = callerCaps();
+  if (caps === null || caps.has('*')) return null;
+  const any = (...k) => k.some((x) => caps.has(x));
+  const hide = {
+    fuel: !any('fuel.manage'),
+    employee: !any('fuel.manage', 'hr.view', 'hr.manage'),
+    hr: !any('hr.view', 'hr.manage'),
+    hrPrivate: !any('hr.manage'),
+    payroll: !any('payroll.manage'),
+  };
+  return Object.values(hide).some(Boolean) ? hide : null;
+}
+
+/** May the caller see this entity type at all (the per-entity History modal)? */
+function entityHidden(entityType, hide) {
+  if (!hide) return false;
+  if (hide.fuel && typeof entityType === 'string' && entityType.startsWith('fuel_')) return true;
+  if (hide.employee && entityType === 'employee') return true;
+  return false;
+}
 
 function register({ expose }) {
   expose('audit:listForEntity', ({ entityType, entityId, limit } = {}) => {
     if (!entityType || !entityId) return [];
-    if (auditLog.isFuelEntityType(entityType) && hideFuel()) return [];
-    return auditLog.listForEntity(entityType, entityId, Number(limit) || 200);
+    const hide = hideSpec();
+    if (entityHidden(entityType, hide)) return [];
+    return auditLog.listForEntity(entityType, entityId, Number(limit) || 200, { hide });
   });
 
   expose('audit:countForEntity', ({ entityType, entityId } = {}) => {
     if (!entityType || !entityId) return 0;
-    if (auditLog.isFuelEntityType(entityType) && hideFuel()) return 0;
-    return auditLog.countForEntity(entityType, entityId);
+    const hide = hideSpec();
+    if (entityHidden(entityType, hide)) return 0;
+    return auditLog.countForEntity(entityType, entityId, { hide });
   });
 
   /**
@@ -47,16 +74,17 @@ function register({ expose }) {
    */
   // v0.1.89: + since / until (epoch ms) and q (text) for the History filters.
   expose('audit:listRecent', ({ limit, offset, entityType, userId, since, until, q } = {}) => {
-    return auditLog.listRecent({ limit, offset, entityType, userId, since, until, q, hideFuel: hideFuel() });
+    return auditLog.listRecent({ limit, offset, entityType, userId, since, until, q, hide: hideSpec() });
   });
   expose('audit:countRecent', ({ entityType, userId, since, until, q } = {}) => {
-    return auditLog.countRecent({ entityType, userId, since, until, q, hideFuel: hideFuel() });
+    return auditLog.countRecent({ entityType, userId, since, until, q, hide: hideSpec() });
   });
 
   // v0.33.0: history retention. stats() backs the "X events · oldest N
   // days ago" line; clearHistory deletes rows older than `days` (or ALL
   // when days <= 0). Runs server-side, so a client clearing history clears
-  // the shared log for everyone — same as any other write.
+  // the shared log for everyone — same as any other write. HR1: staff, fuel,
+  // HR and payroll rows are never cleared (returned as `kept`).
   expose('audit:historyStats', () => auditLog.stats());
   expose('audit:clearHistory', ({ days } = {}) => auditLog.clearOlderThan(days));
 }

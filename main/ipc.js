@@ -49,6 +49,10 @@ const socialGridDomain  = require('./ipc/socialGrid');  // v0.1.25: square produ
 const bulkColumnsDomain = require('./ipc/bulkColumns'); // v0.1.71: saved bulk-table column sets
 const staffDomain       = require('./ipc/staff');        // Fuel F1: thin staff list (seed of HR)
 const fuelDomain        = require('./ipc/fuel');         // Fuel F1: records, rules, reports
+const hrDomain          = require('./ipc/hr');           // HR1: profiles, schedules, holidays, PINs, documents
+const attendanceDomain  = require('./ipc/attendance');   // HR1: attendance + leave
+const kioskDomain       = require('./ipc/kiosk');        // HR1: the shop-Mac clock-in kiosk
+const kioskModeDomain   = require('./ipc/kioskMode');    // HR1: this Mac as the kiosk (local)
 
 function registerIpc(_ctx) {
   const helpers = {
@@ -87,6 +91,10 @@ function registerIpc(_ctx) {
   bulkColumnsDomain.register(helpers);      // v0.1.71
   staffDomain.register(helpers);            // Fuel F1
   fuelDomain.register(helpers);             // Fuel F1
+  hrDomain.register(helpers);               // HR1
+  attendanceDomain.register(helpers);       // HR1
+  kioskDomain.register(helpers);            // HR1
+  kioskModeDomain.register(helpers);        // HR1: kioskMode:* (local)
 }
 
 module.exports = { registerIpc };

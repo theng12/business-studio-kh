@@ -7,9 +7,9 @@ const { getCallerUserId } = require('./_util');
 
 function uuid() { return crypto.randomUUID(); }
 
-function audit(entityType, entityId, action, { before = null, after = null } = {}) {
+function audit(entityType, entityId, action, { before = null, after = null, sensitivity = 'normal' } = {}) {
   try {
-    require('./auditLog').log({ entityType, entityId, action, before, after });
+    require('./auditLog').log({ entityType, entityId, action, before, after, sensitivity });
   } catch (_) { /* audit must never break the write it records */ }
 }
 
@@ -34,6 +34,7 @@ function int(v) {
 function badRequest(message) {
   const err = new Error(message);
   err.code = 'BAD_REQUEST';
+  err.userFacing = true; // HTTP 422 over /api/rpc (main/util/userError.js)
   return err;
 }
 

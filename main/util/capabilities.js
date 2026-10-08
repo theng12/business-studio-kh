@@ -47,10 +47,16 @@ const CAPABILITIES = [
   // (main/db/roles.js excludes them): fuel and staff data are granted on purpose.
   { key: 'fuel.record',      group: 'Fuel',        label: 'Record fuel',                   description: 'Phone fuel page: record fills, tank dips, deliveries and transfers; see vehicle and staff tiles; photos of your own records.' },
   { key: 'fuel.manage',      group: 'Fuel',        label: 'Manage fuel & staff list',      description: 'Vehicles, tanks, dip charts, prices, thresholds, staff list; review, correct and void records; flags, reports and all fuel photos.' },
+  // HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §6). All opt-in: never in the Editor preset.
+  { key: 'attendance.kiosk', group: 'People',      label: 'Shop kiosk',                     description: 'The clock-in kiosk only: staff tiles, PIN sign-in, clock in/out with a photo, a person\'s own attendance, leave and requests. For the shop Mac\'s kiosk account.' },
+  { key: 'attendance.self',  group: 'People',      label: 'Clock in on my phone',           description: 'Clock yourself in and out with a selfie, see your own attendance and leave, ask for leave or a correction. Needs the account linked to a staff record.' },
+  { key: 'attendance.supervise', group: 'People',  label: 'Mark my crew',                   description: 'Mark the people you supervise in and out away from the shop, with an optional photo. Every mark is listed for a manager to review.' },
+  { key: 'hr.view',          group: 'People',      label: 'View staff & attendance',       description: 'Staff directory, attendance, overtime, leave and the monthly export — without ID / NSSF numbers, bank details, documents or clock-in photos.' },
+  { key: 'hr.manage',        group: 'People',      label: 'Manage staff & attendance',     description: 'Edit staff records and documents, set kiosk PINs, schedules and holidays, review clock-ins, approve corrections, overtime, lateness and leave.' },
 ];
 
 /** Capabilities that are never part of a preset by default (granted per role on purpose). */
-const OPT_IN_CAPABILITIES = new Set(['fuel.record', 'fuel.manage']);
+const OPT_IN_CAPABILITIES = new Set(['fuel.record', 'fuel.manage', 'attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage']);
 
 const CAPABILITY_KEYS = new Set(CAPABILITIES.map((c) => c.key));
 
@@ -175,9 +181,29 @@ const CHANNEL_RULES = [
   //   fuel:setDeliveryDips is manage-only: the phone links a delivery's dips
   //   when it records the delivery (dipBeforeId / dipAfterId), so re-linking an
   //   existing delivery afterwards is a manager's correction.
-  [/^staff:(list|get|getPhoto|me)$/,                       ['fuel.record', 'fuel.manage']],
+  // — HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §6). The kiosk account (attendance.kiosk)
+  //   reaches only kiosk:*; a phone with attendance.self only its own
+  //   clock-in, records and requests; a supervisor only their crew. Reads are
+  //   hr.view or hr.manage (handlers narrow what hr.view sees: no ID / bank /
+  //   documents / clock-in photos); everything else under hr:/attendance:/
+  //   leave: is hr.manage. Must sit before the staff:/fuel: rules.
+  [/^kiosk:/,                                            ['attendance.kiosk', 'hr.manage']],
+  [/^attendance:(clockSelf|mine|requestCorrectionSelf)$/, ['attendance.self']],
+  [/^leave:(requestSelf|cancelSelf)$/,                    ['attendance.self']],
+  [/^attendance:(crew|markCrew)$/,                        ['attendance.supervise']],
+  [/^attendance:(day|monthSummary|listEvents|listReview|listCorrections|listOvertime|listLateness|listAlerts)$/, ['hr.view', 'hr.manage']],
+  [/^leave:(listTypes|balances|ledger|listRequests)$/,    ['hr.view', 'hr.manage']],
+  [/^hr:(getSettings|listPositions|listSchedules|listEmployeeSchedules|listHolidays|getProfile|getMonthWorkbook|saveMonthWorkbook)$/, ['hr.view', 'hr.manage']],
+  [/^(hr|attendance|leave):/,                             'hr.manage'],
+  // The staff directory is shared by fuel and HR; fuel.record callers get
+  // tiles only (main/ipc/staff.js).
+  [/^staff:me$/,                                           ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage', 'attendance.self', 'attendance.supervise']],
+  // A supervisor sees the faces of THEIR OWN crew only (main/ipc/staff.js checks
+  // the person is in the caller's crew); fuel / HR callers as before.
+  [/^staff:getPhoto$/,                                     ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage', 'attendance.supervise']],
+  [/^staff:(list|get)$/,                                   ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage']],
+  [/^staff:/,                                              ['fuel.manage', 'hr.manage']],
   [/^fuel:(getSettings|listAssetTypes|listAssets|getAsset|listLocations|getLocation|getChart|getDipLitres|listStations|listPrices|recordFill|recordDip|recordDelivery|recordTransfer|receiveTransfer|addPhoto|getPhoto|listMyRecent|listPendingTransfers|voidMyRecord)$/, ['fuel.record', 'fuel.manage']],
-  [/^staff:/,                                           'fuel.manage'],
   [/^fuel:/,                                            'fuel.manage'],
 ];
 

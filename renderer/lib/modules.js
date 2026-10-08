@@ -157,15 +157,45 @@ export const APP_MODULES = [
     ],
   },
   {
-    // The thin staff list F1 needs; HR1 adds its pages to this module.
+    // HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §5.1, §10). Staff stays open to
+    // fuel.manage (the F1 list: no notes, no HR fields); everything else is
+    // hr.view (read) / hr.manage (act). The badge counts what waits for a
+    // manager: clock-ins to review + alerts, correction requests, leave requests.
     id: 'people',
     name: 'People',
-    description: 'Your staff list.',
+    description: 'Staff, attendance, overtime and leave.',
     icon: 'staff',
+    badge: {
+      caps: ['hr.view', 'hr.manage'],
+      async load(api) {
+        const [review, corrections, leave] = await Promise.all([
+          api.attendance.listReview({ status: 'pending', limit: 1 }),
+          api.attendance.listCorrections({ status: 'pending', limit: 1 }),
+          api.leave.listRequests({ status: 'pending', limit: 1 }),
+        ]);
+        const n = (v) => (Number.isFinite(v) ? v : 0);
+        return n(review?.total) + n(review?.alerts?.length) + n(corrections?.total) + n(leave?.total);
+      },
+      label: (n) => `${n} waiting`,
+      tone: 'amber',
+    },
     sections: [
       {
         pages: [
-          { id: 'staff', name: 'Staff', icon: 'staff', caps: ['fuel.manage'] },
+          { id: 'staff', name: 'Staff', icon: 'staff', caps: ['fuel.manage', 'hr.view', 'hr.manage'] },
+          { id: 'leave', name: 'Leave', icon: 'leave', caps: ['hr.view', 'hr.manage'] },
+          // HR1: the kiosk screen previewed in the app — reached from Settings → Multi-Mac.
+          { id: 'kiosk', name: 'Kiosk preview', icon: 'staff', caps: ['attendance.kiosk', 'hr.manage'], hidden: true },
+        ],
+      },
+      {
+        label: 'Attendance',
+        pages: [
+          { id: 'attendance', name: 'Attendance', icon: 'attendance', caps: ['hr.view', 'hr.manage'] },
+          { id: 'attreview', name: 'Review', icon: 'attreview', caps: ['hr.view', 'hr.manage'] },
+          { id: 'attcorrections', name: 'Corrections', icon: 'attcorrection', caps: ['hr.view', 'hr.manage'] },
+          { id: 'overtime', name: 'Overtime', icon: 'overtime', caps: ['hr.view', 'hr.manage'] },
+          { id: 'lateness', name: 'Lateness', icon: 'lateness', caps: ['hr.view', 'hr.manage'] },
         ],
       },
     ],
