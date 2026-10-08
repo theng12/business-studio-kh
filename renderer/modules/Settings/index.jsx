@@ -20,6 +20,10 @@ import { KioskModePanel } from '../Kiosk/KioskModeSettings.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
 // Fuel F1: Settings → Fuel. Lazy so the fuel screens stay out of the boot bundle.
 const FuelSettingsPanel = lazy(() => import('../Fuel/FuelSettingsPanel.jsx').then((m) => ({ default: m.FuelSettingsPanel })));
+// Fixed Assets: Settings → Assets (register, categories, rates, closed months) and
+// Settings → Branches. Lazy for the same reason.
+const AssetSettingsPanel = lazy(() => import('../Assets/AssetSettingsPanel.jsx').then((m) => ({ default: m.AssetSettingsPanel })));
+const BranchesPanel = lazy(() => import('../Assets/BranchesPanel.jsx').then((m) => ({ default: m.BranchesPanel })));
 // HR1: Settings → People (schedules, holidays, leave types, attendance rules). Lazy, like Fuel.
 const PeopleSettingsPanel = lazy(() => import('../People/PeopleSettingsPanel.jsx').then((m) => ({ default: m.PeopleSettingsPanel })));
 
@@ -52,6 +56,9 @@ const SETTINGS_TABS = [
   { key: 'fuel',        label: 'Fuel' },
   // HR1: offered on a client Mac only to a user with hr.manage (tab filter below).
   { key: 'people',      label: 'People' },
+  // Fixed Assets: offered on a client Mac only to who can use it (tab filter below).
+  { key: 'assets',      label: 'Assets' },
+  { key: 'branches',    label: 'Branches' },
   // v0.49.51: custom roles + permission matrix.
   { key: 'roles',       label: 'Roles & permissions' },
   { key: 'about',       label: 'About' },
@@ -277,6 +284,8 @@ export function Settings() {
               if (!isClient) return true;                       // the host Mac owns everything
               if (t.key === 'roles') return canManageUsers;
               if (t.key === 'fuel') return hasCap(caps, 'fuel.manage');
+              if (t.key === 'assets') return hasCap(caps, 'assets.manage') || canManageSystem;
+              if (t.key === 'branches') return canManageSystem || hasCap(caps, 'assets.manage') || hasCap(caps, 'assets.view');
               if (t.key === 'people') return hasCap(caps, 'hr.manage');
               // v0.1.86: the recycle bin is a data-folder operation like
               // backups — a client Mac may restore or purge, the server holds
@@ -674,6 +683,18 @@ export function Settings() {
         {tab === 'fuel' && (!isClient || hasCap(caps, 'fuel.manage')) && (
           <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
             <FuelSettingsPanel />
+          </Suspense>
+        )}
+
+        {tab === 'assets' && (!isClient || hasCap(caps, 'assets.manage') || canManageSystem) && (
+          <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
+            <AssetSettingsPanel />
+          </Suspense>
+        )}
+
+        {tab === 'branches' && (!isClient || canManageSystem || hasCap(caps, 'assets.manage') || hasCap(caps, 'assets.view')) && (
+          <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
+            <BranchesPanel />
           </Suspense>
         )}
 

@@ -58,7 +58,7 @@ test('the registry covers every routed page exactly once, Home aside', () => {
 });
 
 test('the grouping the owner sees, and no tile for an unbuilt module', () => {
-  assert.deepEqual(reg.APP_MODULES.map((m) => m.id), ['products', 'media', 'labels', 'purchasing', 'fuel', 'people', 'system']);
+  assert.deepEqual(reg.APP_MODULES.map((m) => m.id), ['products', 'media', 'labels', 'purchasing', 'fuel', 'assets', 'people', 'system']);
   for (const m of reg.APP_MODULES) {
     assert.ok(m.name && m.description && m.icon, `${m.id} has a name, a description and an icon`);
     assert.ok(m.description.length <= 60, `${m.id}: the description fits a tile in one or two lines`);
@@ -86,7 +86,10 @@ test('which module a page belongs to is derived from its id', () => {
 
 test('caps hide pages, empty sections and whole tiles', () => {
   const ids = (mods) => mods.map((m) => m.id);
-  assert.deepEqual(ids(reg.visibleModules(['*'])), ['products', 'media', 'labels', 'purchasing', 'fuel', 'people', 'system']);
+  assert.deepEqual(ids(reg.visibleModules(['*'])), ['products', 'media', 'labels', 'purchasing', 'fuel', 'assets', 'people', 'system']);
+  // Fixed Assets: view or manage; the count-only role (stage A3, phone) has no desktop page yet.
+  assert.deepEqual(ids(reg.visibleModules(['assets.view'])), ['products', 'assets', 'system']);
+  assert.deepEqual(ids(reg.visibleModules(['assets.count'])), ['products', 'system']);
   assert.deepEqual(ids(reg.visibleModules([])), ['products', 'system'], 'a viewer sees only the ungated modules');
   assert.deepEqual(ids(reg.visibleModules(['fuel.record'])), ['products', 'fuel', 'system']);
   const fuel = reg.getModule('fuel');
@@ -365,8 +368,9 @@ test('badges: a failure is not cached; the cache clears on mount and on change e
   assert.match(home, /useState\(\(\) => \{ clearBadgeCache\(\); return 0; \}\)/, 'cleared when Home mounts');
   assert.match(home, /window\.api\?\.fuel\?\.onChanged\?\.\(\(\) => stale\(BADGE_EVENTS\.fuel\)\)/);
   assert.match(home, /window\.api\?\.events\?\.onCatalogChanged\?\.\(/);
-  assert.match(home, /export const BADGE_EVENTS = \{ fuel: 'fuel', purchaseOrder: 'purchasing', hr: 'people' \};/);
+  assert.match(home, /export const BADGE_EVENTS = \{ fuel: 'fuel', purchaseOrder: 'purchasing', hr: 'people', assets: 'assets' \};/);
   assert.match(home, /window\.api\?\.hr\?\.onChanged\?\.\(\(\) => stale\(BADGE_EVENTS\.hr\)\)/, 'HR1: People\'s count refreshes on hr:changed');
+  assert.match(home, /window\.api\?\.assets\?\.onChanged\?\.\(\(\) => stale\(BADGE_EVENTS\.assets\)\)/);
   // The PO event really is catalog:changed with kind 'purchaseOrder'.
   assert.match(read('renderer/store/catalogEvents.js'), /case 'purchaseOrder':/);
 });

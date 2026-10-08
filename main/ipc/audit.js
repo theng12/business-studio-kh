@@ -25,6 +25,8 @@ const { callerCaps } = require('./fuelAccess');
  *   sensitivity 'hr'  needs hr.view or hr.manage              (HR1, §6)
  *   'hr_private'      needs hr.manage (staff documents)
  *   'payroll'         needs payroll.manage (HR2 — until then admin only)
+ *   asset / ledger    needs assets.view or assets.manage       (Fixed Assets,
+ *   + 'finance'       review M6 — branch rows stay visible)
  * history.view alone (an Editor on another Mac) never reads who filled what,
  * staff details, attendance or leave through the History page.
  */
@@ -38,6 +40,7 @@ function hideSpec() {
     hr: !any('hr.view', 'hr.manage'),
     hrPrivate: !any('hr.manage'),
     payroll: !any('payroll.manage'),
+    assets: !any('assets.view', 'assets.manage'),
   };
   return Object.values(hide).some(Boolean) ? hide : null;
 }
@@ -47,6 +50,7 @@ function entityHidden(entityType, hide) {
   if (!hide) return false;
   if (hide.fuel && typeof entityType === 'string' && entityType.startsWith('fuel_')) return true;
   if (hide.employee && entityType === 'employee') return true;
+  if (hide.assets && auditLog.isAssetEntityType(entityType)) return true;
   return false;
 }
 

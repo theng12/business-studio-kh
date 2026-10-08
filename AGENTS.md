@@ -69,7 +69,7 @@ listing every page is replaced by two levels (verified 2026-10-08):
 **One source of truth: `renderer/lib/modules.js` (`APP_MODULES`).** The tiles, the sidebar, the
 ⌘1–9 / ⌘, map (`shortcutMap`), the shortcuts sheet (`NAV`) and ⌘K's "Go to …" rows (`searchNav`)
 are all derived from it. Current modules: Products, Media Studio, Labels & Catalogs, Purchasing,
-Fuel, People, System.
+Fuel, Assets, People, System.
 
 - **Add a page:** one `{ id, name, icon, caps?, shortcut? }` line in its module's section, plus the
   route in `PAGES` (`renderer/App.jsx`) and the id in `MODULES` (`renderer/store/navigation.js`),
@@ -178,6 +178,9 @@ For desktop apps:
   sharp-made WebP cached in `<userData>/thumb-cache/` (not the data folder, so backups
   and data-folder moves never see it; capped at 256 MB). Any failure serves the
   original. Full-size viewers (Lightbox, editors) omit `w`.
+- **Fixed-asset photos and documents are evidence too** (verified 2026-10-09): `<dataDir>/fixed-assets/files/<yyyy-mm>/`,
+  indexed in `asset_files`, read only through `assets:getFile` (permission-checked), never
+  `app-image://`; `fixed-assets` is in both `BACKUP_DATA_ENTRIES` and `ARCHIVE_TOP_LEVEL_DIRS`.
 - **Fuel and staff photos are NOT assets** (verified 2026-10-08): they live under
   `<dataDir>/fuel/<yyyy-mm>/` and `<dataDir>/hr/employees/`, are listed in the `fuel_photos`
   table, and are read only through the permission-checked `fuel:getPhoto` / `staff:getPhoto`
@@ -346,7 +349,7 @@ Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
 **Note on styling (corrected 2026-09-19).** This table used to say Tailwind
 CSS and Puppeteer. Neither is true of this app and hasn't been for a long
 time: there is no `tailwindcss` dependency and no Tailwind or PostCSS config,
-and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~12.8k
+and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~13.0k
 lines; verified 2026-10-08) plus small per-feature CSS blocks in the same file, and PDFs are
 produced by Electron's own `webContents.printToPDF()` in
 `main/renderWindow.js` — no bundled Chromium, no extra download. Both
@@ -369,10 +372,10 @@ main/                    # main process — CommonJS (require/module.exports)
   config.js              # config.json read/write (userData, not the DB)
   preload.js             # contextBridge surface — the ONLY api entry point
   ipc.js                 # barrel: registers every domain module in ipc/
-  ipc/                   # 33 files, one per domain (products.js, images.js, …)
-  db/                    # 43 files: index.js owns the schema + migrations,
+  ipc/                   # 37 files, one per domain (products.js, images.js, …)
+  db/                    # 58 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 48 helpers (slug, capabilities, landedCost,
+  util/                  # 53 helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode
@@ -400,12 +403,14 @@ renderer/                # React + Vite — ESM (import/export)
     navIcons.jsx         # every nav / tile icon, inline SVG (§1)
     WhatsNewModal.jsx    # the §3 changelog array
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
-  modules/<Name>/        # 23 feature modules, one folder each (Home is the §1 grid)
+  modules/<Name>/        # 24 feature modules, one folder each (Home is the §1 grid)
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 224 files — `node --test test/**/*.test.js`
-scripts/                 # 15 files: build-icon.js, build-webclient.js (/m + /f),
+test/                    # 238 files — `node --test test/**/*.test.js`
+scripts/                 # 16 files: build-icon.js, build-webclient.js (/m + /f),
                          # seed-realistic.js (--fuel adds staff + 6 months of fuel,
-                         #   --hr adds 3 months of attendance + leave on top),
+                         #   --hr adds 3 months of attendance + leave on top,
+                         #   --assets ~300 fixed assets via seed-assets.js with an
+                         #   independent month-end truth check),
                          # probe-fuel-phone.js (the /f phone page in Chromium),
                          # prune-dmgs.js           (`npm run dmgs:prune`)
                          # probe-render-paint.js  (`npm run check:render`)

@@ -141,7 +141,10 @@ test('History hiding: sensitivity and entity clauses', () => {
   assert.ok(all.some((c) => c.includes("sensitivity <> 'hr'")));
   assert.ok(all.some((c) => c.includes("entity_type <> 'employee'")));
   const src = read('main/db/auditLog.js');
-  assert.ok(/CLEARABLE_SQL = `sensitivity = 'normal' AND \$\{FUEL_ENTITY_SQL\}`/.test(src), 'clearHistory keeps staff / fuel / HR / payroll rows');
+  assert.ok(/CLEARABLE_SQL = `sensitivity = 'normal' AND \$\{FUEL_ENTITY_SQL\} AND \$\{ASSET_ENTITY_SQL\}`/.test(src), 'clearHistory keeps staff / fuel / HR / payroll / asset rows');
+  // Fixed Assets: asset / ledger rows (and 'finance' rows) hidden without assets.view.
+  assert.deepEqual(hideClauses({ assets: true }).length, 2);
+  assert.ok(hideClauses({ assets: true }).some((c) => c.includes("sensitivity <> 'finance'")));
 });
 
 test('the HR scheduler starts on the data-owning boot path, next to the fuel one', () => {

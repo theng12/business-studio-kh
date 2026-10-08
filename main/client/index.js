@@ -1082,6 +1082,23 @@ const PROXIED_CHANNELS = [
   'pos:addLine','pos:updateLine','pos:removeLine',
   'pos:addComponent','pos:updateComponent','pos:removeComponent',
   'pos:listPayments','pos:addPayment','pos:updatePayment','pos:removePayment',
+  // Fixed Assets & Branches A0/A1: the register, branches, rates and the
+  // ledger live with the data on the server (database + its fixed-assets/
+  // folder) — straight RPC. The one exception is assets:saveImportSample
+  // (handleLocal below: the Save dialog opens on this Mac).
+  'assets:getSettings','assets:updateSettings','assets:listCategories','assets:createCategory','assets:updateCategory',
+  'assets:list','assets:get','assets:create','assets:update','assets:previewActivation','assets:activate','assets:cancelDraft',
+  'assets:addFile','assets:getFile','assets:reorderFiles','assets:retireFile','assets:transfer','assets:voidEvent',
+  'assets:reverseEvent','assets:listEvents','assets:getSchedule','assets:linkFuelAsset','assets:unlinkFuelAsset',
+  'assets:createFuelAsset','assets:importColumns','assets:importPlan','assets:importApply','assets:getImportSample',
+  'assets:previewDepreciation','assets:runDepreciation','assets:listRuns','assets:reverseRun','assets:checkIntegrity',
+  'assets:previewDisposal','assets:dispose','assets:partialDispose','assets:markLost','assets:markFound','assets:impair','assets:revalue',
+  'assets:getTaxYear','assets:setPoolOpening','assets:markTaxYearFiled','assets:unfileTaxYear','assets:getReport','assets:getWorkbook',
+  'branches:list','branches:get','branches:create','branches:update','branches:close','branches:suggestFromFuel',
+  'fx:list','fx:rateOn','fx:setRate','fx:voidRate','ledger:listAccounts','ledger:updateAccount','ledger:getEntry',
+  'ledger:entriesForAsset','ledger:listPeriods','ledger:checkIntegrity','ledger:lockPeriod','ledger:unlockPeriod',
+  'assets:setCustodian','assets:setStatus','assets:recordRepair','assets:recordCapex','assets:changeLife','assets:changeSalvage',
+  'assets:addNote',
   // Fuel F1: the staff list and every fuel record live with the data on the
   // server — pure DB + the server's own fuel/ folder — so straight RPC. The one
   // exception is fuel:saveMonthlyWorkbook (handleLocal below: dialog on this Mac).
@@ -1632,6 +1649,34 @@ function registerClientFileHandlers() {
     });
   });
 
+  // Fixed Assets A1: the import sample is built on the server (it lists the
+  // company's categories and branches); the Save dialog opens on THIS Mac.
+  handleLocal('assets:saveWorkbook', async (args = {}) => {
+    const res = await rpc('assets:getWorkbook', args || {});
+    const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);
+    const out = await dialog.showSaveDialog({
+      title: 'Save fixed-asset workbook',
+      defaultPath: res?.filename || 'fixed-assets.xlsx',
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
+    });
+    if (out.canceled || !out.filePath) return null;
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return out.filePath;
+  });
+
+  handleLocal('assets:saveImportSample', async () => {
+    const res = await rpc('assets:getImportSample');
+    const bytes = Buffer.isBuffer(res?.bytes) ? res.bytes : Buffer.from(res?.bytes || []);
+    const out = await dialog.showSaveDialog({
+      title: 'Save sample workbook',
+      defaultPath: res?.filename || 'fixed-assets-import-sample.xlsx',
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
+    });
+    if (out.canceled || !out.filePath) return null;
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return out.filePath;
+  });
+
   // Fuel F1: the workbook is built on the server (where the data is) and the
   // Save dialog opens on THIS Mac, so the bytes come back over RPC.
   handleLocal('fuel:saveMonthlyWorkbook', async ({ month } = {}) => {
@@ -1958,11 +2003,12 @@ function registerClientFileHandlers() {
       } catch (err) {
         if (!tracked || err?.code !== 'RPC_OUTCOME_UNKNOWN') throw err;
 
-        const deadline = Date.now() + 30_000;
+        const clock = _reconcileClock;
+        const deadline = clock.now() + 30_000;
         let outcome;
         let lastOutcomeError;
-        while (Date.now() < deadline) {
-          const remainingMs = deadline - Date.now();
+        while (clock.now() < deadline) {
+          const remainingMs = deadline - clock.now();
           if (remainingMs <= 0) break;
           try {
             outcome = await rpc('templates:getApplyOutcome', { operationId }, remainingMs);
@@ -1977,9 +2023,9 @@ function registerClientFileHandlers() {
             lastOutcomeError = outcomeError;
           }
           if (outcome?.status !== 'pending' && outcome) break;
-          const waitMs = Math.min(250, deadline - Date.now());
+          const waitMs = Math.min(250, deadline - clock.now());
           if (waitMs <= 0) break;
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          await clock.sleep(waitMs);
         }
 
         if (outcome?.status === 'succeeded') {
@@ -2887,8 +2933,18 @@ function registerClientImageImportBridges() {
   });
 }
 
+/**
+ * The overlay reconciliation's clock (the 30-second status budget and the
+ * 250 ms pause between status reads). A test swaps it for a fake one so the
+ * loop is driven by events, not by real timers racing a loaded machine.
+ */
+const REAL_RECONCILE_CLOCK = { now: () => Date.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
+let _reconcileClock = REAL_RECONCILE_CLOCK;
+function setReconcileClockForTests(clock) { _reconcileClock = clock || REAL_RECONCILE_CLOCK; }
+
 module.exports = {
   registerClientProxies,
+  setReconcileClockForTests,
   getConnectionState,
   reconnectNow,
   // Pure timing rules, exported for test/connectivity.test.js.

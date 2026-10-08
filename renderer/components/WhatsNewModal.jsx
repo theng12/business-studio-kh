@@ -2,6 +2,19 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.98', date: '2026-10-09',
+    items: [
+      'NEW — Assets (new square on Home): a register of everything the business owns — vehicles, buildings, land, shop fit-outs, shelves, computers — with branch, the person who looks after it, photos and documents, warranty and serial number. Fuel vehicles appear automatically, marked "needs a cost".',
+      'NEW — Add assets one by one, several at once ("Cost of each"), or import from Excel (pick, match columns, review). Things you already owned come in at their value on the register start date (1 Jan 2026 by default); new purchases at full cost.',
+      'NEW — Depreciation: straight-line over the life you choose, down to a leftover value. Items under $300 are listed but not depreciated unless you tick "Depreciate this item" (the tick works both ways). Land is never depreciated. Each month is previewed and recorded; months already behind are caught up.',
+      'NEW — Asset actions: move between branches, change who looks after it, repairs, upgrades, change of life, sale / scrap / donation with the gain or loss shown first, partial sale, lost and found, write-down and revaluation. Every action can be undone from History.',
+      'NEW — Tax year in riel using Cambodia\'s tax classes (buildings 5%, computers 50%, vehicles and furniture 25%, other 20%). Starting balances are estimates until an accountant confirms them. Eight reports and an Excel workbook.',
+      'NEW — Branches (Settings → Branches) for each company, exchange rates per company, and closing months (admin). Behind the scenes every purchase, opening value and month of depreciation is recorded as a proper accounting entry, ready for a future balance sheet.',
+      'FIX — History keeps asset and accounting entries when cleared and hides them from anyone without asset access.',
+      'Internal — Tables in main/db/assetSchema.js and ledgerSchema.js (additive; journal lines can never be edited or deleted, only reversed); pure bookDepreciation / taxDepreciation / ledgerMath / assetTagCode; scheduler main/assetScheduler.js (never on a client); evidence files under <dataDir>/fixed-assets; capabilities assets.view / assets.manage / assets.count; seed-realistic --assets with an independent month-end truth check. API in docs/ASSETS_AND_BRANCHES_PLAN.md §14.',
+    ],
+  },
+  {
     version: '0.1.97', date: '2026-10-09',
     items: [
       'NEW — People: full staff profiles (details, documents, positions, supervisor, schedule history, dated suspensions, app account and kiosk PIN). Private details (ID, bank, birth date, address) are shown only to HR managers.',

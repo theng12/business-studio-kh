@@ -103,6 +103,8 @@ function log({ entityType, entityId, action, before, after, userId, sensitivity 
   const db = getDb();
   const uid = userId !== undefined ? userId : getCallerUserId();
   try {
+    // Fixed Assets (review M6) tags its rows 'finance'; HR1 tags 'hr' /
+    // 'hr_private' / 'payroll'. The column always exists (main/db/hrSchema.js).
     const info = db
       .prepare(`
         INSERT INTO audit_log (entity_type, entity_id, user_id, action, before_json, after_json, created_at, sensitivity)
@@ -257,8 +259,22 @@ const NO_USER = '@local';
 const FUEL_ENTITY_SQL = "entity_type <> 'employee' AND substr(entity_type, 1, 5) <> 'fuel_'";
 function isFuelEntityType(t) { return t === 'employee' || (typeof t === 'string' && t.startsWith('fuel_')); }
 
-/** HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §6): how sensitive a row is. */
-const SENSITIVITIES = ['normal', 'hr', 'hr_private', 'payroll'];
+/**
+ * Fixed Assets (review M6): rows about asset values and the books are only for
+ * callers with assets.view or assets.manage (main/ipc/audit.js), and History's
+ * "Clear" keeps them. Branch rows stay visible — branch names are not sensitive.
+ * Asset writes also tag their rows `sensitivity: 'finance'` (main/db/_assetUtil.js).
+ */
+const ASSET_ENTITY_TYPES = ['fixed_asset', 'asset_event', 'asset_category', 'asset_settings', 'journal_entry', 'gl_account',
+  'fx_rate', 'ledger_period', 'accounting_period', 'depreciation_run', 'tax_year', 'stocktake'];
+const ASSET_ENTITY_SQL = `entity_type NOT IN (${ASSET_ENTITY_TYPES.map((t) => `'${t}'`).join(', ')})`;
+function isAssetEntityType(t) { return ASSET_ENTITY_TYPES.includes(t); }
+
+/**
+ * HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §6): how sensitive a row is. 'finance' is
+ * Fixed Assets' tag (docs/ASSETS_AND_BRANCHES_PLAN.md).
+ */
+const SENSITIVITIES = ['normal', 'hr', 'hr_private', 'payroll', 'finance'];
 
 /**
  * Which rows a caller may not see (main/ipc/audit.js builds it from the
@@ -269,7 +285,10 @@ const SENSITIVITIES = ['normal', 'hr', 'hr_private', 'payroll'];
  *   hr        rows with sensitivity 'hr'          (hr.view or hr.manage)
  *   hrPrivate rows with sensitivity 'hr_private'  (hr.manage — staff documents)
  *   payroll   rows with sensitivity 'payroll'     (payroll.manage — HR2)
- * `hideFuel: true` (the F1 call shape) means { fuel, employee }.
+ *   assets    asset / ledger entity types and rows with sensitivity 'finance'
+ *                                                 (assets.view or assets.manage)
+ * `hideFuel: true` (the F1 call shape) means { fuel, employee };
+ * `hideAssets: true` (the Assets call shape) means { assets }.
  */
 function hideClauses(hide) {
   if (!hide) return [];
@@ -279,18 +298,20 @@ function hideClauses(hide) {
   if (hide.hr) out.push("sensitivity <> 'hr'");
   if (hide.hrPrivate || hide.hr) out.push("sensitivity <> 'hr_private'");
   if (hide.payroll) out.push("sensitivity <> 'payroll'");
+  if (hide.assets) { out.push(ASSET_ENTITY_SQL); out.push("sensitivity <> 'finance'"); }
   return out;
 }
-function normalizeHide(hide, hideFuel) {
+function normalizeHide(hide, hideFuel, hideAssets) {
   const h = hide ? { ...hide } : {};
   if (hideFuel) { h.fuel = true; h.employee = true; }
+  if (hideAssets) h.assets = true;
   return Object.values(h).some(Boolean) ? h : null;
 }
 
-function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hide = null } = {}) {
+function recentWhere({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hideAssets = false, hide = null } = {}) {
   const wheres = [];
   const params = {};
-  wheres.push(...hideClauses(normalizeHide(hide, hideFuel)));
+  wheres.push(...hideClauses(normalizeHide(hide, hideFuel, hideAssets)));
   if (entityType) { wheres.push('entity_type = @entityType'); params.entityType = entityType; }
   if (userId === NO_USER) wheres.push('user_id IS NULL');
   else if (userId) { wheres.push('user_id = @userId'); params.userId = userId; }
@@ -315,11 +336,11 @@ function recentWhere({ entityType = null, userId = null, since = null, until = n
   return { whereSql: wheres.length ? `WHERE ${wheres.join(' AND ')}` : '', params };
 }
 
-function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hide = null } = {}) {
+function listRecent({ limit = 100, offset = 0, entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hideAssets = false, hide = null } = {}) {
   const db = getDb();
   const cappedLimit  = Math.min(Math.max(1, Number(limit)  || 100), 500);
   const cappedOffset = Math.max(0, Number(offset) || 0);
-  const built = recentWhere({ entityType, userId, since, until, q, hideFuel, hide });
+  const built = recentWhere({ entityType, userId, since, until, q, hideFuel, hideAssets, hide });
   const params = { ...built.params, limit: cappedLimit, offset: cappedOffset };
   const whereSql = built.whereSql;
   const rows = db
@@ -395,9 +416,9 @@ function attachEntityNames(db, entries) {
  * Total count for the global history feed. Used by the History page
  * to render "Showing 1–50 of 12,847" pagination labels.
  */
-function countRecent({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hide = null } = {}) {
+function countRecent({ entityType = null, userId = null, since = null, until = null, q = null, hideFuel = false, hideAssets = false, hide = null } = {}) {
   const db = getDb();
-  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q, hideFuel, hide });
+  const { whereSql, params } = recentWhere({ entityType, userId, since, until, q, hideFuel, hideAssets, hide });
   const row = db
     .prepare(`SELECT COUNT(*) AS n FROM audit_log ${whereSql}`)
     .get(params);
@@ -433,7 +454,8 @@ function stats() {
  */
 function clearOlderThan(days) {
   // HR1 (§6, and the F1 gap the HANDOFF named): rows about staff, fuel, HR or
-  // payroll are history that must not be erasable from the History page —
+  // payroll — and, for Fixed Assets (review M6), about asset values and the
+  // books — are history that must not be erasable from the History page —
   // they are kept whatever `days` says, and reported as `kept`.
   const db = getDb();
   const n = Number(days);
@@ -445,13 +467,18 @@ function clearOlderThan(days) {
   return { deleted: info.changes, kept: Number(kept || 0) };
 }
 
-/** Only ordinary catalogue rows can be cleared. */
-const CLEARABLE_SQL = `sensitivity = 'normal' AND ${FUEL_ENTITY_SQL}`;
+/**
+ * Only ordinary catalogue rows can be cleared: staff / fuel / HR / payroll
+ * rows (HR1) and asset / ledger rows (Fixed Assets, review M6) are kept.
+ */
+const CLEARABLE_SQL = `sensitivity = 'normal' AND ${FUEL_ENTITY_SQL} AND ${ASSET_ENTITY_SQL}`;
 
 module.exports = {
   NO_USER,
   recentWhere,
   isFuelEntityType,
+  isAssetEntityType,
+  ASSET_ENTITY_TYPES,
   SENSITIVITIES,
   hideClauses,
   log,

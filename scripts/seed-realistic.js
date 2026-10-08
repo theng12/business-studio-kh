@@ -9,6 +9,11 @@
  * /api/rpc server with phone accounts (pump, driver and farm phones) — so every flag is computed
  * exactly as in the app. Known theft patterns are planted; ./fuel-truth.json lists them.
  * `--fuel --products 0` builds only the fuel dataset (≈15 s; `--fuel-days 1095` for three years, ≈2 min).
+ * --assets adds the fixed-asset register to KT Ceramic (scripts/seed-assets.js): 5 branches, ≈300
+ * assets (the fuel vehicles included), opening values with known and unknown cost, ≈21 months of
+ * events and monthly depreciation from --assets-start (default 2025-01-01), two period closes and a
+ * purchase entered late into a closed month; ./assets-truth.json holds the independent model and the
+ * check of the app's figures against it. `--assets --products 0` builds only that.
  * ./fuel-truth.json also holds the phone accounts' tokens (test accounts, like ./users.json).
  * --hr (implies --fuel) adds HR1 on top of those staff (see seedHr below): schedules, PINs, ~3 months
  * (`--hr-days N`, default 92) of kiosk, phone and supervisor clock-ins through the real /api/rpc server
@@ -59,6 +64,8 @@ const CONCURRENCY = argVal('--concurrency', 4);
 const HR = argv.includes('--hr');
 const FUEL = argv.includes('--fuel') || HR; // --hr builds on the fuel dataset's 26 staff
 const FUEL_DAYS = argVal('--fuel-days', 183);
+const ASSETS = argv.includes('--assets');
+const ASSETS_START = (() => { const i = argv.indexOf('--assets-start'); return i >= 0 ? argv[i + 1] : '2025-01-01'; })();
 const HR_DAYS = argVal('--hr-days', 92);
 
 // ---- safety: never write outside this folder, never touch the owner's data ----
@@ -632,6 +639,14 @@ async function main() {
     t = realNow();
     report.counts.hr = await seedHr({ kt, report });
     mark('hr', t);
+  }
+
+  // ---------------- fixed assets (opt-in) ----------------
+  if (ASSETS) {
+    t = realNow();
+    report.counts.assets = await require('./seed-assets').seedAssets({ repo: REPO, root: ROOT, kt, log, seed: SEED, start: ASSETS_START });
+    mark('assets', t);
+    if (!report.counts.assets.ok) report.failures.push({ what: 'assets truth check', diffs: report.counts.assets.diffs });
   }
 
   // ---------------- final tallies ----------------

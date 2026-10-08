@@ -43,6 +43,11 @@ const CAPABILITIES = [
   { key: 'history.view',     group: 'System',      label: 'View edit history',             description: 'See the audit log of who changed what.' },
   { key: 'users.manage',     group: 'System',      label: 'Manage users & roles',          description: 'Add/remove users, assign roles, and edit roles on this screen.' },
   { key: 'system.manage',    group: 'System',      label: 'System & data settings',        description: 'Server mode, data folder, backups, app preferences, relaunch. Powerful.' },
+  // Fixed Assets & Branches (docs/ASSETS_AND_BRANCHES_PLAN.md §9). All opt-in
+  // (ASSET_CAPABILITY_KEYS below): never in the Editor preset — values are granted on purpose.
+  { key: 'assets.view',      group: 'Assets',      label: 'View fixed assets',             description: 'The asset register, asset pages, schedules, history and reports, including values; read-only journal lines for an asset.' },
+  { key: 'assets.manage',    group: 'Assets',      label: 'Manage fixed assets',           description: 'Add, edit and activate assets; transfers, repairs, improvements, life and salvage changes; import; categories, settings and official exchange rates.' },
+  { key: 'assets.count',     group: 'Assets',      label: 'Count assets',                  description: 'Stock-take counting on a phone or the Mac: scan and tick items, see asset photos and names for the branch being counted. No values.' },
   // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §6). Neither is in the Editor preset
   // (main/db/roles.js excludes them): fuel and staff data are granted on purpose.
   { key: 'fuel.record',      group: 'Fuel',        label: 'Record fuel',                   description: 'Phone fuel page: record fills, tank dips, deliveries and transfers; see vehicle and staff tiles; photos of your own records.' },
@@ -110,7 +115,8 @@ const CHANNEL_RULES = [
   [/^products:(remove|bulkRemove)$/,                    'products.delete'],
   [/^products:(create|update|bulkUpdate|bulkUpsert|duplicate)$/, 'products.edit'],
   // CSV import + sample sheet feed product create/update.
-  [/^files:(pickWorkbook|parseWorkbook)$/,             'products.edit'],
+  // Fixed Assets: the asset import reads its workbook the same way (§2 gap 5).
+  [/^files:(pickWorkbook|parseWorkbook)$/,             ['products.edit', 'assets.manage']],
   [/^samples:/,                                         'products.edit'],
 
   // — Images. Deleting image content is a "delete" capability; importing
@@ -173,6 +179,21 @@ const CHANNEL_RULES = [
   [/^companies:(create|update)$/,                       'system.manage'],
   [/^app:(relaunch|clearCache)$/,                       'system.manage'],
 
+  // — Fixed Assets & Branches (docs/ASSETS_AND_BRANCHES_PLAN.md §9). First
+  //   match wins; a list = any one of. Handlers narrow further (a counter's
+  //   assets:getFile is photos only — main/ipc/assets.js). branches:list/get
+  //   and fx:list/rateOn are baseline reads (ASSET_BASELINE_READS below).
+  [/^stocktake:(list|get|scan|tick|addUnknown|claimTag|listMyScans|lookupTag)$/, ['assets.count', 'assets.manage']],
+  [/^assets:(getFile|lookupTag)$/,                      ['assets.count', 'assets.view', 'assets.manage']],
+  [/^assets:(markTaxYearFiled|unfileTaxYear)$/,         ADMIN_ONLY],
+  [/^assets:(list|get|getSchedule|getReport|getWorkbook|saveWorkbook|listCategories|getSettings|previewDepreciation|listRuns|listEvents|getTaxYear|checkIntegrity)$/, ['assets.view', 'assets.manage']],
+  [/^(assets|stocktake):/,                              'assets.manage'],
+  [/^branches:(create|update|close|suggestFromFuel)$/,  'system.manage'],
+  [/^ledger:(lockPeriod|unlockPeriod)$/,                ADMIN_ONLY],
+  [/^ledger:updateAccount$/,                            'assets.manage'],
+  [/^ledger:/,                                          ['assets.view', 'assets.manage']],
+  [/^fx:/,                                              ['assets.manage', 'system.manage']],
+
   // — Fuel F1. A rule value may be a LIST: any one of those capabilities allows
   //   the channel. The phone-page channels (record + read the tiles + own
   //   records) are open to fuel.record OR fuel.manage; everything else under
@@ -196,16 +217,25 @@ const CHANNEL_RULES = [
   [/^hr:(getSettings|listPositions|listSchedules|listEmployeeSchedules|listHolidays|getProfile|getMonthWorkbook|saveMonthWorkbook)$/, ['hr.view', 'hr.manage']],
   [/^(hr|attendance|leave):/,                             'hr.manage'],
   // The staff directory is shared by fuel and HR; fuel.record callers get
-  // tiles only (main/ipc/staff.js).
+  // tiles only (main/ipc/staff.js). Fixed Assets: picking an asset's custodian
+  // needs the staff names, so the list and one record are open to the asset
+  // roles too — as tiles (main/ipc/hrAccess.js staffLevel).
   [/^staff:me$/,                                           ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage', 'attendance.self', 'attendance.supervise']],
   // A supervisor sees the faces of THEIR OWN crew only (main/ipc/staff.js checks
   // the person is in the caller's crew); fuel / HR callers as before.
   [/^staff:getPhoto$/,                                     ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage', 'attendance.supervise']],
-  [/^staff:(list|get)$/,                                   ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage']],
+  [/^staff:(list|get)$/,                                   ['fuel.record', 'fuel.manage', 'hr.view', 'hr.manage', 'assets.view', 'assets.manage']],
   [/^staff:/,                                              ['fuel.manage', 'hr.manage']],
   [/^fuel:(getSettings|listAssetTypes|listAssets|getAsset|listLocations|getLocation|getChart|getDipLitres|listStations|listPrices|recordFill|recordDip|recordDelivery|recordTransfer|receiveTransfer|addPhoto|getPhoto|listMyRecent|listPendingTransfers|voidMyRecord)$/, ['fuel.record', 'fuel.manage']],
   [/^fuel:/,                                            'fuel.manage'],
 ];
+
+// Fixed Assets & Branches (docs/ASSETS_AND_BRANCHES_PLAN.md §9): opt-in
+// capabilities and baseline reads, kept in their own block.
+const ASSET_CAPABILITY_KEYS = ['assets.view', 'assets.manage', 'assets.count'];
+for (const k of ASSET_CAPABILITY_KEYS) OPT_IN_CAPABILITIES.add(k);
+const ASSET_BASELINE_READS = ['branches:list', 'branches:get', 'fx:list', 'fx:rateOn'];
+for (const ch of ASSET_BASELINE_READS) BASELINE_READS.add(ch);
 
 /**
  * Resolve a channel to one of:
