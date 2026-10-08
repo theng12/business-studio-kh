@@ -1130,6 +1130,10 @@ const VALIDATORS = {
   },
 };
 
+// Fixed Assets & Branches A0/A1: the assets:* / branches:* / fx:* / ledger:*
+// validators live in their own file and are merged into VALIDATORS here.
+Object.assign(VALIDATORS, require('./assetValidators').ASSET_VALIDATORS);
+
 // Fuel F1: the staff:* and fuel:* validators live in their own file.
 const { FUEL_VALIDATORS } = require('./fuelValidators');
 

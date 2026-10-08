@@ -162,7 +162,7 @@ function positive(v, label) {
   return n;
 }
 
-function createAsset(input = {}) {
+function createAsset(input = {}, { skipRegister = false } = {}) {
   const companyId = input.companyId;
   if (!companyId) throw badRequest('Company is required');
   ensureBuiltinTypes(companyId);
@@ -172,24 +172,31 @@ function createAsset(input = {}) {
   if (!name) throw badRequest('Name is required');
   const id = uuid();
   const now = Date.now();
-  getDb().prepare(`
-    INSERT INTO fuel_assets (id, company_id, type_id, name, plate_or_serial, fuel_type, meter_unit, tank_capacity_l,
-      baseline_rate, baseline_source, assigned_employee_id, home_location, status, notes, created_at, updated_at, updated_by_user_id)
-    VALUES (@id, @companyId, @typeId, @name, @plate, @fuelType, @meterUnit, @capacity, @baseline, @baselineSource,
-      @employee, @home, 'active', @notes, @now, @now, @by)
-  `).run({
-    id, companyId, typeId: type.id, name,
-    plate: str(input.plateOrSerial, 60),
-    fuelType: fuelType(input.fuelType, type.defaultFuel),
-    meterUnit: meterUnit(input.meterUnit, type.meterUnit),
-    capacity: positive(input.tankCapacityL, 'Tank capacity'),
-    baseline: positive(input.baselineRate, 'Baseline'),
-    baselineSource: input.baselineSource === 'learned' ? 'learned' : 'manual',
-    employee: checkEmployee(companyId, input.assignedEmployeeId),
-    home: str(input.homeLocation, 120),
-    notes: str(input.notes, 2000),
-    now, by: getCallerUserId(),
-  });
+  const db = getDb();
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO fuel_assets (id, company_id, type_id, name, plate_or_serial, fuel_type, meter_unit, tank_capacity_l,
+        baseline_rate, baseline_source, assigned_employee_id, home_location, status, notes, created_at, updated_at, updated_by_user_id)
+      VALUES (@id, @companyId, @typeId, @name, @plate, @fuelType, @meterUnit, @capacity, @baseline, @baselineSource,
+        @employee, @home, 'active', @notes, @now, @now, @by)
+    `).run({
+      id, companyId, typeId: type.id, name,
+      plate: str(input.plateOrSerial, 60),
+      fuelType: fuelType(input.fuelType, type.defaultFuel),
+      meterUnit: meterUnit(input.meterUnit, type.meterUnit),
+      capacity: positive(input.tankCapacityL, 'Tank capacity'),
+      baseline: positive(input.baselineRate, 'Baseline'),
+      baselineSource: input.baselineSource === 'learned' ? 'learned' : 'manual',
+      employee: checkEmployee(companyId, input.assignedEmployeeId),
+      home: str(input.homeLocation, 120),
+      notes: str(input.notes, 2000),
+      now, by: getCallerUserId(),
+    });
+    // Fixed Assets A1 (docs/ASSETS_AND_BRANCHES_PLAN.md §3.4): once the company
+    // uses the register, a new vehicle gets its draft register entry in the
+    // same transaction. `skipRegister` is the register's own "Track fuel for this".
+    if (!skipRegister) require('./assetIdentity').onFuelAssetCreated(id);
+  })();
   const created = getAsset(id);
   audit('fuel_asset', id, 'create', { after: created });
   return created;
@@ -226,7 +233,12 @@ function updateAsset(id, rawPatch = {}) {
   if (!sets.length) return existing;
   params.updatedAt = nextUpdatedAt(existing.updatedAt);
   params.by = getCallerUserId();
-  getDb().prepare(`UPDATE fuel_assets SET ${sets.join(', ')}, updated_at = @updatedAt, updated_by_user_id = @by WHERE id = @id`).run(params);
+  getDb().transaction(() => {
+    getDb().prepare(`UPDATE fuel_assets SET ${sets.join(', ')}, updated_at = @updatedAt, updated_by_user_id = @by WHERE id = @id`).run(params);
+    // Fixed Assets A1 (§3.4): a linked vehicle's name, plate and driver are the
+    // register's — the change goes to the register too, in this transaction.
+    require('./assetIdentity').mirrorFromFuel(id, changed);
+  })();
   const diff = require('./auditLog').diffPatch(existing, changed);
   if (diff) audit('fuel_asset', id, 'update', diff);
   return getAsset(id);

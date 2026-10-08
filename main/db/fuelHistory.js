@@ -56,4 +56,13 @@ function trashCompanyPhotoFiles(files) {
   for (const f of files) if (fs.existsSync(f)) trashPathInBackground(f);
 }
 
+// Fixed Assets & Branches (docs/ASSETS_AND_BRANCHES_PLAN.md §7): the register,
+// its events, the journals and branches are history too.
+HISTORY_TABLES.push(
+  ['fixed_assets', 'fixed asset'],
+  ['asset_events', 'asset event'],
+  ['journal_entries', 'journal posting'],
+  ['branches', 'branch record'],
+);
+
 module.exports = { companyHistoryCounts, assertCompanyRemovable, companyPhotoFiles, trashCompanyPhotoFiles, HISTORY_TABLES };
