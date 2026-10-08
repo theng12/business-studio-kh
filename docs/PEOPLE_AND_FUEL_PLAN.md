@@ -359,6 +359,18 @@ client proxy, preload, `CHANNEL_RULES`).
 | Photo retention | **24 months**, then Recently deleted → Trash. |
 | Backup encryption | **No** — rely on FileVault and a private backup drive. |
 
+## 7b. Owner decisions for HR1 (2026-10-08)
+| Topic | Decision |
+|---|---|
+| Where staff clock in | **Shop Mac kiosk, a supervisor marking crews away from the shop, or the person's own phone** for those who have one. |
+| Phone clock-in trust | Location is unavailable (plain HTTP, §25.4), so a phone clock-in takes a **selfie**, the time comes from the server, and phone clock-ins are **accepted but listed for a manager to review** with the photos. |
+| Kiosk photo | **Yes, always** — the shop Mac's camera takes a photo at every clock-in/out; kept 24 months; only HR managers can view. |
+| Schedules | **A few named schedules** (hours, break, work days, grace) assigned per person, with history. |
+| Overtime rates | Start with the **Labour Law defaults** (150% normal-day extra hours; 200% night, weekly day off, public holidays) — editable; confirm with the accountant. Overtime is approved before payroll. |
+| Lateness | Recorded after a grace period and **deducted from pay in payroll (HR2) after approval**; HR1 computes and shows late minutes. |
+| Leave types | Prefilled with **Cambodian law defaults** (annual 1.5 days per month worked, sick, special 7 days, maternity 90 days) for the owner to edit and confirm with the accountant. |
+| Public holidays | **Prefilled with Cambodia's official list** for 2026 (and 2027 where announced), editable each year. |
+
 ## 7. Open questions for the owner (remaining)
 
 1. **Which Mac is the shop Mac?** If it is the server or a single standalone Mac, staff logins there are
