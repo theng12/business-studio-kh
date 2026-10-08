@@ -346,7 +346,7 @@ Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
 **Note on styling (corrected 2026-09-19).** This table used to say Tailwind
 CSS and Puppeteer. Neither is true of this app and hasn't been for a long
 time: there is no `tailwindcss` dependency and no Tailwind or PostCSS config,
-and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~12.3k
+and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~12.8k
 lines; verified 2026-10-08) plus small per-feature CSS blocks in the same file, and PDFs are
 produced by Electron's own `webContents.printToPDF()` in
 `main/renderWindow.js` — no bundled Chromium, no extra download. Both
@@ -369,10 +369,10 @@ main/                    # main process — CommonJS (require/module.exports)
   config.js              # config.json read/write (userData, not the DB)
   preload.js             # contextBridge surface — the ONLY api entry point
   ipc.js                 # barrel: registers every domain module in ipc/
-  ipc/                   # 32 files, one per domain (products.js, images.js, …)
+  ipc/                   # 33 files, one per domain (products.js, images.js, …)
   db/                    # 43 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 46 helpers (slug, capabilities, landedCost,
+  util/                  # 48 helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode
@@ -400,9 +400,9 @@ renderer/                # React + Vite — ESM (import/export)
     navIcons.jsx         # every nav / tile icon, inline SVG (§1)
     WhatsNewModal.jsx    # the §3 changelog array
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
-  modules/<Name>/        # 21 feature modules, one folder each (Home is the §1 grid)
+  modules/<Name>/        # 23 feature modules, one folder each (Home is the §1 grid)
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 216 files — `node --test test/**/*.test.js`
+test/                    # 224 files — `node --test test/**/*.test.js`
 scripts/                 # 15 files: build-icon.js, build-webclient.js (/m + /f),
                          # seed-realistic.js (--fuel adds staff + 6 months of fuel,
                          #   --hr adds 3 months of attendance + leave on top),
