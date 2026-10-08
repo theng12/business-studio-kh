@@ -38,6 +38,12 @@ function defaultConfig() {
     // <dataDir>/backups. The user can repoint this at an external drive
     // from Settings → Backups. Machine-specific (NOT bundled / restored).
     backupsDir: null,
+    // 0.1.94: a weekly automatic backup into backupsDir while the app is open,
+    // keeping the newest 4 automatic ones (owner's decision). Runs on the Mac
+    // that holds the data — never on a client. main/backupManager.js
+    // startAutoBackupScheduler; Settings → Backups has the switch.
+    // Machine-specific (NOT bundled / restored).
+    autoBackupEnabled: true,
     firstLaunchHandled: false,
     defaultExportFolder: null,
     defaultExportProfileId: null,
@@ -84,6 +90,11 @@ function defaultConfig() {
     // web viewer at GET /m (view + search + add-photo). Default on; the
     // server checks this per-request so toggling takes effect immediately.
     webViewerEnabled: true,
+    // 0.1.94: server mode holds a 'prevent-app-suspension' power blocker while
+    // it is listening, so the Mac does not idle to sleep and take every client
+    // and phone offline. Settings → Multi-Mac → "Keep this Mac awake while
+    // serving"; the server re-reads it every few seconds (main/server/index.js).
+    serverKeepAwake: true,
 
     /* v0.1.86: how long a deleted product or image stays restorable in
      * Settings → Recently deleted. Days; 0 = keep until the user clears it.

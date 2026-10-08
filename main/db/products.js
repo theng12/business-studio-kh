@@ -6,6 +6,9 @@ const { productAssetDir, companyDir } = require('../util/assetPath');
 const { trashPathInBackground } = require('../util/fileTrash');
 const { normalizeCurrency } = require('../util/currencies');
 const { rowHasAnyPrice } = require('../util/prices');
+// 0.1.94: the Library search shares ⌘K's matching rule (words ANDed, SKU
+// separators ignored, exact barcode, NFC / zero-width safe).
+const { compileProductSearch, matchProductSearch } = require('./search');
 
 // Late-required to break circular dependencies.
 let _companies;
@@ -69,6 +72,18 @@ function rowToProduct(row) {
     imageCount: Number(row.image_count ?? 0),
     processedImageCount: Number(row.processed_image_count ?? 0),
     mainImagePath: row.main_image_path ?? null,
+    // The picture to SHOW for the main image: its background-removed copy
+    // when it has one, else the original — the rule the phone viewer's
+    // detail sheet already used. `mainImagePath` stays the original, which is
+    // what the desktop screens and the renderers read. The stamp changes
+    // whenever those displayed bytes do (content hash of the original +
+    // workspace revision, which every processed-copy write bumps), so a URL
+    // built from it is cache-busted (AGENTS.md §12). Only `list()` selects
+    // these, so the keys are present only on rows from that query.
+    ...(row.main_display_path !== undefined ? {
+      mainDisplayPath: row.main_display_path ?? null,
+      mainDisplayStamp: row.main_display_stamp ?? null,
+    } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     // v0.15.3: attribution. NULL means "the server admin / standalone";
@@ -123,7 +138,15 @@ function list(companyId, filters = {}) {
       (SELECT COUNT(*) FROM product_images pi
          WHERE pi.product_id = p.id AND pi.is_processed = 1) AS processed_image_count,
       (SELECT pi.filepath FROM product_images pi
-         WHERE pi.product_id = p.id ORDER BY pi.order_index ASC LIMIT 1) AS main_image_path
+         WHERE pi.product_id = p.id ORDER BY pi.order_index ASC LIMIT 1) AS main_image_path,
+      (SELECT CASE WHEN pi.is_processed = 1 AND COALESCE(pi.processed_filepath, '') <> ''
+                   THEN pi.processed_filepath ELSE pi.filepath END
+         FROM product_images pi
+         WHERE pi.product_id = p.id ORDER BY pi.order_index ASC LIMIT 1) AS main_display_path,
+      (SELECT COALESCE(pi.content_hash, '') || '.' || COALESCE(pi.workspace_revision, 0)
+                || '.' || pi.is_processed
+         FROM product_images pi
+         WHERE pi.product_id = p.id ORDER BY pi.order_index ASC LIMIT 1) AS main_display_stamp
     FROM products p
     WHERE p.company_id = ?
   `;
@@ -170,15 +193,25 @@ function list(companyId, filters = {}) {
   //    A search of "   " used to LIKE %   % which matches every row
   //    with at least 2 spaces somewhere. Now we trim then bail if
   //    the result is empty.
-  const trimmedSearch = typeof search === 'string' ? search.trim() : '';
-  if (trimmedSearch) {
-    const escaped = trimmedSearch.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
-    const term = `%${escaped}%`;
-    sql +=
-      " AND (p.sku LIKE ? ESCAPE '\\'" +
-      " OR p.name LIKE ? ESCAPE '\\'" +
-      " OR p.color_finish LIKE ? ESCAPE '\\')";
-    params.push(term, term, term);
+  //
+  // 0.1.94: the LIKE became the shared word rule in ./search.js
+  // (matchProductSearch): every word must match, SKU separators are ignored
+  // ("avm8101" finds "AV-M8101"), an exact barcode finds its product, and
+  // Khmer text is compared NFC-normalised without zero-width characters.
+  // It runs in JS over four short columns, then narrows the real query by id
+  // (one json_each parameter), so the image-count subqueries below still run
+  // only for the matching rows. No wildcard escaping is needed any more —
+  // nothing typed reaches LIKE.
+  const compiledSearch = compileProductSearch(typeof search === 'string' ? search : '');
+  if (compiledSearch) {
+    const ids = getDb()
+      .prepare('SELECT * FROM products WHERE company_id = ?')
+      .all(companyId)
+      .filter((r) => matchProductSearch(compiledSearch, { sku: r.sku, name: r.name, color: r.color_finish, barcode: r.barcode }))
+      .map((r) => r.id);
+    if (ids.length === 0) return [];
+    sql += ' AND p.id IN (SELECT value FROM json_each(?))';
+    params.push(JSON.stringify(ids));
   }
   sql += ' ORDER BY p.updated_at DESC';
   const rows = getDb().prepare(sql).all(...params);
@@ -662,6 +695,15 @@ function update(id, patch, opts = {}) {
 }
 
 function remove(id) {
+  return removeDetailed(id).deleted;
+}
+
+/**
+ * `remove`, plus the recycle-bin entry id the delete was held under (null when
+ * the hold failed or nothing was deleted). The Undo on a delete toast restores
+ * exactly that entry rather than guessing "the newest one for this product".
+ */
+function removeDetailed(id) {
   /* po_lines.product_id is ON DELETE RESTRICT: a product on a purchase order
    * cannot go, and the bare "FOREIGN KEY constraint failed" said nothing about
    * why. Name the PO(s) before anything is touched. */
@@ -747,6 +789,7 @@ function remove(id) {
 
   const info = getDb().prepare('DELETE FROM products WHERE id = ?').run(id);
   const deleted = info.changes > 0;
+  let deletedEntryId = null;
 
   if (deleted) {
     // v0.22.6: audit the delete. The row is gone, so we log the
@@ -799,7 +842,7 @@ function remove(id) {
     }
 
     try {
-      require('../deletedItems').holdProduct({
+      deletedEntryId = require('../deletedItems').holdProduct({
         productRow: rawProductRow,
         imageRows: rawImageRows,
         assetDirRel: dirToClean,
@@ -825,7 +868,7 @@ function remove(id) {
       for (const abs of aiGalleryAbsPaths) trashPathInBackground(abs);
     }
   }
-  return deleted;
+  return { deleted, deletedEntryId: typeof deletedEntryId === 'string' ? deletedEntryId : null };
 }
 
 /**
@@ -843,16 +886,19 @@ function bulkRemove(ids) {
   }
   let deleted = 0;
   const failed = [];
+  const deletedEntryIds = [];
   for (const id of ids) {
     try {
-      const ok = remove(id);
-      if (ok) deleted += 1;
-      else failed.push({ id, error: 'Product not found' });
+      const r = removeDetailed(id);
+      if (r.deleted) {
+        deleted += 1;
+        if (r.deletedEntryId) deletedEntryIds.push(r.deletedEntryId);
+      } else failed.push({ id, error: 'Product not found' });
     } catch (err) {
       failed.push({ id, error: err.message });
     }
   }
-  return { deleted, failed };
+  return { deleted, failed, deletedEntryIds };
 }
 
 function setProcessStatus(id, status) {
@@ -1061,6 +1107,24 @@ function bulkUpsert(companyId, rows, opts = {}) {
       }
       const sku = String(row.sku).trim();
       const existing = existingMap.get(sku);
+      /* Optional per-row conflict token (Bulk "Edit fields" price changes):
+       * a row carrying `expectedUpdatedAt` only applies to the product as the
+       * caller last read it. If it changed since — on another Mac, say — the
+       * row is skipped rather than overwriting that edit with a value computed
+       * from stale data, and it never creates a product. This whole call is
+       * synchronous, so the check and the write cannot be interleaved. */
+      if (row.expectedUpdatedAt != null) {
+        const conflict = !existing
+          ? 'no longer exists with that SKU (it changed elsewhere)'
+          : Number(row.expectedUpdatedAt) !== Number(existing.updatedAt)
+            ? 'was changed elsewhere since you opened this'
+            : null;
+        if (conflict) {
+          skips.push({ rowIndex: idx, sku, reason: conflict, category: 'conflict' });
+          changes.push({ rowIndex: idx, sku, action: 'skip', reason: conflict, category: 'conflict' });
+          return;
+        }
+      }
       try {
         if (existing) {
           // Build patch + diff at the same time so the dry-run preview
@@ -1377,6 +1441,7 @@ module.exports = { customFieldKeys,
   create,
   update,
   remove,
+  removeDetailed,
   bulkRemove,
   duplicate,
   setProcessStatus,

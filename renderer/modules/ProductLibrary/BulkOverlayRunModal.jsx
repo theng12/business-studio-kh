@@ -32,6 +32,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Button, Field, Select } from '../../components/ui.jsx';
 import { useAppStore } from '../../store/index.js';
+
+/* 0.1.94: the server refuses more than this many products in one run
+ * (main/ipc/templates.js, applyBulk and applyByFilter). The modal says so and
+ * disables Apply instead of letting the run fail after the click. */
+export const OVERLAY_MAX_PRODUCTS = 1000;
 // v0.1.69: the "which images" control is shared — every image operation in
 // the Library should offer main / all / specific positions with the same
 // skip-and-report behaviour. See ImageScopeField.jsx for the value shape.
@@ -98,6 +103,9 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
       if (rows.length > 0 && !templateId && !initialTemplateId) setTemplateId(rows[0].id);
     }).catch((err) => { if (!cancelled) addToast(err.message, 'error'); });
     setScope('selection');
+    // 0.1.94: always start on Append — "Overwrite each image in place" is
+    // destructive and must never carry over from the last run.
+    setDestination('append');
     imageChoice.reset();
     setFilterMatch(null);
     return () => { cancelled = true; };
@@ -123,6 +131,10 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
   const selectionCount = productIds?.length ?? 0;
   const filterCount    = filterMatch?.matchedCount ?? 0;
   const finalCount     = scope === 'selection' ? selectionCount : filterCount;
+  const overCap        = finalCount > OVERLAY_MAX_PRODUCTS;
+  // Opened without a Library filter (Overlay Studio's own Apply), the
+  // "filter" scope is the whole company.
+  const filterScopeLabel = filters ? 'Current Library filter' : 'All products';
 
   /** Deepest gallery among the products this run will touch, so the ticks
    *  are sized to the real data. Selection uses the store's filter-agnostic
@@ -165,6 +177,22 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
     if (finalCount === 0) {
       addToast('No products match', 'info');
       return;
+    }
+    if (overCap) {
+      addToast(`One run can apply to at most ${OVERLAY_MAX_PRODUCTS.toLocaleString()} products. Narrow the ${scope === 'selection' ? 'selection' : 'filter'}.`, 'info');
+      return;
+    }
+    if (destination === 'overwrite') {
+      // Loaded on demand: only this destination asks.
+      const { confirm } = await import('../../components/ConfirmModal.jsx');
+      const ok = await confirm({
+        title: `Overwrite photos of ${finalCount} product${finalCount === 1 ? '' : 's'}?`,
+        message: `The overlay is stamped into the image file${multiImage ? 's' : ''} themselves — the original${multiImage ? 's are' : ' is'} replaced, not kept.`,
+        detail: 'This cannot be undone. Choose "Append as new image" instead to keep the originals.',
+        danger: true,
+        confirmLabel: `Overwrite ${finalCount}`,
+      });
+      if (!ok) return;
     }
     const dest = destination === 'saveToFolder'
       ? { kind: 'saveToFolder', folder }
@@ -232,7 +260,7 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
   if (!open) return null;
 
   return (
-    <Modal open={open} title="Overlay Studio · apply template" onClose={onClose}>
+    <Modal open={open} title="Overlay Studio · apply template" onClose={onClose} busy={submitting}>
       <div className="bulk-overlay-run">
         <p className="bulk-overlay-run__intro">
           Render an Overlay Studio template against products and route the result.
@@ -273,7 +301,7 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
               onChange={() => setScope('filter')}
             />
             <span>
-              <strong>Current Library filter ({filterCount})</strong>
+              <strong>{filterScopeLabel} ({filterCount})</strong>
               {filterMatch?.sampleSkus?.length ? (
                 <span className="muted"> — e.g. {filterMatch.sampleSkus.join(', ')}{filterMatch.matchedCount > filterMatch.sampleSkus.length ? '…' : ''}</span>
               ) : null}
@@ -359,17 +387,24 @@ export function BulkOverlayRunModal({ open, productIds, filters, onClose, onDone
           ) : null}
         </fieldset>
 
+        {overCap ? (
+          <p className="bulk-overlay-run__warn" role="status">
+            {finalCount.toLocaleString()} products is more than one run can take (at most {OVERLAY_MAX_PRODUCTS.toLocaleString()}).
+            Narrow the {scope === 'selection' ? 'selection' : 'filter'} and run it in parts.
+          </p>
+        ) : null}
+
         <footer className="bulk-overlay-run__footer">
           <Button onClick={onClose} disabled={submitting}>Cancel</Button>
           <div style={{ flex: 1 }} />
           <Button
             variant="primary"
-            disabled={submitting || !templateId || finalCount === 0 || positionsMissing || (destination === 'saveToFolder' && !folder)}
+            disabled={submitting || !templateId || finalCount === 0 || overCap || positionsMissing || (destination === 'saveToFolder' && !folder)}
             onClick={handleSubmit}
           >
             {submitting
               ? 'Applying…'
-              : `Apply to ${finalCount} product${finalCount === 1 ? '' : 's'}`}
+              : `${destination === 'overwrite' ? 'Overwrite' : 'Apply to'} ${finalCount} product${finalCount === 1 ? '' : 's'}`}
           </Button>
         </footer>
       </div>

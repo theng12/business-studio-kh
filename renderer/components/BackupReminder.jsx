@@ -55,7 +55,7 @@ export function BackupReminder() {
       <span className="backup-reminder__status">
         {state.last
           ? <>Last backup: <strong>{relativeTime(state.last.createdAt)}</strong> · {formatBytes(state.last.sizeBytes)}</>
-          : <>No backups yet — this can't be undone, so consider one first.</>}
+          : <>No backups yet — a backup is the safety net for anything Recently deleted cannot bring back.</>}
       </span>
       <Button onClick={handleCreate} disabled={creating}>
         {creating ? 'Backing up…' : 'Create backup now'}

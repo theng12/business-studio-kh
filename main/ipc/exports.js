@@ -135,10 +135,10 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
    * and a 1700-product preview only takes ~30ms because it's pure
    * existsSync calls, no sharp pipeline.
    */
-  exposeLocal('exports:checkCollisions', ({ profileId, productIds, outputRoot } = {}) => {
+  exposeLocal('exports:checkCollisions', ({ profileId, productIds, outputRoot, imageScope } = {}) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) assertProductInActiveCompany(pid);
-    return exportRunner.previewCollisions({ profile, productIds, outputRoot });
+    return exportRunner.previewCollisions({ profile, productIds, outputRoot, imageScope: exportRunner.effectiveScope(imageScope, profile) });
   });
 
   /**
@@ -153,13 +153,13 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
    * exports:checkCollisions directly (which does the fs check locally
    * because the output folder IS on the same machine).
    */
-  expose('exports:expectedOutputs', ({ profileId, productIds } = {}) => {
+  expose('exports:expectedOutputs', ({ profileId, productIds, imageScope } = {}) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) assertProductInActiveCompany(pid);
-    return exportRunner.expectedOutputs({ profile, productIds });
+    return exportRunner.expectedOutputs({ profile, productIds, imageScope: exportRunner.effectiveScope(imageScope, profile) });
   });
 
-  exposeLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId }) => {
+  exposeLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId, imageScope }) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     // Block any productId that doesn't belong to the active company.
     for (const pid of (productIds ?? [])) {
@@ -190,6 +190,10 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
         outputRoot,
         onExisting: onExistingMode,
         saveToLibrary: !!saveToLibrary,
+        // Main image only / first N / all images — per profile, chosen in the
+        // Export Center. Missing = the profile's stored scope (server-side,
+        // so a caller that omits it still gets what the profile says).
+        imageScope: exportRunner.effectiveScope(imageScope, profile),
         isCancelled: () => run.cancelled,
         onProgress: (stage, payload) => {
           if (stage === 'image') {
@@ -240,7 +244,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
    * out with a clear message ("Use the server Mac for very large
    * exports, or split the selection").
    */
-  expose('exports:runForClient', async ({ profileId, productIds, saveToLibrary, runId } = {}) => {
+  expose('exports:runForClient', async ({ profileId, productIds, saveToLibrary, runId, imageScope } = {}) => {
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) {
       assertProductInActiveCompany(pid);
@@ -264,6 +268,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
         productIds,
         outputRoot: tmpRoot,
         saveToLibrary: !!saveToLibrary,
+        imageScope: exportRunner.effectiveScope(imageScope, profile),
         isCancelled: () => run.cancelled,
         onProgress: (stage, payload) => {
           if (stage === 'image') {

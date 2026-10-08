@@ -442,6 +442,9 @@ input, textarea, select {
 }
 
 .sidebar__item.is-active .sidebar__item-icon { opacity: 1; }
+/* Scrolled into view on page change (Sidebar.jsx); the margin keeps it clear of
+   the nav's bottom fade instead of parking it under the mask. */
+.sidebar__item.is-active { scroll-margin-block: 32px; }
 
 .sidebar__item-shortcut {
   margin-left: auto;
@@ -692,7 +695,9 @@ button.sidebar__storage-tag:focus-visible { outline: 2px solid #10b981; outline-
 }
 .palette__sub,
 .palette__extra {
-  color: var(--c-text-subtle);
+  /* Real content (a product's name, a PO's supplier) — the muted token, not
+     subtle: subtle measured ~3:1 against the surface. */
+  color: var(--c-text-muted);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3339,7 +3344,10 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 .dash-list__name { flex: 1; font-size: var(--fs-md); }
 .dash-list__sku  { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: 600; }
 .dash-list__meta { font-size: var(--fs-xs); color: var(--c-text-muted); font-variant-numeric: tabular-nums; }
-.dash-list__time { font-size: var(--fs-xs); color: var(--c-text-subtle); min-width: 70px; white-space: nowrap; text-align: right; }
+.dash-list__time { font-size: var(--fs-xs); color: var(--c-text-muted); min-width: 70px; white-space: nowrap; text-align: right; }
+/* A product's name under its SKU in Recent products — content, so muted
+   (subtle measured 2.97:1). */
+.dash-list__name.dash-list__name--sub { color: var(--c-text-muted); font-size: var(--fs-sm); }
 
 .dash-list__col {
   flex: 1;
@@ -5031,7 +5039,10 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .col-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--c-text-muted); }
 .col-actions { width: 90px; text-align: right; }
 
-.muted { color: var(--c-text-subtle); }
+/* `.muted` marks secondary CONTENT (a supplier's contact, a product name, a
+   "—" in a table), so it takes the readable muted token; subtle (~3:1) is for
+   decoration only. */
+.muted { color: var(--c-text-muted); }
 
 .col-thumb {
   width: 44px;
@@ -7097,9 +7108,10 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   flex-direction: column;
 }
 .input.export-queue__cat-filter {
-  min-width: 160px;
-  max-width: 240px;
+  min-width: 140px;
+  max-width: 200px;
 }
+.export-queue .toolbar .search-wrap { flex: 1 1 200px; min-width: 180px; max-width: 280px; }
 .export-queue__table th.export-queue__thumb-col,
 .export-queue__table td.export-queue__thumb-col { width: 40px; padding-right: 0; }
 .export-queue__table td { padding-top: 6px; padding-bottom: 6px; }
@@ -7125,9 +7137,12 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 
 .export-runbar {
   display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  padding: var(--s-4);
+  /* Two rows: the folder on its own line (a long path is one line with an
+   * ellipsis, not four squeezed lines), then the run controls, which wrap. */
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
   background: var(--c-sidebar);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
@@ -7145,33 +7160,61 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 
 .export-runbar__summary {
-  font-size: 13px;
+  font-size: var(--fs-md);
   color: var(--c-text);
+  white-space: nowrap;
 }
 
 .export-runbar__folder {
-  flex: 1;
   display: flex;
   align-items: center;
   gap: var(--s-2);
-  font-size: 12px;
+  min-width: 0;
+  font-size: var(--fs-sm);
 }
+.export-runbar__label { color: var(--c-text-muted); white-space: nowrap; }
+.export-runbar__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s-2) var(--s-3);
+  min-width: 0;
+}
+.export-runbar__scope {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.export-runbar__scope .input { width: auto; }
+.export-runbar__scope .export-runbar__count { width: 64px; }
+.export-result__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.export-result__head code { word-break: break-all; }
 /* v0.31.0: "also save to library" toggle in the export runbar. */
 .export-runbar__tolib {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
-  white-space: nowrap;
+  font-size: var(--fs-sm);
+  min-width: 0;
   cursor: pointer;
 }
 .export-runbar__folder code {
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
   background: var(--c-active-bg);
   padding: 2px 6px;
   border-radius: 4px;
-  word-break: break-all;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Result */
@@ -7496,6 +7539,9 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  /* A flex item's min-width is its content by default, so a long Khmer name
+   * pushed the whole AI Studio column past the window. */
+  min-width: 0;
 }
 .product-combobox__chev {
   font-size: 10px;
@@ -7726,8 +7772,8 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .ovl-editor__toolbar {
   display: flex;
   align-items: center;
-  gap: var(--s-3);
-  padding: var(--s-3) 0;
+  gap: var(--s-2) var(--s-3);
+  padding: var(--s-2) 0;
   flex-wrap: wrap;
 }
 .ovl-editor__backdrop-picker {
@@ -7739,6 +7785,20 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   margin-left: auto;
 }
 .ovl-editor__backdrop-picker .input { width: 280px; max-width: 100%; }
+/* Audit 2026-10: "Preview against" moved into the page header, and the name
+ * + canvas size joined the toolbar, so the toolbar is one row at 1280 px
+ * (it wraps on narrower windows) and the canvas gets the height back. */
+.page__header .ovl-editor__backdrop-picker { margin-left: 0; flex-wrap: nowrap; font-size: var(--fs-sm); }
+.ovl-editor__backdrop-picker .product-combobox { width: 240px; }
+.ovl-editor__backdrop-picker .product-combobox__pop { min-width: 320px; z-index: 30; }
+.ovl-editor__identity { align-items: center; gap: var(--s-1); }
+.ovl-editor__identity .field { margin: 0; }
+.ovl-editor__identity .field__label {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+.ovl-editor__identity .input { width: 72px; }
+.ovl-editor__identity .input.ovl-editor__name { width: 170px; }
 .ovl-editor__toolbar > .ws-toolbar__group { max-width: 100%; flex-wrap: wrap; }
 .ovl-canvas__meta { max-width: 100%; flex-wrap: wrap; }
 .page--overlay .ovl-editor,
@@ -8153,7 +8213,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   display: inline-flex;
   align-items: center;
   gap: var(--s-1);
-  padding: var(--s-1) var(--s-3);
+  padding: var(--s-1) var(--s-2);
   background: var(--c-surface);
   border: 1px solid var(--c-border-strong, #a1a1aa);
   border-radius: var(--radius-sm);
@@ -8473,12 +8533,15 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 
 .ai-layout {
   display: grid;
-  grid-template-columns: 1fr 1fr 360px;
+  /* minmax(0, …): a plain 1fr cannot shrink below its content, so one long
+   * product name overflowed the layout at 1280px. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 360px;
   gap: var(--s-4);
   align-items: start;
 }
 
 .ai-card {
+  min-width: 0;
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
@@ -8489,6 +8552,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 
 .ai-card--queue { grid-column: 1 / -1; }
+.ai-promote__confirm { max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 .ai-card--gallery { grid-column: 1 / -1; }
 /* UI pass, 2026-10: card headings are the shared `.section-title` /
  * `.section-head` ("1. Source" … the same numbering as Cost Calculator);
@@ -9170,7 +9234,9 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 
 .setting-row {
   display: grid;
-  grid-template-columns: minmax(260px, 36%) 1fr;
+  /* ~30%: at 36% (min 260px) the control column was so narrow that hints
+     wrapped to eight lines. */
+  grid-template-columns: minmax(220px, 30%) 1fr;
   gap: var(--s-6);
   align-items: start;
   padding: var(--s-4) 0;
@@ -10470,7 +10536,12 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .production-step__body{display:flex;flex-direction:column;gap:var(--s-3)}
 .production-step__body>label,.production-grid>label{display:flex;flex-direction:column;gap:6px;font-size:var(--fs-sm);font-weight:500;color:var(--c-text)}
 .production-step__body>.segments{align-self:flex-start}
-.product-pick-actions{display:flex;gap:var(--s-2)}
+.product-pick-actions{display:flex;flex-wrap:wrap;gap:var(--s-2)}
+.product-pick-filters{display:flex;flex-wrap:wrap;gap:var(--s-2)}
+.product-pick-filters .input{flex:1 1 160px;width:auto;min-width:0}
+.production-done{display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);padding:var(--s-2) var(--s-4) var(--s-3);font-size:var(--fs-sm);color:var(--c-text-muted);min-width:0}
+.production-done>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.production-done code{font-family:var(--font-mono);font-size:var(--fs-xs)}
 .product-pick-list{max-height:250px;overflow:auto;border:1px solid var(--c-border);border-radius:var(--radius-md)}
 .product-pick-list label{display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:var(--s-2);padding:var(--s-2) var(--s-3);border-bottom:1px solid var(--c-border);cursor:pointer}
 .product-pick-list label:last-child{border-bottom:0}
@@ -10782,6 +10853,9 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .catalog-product-panel > header span { margin-top: 2px; font-size: var(--fs-xs); color: var(--c-text-muted); }
 .catalog-product-search { padding: var(--s-2); border-bottom: 1px solid var(--c-border); }
 .catalog-product-list { flex: 1 1 auto; min-height: 220px; overflow: auto; padding: var(--s-1) var(--s-2); }
+/* Audit 2026-10: with nothing capping its height a 50-row page made the
+ * editor 6,000+ px tall; the two lists now scroll inside their panels. */
+.catalog-product-list { max-height: min(560px, 62vh); overscroll-behavior: contain; }
 .catalog-product-list article {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -11259,6 +11333,23 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .inspector-grid .ld-inspector-note { grid-column: 1 / -1; }
 .ld-sample-picker { display: flex; align-items: center; gap: 6px; color: var(--c-text-muted); font-size: var(--fs-sm); white-space: nowrap; }
 .ld-sample-picker select { max-width: 220px; }
+.ld-sample-picker .product-combobox { width: 240px; }
+.ld-sample-picker .product-combobox__pop { min-width: 320px; z-index: 30; }
+.ld-layers__rename { flex: 1; min-width: 0; height: 28px; margin: 1px 2px; font-size: var(--fs-sm); }
+
+/* Label designer at 1280×800 (audit 2026-10): the page is a column and the
+ * shell takes whatever height is left — the old fixed calc(100vh - 192px)
+ * clipped its bottom under the window edge — and the element tools wrap onto
+ * a second row instead of hiding five types behind an invisible sideways
+ * scroll. Below ~360px of room the page scrolls rather than squash the canvas. */
+.label-designer-page { display: flex; flex-direction: column; overflow: auto; }
+.label-designer-page > * { flex: none; }
+.label-designer-page .designer-shell { height: auto; flex: 1 1 auto; min-height: 360px; }
+.label-designer-page .designer-toolbar { flex-wrap: wrap; align-items: flex-start; }
+.label-designer-page .designer-toolbar__brand { width: 170px; }
+.label-designer-page .designer-toolbar__tools { flex-wrap: wrap; overflow: visible; gap: 4px; min-width: 0; }
+.label-designer-page .designer-toolbar__tools button { flex-direction: row; gap: 3px; min-width: 0; padding: 3px 8px; border: 1px solid var(--c-border); white-space: nowrap; }
+.label-designer-page .designer-toolbar__tools button span { font-size: var(--fs-sm); line-height: 1; }
 
 /* ─── UI pass, 2026-10: Label Templates + designer on the house pattern ───
  * (docs/UI_GUIDE.md). The template list uses the shared `.card` in
@@ -11676,3 +11767,393 @@ details.catalog-design-section { display: block; }
 }
 
 .ws-compare-value { width: 64px; }
+
+/* 0.1.94 connectivity pass ─────────────────────────────────────────
+   OfflineBanner (client mode, server unreachable), the collapsed-rail
+   connection dot, the server name on the Client chip, and the phone
+   pairing QR in Settings → Multi-Mac. */
+.offline-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-3);
+  margin: 0 0 var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid color-mix(in srgb, var(--c-rose) 30%, transparent);
+  border-left: 3px solid var(--c-rose);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--c-rose) 6%, var(--c-surface));
+  color: var(--c-text);
+}
+.offline-banner__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-rose);
+  flex: none;
+  animation: offlineBannerPulse 1.6s ease-in-out infinite;
+}
+@keyframes offlineBannerPulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .offline-banner__dot { animation: none; } }
+.offline-banner__body {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.offline-banner__body strong { font-size: var(--fs-md); }
+.offline-banner__body span {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--c-text-muted);
+}
+.offline-banner__body .offline-banner__detail {
+  font-size: var(--fs-xs);
+  color: var(--c-text-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Only visible when the sidebar is collapsed; the footer row that holds
+   the full Client chip is hidden then (see .sidebar.is-collapsed). */
+.sidebar__conn-rail {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 28px;
+  margin: 2px auto 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+.sidebar__conn-rail:hover { background: var(--c-hover-bg); border-color: var(--c-border); }
+.sidebar__conn-rail .sidebar__conn-dot { width: 9px; height: 9px; }
+.sidebar.is-collapsed .sidebar__conn-rail { display: flex; }
+
+.sidebar__conn-server {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text-muted);
+  font-weight: 400;
+}
+
+.pairing-qr {
+  margin-top: var(--s-3);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--c-border);
+}
+.pairing-qr__title { font-weight: 600; font-size: var(--fs-md); }
+.pairing-qr__hint {
+  margin: var(--s-1) 0 var(--s-2);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--c-text-muted);
+}
+.pairing-qr__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+}
+.pairing-qr__code {
+  width: 200px;
+  height: 200px;
+  margin-top: var(--s-3);
+  padding: var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  background: #ffffff; /* scanners need dark-on-light, in dark mode too */
+}
+.pairing-qr__code svg { width: 100%; height: 100%; display: block; }
+
+/* ─── Ops & system screens audit (0.1.94) ───────────────────────────────
+   Purchase Orders, Suppliers, Cost Calculator, Dashboard, Settings →
+   Backups / Recently deleted, links, sidebar overflow, dark SaveStatus. */
+
+/* Links: browser-default blue was unreadable in dark mode. */
+a { color: var(--c-brand); text-decoration: underline; text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+
+/* Lists keep their rows while a new search loads (dimmed, not replaced). */
+.data-table-wrap.is-refreshing { opacity: 0.6; transition: opacity 0.15s; }
+
+/* PO list: "PO-2026-005" on one line. */
+.po-list-table .po-list__number { white-space: nowrap; }
+
+/* PO detail lines table at 1280 px: SKU and numbers never wrap, the product
+   name keeps room for Khmer, the row buttons stay on screen.
+   2026-10-08: the table was 953 px in a 937 px box, so the sticky actions
+   column covered the end of LINE TOTAL with no scrollbar hint. Numeric
+   HEADERS may now wrap onto two lines ("Line total / USD") — the values
+   themselves still never wrap — and the name column gives up 40 px. */
+.po-lines-table .po-lines__sku,
+.po-lines-table td.is-num { white-space: nowrap; }
+.po-lines-table th.is-num { white-space: normal; min-width: 64px; }
+.po-lines-table .po-lines__name { min-width: 180px; }
+.po-lines-table .po-lines__actions {
+  position: sticky;
+  right: 0;
+  background: var(--c-surface);
+  box-shadow: -1px 0 0 var(--c-border);
+}
+.po-lines-table .po-lines__actions .btn { padding-left: var(--s-2); padding-right: var(--s-2); }
+.po-lines-table .po-lines__remove { color: var(--c-rose); }
+/* Sized by the table's own width (the sidebar already takes 220 px of a
+   1280 px window), not the viewport. */
+.po-lines-wrap { container-type: inline-size; }
+@container (max-width: 1100px) {
+  .po-lines-table .po-lines__carton { display: none; }
+}
+.po-pay__fx { white-space: nowrap; }
+.po-line-dup { color: var(--c-amber); }
+.po-entry-currency { align-self: flex-start; }
+
+/* "Close a never-received PO?" choice. */
+.po-close-choice { display: grid; gap: var(--s-2); margin-top: var(--s-2); }
+.po-close-choice__opt {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-start;
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.po-close-choice__opt input { margin-top: 3px; }
+
+/* Cost Calculator */
+.costcalc__rate { margin-top: var(--s-3); }
+.costcalc__save { margin: var(--s-3) 0; flex-wrap: wrap; }
+
+/* Settings → Backups: automatic backups row + tag on automatic files. */
+.backups-auto__status { color: var(--c-text-muted); }
+.backups-auto__note { margin: var(--s-2) 0 0; font-size: var(--fs-sm); color: var(--c-amber); max-width: 560px; }
+.backups-auto__note--error { color: var(--c-rose); }
+.backups-row__tag {
+  display: inline-block;
+  margin-left: var(--s-2);
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--c-border);
+  font-size: var(--fs-xs);
+  color: var(--c-text-muted);
+  vertical-align: 1px;
+}
+
+/* Settings → Recently deleted: full-width list in the normal font (the old
+   rows reused .backups-row__file — monospace, break-all — which split Khmer
+   names mid-word). */
+.deleted-section { padding: var(--s-4) 0; border-top: 1px solid var(--c-border); }
+.deleted-section__head { margin-bottom: var(--s-3); }
+.deleted-section__toolbar { flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-2); }
+.deleted-section__search { max-width: 280px; }
+.deleted-row__selectall { display: inline-flex; gap: var(--s-2); align-items: center; font-size: var(--fs-sm); color: var(--c-text-muted); margin: 0 0 var(--s-2); }
+.deleted-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--c-border); border-radius: var(--radius-md); background: var(--c-surface); }
+.deleted-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border-top: 1px solid var(--c-border);
+}
+.deleted-row:first-child { border-top: none; }
+.deleted-row.is-selected { background: var(--c-brand-soft); }
+.deleted-row__main { flex: 1; min-width: 0; }
+.deleted-row__title { overflow-wrap: anywhere; word-break: normal; }
+.deleted-row__kind {
+  display: inline-block;
+  margin-right: var(--s-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--c-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.deleted-row__label { font-weight: 500; }
+.deleted-row__detail { font-size: var(--fs-sm); color: var(--c-text-muted); overflow-wrap: anywhere; word-break: normal; }
+.deleted-row__actions { display: flex; gap: var(--s-2); flex-shrink: 0; }
+
+/* Dark mode: the SaveStatus pill's text was hard-coded for light mode
+   (#047857 green on a near-black surface). */
+[data-theme="dark"] .save-status { color: var(--c-emerald); }
+[data-theme="dark"] .save-status.save-status--saving { color: var(--c-amber); }
+[data-theme="dark"] .save-status.save-status--dirty { color: var(--c-text-muted); }
+[data-theme="dark"] .save-status.save-status--error { color: var(--c-rose); }
+
+/* Sidebar: a soft fade at the bottom of the nav while more items sit below
+   the fold (Sidebar.jsx toggles --more on scroll / resize). */
+.sidebar__nav.sidebar__nav--more {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+
+/* ─── 0.1.94: Product Library + Image Workspace audit fixes ─────────────────
+   One block, appended, so parallel edits elsewhere in this file stay clear. */
+
+/* Product panel footer: Duplicate moved into ⋯; the row wraps as whole
+   buttons and Save is always the last, fully visible button. */
+.lib-panel__footer { flex-wrap: wrap; justify-content: flex-end; row-gap: var(--s-2); }
+.lib-panel__footer-spacer { flex: 1 1 0; min-width: 0; }
+.lib-panel__footer .btn { flex-shrink: 0; }
+.lib-panel.is-drop-target { outline: 2px dashed var(--c-brand); outline-offset: -4px; }
+.pf-inline-create { gap: var(--s-2); align-items: center; }
+.pf-inline-create .input { flex: 1; min-width: 0; }
+
+/* "6 / 50 · 1.9 MB" stays on one line; the header row wraps as pieces. */
+.image-grid__header { flex-wrap: wrap; gap: var(--s-2); }
+.image-grid__header .field__label { white-space: nowrap; }
+.image-grid__count { white-space: nowrap; }
+.image-select-bar { flex-wrap: wrap; }
+
+/* Toolbar: the view switch, Filters, Details, Columns and Refresh wrap as one
+   group (a narrow grid view used to strand Details / Refresh on a row alone). */
+.lib-toolbar { flex-wrap: wrap; row-gap: var(--s-2); }
+.lib-toolbar__end { display: flex; align-items: center; gap: var(--s-2); flex-wrap: nowrap; margin-left: auto; }
+.lib-toolbar .search-wrap { min-width: 180px; flex: 1 1 220px; max-width: 360px; }
+
+/* Bulk toolbar: "Select all N matching" + "Selected only" sit with the
+   count on the left; the action buttons wrap on the right as before. */
+.lib-bulk-toolbar { flex-wrap: wrap; row-gap: var(--s-2); }
+.lib-bulk-toolbar__lead { display: inline-flex; align-items: center; flex-wrap: wrap; gap: var(--s-1) var(--s-3); margin-right: auto; min-width: 0; }
+.lib-bulk-toolbar__lead .lib-bulk-toolbar__count { margin-right: 0; }
+.lib-bulk-toolbar__link {
+  background: none; border: none; padding: 0;
+  font: inherit; font-size: var(--fs-sm); color: var(--c-text);
+  text-decoration: underline; cursor: pointer; white-space: nowrap;
+}
+.lib-bulk-toolbar__chip {
+  padding: 2px var(--s-2);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--c-surface);
+  color: var(--c-text-muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.lib-bulk-toolbar__chip:hover { color: var(--c-text); }
+.lib-bulk-toolbar__chip.is-active { background: var(--c-brand); border-color: var(--c-brand); color: var(--c-surface); }
+
+/* Sort headers are buttons now (keyboard + aria-sort). */
+.lib-th-sort__btn {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: none; border: none; padding: 0; margin: 0;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit;
+  cursor: pointer; white-space: nowrap;
+}
+.lib-th-sort__btn:focus-visible { outline: 2px solid var(--c-brand); outline-offset: 2px; border-radius: var(--radius-sm); }
+.lib-row:focus { outline: none; }
+.lib-row:focus-visible td { box-shadow: inset 0 1px 0 var(--c-brand), inset 0 -1px 0 var(--c-brand); }
+.lib-row:focus-visible td:first-child { box-shadow: inset 2px 0 0 var(--c-brand), inset 0 1px 0 var(--c-brand), inset 0 -1px 0 var(--c-brand); }
+
+/* Category ellipsizes at ~160px (Khmer names ran ~270px); full name in the
+   tooltip. Price / stock / barcode columns stay on one line. */
+.lib-cell-ellipsis--category { max-width: 160px; }
+.lib-table td.col-barcode,
+.lib-table td.col-price,
+.lib-table td.col-stock { white-space: nowrap; }
+.lib-table th.col-price, .lib-table th.col-stock { text-align: right; }
+/* Below ~900px of table width the Images and Process columns give way. */
+@container lib-main (max-width: 900px) {
+  .lib-table .col-images,
+  .lib-table .col-process { display: none; }
+}
+
+/* Pagination: First / Last and the page-number box. */
+.pagination__page-input {
+  display: inline-block;
+  height: 26px;
+  padding: 0 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-sm);
+}
+/* With First / Last and the page box the bar is wider, and in a narrow column
+   (Generate & Print's product list at 1280 px) it broke "← Prev", "Next →",
+   "Page size" and "Showing 1–50 of 2496" mid-phrase. Same rule the Library
+   already had (.lib-main .pagination): keep each piece on one line and wrap
+   whole pieces instead. */
+.pagination { flex-wrap: wrap; gap: var(--s-2) var(--s-3); }
+.pagination__controls { flex-wrap: wrap; gap: var(--s-2) var(--s-3); }
+.pagination__range,
+.pagination__page-size,
+.pagination__indicator,
+.pagination__btn { white-space: nowrap; }
+
+/* Toast action (Undo) on the same single line. */
+.toast.toast--has-action { display: flex; align-items: center; gap: var(--s-3); }
+.toast__message { flex: 1; min-width: 0; }
+.toast__action {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  padding: 2px var(--s-2);
+  cursor: pointer;
+}
+.toast__action:hover { background: rgba(255, 255, 255, 0.3); }
+
+/* Apply overlay / Social post / Edit fields: the footer stays in view at the
+   bottom of the modal's own scroller instead of sitting below it. */
+.bulk-overlay-run > .bulk-overlay-run__footer,
+.bulk-edit > .bulk-edit__footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--c-surface);
+  padding-bottom: var(--s-1);
+}
+.bulk-overlay-run__warn {
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--radius-sm);
+  background: var(--c-amber-soft, rgba(217, 119, 6, 0.1));
+  color: var(--c-text);
+  font-size: var(--fs-sm);
+}
+
+/* Edit fields → Price: Set / Increase % / Decrease % with a preview. */
+.bulk-edit__price { display: flex; flex-direction: column; gap: var(--s-2); min-width: 0; }
+.bulk-edit__price-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.bulk-edit__price-row .input--select { width: auto; min-width: 140px; }
+.bulk-edit__price-input { width: 120px; }
+.bulk-edit__price-preview { display: flex; flex-direction: column; gap: var(--s-1); font-size: var(--fs-sm); }
+.bulk-edit__price-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.bulk-edit__price-list li { display: flex; gap: var(--s-2); align-items: baseline; font-variant-numeric: tabular-nums; }
+.bulk-edit__price-sku { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.bulk-edit__price-after { font-weight: 600; }
+
+/* Edit in table: cells grow with CSS (field-sizing), not a JS layout loop,
+   and the 200-row window has Previous / Next. */
+.bulk-table__textarea { field-sizing: content; min-height: calc(1.4em + 10px); }
+.bulk-table__window { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+
+/* Auto-match: preview option + import progress. */
+.automatch__option { display: flex; gap: var(--s-2); align-items: flex-start; margin: var(--s-3) 0; font-size: var(--fs-md); cursor: pointer; }
+.automatch__option .field__hint { display: block; margin-top: 2px; }
+.automatch__importing { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-4) 0; }
+.automatch__progress { height: 8px; border-radius: var(--radius-pill); background: var(--c-border); overflow: hidden; }
+.automatch__progress-bar { height: 100%; background: var(--c-brand); transition: width 200ms ease; }
+
+/* Image Workspace: the product picker is the shared searchable combobox, and
+   the canvas tools fit one row at 1280px (Crop wrapped to a row of its own). */
+.ws-prodnav__picker { border: 0; padding: 0; margin: 0; min-width: 0; display: inline-flex; }
+.ws-prodnav__picker .product-combobox { width: 260px; max-width: 32vw; }
+.ws-prodnav__picker .product-combobox__trigger { border: none; background: transparent; }
+.page--workspace .ws-canvas__tools { gap: 2px; padding: 3px 4px; }
+.page--workspace .ws-canvas__tools .ws-tool--text { padding: 4px 7px; }
+.page--workspace .ws-canvas__tools .ws-tool__sep { margin: 0 2px; }
+.page--workspace .ws-canvas__tools .ws-tool__label { min-width: 40px; padding: 0 4px; }
+.ws-watermark-bridge__form { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+.ws-watermark-bridge__form .input { flex: 1 1 160px; min-width: 0; }

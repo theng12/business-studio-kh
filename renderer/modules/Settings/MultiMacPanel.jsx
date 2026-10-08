@@ -22,6 +22,7 @@ import { Button, Input, Select } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { formatDateTime } from '../../lib/format.js';
+import bwipjs from 'bwip-js';
 
 // Inlined copy of SettingRow (also lives in Settings/index.jsx). See the
 // file docblock for why this is duplicated rather than imported.
@@ -73,7 +74,7 @@ export function ModeSegment({ config, addToast }) {
       message: 'Media Studio KH will quit and relaunch to apply the new mode.',
       detail:
         next === 'server'
-          ? 'In server mode this Mac hosts the data over the network for other Macs to connect to. Your local data folder stays exactly as it is. (Networking ships in v0.14.1 — v0.14.0 lets you set up users now.)'
+          ? 'In server mode this Mac hosts the data over the network for other Macs and phones to connect to. Your local data folder stays exactly as it is.'
           : next === 'client'
             ? 'In client mode this Mac connects to a remote server instead of using its own data folder. You\'ll need a server address and a user token before you can do anything.'
             : 'In standalone mode this Mac uses only its local data folder. No network exposure.',
@@ -104,6 +105,83 @@ export function ModeSegment({ config, addToast }) {
           onClick={() => pick(o.value)}
         >{o.label}</button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * 0.1.94: the phone viewer's sign-in address, with the token in the FRAGMENT
+ * (`#t=`). A fragment is never sent to the server, and the viewer removes it
+ * from the address bar as soon as it has stored the token. Pure, for tests.
+ */
+export function pairingUrl(ip, port, token) {
+  return `http://${ip}:${port}/m#t=${encodeURIComponent(token)}`;
+}
+
+/**
+ * 0.1.94: pair a phone by scanning instead of typing a 64-character token.
+ * Lives inside the server Mac's own Settings (the admin's screen — this panel
+ * is not rendered for a client Mac's Mobile viewer section), and the code
+ * stays hidden behind "Show QR", because whoever scans it is signed in as
+ * that user. Rendered locally with bwip-js; the token never leaves this Mac
+ * except as the picture on screen.
+ */
+function PairingQr({ users, addresses, port }) {
+  const active = (users ?? []).filter((u) => !u.deactivatedAt && u.token);
+  const [userId, setUserId] = useState('');
+  const [ip, setIp] = useState('');
+  const [shown, setShown] = useState(false);
+  const user = active.find((u) => u.id === userId) || active[0] || null;
+  const address = (addresses ?? []).find((a) => a.ip === ip) || (addresses ?? [])[0] || null;
+
+  let svg = '';
+  let error = '';
+  if (shown && user && address) {
+    try {
+      svg = bwipjs.toSVG({ bcid: 'qrcode', text: pairingUrl(address.ip, port, user.token), scale: 3, eclevel: 'M' });
+    } catch (err) {
+      error = err?.message || String(err);
+    }
+  }
+  // Hide again whenever the choice changes, so a code is never left showing
+  // for someone other than the person it was opened for.
+  function choose(setter) {
+    return (e) => { setter(e.target.value); setShown(false); };
+  }
+
+  if (active.length === 0) return null;
+  return (
+    <div className="pairing-qr">
+      <div className="pairing-qr__title">Pair a phone</div>
+      <p className="pairing-qr__hint">
+        Scan with the phone&rsquo;s camera to open the viewer already signed in &mdash; no token to type.
+        Whoever scans it is signed in as that user, so show it only to them.
+        After pairing, you can clear this page from the phone&rsquo;s browser history.
+      </p>
+      <div className="pairing-qr__controls">
+        <Select value={user?.id ?? ''} onChange={choose(setUserId)} aria-label="User to pair">
+          {active.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+        </Select>
+        <Select value={address?.ip ?? ''} onChange={choose(setIp)} aria-label="Address the phone uses">
+          {(addresses ?? []).map((a) => (
+            <option key={a.ip} value={a.ip}>
+              {a.kind === 'tailscale' ? 'Tailscale' : a.kind === 'mdns' ? 'Bonjour' : 'Wi-Fi'} · {a.ip}
+            </option>
+          ))}
+        </Select>
+        <Button onClick={() => setShown((v) => !v)}>{shown ? 'Hide QR' : 'Show QR'}</Button>
+      </div>
+      {shown && svg ? (
+        <div className="pairing-qr__code" role="img" aria-label={`Pairing code for ${user?.name}`}
+          dangerouslySetInnerHTML={{ __html: svg }} />
+      ) : null}
+      {shown && error ? <p className="pairing-qr__hint">Could not draw the code: {error}</p> : null}
+      {shown && address?.kind === 'mdns' ? (
+        <p className="pairing-qr__hint">Many Android phones can&rsquo;t open <code>.local</code> names &mdash; for those, pick the Tailscale or Wi-Fi address.</p>
+      ) : null}
+      {shown && address?.kind === 'tailscale' ? (
+        <p className="pairing-qr__hint">The phone needs the Tailscale app switched on to reach this address.</p>
+      ) : null}
     </div>
   );
 }
@@ -140,6 +218,14 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
     setWebViewer(next);
     try { await window.api.settings.setOne('webViewerEnabled', next); }
     catch (err) { setWebViewer(!next); addToast?.(err.message, 'error'); }
+  }
+  // 0.1.94: keep the server Mac awake while it serves (default on). The
+  // server re-reads the flag every few seconds, so no restart is needed.
+  const [keepAwake, setKeepAwake] = useState(config?.serverKeepAwake !== false);
+  async function toggleKeepAwake(next) {
+    setKeepAwake(next);
+    try { await window.api.settings.setOne('serverKeepAwake', next); }
+    catch (err) { setKeepAwake(!next); addToast?.(err.message, 'error'); }
   }
   useEffect(() => {
     // v0.1.22: the server controls are server-only, so on a client Mac this poll
@@ -406,8 +492,19 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
     )}
     {!clientMode && (
     <SettingRow
+      label="Keep this Mac awake while serving"
+      hint="While the server is running this Mac won't go to sleep by itself, so the other Macs and phones don't lose it. The screen can still turn off."
+    >
+      <label className="toggle">
+        <input type="checkbox" checked={keepAwake} onChange={(e) => toggleKeepAwake(e.target.checked)} />
+        <span>{keepAwake ? 'On' : 'Off'}</span>
+      </label>
+    </SettingRow>
+    )}
+    {!clientMode && (
+    <SettingRow
       label="Mobile web viewer"
-      hint="Serves a lightweight phone/iPad page at /m on this same server — for viewing, searching, and adding product photos straight from the camera or photo library. Nothing to install: open the address in Safari and paste a user token. Toggle off to disable the page (your Mac clients' API stays up either way)."
+      hint="Serves a lightweight phone and tablet page at /m on this same server — for viewing, searching, and adding product photos straight from the camera or gallery. Nothing to install: open the address in the phone's browser (Chrome, Safari, Samsung Internet…) and paste a user token, or scan a pairing code below. Toggle off to disable the page (your Mac clients' API stays up either way)."
     >
       <label className="toggle">
         <input type="checkbox" checked={webViewer} onChange={(e) => toggleWebViewer(e.target.checked)} />
@@ -415,7 +512,7 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
       </label>
       {webViewer && serverStatus.running && (serverStatus.addresses ?? []).length > 0 ? (
         <div className="server-status__addrs" style={{ marginTop: 8 }}>
-          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Open one of these in Safari on the phone/iPad:</div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Open one of these in the phone&rsquo;s browser:</div>
           {serverStatus.addresses.map((a) => {
             const url = `http://${a.ip}:${serverStatus.port}/m`;
             return (
@@ -423,12 +520,15 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
                 <code
                   className="server-status__url"
                   onClick={() => { navigator.clipboard?.writeText(url); addToast?.('Copied: ' + url, 'success'); }}
-                  title="Click to copy — open this in Safari on your phone/iPad, then paste a user token."
+                  title="Click to copy — open this in the phone's browser, then paste a user token."
                 >{url}</code>
               </div>
             );
           })}
         </div>
+      ) : null}
+      {webViewer && serverStatus.running && (serverStatus.addresses ?? []).length > 0 ? (
+        <PairingQr users={users} addresses={serverStatus.addresses} port={serverStatus.port} />
       ) : null}
     </SettingRow>
     )}
@@ -676,8 +776,21 @@ export function ClientModePanel({ config, patch }) {
   // edited them in-session, the runtime is still using the old
   // values — and the app appears broken until they relaunch. This
   // button is the explicit "yes, restart and start using it" CTA.
+  // 0.1.94: from Standalone / Server mode the old "Restart now" only
+  // relaunched — into the SAME mode, so the server just tested was never
+  // used. Off client mode the button now saves the address and token and
+  // switches to Client mode (which restarts on its own).
+  const runningAsClient = (config?.mode ?? 'standalone') === 'client';
   async function applyAndRestart() {
     try {
+      if (!runningAsClient) {
+        clearTimeout(saveTimer.current);
+        await doSave({ url: (latest.current.url ?? '').trim(), token: (latest.current.token ?? '').trim() });
+        if (dirty.current) return; // doSave already showed why it failed
+        addToast?.('Switching to Client mode and restarting…', 'info');
+        await window.api.settings.setMode('client');
+        return;
+      }
       addToast?.('Restarting…', 'info');
       await window.api.app.relaunch();
     } catch (err) {
@@ -799,9 +912,13 @@ export function ClientModePanel({ config, patch }) {
                   Test runs. The button explicitly applies and
                   restarts. */}
               <div className="connection-result__cta">
-                <span>Restart now to start using this server.</span>
+                <span>
+                  {runningAsClient
+                    ? 'Restart now to start using this server.'
+                    : 'This Mac is not in Client mode yet. Switch to start using this server — the app restarts.'}
+                </span>
                 <Button variant="primary" onClick={applyAndRestart}>
-                  Restart now
+                  {runningAsClient ? 'Restart now' : 'Switch to Client mode & restart'}
                 </Button>
               </div>
             </div>

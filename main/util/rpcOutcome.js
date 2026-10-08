@@ -7,12 +7,26 @@
 const READ_ACTIONS = new Set([
   'get', 'list', 'count', 'search', 'preview', 'last', 'presence',
   'capabilities', 'whoami', 'status', 'addresses', 'ping', 'stats',
+  // Connectivity pass: whole-word reads that are not covered by the prefixes
+  // below. A timed-out read must not tell the user it "may still have
+  // completed" — there is nothing to complete.
+  'completeness', 'estimateCost',
 ]);
+
+// Read verbs used as a prefix: `getActiveId`, `listByProduct`, `listRuns`,
+// `recentBrands`, `countForEntity`, `getApplyOutcome`… Every channel the app
+// registers with one of these prefixes only reads (checked when this was added:
+// none of `get*` / `list*` / `count*` / `recent*` writes anything).
+const READ_PREFIX = /^(get|list|count|recent)[A-Z]/;
+
+function isReadAction(action) {
+  return READ_ACTIONS.has(action) || READ_PREFIX.test(action);
+}
 
 function isLikelyMutationChannel(channel) {
   if (typeof channel !== 'string') return false;
   const action = channel.split(':').slice(1).join(':');
-  return !!action && !READ_ACTIONS.has(action);
+  return !!action && !isReadAction(action);
 }
 
 function isTimeoutError(err) {
@@ -23,7 +37,9 @@ function isTimeoutError(err) {
 
 function mutationOutcomeUnknown(channel, cause) {
   const err = new Error(
-    `The request for ${channel} timed out before the server confirmed the result. ` +
+    // §18: plain words — the channel name rides on err.channel and in the
+    // log, not in the sentence the user reads.
+    'The server Mac stopped answering before it confirmed this change. ' +
     'The operation may still have completed; refresh the current data before retrying.',
     { cause },
   );
@@ -32,4 +48,4 @@ function mutationOutcomeUnknown(channel, cause) {
   return err;
 }
 
-module.exports = { isLikelyMutationChannel, isTimeoutError, mutationOutcomeUnknown };
+module.exports = { isLikelyMutationChannel, isReadAction, isTimeoutError, mutationOutcomeUnknown };

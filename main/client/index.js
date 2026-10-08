@@ -40,7 +40,7 @@ const { retryWaitMs, shouldRetry } = require('../util/rateLimitRetry');
 // exactly like the server/standalone ones do.
 const { validateArgs } = require('../util/validateArgs');
 const { writeExclusiveFile, writeUniqueFile } = require('../util/exclusiveFile');
-const { isLikelyMutationChannel, isTimeoutError, mutationOutcomeUnknown } = require('../util/rpcOutcome');
+const { isLikelyMutationChannel, isReadAction, isTimeoutError, mutationOutcomeUnknown } = require('../util/rpcOutcome');
 // v0.15.1: WebSocket client (same `ws` lib as the server). Used in
 // client mode to subscribe to live update events. Loaded lazily so
 // standalone / server mode doesn't pay the import cost.
@@ -87,10 +87,11 @@ let _connectionState = {
   lastError: null,
   user: null,
   serverVersion: null,
+  reconnectCount: 0,
+  wsOpenCount: 0,
 };
 let _identityGeneration = 0;
 let _pollTimer = null;
-let _pollBackoffMs = 2000;
 // ponytail: JSON/base64 keeps the 100 MiB encoded ceiling and buffers the
 // payload. Add streaming only for an operation whose normal workload needs it.
 const MAX_RPC_BODY_BYTES = 100 * 1024 * 1024;
@@ -125,12 +126,46 @@ const PING_FAILURE_THRESHOLD = 2;
 // out and flip the chip red. 10s still bounds the user's wait but
 // gives realistic networks the headroom they need.
 const PING_TIMEOUT_MS = 10_000;
+/* Connectivity pass (0.1.94). The loop used to ping every 30s while healthy
+ * and — because the failure backoff doubled from 30s and was capped at 30s —
+ * waited another 30s before the confirming second ping. A black-holed server
+ * (asleep, off Tailscale) therefore took ~77s to turn the chip red, and every
+ * call made in the meantime hung for its full 120s. Now:
+ *   - healthy: one /api/ping every 12s (a tiny GET; the server answers it
+ *     without touching the database);
+ *   - after one failure: confirm 1s later instead of 30s;
+ *   - while disconnected: retry 2s → 4s → 8s → 10s cap, so recovery is seen
+ *     within seconds of the server coming back. */
+const PING_HEALTHY_INTERVAL_MS = 12_000;
+const PING_CONFIRM_DELAY_MS = 1_000;
+const PING_RETRY_MAX_MS = 10_000;
+/* Ordinary reads give up after 20s (a product list of 2,500 rows is ~21 KB
+ * gzipped); writes and uploads keep 120s, because a write that times out may
+ * still have committed and a large upload legitimately takes a while. Preview
+ * renders are reads that do real work on the server, so they keep 120s too. */
+const READ_TIMEOUT_MS = 20_000;
+const WRITE_TIMEOUT_MS = 120_000;
+/* No response headers for this long on any call → ask /api/ping straight away
+ * (short timeout). If that fails too, the server is gone: say so now instead
+ * of when the call finally times out. The ping keeps a slow-but-alive server
+ * (a big bulk upsert, an upload on a thin link) from being reported as down. */
+const RPC_STALL_PROBE_MS = 15_000;
+const RPC_STALL_PROBE_TIMEOUT_MS = 6_000;
+let _pollInFlight = null;
+let _reconnectCount = 0;
 
 function getConnectionState() {
   return { ..._connectionState };
 }
 
 function setConnectionState(patch) {
+  const wasDown = _connectionState.status === 'disconnected' || _connectionState.status === 'degraded';
+  if (wasDown && patch.status === 'connected') {
+    // Bumped on every recovery. Pushed with the state so the renderer's
+    // ConnImg can retry images that failed while the server was away.
+    _reconnectCount += 1;
+    patch = { ...patch, reconnectCount: _reconnectCount };
+  }
   _connectionState = { ..._connectionState, ...patch };
   // Push to renderer if a window is open.
   try {
@@ -265,6 +300,95 @@ function broadcastRpcActivity(payload) {
   } catch (_) {}
 }
 
+/** Per-attempt deadline for one RPC (see READ_TIMEOUT_MS). */
+function rpcTimeoutMs(channel) {
+  const action = String(channel || '').split(':').slice(1).join(':');
+  if (!isLikelyMutationChannel(channel) && isReadAction(action) && !/preview/i.test(action)) {
+    return READ_TIMEOUT_MS;
+  }
+  return WRITE_TIMEOUT_MS;
+}
+
+/* ─── Stall watchdog ─────────────────────────────────────────────
+ * One unref'd interval checks the in-flight calls. A call that has waited
+ * RPC_STALL_PROBE_MS without response headers triggers one short ping; if the
+ * ping fails as well, the chip turns red and the offline banner appears now,
+ * ~15s in, rather than when the call gives up. Nothing is aborted here — a
+ * write that is merely slow is left to finish. */
+const _rpcInFlight = new Set();
+let _rpcWatchdog = null;
+let _stallProbe = null;
+/* A server busy with a long write (a big bulk upsert, an upload being
+ * decoded) can miss one 6s ping while still alive. So the watchdog needs TWO
+ * consecutive failed stall pings before it says anything, and when a write is
+ * among the waiting calls it says "busy" (degraded, amber) rather than
+ * "disconnected" — the regular ping loop, which it kicks, still flips to
+ * disconnected on its own two-in-a-row rule if the server really is gone. */
+let _stallProbeFailures = 0;
+const STALL_PROBE_FAILURES_TO_REPORT = 2;
+
+function ensureRpcWatchdog() {
+  if (_rpcWatchdog) return;
+  _rpcWatchdog = setInterval(checkStalledRpcs, 2_500);
+  _rpcWatchdog.unref?.();
+}
+
+function checkStalledRpcs() {
+  if (_rpcInFlight.size === 0) {
+    clearInterval(_rpcWatchdog);
+    _rpcWatchdog = null;
+    return;
+  }
+  const now = performance.now();
+  let stalled = null;
+  for (const flight of _rpcInFlight) {
+    if (!flight.headers && !flight.probed && now - flight.startedPerf >= RPC_STALL_PROBE_MS) {
+      flight.probed = true;
+      stalled = flight;
+    }
+  }
+  if (!stalled || _stallProbe || _connectionState.status === 'disconnected') return;
+  const url = baseUrl();
+  if (!url) return;
+  _stallProbe = fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(RPC_STALL_PROBE_TIMEOUT_MS) })
+    .then((res) => {
+      if (!res.ok) throw Object.assign(new Error(`Status ${res.status}`), { httpStatus: res.status });
+      _stallProbeFailures = 0;
+    })
+    .catch((err) => {
+      if (err?.httpStatus) { _stallProbeFailures = 0; return; } // the server answered — slow, not gone
+      process.stderr.write(`[client rpc] ${stalled.channel} has had no response for ${Math.round(RPC_STALL_PROBE_MS / 1000)}s and /api/ping failed: ${err?.message || err}\n`);
+      const verdict = stallProbeVerdict(++_stallProbeFailures, [..._rpcInFlight].map((f) => f.channel));
+      if (verdict === 'retry') {
+        // One miss: probe again on the next tick before saying anything.
+        stalled.probed = false;
+        return;
+      }
+      _stallProbeFailures = 0;
+      if (verdict === 'busy') {
+        setConnectionState({
+          status: 'degraded',
+          lastError: 'The server Mac is busy — it is still working on a save or upload from this Mac and has not answered a quick check. Leave it to finish.',
+        });
+        schedulePoll(PING_CONFIRM_DELAY_MS);
+        return;
+      }
+      const { analyzeFetchError } = require('../util/fetchErrors');
+      _consecutivePingFailures = PING_FAILURE_THRESHOLD;
+      setConnectionState({ status: 'disconnected', lastError: analyzeFetchError(err, url).message });
+      schedulePoll(PING_CONFIRM_DELAY_MS);
+    })
+    .finally(() => { _stallProbe = null; });
+}
+
+/** Pure: what a failed stall ping means. 'retry' until the second
+ *  consecutive miss; then 'busy' if a write is among the waiting calls
+ *  (the server may just be working on it), else 'down'. */
+function stallProbeVerdict(failures, inFlightChannels) {
+  if (failures < STALL_PROBE_FAILURES_TO_REPORT) return 'retry';
+  return (inFlightChannels || []).some((c) => isLikelyMutationChannel(c)) ? 'busy' : 'down';
+}
+
 async function rpc(channel, args, timeoutMs) {
   const url = baseUrl();
   const auth = authHeader();
@@ -279,6 +403,11 @@ async function rpc(channel, args, timeoutMs) {
   const requestBytes = Buffer.byteLength(requestBody, 'utf8');
   _syncStats.inFlight += 1;
   _syncStats.lastChannel = channel;
+  // Stall watchdog bookkeeping (see RPC_STALL_PROBE_MS). performance.now(),
+  // not Date.now(), so a test that fakes the wall clock cannot trip it.
+  const flight = { channel, startedPerf: performance.now(), headers: false, probed: false };
+  _rpcInFlight.add(flight);
+  ensureRpcWatchdog();
   // Fire a "started" event so the overlay can show the current
   // channel immediately, not just after the response lands.
   broadcastRpcActivity({
@@ -303,8 +432,9 @@ async function rpc(channel, args, timeoutMs) {
     // threw immediately and failed the whole operation; now we wait the
     // hinted interval and retry a bounded number of times so transient
     // bursts self-heal. Non-429 responses fall straight through.
+    const perAttemptMs = rpcTimeoutMs(channel);
     for (let attempt = 0; ; attempt++) {
-      const signal = budgetSignal || AbortSignal.timeout(120_000);
+      const signal = budgetSignal || AbortSignal.timeout(perAttemptMs);
       try {
         budgetSignal?.throwIfAborted();
         res = await fetch(`${url}/api/rpc`, {
@@ -321,6 +451,7 @@ async function rpc(channel, args, timeoutMs) {
           // recovers instead of spinning forever.
           signal,
         });
+        flight.headers = true;
 
         // Keep body consumption inside the same transport error boundary as
         // headers: a timed-out write response is still an unknown outcome.
@@ -352,7 +483,13 @@ async function rpc(channel, args, timeoutMs) {
         const analyzed = analyzeFetchError(err, url);
         setConnectionState({ status: 'disconnected', lastError: analyzed.message });
         _syncStats.errorCount += 1;
-        throw new Error(analyzed.message, { cause: err });
+        // A read that timed out is simply a failed read — it has nothing to
+        // "complete". Say so in words the user can act on (§18).
+        const readTimedOut = (isTimeoutError(err) || isTimeoutError(signal.reason)) && !isLikelyMutationChannel(channel);
+        throw new Error(
+          readTimedOut ? `${analyzed.message} Nothing was changed.` : analyzed.message,
+          { cause: err },
+        );
       }
 
       // Rate limited → wait the server's Retry-After (or backoff) and try
@@ -413,6 +550,7 @@ async function rpc(channel, args, timeoutMs) {
     _syncStats.okCount += 1;
     return deserializeFromServer(body?.result);
   } finally {
+    _rpcInFlight.delete(flight);
     const endedAt = Date.now();
     const durationMs = endedAt - startedAt;
     _syncStats.inFlight = Math.max(0, _syncStats.inFlight - 1);
@@ -475,7 +613,35 @@ function wsUrl() {
   }
 }
 
+/* Connectivity pass (0.1.94): the socket used to be trusted until the OS told
+ * us it had closed. A half-open socket — the laptop roamed networks, the
+ * server Mac slept with the lid shut, Tailscale re-keyed the path — never
+ * closes on its own, so live updates silently stopped while the chip stayed
+ * green (reproduced: 90s with zero events and no reconnect). Now:
+ *   - every frame, ping and pong counts as "alive"; this side also pings every
+ *     WS_CLIENT_PING_MS so a live socket always has traffic;
+ *   - nothing heard for WS_DEAD_AFTER_MS → terminate() and reconnect;
+ *   - the opening handshake gives up after WS_HANDSHAKE_TIMEOUT_MS;
+ *   - a successful HTTP ping while the socket is down reconnects at once
+ *     instead of waiting out a backoff of up to 30s, and so does waking the
+ *     Mac from sleep (powerMonitor 'resume'). */
+const WS_CLIENT_PING_MS = 25_000;
+const WS_DEAD_AFTER_MS = 75_000;
+const WS_HANDSHAKE_TIMEOUT_MS = 10_000;
+const WS_OPEN = 1;
+const WS_CONNECTING = 0;
+let _wsLastFrameAt = 0;
+let _wsOpenCount = 0;
+let _wsLastPingAt = 0;
+let _wsLiveness = null;
+
+function wsIsUp() {
+  return !!_ws && (_ws.readyState === WS_OPEN || _ws.readyState === WS_CONNECTING);
+}
+
 function startWsClient() {
+  if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+  if (wsIsUp()) return;
   if (!WebSocket) {
     try { WebSocket = require('ws'); }
     catch (err) {
@@ -488,23 +654,38 @@ function startWsClient() {
     // Nothing to connect to yet — try again later (URL may be set
     // after the user pastes credentials in Settings).
     _wsReconnectTimer = setTimeout(startWsClient, 5000);
+    _wsReconnectTimer.unref?.();
     return;
   }
 
+  let ws;
   try {
-    _ws = new WebSocket(url);
+    ws = new WebSocket(url, { handshakeTimeout: WS_HANDSHAKE_TIMEOUT_MS });
   } catch (err) {
     process.stderr.write(`[client ws] construct failed: ${err.message}\n`);
     scheduleReconnect();
     return;
   }
+  _ws = ws;
+  _wsLastFrameAt = performance.now();
+  _wsLastPingAt = _wsLastFrameAt;
+  const heard = () => { if (_ws === ws) _wsLastFrameAt = performance.now(); };
 
-  _ws.on('open', () => {
+  ws.on('open', () => {
     process.stdout.write('[client ws] connected\n');
+    _wsOpenCount += 1;
+    // Published so the renderer can tell the session's FIRST socket (whose
+    // greeting arrives while bootstrap is loading the same data) from a
+    // reconnect (renderer/store/bootstrap.js shouldSkipHelloResync).
+    setConnectionState({ wsOpenCount: _wsOpenCount });
+    heard();
     _wsBackoffMs = 1000;
   });
+  ws.on('ping', heard);
+  ws.on('pong', heard);
 
-  _ws.on('message', (data) => {
+  ws.on('message', (data) => {
+    heard();
     try {
       const frame = JSON.parse(data.toString('utf8'));
       dispatchIncoming(frame);
@@ -513,21 +694,77 @@ function startWsClient() {
     }
   });
 
-  _ws.on('close', () => {
+  ws.on('close', () => {
+    // A socket we already replaced (terminate + reconnect) must not schedule
+    // a second reconnect or clear the new one.
+    if (_ws !== ws) return;
     process.stdout.write('[client ws] disconnected\n');
     _ws = null;
     scheduleReconnect();
   });
 
-  _ws.on('error', (err) => {
+  ws.on('error', (err) => {
     process.stderr.write(`[client ws] error: ${err.message}\n`);
     // The 'close' handler will run after this and schedule reconnect.
   });
+
+  ensureWsLiveness();
+}
+
+function ensureWsLiveness() {
+  if (_wsLiveness) return;
+  _wsLiveness = setInterval(checkWsLiveness, 5_000);
+  _wsLiveness.unref?.();
+}
+
+function checkWsLiveness() {
+  const ws = _ws;
+  if (!ws || ws.readyState !== WS_OPEN) return;
+  const now = performance.now();
+  if (now - _wsLastFrameAt > WS_DEAD_AFTER_MS) {
+    process.stdout.write(`[client ws] nothing heard for ${Math.round((now - _wsLastFrameAt) / 1000)}s — dropping the socket and reconnecting\n`);
+    restartWs('silent');
+    return;
+  }
+  if (now - _wsLastPingAt >= WS_CLIENT_PING_MS && typeof ws.ping === 'function') {
+    _wsLastPingAt = now;
+    try { ws.ping(); } catch (_) { /* close handler reconnects */ }
+  }
+}
+
+/**
+ * Drop the current socket (if any) and connect again now, with the backoff
+ * reset. `reason` is only for the log.
+ */
+function restartWs(reason) {
+  const old = _ws;
+  _ws = null;
+  _wsBackoffMs = 1000;
+  if (old) {
+    try { typeof old.terminate === 'function' ? old.terminate() : old.close?.(); } catch (_) { /* already gone */ }
+  }
+  if (reason) process.stdout.write(`[client ws] reconnecting (${reason})\n`);
+  startWsClient();
+}
+
+/**
+ * Called when we have fresh evidence the server is reachable (a good ping,
+ * the Mac waking up, the user pressing Retry). A socket that is down
+ * reconnects immediately; one that is "open" but has been silent for longer
+ * than a ping cycle is presumed half-open and replaced.
+ */
+function nudgeWs({ suspectSilentMs = WS_CLIENT_PING_MS + 10_000 } = {}) {
+  if (!wsUrl()) return;
+  if (!wsIsUp()) { restartWs(_ws ? 'stale' : null); return; }
+  if (_ws.readyState === WS_OPEN && performance.now() - _wsLastFrameAt > suspectSilentMs) {
+    restartWs('silent after the server came back');
+  }
 }
 
 function scheduleReconnect() {
   if (_wsReconnectTimer) clearTimeout(_wsReconnectTimer);
   _wsReconnectTimer = setTimeout(startWsClient, _wsBackoffMs);
+  _wsReconnectTimer.unref?.();
   _wsBackoffMs = Math.min(_wsBackoffMs * 2, 30_000);
 }
 
@@ -582,111 +819,180 @@ async function ensureWhoami() {
   }
 }
 
-function startPolling() {
-  async function tick() {
-    const url = baseUrl();
-    if (!url) {
-      /* No URL configured yet — keep waiting, the user is probably about to
-       * fill it in.
-       *
-       * v0.1.31: also PUBLISH that fact. The renderer needs to tell "this Mac
-       * is a client with no server set" apart from "the server is down" — the
-       * first is a setup step, the second is a fault — and it cannot work that
-       * out from a mirrored config value that goes stale the moment the user
-       * types an address. This is pushed live, every tick, so the banner
-       * disappears on its own once an address is saved. */
-      setConnectionState({ status: 'unconfigured', lastError: null });
-      _pollTimer = setTimeout(tick, 5000);
-      return;
-    }
+function schedulePoll(delayMs) {
+  if (_pollTimer) clearTimeout(_pollTimer);
+  _pollTimer = setTimeout(() => { _pollTimer = null; return pollOnce(); }, delayMs);
+  _pollTimer.unref?.();
+}
 
-    // v0.26.38: three-way ping classification, replacing the old
-    // binary throw-on-anything-not-2xx logic. The previous code
-    // treated a 500 response identically to a fetch-failed network
-    // error, which made the chip flash red on transient server
-    // hiccups even though the network was fine — see the bug report
-    // we tracked down before this build.
-    //
-    // The three outcomes:
-    //   - 2xx                → connected (green)
-    //   - 5xx response       → degraded (amber); server is REACHABLE
-    //                          but its HTTP layer returned an error.
-    //                          Log it so headless servers leave a
-    //                          breadcrumb in the crash.log.
-    //   - 4xx (except 401)   → degraded; same as 5xx — the server
-    //                          responded, so the connection is fine.
-    //                          (401 is handled by /rpc separately —
-    //                          /api/ping doesn't require auth.)
-    //   - fetch threw /
-    //     timeout / 401 ping → counts toward `_consecutivePingFailures`;
-    //                          flips to disconnected only after
-    //                          PING_FAILURE_THRESHOLD in a row.
-    //
-    // The debounce on consecutive failures is the meat of this fix.
-    // A single noisy poll cycle no longer triggers a red glow — you
-    // need 2 in a row, which is much rarer than 1 in isolation.
-    let res = null;
-    let netError = null;
-    try {
-      res = await fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(PING_TIMEOUT_MS) });
-    } catch (err) {
-      netError = err;
-    }
+/**
+ * One /api/ping, then schedule the next. Concurrent callers (the timer, a
+ * Retry click, a wake from sleep) share the same in-flight ping. Resolves to
+ * the connection state after this ping.
+ */
+function pollOnce() {
+  if (_pollInFlight) return _pollInFlight;
+  _pollInFlight = pollTick()
+    .catch((err) => {
+      process.stderr.write(`[client ping] tick failed: ${err?.message || err}\n`);
+      return PING_HEALTHY_INTERVAL_MS;
+    })
+    .then((nextMs) => {
+      schedulePoll(nextMs);
+      return getConnectionState();
+    })
+    .finally(() => { _pollInFlight = null; });
+  return _pollInFlight;
+}
 
-    if (res && res.ok) {
-      // Healthy ping.
-      const body = await res.json().catch(() => ({}));
-      _consecutivePingFailures = 0;
-      if (_connectionState.status !== 'connected') {
-        setConnectionState({
-          status: 'connected',
-          lastOkAt: Date.now(),
-          lastError: null,
-          serverVersion: body?.version ?? null,
-        });
-      } else {
-        setConnectionState({ lastOkAt: Date.now(), serverVersion: body?.version ?? null });
-      }
-      ensureWhoami();
-      _pollBackoffMs = 30_000;
-    } else if (res && !res.ok) {
-      // Server replied with a non-2xx — connection is fine, server
-      // had a hiccup. Don't flip to disconnected; flag as degraded
-      // and leave a breadcrumb in stderr (mirrors to crash.log on
-      // the server admin's `tail` workflow, useful for the headless
-      // mac-mini case where they don't see UI errors).
-      const detail = `Status ${res.status}`;
-      process.stderr.write(`[client ping] server responded with ${detail} on /api/ping at ${new Date().toISOString()}\n`);
-      // Reset the network-failure debounce — this ISN'T a network
-      // failure. The degraded state replaces it cleanly.
-      _consecutivePingFailures = 0;
-      setConnectionState({
-        status: 'degraded',
-        lastError: `Server returned ${detail} on /api/ping (the connection is up — something inside the server hiccuped briefly)`,
-      });
-      _pollBackoffMs = 30_000;
-    } else {
-      // Genuine network failure (fetch threw, timed out, etc).
-      // Debounce — only flip to disconnected after two in a row, so
-      // single-tick noise doesn't make the chip blink red.
-      _consecutivePingFailures += 1;
-      const isFinal = _consecutivePingFailures >= PING_FAILURE_THRESHOLD;
-      if (isFinal) {
-        setConnectionState({ status: 'disconnected', lastError: netError?.message || 'Network error' });
-      } else {
-        // Single failure — don't change the user-visible status yet.
-        // Log quietly so we can investigate later if it's a pattern.
-        process.stderr.write(
-          `[client ping] transient failure (${_consecutivePingFailures}/${PING_FAILURE_THRESHOLD}): ${netError?.message || 'unknown'}\n`,
-        );
-      }
-      _pollBackoffMs = Math.min(_pollBackoffMs * 2, 30_000);
-    }
-    _pollTimer = setTimeout(tick, _pollBackoffMs);
+/** Returns the delay before the next ping. */
+async function pollTick() {
+  const url = baseUrl();
+  if (!url) {
+    /* No URL configured yet — keep waiting, the user is probably about to
+     * fill it in.
+     *
+     * v0.1.31: also PUBLISH that fact. The renderer needs to tell "this Mac
+     * is a client with no server set" apart from "the server is down" — the
+     * first is a setup step, the second is a fault — and it cannot work that
+     * out from a mirrored config value that goes stale the moment the user
+     * types an address. This is pushed live, every tick, so the banner
+     * disappears on its own once an address is saved. */
+    setConnectionState({ status: 'unconfigured', lastError: null });
+    return 5000;
   }
+
+  // v0.26.38: three-way ping classification, replacing the old
+  // binary throw-on-anything-not-2xx logic. The previous code
+  // treated a 500 response identically to a fetch-failed network
+  // error, which made the chip flash red on transient server
+  // hiccups even though the network was fine — see the bug report
+  // we tracked down before this build.
+  //
+  // The three outcomes:
+  //   - 2xx                → connected (green)
+  //   - 5xx response       → degraded (amber); server is REACHABLE
+  //                          but its HTTP layer returned an error.
+  //                          Log it so headless servers leave a
+  //                          breadcrumb in the crash.log.
+  //   - 4xx (except 401)   → degraded; same as 5xx — the server
+  //                          responded, so the connection is fine.
+  //                          (401 is handled by /rpc separately —
+  //                          /api/ping doesn't require auth.)
+  //   - fetch threw /
+  //     timeout / 401 ping → counts toward `_consecutivePingFailures`;
+  //                          flips to disconnected only after
+  //                          PING_FAILURE_THRESHOLD in a row.
+  //
+  // The debounce on consecutive failures is the meat of this fix.
+  // A single noisy poll cycle no longer triggers a red glow — you
+  // need 2 in a row, which is much rarer than 1 in isolation.
+  let res = null;
+  let netError = null;
+  try {
+    res = await fetch(`${url}/api/ping`, { signal: AbortSignal.timeout(PING_TIMEOUT_MS) });
+  } catch (err) {
+    netError = err;
+  }
+
+  if (res && res.ok) {
+    // Healthy ping.
+    const body = await res.json().catch(() => ({}));
+    const wasDown = _connectionState.status !== 'connected';
+    _consecutivePingFailures = 0;
+    const patch = {
+      lastOkAt: Date.now(),
+      serverVersion: body?.version ?? null,
+      // Connectivity pass: the server Mac's own name (newer servers send it),
+      // shown in the sidebar chip so "connected" says connected to WHAT.
+      serverName: typeof body?.name === 'string' && body.name ? body.name : (_connectionState.serverName ?? null),
+    };
+    setConnectionState(wasDown ? { ...patch, status: 'connected', lastError: null } : patch);
+    ensureWhoami();
+    // The server answers again — make sure live updates do too, now rather
+    // than after the socket's own backoff.
+    nudgeWs(wasDown ? { suspectSilentMs: WS_CLIENT_PING_MS + 10_000 } : { suspectSilentMs: WS_DEAD_AFTER_MS });
+    return PING_HEALTHY_INTERVAL_MS;
+  }
+  if (res && !res.ok) {
+    // Server replied with a non-2xx — connection is fine, server
+    // had a hiccup. Don't flip to disconnected; flag as degraded
+    // and leave a breadcrumb in stderr (mirrors to crash.log on
+    // the server admin's `tail` workflow, useful for the headless
+    // mac-mini case where they don't see UI errors).
+    const detail = `Status ${res.status}`;
+    process.stderr.write(`[client ping] server responded with ${detail} on /api/ping at ${new Date().toISOString()}\n`);
+    // Reset the network-failure debounce — this ISN'T a network
+    // failure. The degraded state replaces it cleanly.
+    _consecutivePingFailures = 0;
+    setConnectionState({
+      status: 'degraded',
+      lastError: `The server Mac answered with an error (${detail}). The connection is fine — something inside the server hiccuped; it usually clears by itself.`,
+    });
+    return PING_HEALTHY_INTERVAL_MS;
+  }
+  // Genuine network failure (fetch threw, timed out, etc).
+  // Debounce — only flip to disconnected after two in a row, so
+  // single-tick noise doesn't make the chip blink red.
+  _consecutivePingFailures += 1;
+  const isFinal = _consecutivePingFailures >= PING_FAILURE_THRESHOLD;
+  if (isFinal) {
+    // §18: the same plain-English reading every other client-mode network
+    // failure gets — never the raw "The operation was aborted due to timeout".
+    const { analyzeFetchError } = require('../util/fetchErrors');
+    setConnectionState({ status: 'disconnected', lastError: analyzeFetchError(netError, url).message });
+  } else {
+    // Single failure — don't change the user-visible status yet.
+    // Log quietly so we can investigate later if it's a pattern.
+    process.stderr.write(
+      `[client ping] transient failure (${_consecutivePingFailures}/${PING_FAILURE_THRESHOLD}): ${netError?.message || 'unknown'}\n`,
+    );
+  }
+  return pingRetryDelay(_consecutivePingFailures);
+}
+
+/** 1 failure → confirm after 1s; then 2s, 4s, 8s, capped at 10s. */
+function pingRetryDelay(failures) {
+  if (failures <= 1) return PING_CONFIRM_DELAY_MS;
+  return Math.min(2_000 * 2 ** (failures - 2), PING_RETRY_MAX_MS);
+}
+
+function startPolling() {
   // First tick fires soon after boot so the badge transitions out of
   // 'unknown' quickly.
-  _pollTimer = setTimeout(tick, 500);
+  _pollTimer = setTimeout(() => { _pollTimer = null; return pollOnce(); }, 500);
+  _pollTimer.unref?.();
+  watchPower();
+}
+
+/**
+ * Ping now and bring the live-update socket back if it is down. Used by the
+ * Retry button, "Test connection now", and waking from sleep. Resolves to the
+ * connection state after the ping, so the caller can say what happened.
+ */
+async function reconnectNow(reason = 'retry') {
+  process.stdout.write(`[client] reconnect requested (${reason})\n`);
+  // When the user asks (Retry, Test connection now) this one ping decides —
+  // they are looking at the answer. Waking from sleep keeps the usual
+  // two-strike debounce: Wi-Fi often needs a few seconds to come back.
+  if (reason === 'retry' || reason === 'test') _consecutivePingFailures = PING_FAILURE_THRESHOLD - 1;
+  if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+  const state = await pollOnce();
+  if (state.status === 'connected') nudgeWs({ suspectSilentMs: reason === 'resume' ? 0 : WS_CLIENT_PING_MS + 10_000 });
+  return state;
+}
+
+let _powerWatched = false;
+function watchPower() {
+  if (_powerWatched) return;
+  let powerMonitor = null;
+  try { ({ powerMonitor } = require('electron')); } catch (_) { /* not in Electron */ }
+  if (!powerMonitor || typeof powerMonitor.on !== 'function') return;
+  _powerWatched = true;
+  // After sleep every socket is suspect and the ping timer may be minutes
+  // stale. Check at once; a dead socket is replaced (suspectSilentMs: 0).
+  powerMonitor.on('resume', () => { void reconnectNow('resume'); });
+  powerMonitor.on('unlock-screen', () => { void reconnectNow('unlock'); });
 }
 
 /* ─── Channel proxies ──────────────────────────────────────────── */
@@ -1125,6 +1431,12 @@ function registerClientProxies(loadConfigFn) {
   /* Connection-state IPC for the renderer's sidebar badge. */
   handleLocal('client:connectionState', () => getConnectionState());
 
+  /* Connectivity pass (0.1.94): a REAL check, for the offline banner's Retry
+   * and the connection legend's "Test connection now". Pings the server now,
+   * reconnects the live-update socket if it is down, and returns the state
+   * that ping produced — not the cached snapshot the legend used to re-read. */
+  handleLocal('client:reconnectNow', (args) => reconnectNow(args?.reason === 'test' ? 'test' : 'retry'));
+
   /* v0.26.33: RPC activity stats — exposed as a one-shot snapshot for
      the sidebar chip + SyncOverlay seed. Continuous updates flow via
      the `client:rpcActivity` push channel (see broadcastRpcActivity). */
@@ -1286,6 +1598,14 @@ function registerClientFileHandlers() {
     return require('../renderWindow').listPrinters();
   });
 
+  // "Show in Finder" after a run — the files are on THIS (client) Mac, so it
+  // never goes to the server. Same rule as main/ipc/files.js.
+  handleLocal('files:revealPath', async (absPath) => {
+    if (typeof absPath !== 'string' || !path.isAbsolute(absPath)) throw new Error('An absolute path is required');
+    // Same shared rule as the standalone handler: packages are revealed, never opened.
+    return require('../util/openPath').revealPath(absPath);
+  });
+
   handleLocal('labels:openOutput', async ({ outputPath } = {}) => {
     // The file is on this Mac's disk, so it must be opened here.
     if (!outputPath || typeof outputPath !== 'string') throw new Error('Output path required');
@@ -1311,7 +1631,7 @@ function registerClientFileHandlers() {
     await fsp.mkdir(outputFolder, { recursive: true });
 
     const renderer = require('../renderWindow');
-    const { slugify } = require('../util/slug');
+    const { slugifyUnicode } = require('../util/slug');
     const events = require('../events');
     const opId = `label-${Date.now()}`;
     const made = [];
@@ -1327,8 +1647,9 @@ function registerClientFileHandlers() {
         const built = await rpc('labels:buildDocument', { companyId, templateId, productIds, layout });
         templateName = built.templateName;
         events.broadcast('progress:event', { id: opId, kind: 'labels', done: 0, total: built.products.length, phase: 'rendering', label: templateName });
-        const target = path.join(outputFolder, `${slugify(templateName, 'labels')}-${Date.now()}.pdf`);
-        await renderer.toPdf(built.html, target, { orientation: layout.orientation });
+        const { outputBaseName } = require('../util/outputNames');
+        // Name claimed atomically at write time (unique → `wx`, `-2` on EEXIST).
+        const target = await renderer.toPdf(built.html, path.join(outputFolder, `${outputBaseName(templateName, 'labels')}.pdf`), { orientation: layout.orientation, unique: true });
         made.push({ filePath: target });
         items = built.products.map((product) => ({ ...product, filePath: target }));
         events.broadcast('progress:event', { id: opId, kind: 'labels', done: built.products.length, total: built.products.length, phase: 'finishing', label: templateName });
@@ -1345,7 +1666,7 @@ function registerClientFileHandlers() {
         const ext = format === 'jpeg' ? 'jpg' : 'png';
         for (let i = 0; i < built.documents.length; i += 1) {
           const doc = built.documents[i];
-          const target = path.join(outputFolder, `${slugify(doc.sku, 'label')}-${slugify(templateName, 'label')}.${ext}`);
+          const target = path.join(outputFolder, `${slugifyUnicode(doc.sku, 'label')}-${slugifyUnicode(templateName, 'label')}.${ext}`);
           const actualPath = await renderer.toImage(doc.html, target, {
             format,
             width: Math.ceil(built.widthMm * scale),
@@ -1439,8 +1760,8 @@ function registerClientFileHandlers() {
     if (!outputFolder || typeof outputFolder !== 'string') throw new Error('Pick an output folder');
     const res = await rpc('catalogStudio:exportBytes', { id });
     await fsp.mkdir(outputFolder, { recursive: true });
-    const outputPath = path.join(outputFolder, res.fileName);
-    await fsp.writeFile(outputPath, Buffer.from(res.bytes));
+    // Never over an earlier export (the server's name carries a minute stamp).
+    const outputPath = await writeUniqueFile(outputFolder, res.fileName, Buffer.from(res.bytes));
     // 'Exported' is a property of the catalog, which lives on the server.
     await rpc('catalogStudio:markExported', { id });
     return { outputPath };
@@ -1863,13 +2184,13 @@ function registerClientImageImportBridges() {
    * is preserved — same `{ exported, skipped, products, outputPath,
    * skips }` so the Export Center's result modal Just Works.
    */
-  handleLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId } = {}) => {
+  handleLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId, imageScope } = {}) => {
     if (!profileId) throw new Error('profileId required');
     if (!outputRoot) throw new Error('outputRoot required');
     // v0.31.0: forward saveToLibrary — the server appends the exports to
     // ITS library (the shared source of truth) + broadcasts a catalog
     // change, which this client picks up like any other remote edit.
-    const result = await rpc('exports:runForClient', { profileId, productIds, saveToLibrary, runId });
+    const result = await rpc('exports:runForClient', { profileId, productIds, saveToLibrary, runId, imageScope });
     const files = Array.isArray(result?.files) ? result.files : [];
 
     /* v0.1.27: honour the collision choice the user already made.
@@ -1952,11 +2273,11 @@ function registerClientImageImportBridges() {
    * outputRoot. Same return shape as the server-side previewCollisions
    * so the Export Center's collision modal works identically.
    */
-  handleLocal('exports:checkCollisions', async ({ profileId, productIds, outputRoot } = {}) => {
+  handleLocal('exports:checkCollisions', async ({ profileId, productIds, outputRoot, imageScope } = {}) => {
     if (!profileId || !outputRoot) {
       return { totalExpected: 0, collisionCount: 0, sampleCollisions: [] };
     }
-    const { totalExpected, entries } = await rpc('exports:expectedOutputs', { profileId, productIds });
+    const { totalExpected, entries } = await rpc('exports:expectedOutputs', { profileId, productIds, imageScope });
     const outRootAbs = path.resolve(outputRoot);
     const collisions = [];
     for (const { rel, sku } of (entries || [])) {
@@ -2269,9 +2590,69 @@ function registerClientImageImportBridges() {
    *   5. Aggregate the same diagnostic stats the server-side handler
    *      returns so the result modal looks identical.
    */
-  handleLocal('images:autoMatchBySku', async ({ companyId, folderPath } = {}) => {
+  handleLocal('images:autoMatchBySku', async ({ companyId, folderPath, dryRun, files } = {}) => {
     if (!companyId) throw new Error('companyId is required');
     if (!folderPath) throw new Error('Folder path is required');
+
+    /* 0.1.94: preview, then import — the same two modes as the standalone
+     * handler (main/ipc/images.js), planned by the same shared
+     * main/util/autoMatchPlan.js. The folder is on THIS Mac, so the scan and
+     * the file reads happen here; the products and the photos are the
+     * server's, so they go over RPC. */
+    if (dryRun === true) {
+      const { buildAutoMatchPlan, summarizeUnmatched } = require('../util/autoMatchPlan');
+      const list = await rpc('products:list', { companyId });
+      if (!Array.isArray(list)) throw new Error('Could not fetch product list from server');
+      const skuToProduct = new Map(list.map((p) => [p.sku.toLowerCase(), p]));
+      const allImages = imageManager.scanImagesRecursive(folderPath);
+      const { groups, unmatched } = imageManager.groupAndSortMatches(allImages, folderPath, new Set(skuToProduct.keys()));
+      const plan = buildAutoMatchPlan({
+        groups, skuToProduct, imageCountOf: (p) => p.imageCount, max: imageManager.MAX_IMAGES_PER_PRODUCT, folderPath,
+      });
+      return {
+        dryRun: true,
+        ...plan,
+        ...summarizeUnmatched(unmatched, folderPath),
+        scannedFiles: allImages.length,
+        totalProducts: list.length,
+        matchedSkus: plan.products.length,
+        maxImagesPerProduct: imageManager.MAX_IMAGES_PER_PRODUCT,
+      };
+    }
+    if (Array.isArray(files)) {
+      const fsp = require('node:fs/promises');
+      const path = require('node:path');
+      const { importEntryProblem, relativeTo } = require('../util/autoMatchPlan');
+      if (files.length > 200) throw new Error('Too many files in one batch (max 200)');
+      let imported = 0;
+      let skippedDup = 0;
+      const failures = [];
+      const touched = new Set();
+      for (const entry of files) {
+        const problem = importEntryProblem(folderPath, entry);
+        if (problem) {
+          failures.push({ filepath: String(entry?.sourcePath ?? ''), sku: entry?.sku ?? '', error: problem });
+          continue;
+        }
+        try {
+          const bytes = await fsp.readFile(entry.sourcePath);
+          const ext = path.extname(entry.sourcePath).toLowerCase() || '.jpg';
+          // makeMain rides on the add itself: the server sets the main image
+          // by row id inside the same product-lock turn as the add. A second
+          // set-main-by-filepath RPC here could hit a different photo if
+          // another Mac renumbered the product's files in between.
+          const res = await rpc('images:importFromBytes', {
+            productId: entry.productId, bytes, ext,
+            ...(entry.makeMain === true ? { makeMain: true } : {}),
+          });
+          if (res?.skipped) skippedDup += 1;
+          else { imported += 1; touched.add(entry.productId); }
+        } catch (err) {
+          failures.push({ filepath: relativeTo(folderPath, entry.sourcePath), sku: entry.sku ?? '', error: err.message });
+        }
+      }
+      return { imported, skippedDup, failures, productsTouched: [...touched] };
+    }
 
     // v0.17.1: progress events. In client mode `broadcast` only
     // delivers to the local renderer (no WS server here), which is
@@ -2389,6 +2770,11 @@ function registerClientImageImportBridges() {
 module.exports = {
   registerClientProxies,
   getConnectionState,
+  reconnectNow,
+  // Pure timing rules, exported for test/connectivity.test.js.
+  rpcTimeoutMs,
+  pingRetryDelay,
+  stallProbeVerdict,
   rpc,
   baseUrl,
   authHeader,

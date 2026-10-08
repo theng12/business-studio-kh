@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { ANCHORS, BARCODE_FORMATS, IMAGE_SOURCES, TOKENS } from './elementDefaults.js';
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ANCHORS, BARCODE_FORMATS, IMAGE_SOURCES, TOKENS, priceGroupTokens } from './elementDefaults.js';
 import { Button, Field, Input, Select, Textarea, SliderField } from '../../components/ui.jsx';
 import { FontFamilyPicker } from './FontFamilyPicker.jsx';
 import { EyeIcon, EyeOffIcon, LockIcon, UnlockIcon } from './icons.jsx';
@@ -29,6 +29,12 @@ import { EyeIcon, EyeOffIcon, LockIcon, UnlockIcon } from './icons.jsx';
  *     bounds, and an optional `format` for display normalisation
  *     (e.g. rounding for the displayed percent in FracField)
  */
+/* The element the inspector is showing. A NumberInput remembers it, so an
+ * edit typed for element A is committed to A even when the canvas selects B
+ * (on pointerdown) before the input blurs — audit 2026-10, the same bug as
+ * the label designer's NumberField. */
+const InspectorTarget = createContext(null);
+
 function NumberInput({
   value,
   onCommit,
@@ -39,6 +45,19 @@ function NumberInput({
   const fmt = format ?? ((n) => (n == null ? '' : String(n)));
   const [draft, setDraft] = useState(() => fmt(value));
   const dirty = useRef(false);
+  const target = useContext(InspectorTarget);
+  // The previous render's commit, i.e. the one bound to the element the
+  // user was typing for. Used once if the element changes under a dirty field.
+  const prev = useRef({ target, commitTo: null });
+  // Declared before the `prev` update below, so it still sees the previous
+  // render's commit. Only `target` re-runs it.
+  useLayoutEffect(() => {
+    if (Object.is(prev.current.target, target)) return;
+    if (dirty.current && prev.current.commitTo) prev.current.commitTo(draft);
+    dirty.current = false;
+    setDraft(fmt(value));
+  }, [target]); // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => { prev.current = { target, commitTo: (text) => commitText(text) }; });
 
   // Resync only when the user isn't editing — otherwise we'd squash
   // their in-progress text every time the parent re-renders.
@@ -56,7 +75,13 @@ function NumberInput({
 
   function commit() {
     dirty.current = false;
-    const raw = draft.trim();
+    commitText(draft);
+  }
+
+  /* Parse + clamp + commit `text` with THIS render's `value` / `onCommit`.
+   * Returns nothing; reverts the draft when the text is not a number. */
+  function commitText(text) {
+    const raw = String(text ?? '').trim();
     if (raw === '' || raw === '-' || raw === '.') {
       // Empty / partial input → revert to last committed.
       setDraft(fmt(value));
@@ -104,7 +129,16 @@ function NumberInput({
  * Numeric inputs that represent fractions accept percentages (0–100) for
  * readability and convert to 0–1 fractions on the way out.
  */
-export function Inspector({ element, onChange, onDelete }) {
+export function Inspector(props) {
+  return (
+    <InspectorTarget.Provider value={props.element?.id ?? null}>
+      <InspectorBody {...props} />
+    </InspectorTarget.Provider>
+  );
+}
+
+function InspectorBody({ element, onChange, onDelete, priceGroups = [] }) {
+  const priceTokens = priceGroupTokens(priceGroups);
   if (!element) {
     return (
       <div className="ovl-inspector ovl-inspector--empty">
@@ -214,10 +248,10 @@ export function Inspector({ element, onChange, onDelete }) {
       ) : null}
 
       {element.type === 'text' ? (
-        <TextProps element={element} patchEl={patchEl} patchFont={patchFont} patchBg={patchBg} />
+        <TextProps element={element} patchEl={patchEl} patchFont={patchFont} patchBg={patchBg} priceTokens={priceTokens} />
       ) : null}
       {element.type === 'barcode' ? (
-        <BarcodeProps element={element} patchEl={patchEl} patchBg={patchBg} />
+        <BarcodeProps element={element} patchEl={patchEl} patchBg={patchBg} priceTokens={priceTokens} />
       ) : null}
       {element.type === 'image' ? (
         <ImageProps element={element} patchEl={patchEl} />
@@ -291,7 +325,7 @@ function AnchorPicker({ value, onChange }) {
 /** Re-usable content field with a chip-row of available tokens. Clicking
  *  a chip appends the token to the textarea so users don't have to remember
  *  the exact spelling. */
-function TokenContentField({ value, onChange, multiline = false }) {
+function TokenContentField({ value, onChange, multiline = false, priceTokens = [] }) {
   function appendToken(tok) {
     onChange((value ?? '') + tok);
   }
@@ -322,6 +356,16 @@ function TokenContentField({ value, onChange, multiline = false }) {
                 onClick={() => appendToken(tok)}
               >{tok}</button>
             ))}
+            {/* The company's own price groups (Settings → Price groups). */}
+            {priceTokens.map(({ token, label }) => (
+              <button
+                key={token}
+                type="button"
+                className="ovl-token-chip"
+                onClick={() => appendToken(token)}
+                title={`${label} price`}
+              >{token}</button>
+            ))}
           </div>
         </>
       )}
@@ -331,11 +375,11 @@ function TokenContentField({ value, onChange, multiline = false }) {
 
 /* ── Per-type property panels ──────────────────────────────────── */
 
-function TextProps({ element, patchEl, patchFont, patchBg }) {
+function TextProps({ element, patchEl, patchFont, patchBg, priceTokens }) {
   return (
     <>
       <Section title="Text">
-        <TokenContentField value={element.content} onChange={(v) => patchEl({ content: v })} multiline />
+        <TokenContentField value={element.content} onChange={(v) => patchEl({ content: v })} multiline priceTokens={priceTokens} />
         <Field label="Align">
           {({ id }) => (
             <Select id={id} value={element.align ?? 'left'} onChange={(e) => patchEl({ align: e.target.value })}>
@@ -417,11 +461,11 @@ function TextProps({ element, patchEl, patchFont, patchBg }) {
   );
 }
 
-function BarcodeProps({ element, patchEl, patchBg }) {
+function BarcodeProps({ element, patchEl, patchBg, priceTokens }) {
   return (
     <>
       <Section title="Barcode">
-        <TokenContentField value={element.content} onChange={(v) => patchEl({ content: v })} />
+        <TokenContentField value={element.content} onChange={(v) => patchEl({ content: v })} priceTokens={priceTokens} />
         <Field label="Format" hint="EAN-13 needs 12 digits; UPC-A needs 11 digits. Code 128 accepts anything alphanumeric.">
           {({ id }) => (
             <Select id={id} value={element.format ?? 'code128'} onChange={(e) => patchEl({ format: e.target.value })}>

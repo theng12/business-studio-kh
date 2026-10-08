@@ -22,6 +22,89 @@ let enginePromise = null;
 const cutoutCache = new Map(); // filepath -> { blob, bytes }
 const inFlight = new Map();    // same key -> Promise
 
+/* ─── 0.1.94: run the engine in a module Worker ─────────────────────────
+ *
+ * On the main thread @imgly froze the whole window for ~7.9 s per photo
+ * (measured): no scrolling, no typing, no progress paint. The engine now runs
+ * in renderer/lib/bgRemoval.worker.js with the same input, options and
+ * progress callbacks; this file's API is unchanged. The worker is created
+ * once and reused (the model stays loaded in it). If it cannot start at all —
+ * an old Electron, a CSP that refuses it — the engine runs here as before, so
+ * the feature never stops working because of the worker. */
+let worker = null;
+let workerUnavailable = false;
+let workerSeq = 0;
+const workerJobs = new Map(); // id -> { resolve, reject, onProgress }
+
+class WorkerStartError extends Error {}
+
+function failAllWorkerJobs(err) {
+  for (const job of workerJobs.values()) job.reject(err);
+  workerJobs.clear();
+}
+
+function getWorker() {
+  if (workerUnavailable || typeof Worker === 'undefined') return null;
+  if (worker) return worker;
+  try {
+    worker = new Worker(new URL('./bgRemoval.worker.js', import.meta.url), { type: 'module' });
+  } catch {
+    workerUnavailable = true;
+    return null;
+  }
+  worker.onmessage = (event) => {
+    const msg = event.data || {};
+    const job = workerJobs.get(msg.id);
+    if (!job) return;
+    if (msg.type === 'progress') { job.onProgress?.(msg.key, msg.ratio); return; }
+    workerJobs.delete(msg.id);
+    if (msg.type === 'done') job.resolve(msg.blob);
+    else job.reject(new Error(msg.message || 'Background removal failed'));
+  };
+  // A script that cannot load (or crashes) reports here, not via a message.
+  worker.onerror = (event) => {
+    event.preventDefault?.();
+    workerUnavailable = true;
+    try { worker.terminate(); } catch {}
+    worker = null;
+    failAllWorkerJobs(new WorkerStartError(event.message || 'The background-removal worker could not start'));
+  };
+  return worker;
+}
+
+function runInWorker(w, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const id = ++workerSeq;
+    workerJobs.set(id, { resolve, reject, onProgress });
+    try {
+      w.postMessage({ id, blob });
+    } catch (err) {
+      workerJobs.delete(id);
+      reject(new WorkerStartError(err?.message || String(err)));
+    }
+  });
+}
+
+/** The engine call, in the worker when possible. Resolves to the PNG Blob. */
+async function runEngine(blob, onProgress) {
+  const w = getWorker();
+  if (w) {
+    try {
+      return await runInWorker(w, blob, onProgress);
+    } catch (err) {
+      if (!(err instanceof WorkerStartError)) throw err;
+      // The worker never started — fall through to the main thread.
+    }
+  }
+  const engine = await loadLocalEngine();
+  return engine(blob, {
+    output: { format: 'image/png' },
+    progress: onProgress
+      ? (key, current, total) => onProgress(key, total > 0 ? current / total : 0)
+      : undefined,
+  });
+}
+
 function loadLocalEngine() {
   if (!enginePromise) {
     enginePromise = import('@imgly/background-removal').then((m) => {
@@ -95,7 +178,6 @@ async function makeWarmupBlob() {
  * The model + WASM still cache the same way; only the input changed.
  */
 export async function prefetchLocalModel(onProgress) {
-  const engine = await loadLocalEngine();
   let blob;
   try {
     blob = await makeWarmupBlob();
@@ -104,12 +186,8 @@ export async function prefetchLocalModel(onProgress) {
   }
   if (!blob) throw new Error('Failed to build warm-up image (canvas returned null)');
   try {
-    await engine(blob, {
-      output: { format: 'image/png' },
-      progress: onProgress
-        ? (key, current, total) => onProgress(key, total > 0 ? current / total : 0)
-        : undefined,
-    });
+    // 0.1.94: warmed where it will run — in the worker (see runEngine).
+    await runEngine(blob, onProgress);
   } catch (err) {
     // Reuse the same friendly translator the workspace uses so users get
     // the actionable "check internet" / "CSP" hints instead of the raw
@@ -143,14 +221,8 @@ async function verifySource(inputBlob, { expectedSourceHash, validateSource } = 
 async function removeViaLocal(filepath, onProgress, version, sourceIdentity) {
   const inputBlob = await fetchImageBlob(filepath, version);
   const sourceHash = await verifySource(inputBlob, sourceIdentity);
-  const engine = await loadLocalEngine();
   try {
-    const outBlob = await engine(inputBlob, {
-      output: { format: 'image/png' },
-      progress: onProgress
-        ? (key, current, total) => onProgress(key, total > 0 ? current / total : 0)
-        : undefined,
-    });
+    const outBlob = await runEngine(inputBlob, onProgress);
     const bytes = await outBlob.arrayBuffer();
     return { blob: outBlob, bytes, sourceHash };
   } catch (err) {

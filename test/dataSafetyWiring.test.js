@@ -70,7 +70,9 @@ test('brand icons are cache-stamped, since a replaced icon keeps its path', () =
 
 test('export save-back refreshes the product stamp the thumbnails cache-bust on', () => {
   const runner = read('main/exportRunner.js');
-  assert.match(runner, /productImages\.setMainById\(pid, image\.id\)/);
+  // The add and the set-main run in one turn of the product image lock
+  // (addFromSource makeMain → setMainById by row id inside the lock).
+  assert.match(runner, /productImages\.addFromSource\(pid, f, \{ originalFilepath: marker, makeMain: true \}\)/);
   assert.match(runner, /products\.touchUpdated\(pid\)/);
 });
 

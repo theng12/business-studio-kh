@@ -13,6 +13,13 @@ export function newExportRunId() {
   return `export-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
 }
 
+// The selected profile's stored image scope ({ mode, count? }); older profile
+// objects without one export every image, as they always did.
+function selectedProfileScope(state) {
+  const profile = state.exportProfiles.find((p) => p.id === state.selectedExportProfileId);
+  return profile?.imageScope ?? { mode: 'all' };
+}
+
 export function createExportsSlice(set, get) {
   return {
     // — Export center
@@ -102,6 +109,7 @@ export function createExportsSlice(set, get) {
           onExisting,
           exportSaveToLibrary,
           runId,
+          selectedProfileScope(get()),
         );
         set({ exportLastResult: result, exportRunning: false, exportRunId: null });
         get().refreshProducts();
@@ -130,6 +138,7 @@ export function createExportsSlice(set, get) {
           selectedExportProfileId,
           exportQueueIds,
           exportOutputRoot,
+          selectedProfileScope(get()),
         );
       } catch (err) {
         // Don't block the run on a failed pre-check — surface the error,

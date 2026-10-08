@@ -447,7 +447,10 @@ export function Suppliers() {
         </div>
       ) : null}
 
-      {loading ? (
+      {/* Keep the current rows while a new search loads; "Loading…" only
+          shows before the first answer (it used to replace the table on
+          every keystroke). */}
+      {loading && sorted.length === 0 ? (
         <div className="muted">Loading…</div>
       ) : sorted.length === 0 ? (
         <EmptyState
@@ -463,7 +466,7 @@ export function Suppliers() {
         />
       ) : (
         <>
-          <div className="data-table-wrap">
+          <div className={`data-table-wrap${loading ? ' is-refreshing' : ''}`} aria-busy={loading || undefined}>
             <table className="data-table">
               <thead>
                 <tr>

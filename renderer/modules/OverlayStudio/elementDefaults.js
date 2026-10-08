@@ -11,6 +11,25 @@ export const TOKENS = [
   '{date}', '{date_short}',
 ];
 
+/**
+ * `{price_<key>}` chips for the company's own price groups. The renderer has
+ * always filled these (fillTokens in main/templateRenderer.js) but the editor
+ * offered no button for them, so a VIP or riel price was only reachable by
+ * typing the exact key. Built-in retail / wholesale are already in TOKENS;
+ * a key the token pattern cannot match (`[a-z0-9_-]`) is left out.
+ */
+export function priceGroupTokens(priceGroups = []) {
+  const seen = new Set(['retail', 'wholesale']);
+  const out = [];
+  for (const group of Array.isArray(priceGroups) ? priceGroups : []) {
+    const key = String(group?.key ?? '').trim().toLowerCase();
+    if (!/^[a-z0-9_-]+$/.test(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ token: `{price_${key}}`, label: String(group?.label ?? '').trim() || key });
+  }
+  return out;
+}
+
 export const ANCHORS = [
   ['tl', 'Top left'],   ['tc', 'Top center'],   ['tr', 'Top right'],
   ['lc', 'Center left'],['c',  'Center'],       ['rc', 'Center right'],
@@ -112,6 +131,15 @@ export function defaultElement(type) {
  * editor's box should too; without a measurer (tests, no DOM) the old ~0.55 em
  * per character estimate is used.
  */
+/** One text line's height in em — 1.45 when the text has Khmer, 1.15
+ *  otherwise. Mirrors `overlayLineEm` in main/templateRenderer.js (the export
+ *  grew the box for Khmer so stacked subscripts are not clipped); keep the two
+ *  identical or bottom-anchored text lands in a different place. */
+const KHMER_RE = /[\u1780-\u17FF\u19E0-\u19FF]/;
+export function overlayLineEm(text) {
+  return KHMER_RE.test(String(text ?? '')) ? 1.45 : 1.15;
+}
+
 export function elementBox(el, canvasW, canvasH, previewText = null, designW = 2000, designH = 2000, measureInk = null) {
   const explicitW = (el.width  ?? 0) * canvasW;
   const explicitH = (el.height ?? 0) * canvasH;
@@ -148,7 +176,7 @@ export function elementBox(el, canvasW, canvasH, previewText = null, designW = 2
     // which came out shorter than the render whenever there was padding
     // (120 vs 134 px for a 96 px font with 12 px padding), so a
     // bottom-anchored text sat lower in the export than in the editor.
-    const designHpx = fontSize * 1.15 + padding * 2;
+    const designHpx = fontSize * overlayLineEm(sample) + padding * 2;
     fallbackW = designWpx * scaleX;
     fallbackH = designHpx * scaleY;
   }

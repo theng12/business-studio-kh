@@ -33,9 +33,14 @@ import { confirm } from '../../components/ConfirmModal.jsx';
 import { PODetail, PAYMENT_STATUS_TONE, PAYMENT_STATUS_LABEL } from './PODetail.jsx';
 import { useCostingCaps } from './costingCaps.js';
 import { suggestNextPoNumber } from './poNumber.js';
+import { clearPendingPoStatus } from './poNav.js';
+import { fxLabel } from './fxRate.js';
+import { FxRateInput } from './FxRateInput.jsx';
 
 const STATUS_FILTERS = [
   { value: 'all',        label: 'All' },
+  { value: 'open',       label: 'Open (not received)' },
+  { value: 'owed',       label: 'Owed to supplier' },
   { value: 'draft',      label: 'Draft' },
   { value: 'ordered',    label: 'Ordered' },
   { value: 'in_transit', label: 'In transit' },
@@ -69,10 +74,11 @@ export function PurchaseOrders() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
-  // v0.49.48: pending cross-module navigation (from Library Cost column
-  // or Suppliers "Orders" button). Consumed once on mount.
+  // v0.49.48: pending cross-module navigation (from Library Cost column,
+  // Suppliers "Orders", ⌘K or the Dashboard's Operations chips).
   const pendingPoId = useAppStore((s) => s.pendingPoId);
   const pendingPoSupplierId = useAppStore((s) => s.pendingPoSupplierId);
+  const pendingPoStatus = useAppStore((s) => s.pendingPoStatus);
   const clearPendingPoNav = useAppStore((s) => s.clearPendingPoNav);
   // §8 gating: a costing.view-only client sees the list but no write controls.
   const { canManage } = useCostingCaps();
@@ -82,7 +88,7 @@ export function PurchaseOrders() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [supplierFilter, setSupplierFilter] = useState(pendingPoSupplierId || '');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState(pendingPoStatus || 'all');
   const [openPoId, setOpenPoId] = useState(pendingPoId || null); // null = list view; id = detail
   const [creating, setCreating] = useState(false);
   const [page, setPage] = useState(0);
@@ -93,12 +99,25 @@ export function PurchaseOrders() {
   const supplierRequestRef = useRef(0);
   const previousCompanyRef = useRef(activeCompanyId);
 
-  // Consume the pending-nav intent exactly once, then clear it so a later
-  // manual return to this module doesn't re-trigger the jump.
+  // Act on a pending-nav intent whenever one arrives — on mount AND while
+  // this module is already open (⌘K "open PO-…" from inside Purchase Orders
+  // used to do nothing, then fire later on the next visit). Cleared at once
+  // so a later manual return doesn't re-trigger the jump.
   useEffect(() => {
+    if (!pendingPoId && !pendingPoSupplierId && !pendingPoStatus) return;
+    setCreating(false);
+    if (pendingPoId) {
+      setOpenPoId(pendingPoId);
+    } else {
+      setOpenPoId(null);
+      setSearch('');
+      setSupplierFilter(pendingPoSupplierId || '');
+      setStatusFilter(pendingPoStatus || 'all');
+      setPage(0);
+    }
     if (pendingPoId || pendingPoSupplierId) clearPendingPoNav();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (pendingPoStatus) clearPendingPoStatus();
+  }, [pendingPoId, pendingPoSupplierId, pendingPoStatus, clearPendingPoNav]);
 
   useEffect(() => {
     const request = ++supplierRequestRef.current;
@@ -174,6 +193,9 @@ export function PurchaseOrders() {
   const visibleRows = useMemo(() => rows.slice(pageStart, pageEnd), [rows, pageStart, pageEnd]);
 
   const filtersActive = search.trim() !== '' || supplierFilter !== '' || statusFilter !== 'all';
+  // A new PO can only go to a supplier that is still active; archived ones
+  // stay in the filter so their old orders can still be found.
+  const activeSuppliers = useMemo(() => suppliers.filter((s) => s.status !== 'archived'), [suppliers]);
   function clearFilters() {
     setSearch('');
     setSupplierFilter('');
@@ -229,6 +251,7 @@ export function PurchaseOrders() {
       <PODetail
         poId={openPoId}
         onBack={() => { setOpenPoId(null); refreshList(); }}
+        onOpenPo={(id) => { setOpenPoId(id); refreshList(); }}
         suppliers={suppliers}
       />
     );
@@ -242,10 +265,12 @@ export function PurchaseOrders() {
         actions={canManage ? (
           <Button
             variant="primary"
-            disabled={!activeCompanyId || suppliers.length === 0}
+            disabled={!activeCompanyId || activeSuppliers.length === 0}
             title={!activeCompanyId
               ? 'Choose a company first'
-              : suppliers.length === 0 ? 'Add a supplier first. Every purchase order belongs to one.' : undefined}
+              : suppliers.length === 0
+                ? 'Add a supplier first. Every purchase order belongs to one.'
+                : activeSuppliers.length === 0 ? 'Every supplier is archived. Restore one in Suppliers first.' : undefined}
             onClick={() => setCreating(true)}
           >
             + New purchase order
@@ -275,7 +300,7 @@ export function PurchaseOrders() {
                 type="search"
                 className="search-input"
                 aria-label="Search purchase orders"
-                placeholder="Search by PO number or supplier name…"
+                placeholder="Search PO number, supplier, SKU or product…"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(0); }}
               />
@@ -297,7 +322,10 @@ export function PurchaseOrders() {
             </Select>
           </div>
 
-          {loading && <div className="muted">Loading…</div>}
+          {/* Keep the current rows on screen while a new search loads —
+              swapping the table for "Loading…" on every keystroke made the
+              page jump. "Loading…" only shows before the first answer. */}
+          {loading && rows.length === 0 && <div className="muted">Loading…</div>}
           {!loading && rows.length === 0 && (filtersActive ? (
             <EmptyState
               title="No purchase orders match these filters"
@@ -308,12 +336,12 @@ export function PurchaseOrders() {
             <EmptyState
               title="No purchase orders yet"
               body={canManage ? 'Record your first order to start tracking landed cost.' : 'Purchase orders recorded for this company will be listed here.'}
-              action={canManage ? <Button variant="primary" onClick={() => setCreating(true)}>+ New purchase order</Button> : null}
+              action={canManage && activeSuppliers.length > 0 ? <Button variant="primary" onClick={() => setCreating(true)}>+ New purchase order</Button> : null}
             />
           ))}
-          {!loading && rows.length > 0 && (
-            <div className="data-table-wrap">
-              <table className="data-table">
+          {rows.length > 0 && (
+            <div className={`data-table-wrap${loading ? ' is-refreshing' : ''}`} aria-busy={loading || undefined}>
+              <table className="data-table po-list-table">
                 <thead>
                   <tr>
                     <th>PO #</th>
@@ -336,7 +364,7 @@ export function PurchaseOrders() {
                       className="is-clickable"
                       onClick={() => setOpenPoId(po.id)}
                     >
-                      <td><strong>{po.poNumber || '(no number)'}</strong></td>
+                      <td className="po-list__number"><strong>{po.poNumber || '(no number)'}</strong></td>
                       <td>{po.supplierName || '—'}</td>
                       <td><Badge tone={STATUS_TONE(po.status)}>{STATUS_LABEL(po.status)}</Badge></td>
                       <td>
@@ -361,7 +389,7 @@ export function PurchaseOrders() {
               </table>
             </div>
           )}
-          {!loading && rows.length > 0 && (
+          {rows.length > 0 && (
             <Pagination
               currentPage={currentPage}
               maxPage={maxPage}
@@ -379,7 +407,8 @@ export function PurchaseOrders() {
       {creating && (
         <NewPOModal
           companyId={activeCompanyId}
-          suppliers={suppliers}
+          suppliers={activeSuppliers}
+          defaultSupplierId={activeSuppliers.some((s) => s.id === supplierFilter) ? supplierFilter : ''}
           onCancel={() => setCreating(false)}
           onCreate={handleCreate}
         />
@@ -393,10 +422,10 @@ export function PurchaseOrders() {
  * exchange rate, container type, incoterm. Everything else (lines,
  * components, status flow) happens on the detail page.
  */
-function NewPOModal({ companyId, suppliers, onCancel, onCreate }) {
-  // Default to the first supplier so the currency / incoterm prefills
-  // are sensible without the user having to pick again.
-  const [supplierId, setSupplierId] = useState(suppliers[0]?.id || '');
+function NewPOModal({ companyId, suppliers, defaultSupplierId = '', onCancel, onCreate }) {
+  // Default to the supplier the list is filtered to, else the first one, so
+  // the currency / incoterm prefills are sensible without picking again.
+  const [supplierId, setSupplierId] = useState(defaultSupplierId || suppliers[0]?.id || '');
   const supplier = suppliers.find((s) => s.id === supplierId) || null;
   const [poNumber, setPoNumber] = useState('');
   const poNumberTouched = useRef(false);
@@ -501,16 +530,13 @@ function NewPOModal({ companyId, suppliers, onCancel, onCreate }) {
         </label>
         <label className="field">
           <span className="field__label">
-            Exchange rate (1 {currency} = ? USD)
+            {currency === 'USD' ? 'Exchange rate' : fxLabel(currency)}
           </span>
-          <Input
-            type="number"
-            step="0.0001"
-            min="0"
+          <FxRateInput
+            currency={currency}
             value={exchangeRateToUsd}
             disabled={currency === 'USD'}
-            onChange={(e) => setExchangeRateToUsd(e.target.value)}
-            placeholder={currency === 'USD' ? '1.0000' : 'e.g. 0.14 for THB→USD'}
+            onChange={setExchangeRateToUsd}
           />
           <span className="field__hint">
             Locks the FX rate for this PO. All landed-cost numbers convert to USD using this rate.

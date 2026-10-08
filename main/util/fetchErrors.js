@@ -120,72 +120,89 @@ function analyzeFetchError(err, baseUrl) {
   //   → optionally further nested for IPv6 vs IPv4 retry chains
   // Walk the chain until we hit something with a code we recognise.
   let cause = err?.cause;
-  let code = null;
+  let code = err?.code && typeof err.code === 'string' && err.code !== 'ERR_INVALID_URL' ? err.code : null;
   let address = null;
   let port = null;
-  while (cause && code == null) {
-    if (cause.code) { code = cause.code; }
-    if (cause.address) address = cause.address;
-    if (cause.port)    port = cause.port;
+  let timedOut = isTimeoutLike(err);
+  while (cause) {
+    if (code == null && cause.code) code = cause.code;
+    if (!address && cause.address) address = cause.address;
+    if (!port && cause.port) port = cause.port;
+    if (isTimeoutLike(cause)) timedOut = true;
     cause = cause.cause;
   }
+  if (!port && baseUrl) {
+    try { port = new URL(baseUrl).port || null; } catch (_) { /* keep null */ }
+  }
 
-  const where = baseUrl ? ` (${baseUrl})` : '';
+  // Connectivity pass (AGENTS.md §18): these messages land in toasts and in the
+  // connection chip, so they say what happened and what to check, in plain
+  // words — no socket codes, no "UND_ERR_SOCKET other side closed".
+  const STOPPED_ANSWERING =
+    'The server Mac stopped answering. Check it\'s awake and connected to Tailscale (or the same Wi-Fi), then try again.';
 
-  // Map the common Node socket / DNS codes to actionable messages.
+  if (timedOut) {
+    return { code: code || 'TIMEOUT', message: STOPPED_ANSWERING, hint: 'Server stopped answering' };
+  }
+
+  // Map the common Node socket / DNS / undici codes to actionable messages.
   // Ordered roughly by how often we expect to see them in practice.
   switch (code) {
+    case 'ETIMEDOUT':
+    case 'UND_ERR_CONNECT_TIMEOUT':
+    case 'UND_ERR_HEADERS_TIMEOUT':
+    case 'UND_ERR_BODY_TIMEOUT':
+      return { code, message: STOPPED_ANSWERING, hint: 'Server stopped answering' };
+    case 'UND_ERR_SOCKET':
+    case 'ECONNRESET':
+    case 'EPIPE':
+    case 'UND_ERR_CLOSED':
+      return {
+        code,
+        message:
+          'The connection to the server Mac dropped. It may be asleep, restarting, or off Tailscale. ' +
+          'This Mac keeps retrying on its own.',
+        hint: 'Connection dropped',
+      };
     case 'ECONNREFUSED':
       return {
         code,
         message:
-          `Server refused the connection${where}. ` +
-          `The most likely reasons: the server Mac isn't running Server mode (check its Settings → Multi-Mac shows "Listening on port ${port || 'N'}"), or the port number is wrong.`,
+          `The server Mac is reachable but Media Studio KH isn't accepting connections${port ? ` on port ${port}` : ''}. ` +
+          'Check the app is open there and its Settings → Multi-Mac says "Listening". If it does, the port number here is wrong.',
         hint: 'Server not listening on this port',
       };
     case 'ENOTFOUND':
+    case 'EAI_AGAIN':
       return {
         code,
         message:
-          `Hostname not found${where}. ` +
-          `DNS couldn't resolve the address. If you're using a Tailscale name, make sure Tailscale is running on this Mac. If you typed an IP, double-check it for typos.`,
+          'Can\'t find the server Mac at that address. If it\'s a Tailscale name, check Tailscale is running on this Mac; ' +
+          'otherwise check the address for typos.',
         hint: 'Hostname / IP not reachable',
-      };
-    case 'ETIMEDOUT':
-    case 'UND_ERR_CONNECT_TIMEOUT':
-      return {
-        code,
-        message:
-          `Connection timed out${where}. ` +
-          `Either the server is blocked by a firewall, or you and the server aren't on the same network. ` +
-          `Tailscale users: confirm both Macs are signed into the same tailnet.`,
-        hint: 'Network unreachable',
-      };
-    case 'ECONNRESET':
-      return {
-        code,
-        message:
-          `Server dropped the connection mid-handshake${where}. ` +
-          `Likely a server crash or restart. Check the server Mac's Settings → Multi-Mac shows "Listening" and try again.`,
-        hint: 'Server reset connection',
       };
     case 'EHOSTUNREACH':
     case 'ENETUNREACH':
+    case 'EHOSTDOWN':
+    case 'ENETDOWN':
+    case 'EADDRNOTAVAIL':
       return {
         code,
         message:
-          `No network route to ${address || 'server'}${where}. ` +
-          `Your Mac and the server aren't on the same network. Verify the server's IP (look at the green address chips on its Multi-Mac page) and that you're connected to the same Wi-Fi / Tailscale / VPN.`,
+          `No network route to the server Mac${address ? ` (${address})` : ''}. ` +
+          'Check this Mac is online and connected to Tailscale (or the same Wi-Fi as the server Mac).',
         hint: 'No route to host',
       };
     case 'CERT_HAS_EXPIRED':
     case 'UNABLE_TO_VERIFY_LEAF_SIGNATURE':
     case 'SELF_SIGNED_CERT_IN_CHAIN':
+    case 'DEPTH_ZERO_SELF_SIGNED_CERT':
+    case 'ERR_SSL_WRONG_VERSION_NUMBER':
       return {
         code,
         message:
-          `TLS certificate problem${where}: ${code}. ` +
-          `If the server is on HTTP (not HTTPS), drop the "https://" from the URL.`,
+          'The server address starts with https://, but the server Mac speaks plain http://. ' +
+          'Change the address to start with http://.',
         hint: 'TLS / certificate problem',
       };
     default:
@@ -197,6 +214,7 @@ function analyzeFetchError(err, baseUrl) {
   // catches the common case (missing http://) but odd characters
   // can still slip past.
   if (err?.message?.includes('Invalid URL')) {
+    const where = baseUrl ? ` (${baseUrl})` : '';
     return {
       code: 'INVALID_URL',
       message:
@@ -206,16 +224,25 @@ function analyzeFetchError(err, baseUrl) {
     };
   }
 
-  // Fallback: surface the cause string if we have one, else the
-  // top-level message. Strictly better than the raw "fetch failed".
+  // Fallback: a failure we have no specific words for. Still plain English;
+  // the raw detail goes in brackets at the end for whoever reads crash.log.
   const rawCause = err?.cause
-    ? `${err.cause.code || ''} ${err.cause.syscall || ''} ${err.cause.message || err.cause}`.trim()
+    ? `${err.cause.code || ''} ${err.cause.message || err.cause}`.trim()
     : null;
+  const detail = rawCause || (err?.message && err.message !== 'fetch failed' ? err.message : '');
   return {
     code: code || null,
-    message: `Couldn't reach server${where}: ${rawCause || err?.message || 'unknown error'}`,
+    message: `Couldn't reach the server Mac. Check it's awake and connected to Tailscale.${detail ? ` (${detail})` : ''}`,
     hint: 'Network error',
   };
+}
+
+/** A fetch abort caused by a deadline (AbortSignal.timeout / undici timeouts). */
+function isTimeoutLike(e) {
+  if (!e) return false;
+  if (e.name === 'TimeoutError') return true;
+  if (e.code === 'UND_ERR_HEADERS_TIMEOUT' || e.code === 'UND_ERR_BODY_TIMEOUT' || e.code === 'UND_ERR_CONNECT_TIMEOUT') return true;
+  return e.name === 'AbortError' && /timeout|timed out|deadline/i.test(String(e.message || ''));
 }
 
 /**

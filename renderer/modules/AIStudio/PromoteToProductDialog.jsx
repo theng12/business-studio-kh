@@ -28,11 +28,6 @@ export function PromoteToProductDialog({ entry, onClose, onPromoted, onError }) 
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const listRef = useRef(null);
-  // Arrow-key cursor for the product list. Only the setter is bound: the value
-  // is read exclusively through the updater form below (`setActiveIdx((i) => …)`
-  // needs the previous index to move by one), so naming it would be a dead
-  // binding — but the STATE must stay, or arrow navigation loses its position.
-  const [, setActiveIdx] = useState(0);
 
   const [newSku, setNewSku] = useState('');
   const [newName, setNewName] = useState('');
@@ -45,35 +40,40 @@ export function PromoteToProductDialog({ entry, onClose, onPromoted, onError }) 
     const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const base = terms.length
       ? products.filter((p) => {
-          const hay = `${p.sku ?? ''} ${p.name ?? ''}`.toLowerCase();
+          const hay = `${p.sku ?? ''} ${p.name ?? ''} ${p.barcode ?? ''}`.toLowerCase();
           return terms.every((t) => hay.includes(t));
         })
       : products;
     return base.slice(0, 200);
   }, [products, search]);
 
+  // The selection must always be a row the user can SEE. Typing a search
+  // used to leave the earlier pick selected while it was filtered out of the
+  // list, so Enter promoted to a product that was no longer on screen. When
+  // the list changes and the pick is gone, the first match becomes the pick
+  // (or nothing, when nothing matches).
+  const selectedIdx = filtered.findIndex((p) => p.id === selectedId);
+  const target = selectedIdx >= 0 ? filtered[selectedIdx] : null;
   useEffect(() => {
-    if (filtered.length > 0 && !selectedId) setSelectedId(filtered[0].id);
-  }, [filtered, selectedId]);
+    if (selectedIdx >= 0) return;
+    setSelectedId(filtered[0]?.id ?? null);
+  }, [filtered, selectedIdx]);
+  useEffect(() => {
+    if (selectedIdx < 0 || !listRef.current) return;
+    const el = listRef.current.querySelector(`[data-idx="${selectedIdx}"]`);
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+  }, [selectedIdx]);
 
   function onSearchKey(e) {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setActiveIdx((i) => {
-        const next = Math.min(filtered.length - 1, i + 1);
-        const row = filtered[next];
-        if (row) setSelectedId(row.id);
-        return next;
-      });
+      const row = filtered[Math.min(filtered.length - 1, selectedIdx + 1)];
+      if (row) setSelectedId(row.id);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setActiveIdx((i) => {
-        const next = Math.max(0, i - 1);
-        const row = filtered[next];
-        if (row) setSelectedId(row.id);
-        return next;
-      });
-    } else if (e.key === 'Enter' && selectedId) {
+      const row = filtered[Math.max(0, selectedIdx - 1)];
+      if (row) setSelectedId(row.id);
+    } else if (e.key === 'Enter' && target) {
       e.preventDefault();
       handleConfirm();
     }
@@ -84,12 +84,12 @@ export function PromoteToProductDialog({ entry, onClose, onPromoted, onError }) 
     setBusy(true);
     try {
       if (tab === 'existing') {
-        if (!selectedId) {
+        if (!target) {
           onError?.('Pick a product first.');
           setBusy(false);
           return;
         }
-        await window.api.ai.promoteGallery({ galleryId: entry.id, targetProductId: selectedId });
+        await window.api.ai.promoteGallery({ galleryId: entry.id, targetProductId: target.id });
       } else {
         if (!newSku.trim()) {
           onError?.('SKU is required.');
@@ -119,8 +119,16 @@ export function PromoteToProductDialog({ entry, onClose, onPromoted, onError }) 
   const footer = (
     <>
       <Button onClick={onClose}>Cancel</Button>
-      <Button variant="primary" disabled={busy} onClick={handleConfirm}>
-        {busy ? 'Promoting…' : 'Promote'}
+      <Button
+        variant="primary"
+        className="ai-promote__confirm"
+        disabled={busy || (tab === 'existing' && !target) || (tab === 'new' && !newSku.trim())}
+        onClick={handleConfirm}
+        title={tab === 'existing' && target ? `${target.sku}${target.name ? ` · ${target.name}` : ''}` : undefined}
+      >
+        {busy ? 'Promoting…'
+          : tab === 'existing' ? (target ? `Promote to ${target.sku}` : 'Pick a product')
+          : newSku.trim() ? `Create ${newSku.trim()}` : 'Promote'}
       </Button>
     </>
   );
@@ -170,7 +178,7 @@ export function PromoteToProductDialog({ entry, onClose, onPromoted, onError }) 
                   type="button"
                   data-idx={idx}
                   className={`ai-promote__row${p.id === selectedId ? ' is-active' : ''}`}
-                  onClick={() => { setSelectedId(p.id); setActiveIdx(idx); }}
+                  onClick={() => setSelectedId(p.id)}
                   role="option"
                   aria-selected={p.id === selectedId}
                 >

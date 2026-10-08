@@ -268,14 +268,25 @@ function renumberFiles(productId) {
  * at insert time rather than reused from before the encode: a remove that ran
  * meanwhile would otherwise leave a gap.
  */
-function addFromSource(productId, sourcePath, { originalFilepath } = {}) {
+function addFromSource(productId, sourcePath, { originalFilepath, makeMain } = {}) {
   return withProductImageLock(productId, () => addImage(productId, originalFilepath, (im, opts) =>
-    im.importProductImage(sourcePath, opts)));
+    im.importProductImage(sourcePath, opts)).then((res) => makeMainInLock(productId, res, makeMain)));
 }
 
-function addFromBytes(productId, buffer, ext, { originalFilepath } = {}) {
+function addFromBytes(productId, buffer, ext, { originalFilepath, makeMain } = {}) {
   return withProductImageLock(productId, () => addImage(productId, originalFilepath, (im, opts) =>
-    im.importProductImageFromBytes(buffer, ext, opts)));
+    im.importProductImageFromBytes(buffer, ext, opts)).then((res) => makeMainInLock(productId, res, makeMain)));
+}
+
+/* `makeMain: true` makes the added (or dedup-reused) photo the main image by
+ * its ROW ID, still inside the add's own turn of the product lock — so no
+ * remove/reorder from another Mac can renumber the files between the add and
+ * the set-main and hand the main slot to a different photo. Returns `image`
+ * re-read after the renumber (its filepath is now the main slot). */
+function makeMainInLock(productId, res, makeMain) {
+  if (makeMain !== true || !res?.image?.id) return res;
+  setMainById(productId, res.image.id);
+  return { ...res, image: getById(productId, res.image.id) ?? res.image, madeMain: true };
 }
 
 async function addImage(productId, originalFilepath, importFn) {
@@ -399,7 +410,8 @@ function remove(productId, imageId, expectedContentHash) {
   } catch (err) {
     process.stderr.write(`[images.remove] renumber after delete skipped: ${err.message}\n`);
   }
-  return rowToImage(rawRow);
+  // `deletedEntryId`: the recycle-bin entry holding this photo (for Undo).
+  return { ...rowToImage(rawRow), deletedEntryId: heldId ?? null };
 }
 
 /**

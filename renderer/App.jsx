@@ -18,6 +18,7 @@ import { SearchPalette } from './components/SearchPalette.jsx';
 // the-same-row case. Users can audit cross-Mac edits via the History
 // page.
 import { PageErrorBoundary } from './components/PageErrorBoundary.jsx';
+import { OfflineBanner } from './components/OfflineBanner.jsx';
 // v0.49.31: routes split into eager + lazy. Eager = small modules + likely
 // first-paint targets (Dashboard is the default; ProductLibrary is the most
 // common landing once a company is picked). Lazy = anything heavy whose
@@ -261,6 +262,7 @@ export default function App() {
             <Button variant="primary" onClick={() => setActiveModule('settings')}>Open Settings</Button>
           </div>
         ) : null}
+        <OfflineBanner />
         {ready ? (
           <PageErrorBoundary pageKey={activeModule}>
             {/* v0.49.31: Suspense INSIDE the error boundary so a chunk-

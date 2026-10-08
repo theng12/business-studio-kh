@@ -70,9 +70,10 @@ const { PORTABLE_CONFIG_KEYS } = require('./serverBundle');
 
 /* ─── small shared helpers ─────────────────────────────────────── */
 
-function runCommand(cmd, args) {
+function runCommand(cmd, args, { onSpawn } = {}) {
   return new Promise((resolve, reject) => {
     const p = spawn(cmd, args);
+    onSpawn?.(p);
     let stdout = '';
     let stderr = '';
     p.stdout?.on('data', (d) => { stdout += d.toString(); });
@@ -110,6 +111,144 @@ function resolveBackupsDir(cfg) {
 /* ─── create ───────────────────────────────────────────────────── */
 
 /**
+ * The hidden name an archive is written under until it is complete. The
+ * leading dot and the `.partial` suffix both keep it out of
+ * isBackupFilename(), so listBackups, retention and restore never see it.
+ */
+function partialBackupPath(outputPath) {
+  const dir = path.dirname(outputPath);
+  const base = path.basename(outputPath);
+  return path.join(dir, `.${base}.${process.pid}-${Date.now()}.partial`);
+}
+
+/**
+ * Write `outputPath` via a temp file in the same folder and rename it into
+ * place on success (same folder ⇒ same disk ⇒ atomic). On failure only the
+ * temp file — this run's own partial output — is removed, then the error is
+ * rethrown. `write(tmpPath)` does the actual writing.
+ */
+async function writeArchiveAtomically(outputPath, write, job = null) {
+  const tmpPath = partialBackupPath(outputPath);
+  if (job) job.tmpArchive = tmpPath;
+  let renamed = false;
+  try {
+    await write(tmpPath);
+    await fsp.rename(tmpPath, outputPath);
+    renamed = true;
+    return outputPath;
+  } finally {
+    if (!renamed) {
+      try { await fsp.rm(tmpPath, { force: true }); } catch (_) { /* best effort */ }
+    }
+    if (job) job.tmpArchive = null;
+  }
+}
+
+/* In-flight backups, so quitting the app can stop `tar` and clear this run's
+ * own temp output (the staging copy and the hidden partial archive). */
+const activeJobs = new Set();
+let quitHookInstalled = false;
+
+function installQuitCleanup() {
+  if (quitHookInstalled || typeof app?.on !== 'function') return;
+  quitHookInstalled = true;
+  app.on('will-quit', cleanupActiveBackups);
+}
+
+/** Stop every running backup and remove its temp files. Synchronous: it runs from will-quit. */
+function cleanupActiveBackups() {
+  for (const job of activeJobs) {
+    job.cancelled = true;
+    try { job.child?.kill('SIGTERM'); } catch (_) { /* already gone */ }
+    for (const p of [job.tmpArchive, job.stagingRoot]) {
+      if (!p) continue;
+      try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) { /* best effort */ }
+    }
+  }
+  activeJobs.clear();
+}
+
+/* One backup at a time — a manual one and the automatic one would otherwise
+ * each stage a full copy of the data at once. */
+let backupQueue = Promise.resolve();
+function serializeBackup(fn) {
+  const run = backupQueue.then(fn, fn);
+  backupQueue = run.then(() => {}, () => {});
+  return run;
+}
+
+/* ─── free space ─── */
+
+const GB = 1024 ** 3;
+const SPACE_MARGIN_BYTES = 200 * 1024 * 1024;
+
+async function freeBytes(dir) {
+  if (typeof fsp.statfs !== 'function') return null;
+  try {
+    const st = await fsp.statfs(dir);
+    return Number(st.bavail) * Number(st.bsize);
+  } catch (_) {
+    return null; // unknown → do not block the backup on it
+  }
+}
+
+/**
+ * Whether a backup of `dataBytes` fits: the staging copy needs about the data
+ * size, and the archive about the same again (photos barely compress). On one
+ * disk both come out of the same free space. A `null` free figure is unknown
+ * and never blocks. Returns null when it fits, else { needBytes, freeBytes, where }.
+ */
+function backupSpaceShortfall({ dataBytes, stagingFree, destFree, sameVolume, stagingDir, destDir }) {
+  const each = Math.ceil(Number(dataBytes) * 1.05) + SPACE_MARGIN_BYTES;
+  if (sameVolume) {
+    const free = destFree ?? stagingFree;
+    if (free != null && free < each * 2) return { needBytes: each * 2, freeBytes: free, where: destDir };
+    return null;
+  }
+  if (stagingFree != null && stagingFree < each) return { needBytes: each, freeBytes: stagingFree, where: stagingDir };
+  if (destFree != null && destFree < each) return { needBytes: each, freeBytes: destFree, where: destDir };
+  return null;
+}
+
+function spaceMessage(shortfall, auto) {
+  const gb = (n) => (Math.max(0.1, n / GB)).toFixed(1);
+  return `Not enough free space for ${auto ? 'an automatic' : 'a'} backup — needs about ${gb(shortfall.needBytes)} GB, `
+    + `${gb(shortfall.freeBytes)} GB free on ${shortfall.where}. Free some space or choose another backups folder in Settings → Backups.`;
+}
+
+async function sumInventoryBytes(dataDir, treeSnapshot) {
+  let total = 0;
+  for (const e of treeSnapshot || []) if (e.kind === 'file') total += Number(e.size) || 0;
+  for (const f of ['database.sqlite', 'database.sqlite-wal']) {
+    try { total += (await fsp.stat(path.join(dataDir, f))).size; } catch (_) { /* absent */ }
+  }
+  return total;
+}
+
+const STAGING_PREFIX = '.iskh-backup-staging-';
+const STALE_TEMP_MS = 6 * 3600 * 1000;
+
+/**
+ * Remove this app's own leftovers from an earlier run that was killed before
+ * it could clean up (hidden staging folders and `.partial` archives). Only
+ * names this file creates, and only ones untouched for hours.
+ */
+async function sweepStaleTemp(dir, now = Date.now()) {
+  let names;
+  try { names = await fsp.readdir(dir); } catch (_) { return; }
+  for (const name of names) {
+    const ours = name.startsWith(STAGING_PREFIX) || /^\.(?:media|image)-studio-kh-backup-.+\.partial$/.test(name);
+    if (!ours) continue;
+    const full = path.join(dir, name);
+    try {
+      const st = await fsp.lstat(full);
+      if (now - st.mtimeMs < STALE_TEMP_MS) continue;
+      await fsp.rm(full, { recursive: true, force: true });
+    } catch (_) { /* best effort */ }
+  }
+}
+
+/**
  * Create a backup of the active data folder + config.json. Writes a
  * single .iskhbackup (tar.gz) into the backups folder.
  *
@@ -119,7 +258,12 @@ function resolveBackupsDir(cfg) {
  * @param {(stage: string) => void} [args.onProgress]
  *   Stages: 'snapshot' | 'manifest' | 'archive' | 'cleanup' | 'done'.
  */
-async function createBackup({ destDir, onProgress } = {}) {
+function createBackup(opts = {}) {
+  return serializeBackup(() => createBackupNow(opts));
+}
+
+async function createBackupNow({ destDir, onProgress, auto = false } = {}) {
+  installQuitCleanup();
   const config = require('./config');
   const cfg = config.loadConfig();
   const dataDir = cfg.dataDir;
@@ -132,12 +276,22 @@ async function createBackup({ destDir, onProgress } = {}) {
 
   const createdAt = Date.now();
   const stamp = backupStamp(new Date(createdAt));
-  const fileName = backupFilename(stamp, app.getVersion());
+  const fileName = auto ? autoBackupFilename(stamp, app.getVersion()) : backupFilename(stamp, app.getVersion());
   const outputPath = path.join(backupsDir, fileName);
 
-  // Stage into a temp dir (mkdtemp) so a crash/cancel leaves nothing
-  // half-written in the user's backups folder.
-  const stagingRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-backup-'));
+  // Stage into a temp dir (mkdtemp). When the system temp folder is on
+  // another disk than the destination (an external backups drive), stage on
+  // the destination's disk instead, so the boot disk never has to hold a full
+  // copy of the data. A hidden name keeps it out of the backup listing.
+  const stageOnDest = !sameDisk(os.tmpdir(), backupsDir);
+  const stagingParent = stageOnDest ? backupsDir : os.tmpdir();
+  await sweepStaleTemp(backupsDir);
+  const stagingRoot = await fsp.mkdtemp(path.join(stagingParent, stageOnDest ? STAGING_PREFIX : 'iskh-backup-'));
+  const stagingName = `iskh-backup-${stamp}`;
+  const stagingDir = path.join(stagingRoot, stagingName);
+  await fsp.mkdir(stagingDir);
+  const job = { child: null, stagingRoot, tmpArchive: null, cancelled: false };
+  activeJobs.add(job);
 
   try {
     // 1. Record the asset trees before the DB snapshot. A backup must
@@ -148,8 +302,24 @@ async function createBackup({ destDir, onProgress } = {}) {
     if (fs.existsSync(dbSrc)) {
       const trees = BACKUP_DATA_ENTRIES.filter((n) => n !== 'database.sqlite');
       const treeSnapshot = await snapshotDataTrees(dataDir, trees);
-      await snapshotDatabase(path.join(stagingRoot, 'database.sqlite'));
-      const includedTrees = await copyDataTrees(dataDir, stagingRoot, trees, treeSnapshot);
+      // Free space before the copy: staging + archive need about twice the
+      // data, and an unattended run must not fill the boot disk.
+      const dataBytes = await sumInventoryBytes(dataDir, treeSnapshot);
+      const shortfall = backupSpaceShortfall({
+        dataBytes,
+        stagingFree: await freeBytes(stagingRoot),
+        destFree: await freeBytes(backupsDir),
+        sameVolume: stageOnDest || sameDisk(stagingRoot, backupsDir),
+        stagingDir: stagingParent,
+        destDir: backupsDir,
+      });
+      if (shortfall) {
+        const err = new Error(spaceMessage(shortfall, auto));
+        err.code = 'BACKUP_NO_SPACE';
+        throw err;
+      }
+      await snapshotDatabase(path.join(stagingDir, 'database.sqlite'));
+      const includedTrees = await copyDataTrees(dataDir, stagingDir, trees, treeSnapshot);
       includes.push('database.sqlite');
       for (const name of includedTrees) includes.push(name + '/');
     } else {
@@ -162,7 +332,7 @@ async function createBackup({ destDir, onProgress } = {}) {
     onProgress?.('manifest');
     const cfgPath = config.configPath();
     if (fs.existsSync(cfgPath)) {
-      await fsp.copyFile(cfgPath, path.join(stagingRoot, 'config.json'));
+      await fsp.copyFile(cfgPath, path.join(stagingDir, 'config.json'));
       includes.push('config.json');
     }
 
@@ -171,20 +341,24 @@ async function createBackup({ destDir, onProgress } = {}) {
       backupFormatVersion: BACKUP_FORMAT_VERSION,
       appVersion: app.getVersion(),
       createdAt,
+      ...(auto ? { automatic: true } : {}),
       sourceDataDir: dataDir,   // informational; restore uses the live dataDir
       includes,
     };
     await fsp.writeFile(
-      path.join(stagingRoot, 'manifest.json'),
+      path.join(stagingDir, 'manifest.json'),
       JSON.stringify(manifest, null, 2),
     );
 
     // 4. Pack the regular-file staging tree; live data is never
-    //    referenced from the archive operation.
+    //    referenced from the archive operation. The archive is written
+    //    under a hidden temp name and renamed into place only once tar has
+    //    finished, so a full disk or a quit mid-pack never leaves a
+    //    truncated file that lists (and counts) as a good backup.
     onProgress?.('archive');
-    const stagingParent = path.dirname(stagingRoot);
-    const stagingName = path.basename(stagingRoot);
-    await runCommand('tar', ['-czf', outputPath, '-C', stagingParent, stagingName]);
+    if (job.cancelled) throw new Error('Backup cancelled: the app is quitting');
+    await writeArchiveAtomically(outputPath, (tmpPath) =>
+      runCommand('tar', ['-czf', tmpPath, '-C', stagingRoot, stagingName], { onSpawn: (child) => { job.child = child; } }), job);
 
     onProgress?.('done');
     const stat = await fsp.stat(outputPath);
@@ -197,9 +371,25 @@ async function createBackup({ destDir, onProgress } = {}) {
       backupsDir,
     };
   } finally {
+    activeJobs.delete(job);
     onProgress?.('cleanup');
     try { await fsp.rm(stagingRoot, { recursive: true, force: true }); } catch (_) {}
   }
+}
+
+/**
+ * The local time stamped into a backup filename by backupStamp()
+ * (YYYY-MM-DD-HHmm), in ms — or null when the name has none or it is not a
+ * real date. The last such stamp in the name wins.
+ */
+function backupTimeFromName(name) {
+  const matches = [...String(name || '').matchAll(/(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})/g)];
+  const m = matches[matches.length - 1];
+  if (!m) return null;
+  const [y, mo, d, h, mi] = m.slice(1).map(Number);
+  const t = new Date(y, mo - 1, d, h, mi);
+  if (t.getFullYear() !== y || t.getMonth() !== mo - 1 || t.getDate() !== d || t.getHours() !== h || t.getMinutes() !== mi) return null;
+  return t.getTime();
 }
 
 /* ─── list ─────────────────────────────────────────────────────── */
@@ -219,7 +409,9 @@ async function listBackups() {
   try {
     names = await fsp.readdir(backupsDir);
   } catch (err) {
-    if (err.code === 'ENOENT') return { backupsDir, backups: [] };
+    // No folder yet (fresh install): still report the automatic-backup
+    // status, or a client reads its absence as an out-of-date server.
+    if (err.code === 'ENOENT') return { backupsDir, backups: [], autoBackup: autoBackupStatus(cfg, backupsDir, []) };
     throw err;
   }
   const backups = [];
@@ -233,13 +425,251 @@ async function listBackups() {
         fileName: name,
         backupPath: full,
         sizeBytes: stat.size,
-        // Birth time when available (macOS reports it), else mtime.
-        createdAt: Math.round((stat.birthtimeMs || stat.mtimeMs) || 0),
+        // The time in the FILENAME, not the file's birth time: a restore or
+        // a data-folder move copies the backups folder, and every copy is
+        // "born" in copy order — retention then trashed the newest backup and
+        // the next automatic one was pushed back a week. mtime only when the
+        // name carries no readable time (a renamed file).
+        createdAt: backupTimeFromName(name) ?? Math.round(stat.mtimeMs || 0),
+        auto: isAutoBackupName(name),
       });
     } catch (_) { /* skip unreadable */ }
   }
   backups.sort((a, b) => b.createdAt - a.createdAt);
-  return { backupsDir, backups };
+  return { backupsDir, backups, autoBackup: autoBackupStatus(cfg, backupsDir, backups) };
+}
+
+/* ─── automatic weekly backups ─────────────────────────────────── */
+
+/**
+ * 0.1.94 — owner's decision: a weekly automatic backup while the app is
+ * open, keeping the newest four automatic ones.
+ *
+ *   - Checked shortly after launch and every few hours after that; when the
+ *     newest AUTOMATIC backup in the backups folder is 7+ days old (or there
+ *     is none), one is made in the background.
+ *   - Automatic backups are told apart by their filename
+ *     (`media-studio-kh-backup-auto-…`), which isBackupFilename() already
+ *     accepts, so they list and restore like any other.
+ *   - Retention only ever touches automatic backups: the oldest beyond four
+ *     go to the macOS Trash (main/util/fileTrash.js — never erased). A
+ *     backup the user made by hand is never pruned.
+ *   - Only the Mac that holds the data runs it: main/index.js starts the
+ *     scheduler on the standalone / server boot path, and the check refuses
+ *     client mode too, in case that ever changes.
+ *   - It runs as a tracked operation, so a restore or data-folder move waits
+ *     for it instead of moving the folder out from under the archive.
+ */
+const AUTO_BACKUP_INTERVAL_MS = 7 * 24 * 3600 * 1000;
+const AUTO_BACKUP_KEEP = 4;
+const AUTO_BACKUP_CHECK_MS = 3 * 3600 * 1000;
+const AUTO_BACKUP_FIRST_CHECK_MS = 2 * 60 * 1000;
+const AUTO_PREFIX = 'media-studio-kh-backup-auto-';
+// A write into the data folder during the copy fails the snapshot check; on a
+// busy day that is common, so an automatic run retries sooner than the next
+// 3-hour check — a few times a day at most.
+const AUTO_BACKUP_RETRY_MS = 30 * 60 * 1000;
+const AUTO_BACKUP_MAX_RETRIES_PER_DAY = 4;
+const RETRYABLE_BACKUP_ERROR = /Data folder changed during|Staged data does not match the source snapshot/;
+
+function autoBackupFilename(stamp, appVersion) {
+  return backupFilename(stamp, appVersion).replace('media-studio-kh-backup-', AUTO_PREFIX);
+}
+
+function isAutoBackupName(name) {
+  return typeof name === 'string' && name.startsWith(AUTO_PREFIX) && isBackupFilename(name);
+}
+
+/**
+ * Newest automatic backup's time, or null. A backup dated after `now` (the
+ * clock was set back, or a file was copied in) is ignored: counting it as
+ * the newest would either postpone backups until that date or — as it did
+ * before — make every 3-hour check "due" and churn the retention slots.
+ */
+function lastAutoBackupAt(backups, now = Date.now()) {
+  let best = null;
+  for (const b of backups || []) {
+    if (!(b.auto ?? isAutoBackupName(b.fileName))) continue;
+    const at = Number(b.createdAt);
+    if (!Number.isFinite(at) || at > now) continue;
+    if (best == null || at > best) best = at;
+  }
+  return best;
+}
+
+/** True when an automatic backup should run now. */
+function autoBackupDue({ lastAutoAt, now = Date.now(), intervalMs = AUTO_BACKUP_INTERVAL_MS } = {}) {
+  if (lastAutoAt == null || !Number.isFinite(Number(lastAutoAt))) return true;
+  // A future time counts as "just made" (clamped to now). lastAutoBackupAt
+  // already skips future-dated files, so this only guards direct callers.
+  const last = Math.min(Number(lastAutoAt), now);
+  return now - last >= intervalMs;
+}
+
+/**
+ * The automatic backups to retire: every automatic one beyond the newest
+ * `keep`, oldest last. Manual backups are never in the result.
+ *
+ * Future-dated automatic backups (later than `now`) are neither counted
+ * toward `keep` nor retired: one may be the newest real backup (the clock
+ * went backwards), and letting it hold a slot would let each new backup push
+ * a good older one into the Trash. `justMade` (a backupPath) is always kept
+ * and counted first, whatever its timestamp says.
+ */
+function autoBackupsToPrune(backups, { keep = AUTO_BACKUP_KEEP, now = Date.now(), justMade = null } = {}) {
+  const isJustMade = (b) => justMade != null && b.backupPath === justMade;
+  const autos = (backups || [])
+    .filter((b) => b.auto ?? isAutoBackupName(b.fileName))
+    .filter((b) => isJustMade(b) || !(Number(b.createdAt) > now))
+    .sort((a, b) => (isJustMade(b) - isJustMade(a)) || (b.createdAt - a.createdAt));
+  return autos.slice(Math.max(0, keep));
+}
+
+/** True when the two paths live on the same disk (the nearest existing ancestor of each). */
+function sameDisk(a, b) {
+  const devOf = (p) => {
+    let cur = path.resolve(p);
+    for (;;) {
+      try { return fs.statSync(cur).dev; } catch (_) { /* climb */ }
+      const up = path.dirname(cur);
+      if (up === cur) return null;
+      cur = up;
+    }
+  };
+  const da = devOf(a);
+  const db = devOf(b);
+  return da != null && db != null && da === db;
+}
+
+const autoState = {
+  running: false, lastError: null, lastErrorAt: null, timer: null, firstTimer: null,
+  retryTimer: null, retries: { day: null, count: 0 },
+};
+
+/**
+ * How soon to retry an automatic backup that failed with `message`, or null
+ * to wait for the regular check. Only the "data changed while copying" error
+ * is retried early, at most AUTO_BACKUP_MAX_RETRIES_PER_DAY times per day.
+ * Returns the delay and the updated per-day count.
+ */
+function autoRetryPlan(message, retries, now) {
+  const day = new Date(now).toDateString();
+  const count = retries?.day === day ? retries.count : 0;
+  if (!RETRYABLE_BACKUP_ERROR.test(String(message || ''))) return { retryInMs: null, retries: { day, count } };
+  if (count >= AUTO_BACKUP_MAX_RETRIES_PER_DAY) return { retryInMs: null, retries: { day, count } };
+  return { retryInMs: AUTO_BACKUP_RETRY_MS, retries: { day, count: count + 1 } };
+}
+
+function autoBackupStatus(cfg, backupsDir, backups) {
+  const lastAt = lastAutoBackupAt(backups, Date.now());
+  return {
+    enabled: cfg?.autoBackupEnabled !== false,
+    intervalDays: AUTO_BACKUP_INTERVAL_MS / (24 * 3600 * 1000),
+    keep: AUTO_BACKUP_KEEP,
+    lastAt,
+    nextDueAt: lastAt == null ? null : lastAt + AUTO_BACKUP_INTERVAL_MS,
+    running: autoState.running,
+    lastError: autoState.lastError,
+    lastErrorAt: autoState.lastErrorAt,
+    // "Same disk as the data" is the real risk (one drive failing takes both);
+    // a backups folder inside the data folder is the default case of it.
+    sameDiskAsData: cfg?.dataDir ? sameDisk(backupsDir, cfg.dataDir) : false,
+  };
+}
+
+/**
+ * Make an automatic backup if one is due, then retire automatic backups
+ * beyond the newest four. Never throws: a failure is logged and remembered
+ * for Settings, and the next check retries.
+ *
+ * `deps` lets a test supply the pieces; production passes nothing.
+ */
+async function runAutoBackupIfDue({ now = Date.now(), log = () => {}, deps = {} } = {}) {
+  const config = deps.config || require('./config');
+  const list = deps.listBackups || listBackups;
+  const create = deps.createBackup || createBackup;
+  const trash = deps.trashPath || require('./util/fileTrash').trashPath;
+  const track = deps.runTracked || ((fn) => {
+    const lifecycle = require('./util/maintenanceLifecycle');
+    if (lifecycle.isMaintenanceActive()) return { skipped: 'maintenance' };
+    return lifecycle.runTrackedOperation('backups:auto', fn);
+  });
+  if (autoState.running) return { skipped: 'running' };
+  const cfg = config.loadConfig();
+  if (cfg.mode === 'client') return { skipped: 'client' };
+  if (cfg.autoBackupEnabled === false) return { skipped: 'disabled' };
+  autoState.running = true;
+  try {
+    // The whole check — listing, the backup AND the retention that follows —
+    // runs as ONE tracked operation, so a restore or data-folder move cannot
+    // start while old backups are still being moved to the Trash.
+    const outcome = await track(async () => {
+      const before = await list();
+      let created = null;
+      if (autoBackupDue({ lastAutoAt: lastAutoBackupAt(before.backups, now), now })) {
+        // A custom folder on an external drive that is not plugged in: making
+        // it would quietly create /Volumes/<drive>/… on the internal disk.
+        if (cfg.backupsDir && !(deps.exists || fs.existsSync)(cfg.backupsDir)) {
+          throw new Error(`The backups folder is not available: ${cfg.backupsDir}. Connect the drive, or choose another folder in Settings → Backups.`);
+        }
+        created = await create({ auto: true });
+        log('backup:auto', `${created.fileName} ${created.sizeBytes} bytes`);
+      }
+      const after = created ? await list() : before;
+      const pruned = [];
+      const toPrune = autoBackupsToPrune(after.backups, { now, justMade: created?.backupPath ?? null });
+      for (const old of toPrune) {
+        const outcome = await trash(old.backupPath);
+        pruned.push({ fileName: old.fileName, outcome });
+        log('backup:auto-retired', `${old.fileName} → ${outcome}`);
+      }
+      return { created, pruned };
+    });
+    if (outcome?.skipped) return outcome;
+    // Only a backup that was actually made clears an earlier failure; a
+    // "not due yet" check proves nothing and must not hide the error.
+    if (outcome?.created) {
+      autoState.lastError = null;
+      autoState.lastErrorAt = null;
+    }
+    return outcome;
+  } catch (err) {
+    autoState.lastError = err.message;
+    autoState.lastErrorAt = now;
+    log('backup:auto-failed', err.message);
+    const plan = autoRetryPlan(err.message, autoState.retries, now);
+    autoState.retries = plan.retries;
+    return plan.retryInMs ? { error: err.message, retryInMs: plan.retryInMs } : { error: err.message };
+  } finally {
+    autoState.running = false;
+  }
+}
+
+/** Start the weekly check (first one a couple of minutes after launch). Returns a stop function. */
+function startAutoBackupScheduler({ log = () => {} } = {}) {
+  stopAutoBackupScheduler();
+  const tick = () => {
+    runAutoBackupIfDue({ log }).then((res) => {
+      if (!res?.retryInMs || !autoState.timer) return;
+      clearTimeout(autoState.retryTimer);
+      autoState.retryTimer = setTimeout(tick, res.retryInMs);
+      autoState.retryTimer.unref?.();
+    }).catch(() => { /* never throws; belt-and-braces */ });
+  };
+  autoState.firstTimer = setTimeout(tick, AUTO_BACKUP_FIRST_CHECK_MS);
+  autoState.timer = setInterval(tick, AUTO_BACKUP_CHECK_MS);
+  autoState.firstTimer.unref?.();
+  autoState.timer.unref?.();
+  return stopAutoBackupScheduler;
+}
+
+function stopAutoBackupScheduler() {
+  clearTimeout(autoState.firstTimer);
+  clearInterval(autoState.timer);
+  clearTimeout(autoState.retryTimer);
+  autoState.firstTimer = null;
+  autoState.timer = null;
+  autoState.retryTimer = null;
 }
 
 /** The single most-recent backup (or null). Cheap call for the "last backup was…" affordance. */
@@ -371,7 +801,7 @@ async function restoreBackup({ backupPath, onProgress, runReplacement } = {}) {
         const newBackups = path.join(dataDir, BACKUP_DIR_NAME);
         try {
           if (fs.existsSync(oldBackups) && !fs.existsSync(newBackups)) {
-            await fsp.cp(oldBackups, newBackups, { recursive: true });
+            await fsp.cp(oldBackups, newBackups, { recursive: true, preserveTimestamps: true });
           }
         } catch (_) { /* leave history in the safety copy */ }
       }
@@ -453,4 +883,24 @@ module.exports = {
   previewBackup,
   restoreBackup,
   resolveBackupsDir,
+  writeArchiveAtomically,
+  backupTimeFromName,
+  backupSpaceShortfall,
+  cleanupActiveBackups,
+  autoRetryPlan,
+  AUTO_BACKUP_RETRY_MS,
+  AUTO_BACKUP_MAX_RETRIES_PER_DAY,
+  // test seams
+  _internals: { activeJobs, runCommand, serializeBackup, sweepStaleTemp },
+  // 0.1.94 automatic weekly backups
+  AUTO_BACKUP_INTERVAL_MS,
+  AUTO_BACKUP_KEEP,
+  autoBackupFilename,
+  isAutoBackupName,
+  autoBackupDue,
+  autoBackupsToPrune,
+  lastAutoBackupAt,
+  runAutoBackupIfDue,
+  startAutoBackupScheduler,
+  stopAutoBackupScheduler,
 };

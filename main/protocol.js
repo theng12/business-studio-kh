@@ -77,6 +77,8 @@ function registerRendererProtocol(distRendererDir) {
  * onError can fall back to a placeholder without confusing the user
  * about whether the file or the network is at fault.
  */
+const IMAGE_FETCH_TIMEOUT_MS = 20_000;
+
 function registerClientImageProtocol(getClient) {
   protocol.handle('app-image', async (request) => {
     try {
@@ -109,10 +111,25 @@ function registerClientImageProtocol(getClient) {
           '_auth',
           createHash('sha256').update(auth).digest('hex').slice(0, 16),
         );
-        upstream = await net.fetch(upstreamUrl.toString(), {
-          headers: { Authorization: auth },
-          cache: 'no-cache',
-        });
+        // Connectivity pass (0.1.94): an image request to a server that has
+        // gone quiet used to hang with no deadline, leaving a blank tile
+        // forever. Give up if no response has started within 20s; the
+        // renderer's ConnImg retries the tile once the connection comes back.
+        // The deadline covers the wait for headers only — a full-size photo
+        // that is arriving slowly over a thin link is left to finish.
+        const deadline = new AbortController();
+        const deadlineTimer = setTimeout(() => {
+          deadline.abort(new DOMException('The server Mac did not answer the image request in time.', 'TimeoutError'));
+        }, IMAGE_FETCH_TIMEOUT_MS);
+        try {
+          upstream = await net.fetch(upstreamUrl.toString(), {
+            headers: { Authorization: auth },
+            cache: 'no-cache',
+            signal: deadline.signal,
+          });
+        } finally {
+          clearTimeout(deadlineTimer);
+        }
       } catch (err) {
         process.stderr.write(`[app-image client] fetch error: ${err.message}\n`);
         return new Response(`Upstream fetch failed: ${err.message}`, { status: 502 });

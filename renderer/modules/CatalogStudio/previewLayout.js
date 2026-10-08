@@ -23,7 +23,10 @@ export function paginatePreviewDocument(doc, config = {}) {
   const paper = catalogPaper(config); const mm = 96 / 25.4;
   const grid = doc.querySelector('main.grid'); if (!grid) return { pages: [], firstProduct: 0, oversized: false };
   const body = doc.body; const cover = body.querySelector('.cover');
-  body.style.cssText = `margin:0;padding:16px;background:#e8e8eb;width:${paper.width * mm + 32}px;`;
+  // margin auto: at "Fit page" (and any zoom narrower than the frame) the
+  // sheets sit in the middle of the preview, not against its left edge.
+  body.style.cssText = `margin:0 auto;padding:16px;background:#e8e8eb;width:${paper.width * mm + 32}px;`;
+  if (doc.documentElement?.style) doc.documentElement.style.background = '#e8e8eb';
   grid.style.width = `${(paper.width - 2 * paper.margin) * mm}px`;
   const children = [...grid.children]; const columns = config.layoutMode === 'list' ? 1 : Math.max(1, Math.min(5, Number(config.columns) || 3));
   const gap = Math.max(0, Number(config.gapMm ?? 5)) * mm;

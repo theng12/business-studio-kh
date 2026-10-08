@@ -190,13 +190,24 @@ When auto-matching a folder of images to records by some key (e.g. SKU):
 
 - **Recursive folder scan**, up to 5 levels deep. Skip dotfiles/hidden folders.
 - **Case-insensitive** filename + folder name matching.
-- Supported patterns for one key with N images:
-  - `<key>.ext` → position 0 (main)
-  - `<key>-1.ext`, `<key>-2.ext`, `<key>-3.ext` → positions in that order
+- Supported patterns for one key with N images — these set the **order of the matched
+  photos among themselves** (first = the folder's "main" candidate):
+  - `<key>.ext` → first
+  - `<key>-1.ext`, `<key>-2.ext`, `<key>-3.ext` → in that order
   - `<key>_2.ext`, `<key> 2.ext` — same intent, different separators all accepted
-  - `<key>/main.ext` or `<key>/primary.ext` or `<key>/cover.ext` → position 0
-  - `<key>/1.ext`, `<key>/2.ext` → positions by number
+  - `<key>/main.ext` or `<key>/primary.ext` or `<key>/cover.ext` → first
+  - `<key>/1.ext`, `<key>/2.ext` → by number
   - `<key>/anything.ext` → falls back to alphabetical
+- **Matched photos are APPENDED after the product's existing photos**; they do not
+  replace position 0. Only when "Make the first matched photo the main image" is ticked
+  does the first matched photo become the main image — set by row id inside the product's
+  image lock, never by filepath after an await (`makeMain` on the planned entry →
+  `productImages.addFromSource` / `addFromBytes` in `main/db/productImages.js`; client mode
+  sends it on `images:importFromBytes`). (verified 2026-10-08)
+- **Preview before import**: `images:autoMatchBySku` with `dryRun: true` returns the plan
+  (`main/util/autoMatchPlan.js`, shared by standalone and client mode); `files: [...]` then
+  imports exactly the planned entries in batches of ≤ 200. Every entry must resolve — after
+  symlinks (`fs.realpathSync`) — inside the picked folder. (verified 2026-10-08)
 - **Surface the matching rules** to the user before they pick a folder (a rules list in the modal). After matching, show stats: scanned, matched, imported, duplicates skipped, unmatched, cap-skipped.
 
 ## 14. Database conventions (SQLite + better-sqlite3)

@@ -53,6 +53,49 @@ let productsInvalidation = 0;
 const freshThrough = new Map();     // view key → invalidation its last committed fetch started after
 const allFreshThrough = new Map();  // companyId → same, for the filter-agnostic list
 
+/* 0.1.94: the background list refresh after a product save (see
+ * updateProduct). One timer coalesces a burst of autosaves; the save is noted
+ * as an invalidation, and the timer skips its fetch when any refresh started
+ * after that note (typically the save's own catalog echo) already ran. */
+const BACKGROUND_REFRESH_MS = 600;
+let backgroundRefreshTimer = null;
+let backgroundRefreshMark = 0;
+function scheduleBackgroundProductsRefresh(get) {
+  backgroundRefreshMark = get().noteProductsInvalidated();
+  if (backgroundRefreshTimer) return;
+  backgroundRefreshTimer = setTimeout(() => {
+    backgroundRefreshTimer = null;
+    if (get().productsFreshThrough(backgroundRefreshMark)) return;
+    Promise.resolve(get().refreshProducts()).catch(() => { /* refreshProducts toasts its own errors */ });
+  }, BACKGROUND_REFRESH_MS);
+}
+
+/* A row merged from a save (mergeProductRow) can be older on the wire than a
+ * `products:list` that was already in flight when the save went out: that
+ * response lands after the merge and would put the pre-save row back (a
+ * flicker, and — if the panel remounts from it — a stale conflict token).
+ * So merged rows are remembered by `updatedAt`, and a list response keeps the
+ * merged copy wherever its own row is OLDER. Once a list returns the row at
+ * least as new, the entry is dropped; entries also expire after a while so
+ * the map cannot grow. Pure helper exported for tests. */
+const MERGED_ROW_TTL_MS = 120_000;
+const mergedRows = new Map(); // id → { row, updatedAt, at }
+
+export function preferNewerRows(list, merged, now = Date.now()) {
+  if (!Array.isArray(list) || merged.size === 0) return list;
+  let out = list;
+  list.forEach((p, i) => {
+    const m = p && merged.get(p.id);
+    if (!m) return;
+    if (now - m.at > MERGED_ROW_TTL_MS) { merged.delete(p.id); return; }
+    const listAt = Number(p.updatedAt);
+    if (Number.isFinite(listAt) && listAt >= m.updatedAt) { merged.delete(p.id); return; }
+    if (out === list) out = list.slice();
+    out[i] = { ...p, ...m.row };
+  });
+  return out;
+}
+
 function filtersAreDefault(filters) {
   return filters.search === '' &&
     (filters.brandIds == null || filters.brandIds.length === 0) &&
@@ -199,7 +242,7 @@ export function createProductsSlice(set, get) {
       // Clicking the same column toggles direction. Clicking a different
       // column starts in 'asc' for text columns, 'desc' for numeric/date
       // columns so the most-useful values surface first.
-      const NUMERIC_DEFAULTS_DESC = new Set(['images', 'updated']);
+      const NUMERIC_DEFAULTS_DESC = new Set(['images', 'updated', 'stock']);
       set((s) => {
         const prev = s.productSort;
         const nextSort = prev.key === key
@@ -254,8 +297,9 @@ export function createProductsSlice(set, get) {
         if (get().products.length === 0) set({ productsLoading: true });
         const through = productsInvalidation;
         try {
-          const list = await window.api.products.list(companyId, filters);
+          const rawList = await window.api.products.list(companyId, filters);
           if (seq !== refreshSeq || get().activeCompanyId !== companyId) return;
+          const list = preferNewerRows(rawList, mergedRows);
           freshThrough.set(key, through);
           if (defaultView) {
             const ownsAll = allSeq === refreshAllSeq;
@@ -326,7 +370,7 @@ export function createProductsSlice(set, get) {
           const list = await window.api.products.list(companyId, {});
           if (seq !== refreshAllSeq || get().activeCompanyId !== companyId) return;
           allFreshThrough.set(companyId, through);
-          set({ allProducts: list });
+          set({ allProducts: preferNewerRows(list, mergedRows) });
         } catch (err) {
           if (seq === refreshAllSeq && get().activeCompanyId === companyId) {
             get().addToast(err.message, 'error');
@@ -372,17 +416,57 @@ export function createProductsSlice(set, get) {
       ]);
       return created;
     },
+    /* 0.1.94: a product save no longer waits for the whole list.
+     *
+     * Every autosave used to await `refreshProducts()` — the full company list
+     * (2,500 rows, ~2.8 MB, 35–50 ms in the main process, twice with a filter)
+     * — before the panel could say "Saved". The update already returns the
+     * saved row, so it is merged into `products` / `allProducts` straight away
+     * and the list is refreshed in the background, coalesced across a burst of
+     * autosaves. The refresh still happens (the edit can move the row in or out
+     * of a filter, and another Mac may have changed something), and it keeps
+     * the catalog-event bookkeeping honest: the save is noted as an
+     * invalidation, so whichever refresh starts first after it — the edit's own
+     * `catalog:changed` echo, or this one — satisfies the other. Nothing here
+     * marks the list fresh without fetching it. */
     async updateProduct(id, patch) {
       const updated = await window.api.products.update(id, patch);
-      await get().refreshProducts();
+      get().mergeProductRow(updated);
+      scheduleBackgroundProductsRefresh(get);
       return updated;
     },
+
+    /** Replace a row (by id) in the Library list and the full list, in place. */
+    mergeProductRow(row) {
+      if (!row?.id) return;
+      const companyId = get().activeCompanyId;
+      if (row.companyId && companyId && row.companyId !== companyId) return;
+      const updatedAt = Number(row.updatedAt);
+      if (Number.isFinite(updatedAt)) {
+        const prev = mergedRows.get(row.id);
+        if (!prev || updatedAt >= prev.updatedAt) mergedRows.set(row.id, { row, updatedAt, at: Date.now() });
+      }
+      const swap = (list) => {
+        if (!Array.isArray(list)) return list;
+        const at = list.findIndex((p) => p.id === row.id);
+        if (at < 0) return list;
+        // Never replace a row with an OLDER copy of itself.
+        if (Number(list[at].updatedAt) > updatedAt) return list;
+        const next = list.slice();
+        next[at] = { ...list[at], ...row };
+        return next;
+      };
+      set((s) => ({ products: swap(s.products), allProducts: swap(s.allProducts) }));
+    },
+    /** Returns the server's `{ deleted, deletedEntryId }` (the recycle-bin
+     *  entry the delete was held under — the toast's Undo restores it). */
     async removeProduct(id) {
-      await window.api.products.remove(id);
+      const result = await window.api.products.remove(id);
       await Promise.all([
         get().refreshProducts(),
         get().refreshDashboard(),
       ]);
+      return result;
     },
   };
 }
