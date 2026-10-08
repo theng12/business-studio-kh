@@ -8,7 +8,8 @@
  * transfers with small photos, entered through the real IPC handlers (Mac paper slips) and the real
  * /api/rpc server with phone accounts (pump, driver and farm phones) — so every flag is computed
  * exactly as in the app. Known theft patterns are planted; ./fuel-truth.json lists them.
- * `--fuel --products 0` builds only the fuel dataset (≈1 minute).
+ * `--fuel --products 0` builds only the fuel dataset (≈15 s; `--fuel-days 1095` for three years, ≈2 min).
+ * ./fuel-truth.json also holds the phone accounts' tokens (test accounts, like ./users.json).
  *
  * Why: the UI crawl's test companies are nearly empty, so layout and speed problems that only show
  * with a real catalogue (≈2,500 products, ≈9,000 photos, Khmer names) slip through — 0.1.89 shipped a
@@ -1121,10 +1122,10 @@ async function seedFuel({ kt, report: seedReport }) {
     let fill;
     if (token) {
       const photos = [{ kind: 'pump_display', bytes: await photo('pump_display', [paidText, `${litres.toFixed(2)} L`, `${price} KHR/L`]) }];
-      if (fchance(0.98)) photos.push({ kind: 'meter', bytes: await photo('meter', [`${reading} km`, a.def.plate]) });
-      else truth.honest.missingPhoto.push('pending');
+      const forgotMeterPhoto = !fchance(0.98);
+      if (!forgotMeterPhoto) photos.push({ kind: 'meter', bytes: await photo('meter', [`${reading} km`, a.def.plate]) });
       fill = await saveFill({ code: 'drv', token, photos, truthInfo: info, args: { ...args, litresShownOnPump: litres } });
-      if (fill && truth.honest.missingPhoto[truth.honest.missingPhoto.length - 1] === 'pending') truth.honest.missingPhoto[truth.honest.missingPhoto.length - 1] = fill.rootId;
+      if (fill && forgotMeterPhoto) truth.honest.missingPhoto.push(fill.rootId);
     } else {
       // No smartphone: a paper slip + the receipt, typed in on the Mac next morning.
       const slipAt = t;
@@ -1366,9 +1367,10 @@ async function seedFuel({ kt, report: seedReport }) {
         W.pumpTrue += trueSent;
         W.litres -= trueSent;
         const after = pumpShown();
+        const carrier = fpick(['S006', 'S001']);
         const res = await rpc(tokenOf(code), 'fuel:recordTransfer', {
           companyId, fromLocationId: warehouse.id, toLocationId: farm.id, pumpMeterBefore: before, pumpMeterAfter: after, containers: cans,
-          note: `Carried by ${fpick(['Mao Sambath (truck)', 'Sok Dara (Pickup 1)'])}`, clientRef: clientRef('xfer'),
+          carriedByEmployeeId: emp[carrier].id, note: `Carried by ${carrier === 'S006' ? 'Mao Sambath (truck)' : 'Sok Dara (Pickup 1)'}`, clientRef: clientRef('xfer'),
           photos: [{ kind: 'containers', bytes: await photo('containers', [`${cans} cans × 20 L`]) }],
         }).catch((e) => { failures.push({ what: 'transfer', error: e.message }); return null; });
         if (!res) return;
@@ -1378,7 +1380,7 @@ async function seedFuel({ kt, report: seedReport }) {
         const arrivedTrue = loss ? trueSent - canL[0] : trueSent - 0.3 * fr();
         const id = res.transfer.id;
         truth.transfers.push({ id, cans, sentMeter: res.transfer.litresSent, sentTrue: r2(trueSent), arrivedTrue: r2(arrivedTrue), loss });
-        if (loss) { lossDone = true; truth.planted.P6_transferLoss = { transferId: id, cans, arrivedCans, carriedBy: 'see note' }; }
+        if (loss) { lossDone = true; truth.planted.P6_transferLoss = { transferId: id, cans, arrivedCans, carriedBy: carrier }; }
         const arrive = Date.now() + fri(110, 160) * 60000;
         const queued = fchance(0.3) ? fri(20, 120) * 60000 : 0;
         schedule(arrive, () => { F.litres += arrivedTrue; }, 'arrive');

@@ -257,7 +257,7 @@ test('phone RPC: no backdating, queued records after the latest dip, History hid
   const auditor = users.create({ name: 'Auditor', role: histRole.key });
   const sender = employees.create({ companyId: company.id, staffCode: 'P1', nameEn: 'Sender', isFuelAttendant: true, userId: pump.id, phone: '012 999 888' });
   const gone = employees.create({ companyId: company.id, staffCode: 'X1', nameEn: 'Gone', isDriver: true });
-  employees.markLeft(gone.id, { reason: 'left' });
+  employees.markLeft(gone.id, { leftOn: new Date(Date.now() + 7 * 3600e3 - 10 * DAY).toISOString().slice(0, 10), reason: 'left' });
   const { tank, truck } = tankAndTruck(company.id);
   const farmStore = fuel.createLocation({ companyId: company.id, name: `Farm store ${counter}`, kind: 'farm_store' });
 
@@ -326,4 +326,43 @@ test('phone RPC: no backdating, queued records after the latest dip, History hid
   }
   assert.match((await rpc(pump.token, 'fuel:addPhoto', { ownerKind: 'fill', ownerId: fill.id, kind: 'other', bytes: { __bin: true, b64: shot } })).body.error, /most one record can hold is 12/);
   assert.equal(records.listPhotos('fill', fill.id).length, 12);
+});
+
+test('realistic-data fixes: USD slip litres, leaver\'s old slip, transfer carrier, missed-dip gap kept after the next dip', { skip: skipReason }, () => {
+  const { company } = fixture();
+  const { records, employees, fuel, flags } = m();
+  const { tank, truck } = tankAndTruck(company.id);
+  // B1: a USD paper slip with no litres → converted at the exchange rate (4,100 when no config).
+  fuel.setPrice({ companyId: company.id, fuelType: 'diesel', priceMinorPerL: 4100, effectiveFrom: '2025-01-01' });
+  const usd = records.createFill({ companyId: company.id, kind: 'cash_station', assetId: truck.id, stationName: 'Caltex', amountPaidMinor: 1000, currency: 'USD', at: Date.now() - DAY }).fill;
+  assert.equal(usd.litres, 10, '$10 × 4,100 ÷ 4,100 KHR/L');
+  assert.equal(usd.litresSource, 'derived_from_price');
+  // B2: someone who left last week — a slip from before they left is accepted, a newer one is not.
+  const leaver = employees.create({ companyId: company.id, staffCode: 'L1', nameEn: 'Leaver', isDriver: true });
+  const leftOn = new Date(Date.now() + 7 * 3600e3 - 7 * DAY).toISOString().slice(0, 10);
+  employees.markLeft(leaver.id, { leftOn });
+  const old = records.createFill({ companyId: company.id, kind: 'warehouse_tank', locationId: tank.id, assetId: truck.id, litres: 20, driverEmployeeId: leaver.id, at: Date.now() - 9 * DAY });
+  assert.equal(old.fill.driverEmployeeId, leaver.id);
+  assert.throws(() => records.createFill({ companyId: company.id, kind: 'warehouse_tank', locationId: tank.id, assetId: truck.id, litres: 20, driverEmployeeId: leaver.id, at: Date.now() - DAY }), /has left/);
+  // D3: the carrier is stored and named on F1.
+  const farm = fuel.createLocation({ companyId: company.id, name: `Farm ${counter}`, kind: 'farm_store' });
+  const carrier = employees.create({ companyId: company.id, staffCode: 'C1', nameEn: 'Sok Dara', isDriver: true });
+  const receiver = employees.create({ companyId: company.id, staffCode: 'R1', nameEn: 'Ouk Samnang' });
+  const tr = records.createTransfer({ companyId: company.id, fromLocationId: tank.id, toLocationId: farm.id, litresSent: 160, carriedByEmployeeId: carrier.id, at: Date.now() - 2 * DAY }).transfer;
+  assert.equal(tr.carriedByEmployeeId, carrier.id);
+  records.receiveTransfer(tr.id, { litresReceived: 140, receivedByEmployeeId: receiver.id, at: Date.now() - 2 * DAY + 3600e3 });
+  flags.recomputeLocation(tank.id);
+  const f1 = flags.listFlags(company.id, { ruleKey: 'F1' }).items[0];
+  assert.equal(f1.employeeId, carrier.id);
+  assert.match(f1.explanation, /carried by Sok Dara, received by Ouk Samnang/);
+  // D2: a 6-day gap without a dip stays a flag after the tank is dipped again.
+  const d0 = records.createDip({ companyId: company.id, locationId: tank.id, dipCm: 100, at: Date.now() - 12 * DAY }).dip;
+  flags.recomputeLocation(tank.id, null, Date.now() - 5 * DAY);
+  records.createDip({ companyId: company.id, locationId: tank.id, dipCm: 99, at: Date.now() - 6 * DAY });
+  records.createDip({ companyId: company.id, locationId: tank.id, dipCm: 98, at: Date.now() - DAY });
+  flags.recomputeLocation(tank.id);
+  const gap = flags.listFlags(company.id, { ruleKey: 'T3', subject: `nodip:${tank.id}:${d0.id}` }).items[0];
+  assert.ok(gap, 'the gap is still listed');
+  assert.equal(gap.measured, 6);
+  assert.match(gap.explanation, /went 6 days without a dip/);
 });

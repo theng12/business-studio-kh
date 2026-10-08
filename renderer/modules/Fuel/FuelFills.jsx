@@ -22,7 +22,7 @@ import { AddFillModal, CorrectFillModal } from './FillForms.jsx';
 import { FlagReviewModal } from './FuelOverview.jsx';
 import {
   FILL_KINDS, FLAG_STATUS_LABEL, REVIEW_STATUSES, assetLabel, buildReviewQueue, errText, fillKindLabel, flagHeadline,
-  fmtLitres, fmtMoney, fmtNumber, fmtWhen, litresSourceLabel, meterSincePrevious, meterWord, monthRange, parseNumber, ppMonthKey,
+  fmtLitres, fmtMoney, fmtNumber, fmtShort, fmtWhen, litresSourceLabel, meterSincePrevious, meterWord, monthRange, parseNumber, ppMonthKey,
   recentMonths, reviewStatusOf, staffName, toMinor,
 } from './fuelModel.js';
 
@@ -188,10 +188,10 @@ function FillRow({ fill: f, lookups, onOpen, onPhoto }) {
   const rs = reviewStatusOf(f.reviewStatus);
   return (
     <tr className={cx('is-clickable', f.voided && 'is-muted')} onClick={onOpen}>
-      <td><PhotoStrip photos={f.photos} size={40} max={3} onOpen={onPhoto} /></td>
-      <td>{fmtWhen(f.at)}{f.source === 'phone' ? <div className="muted">phone</div> : null}</td>
+      <td className="fuel-nowrap"><PhotoStrip photos={f.photos} size={40} max={1} onOpen={onPhoto} /></td>
+      <td className="fuel-nowrap">{fmtShort(f.at)}{f.source === 'phone' ? <div className="muted">phone</div> : null}</td>
       <td>{asset ? assetLabel(asset) : '—'}</td>
-      <td>{fromLabel(f, lookups)}<div className="muted">{fillKindLabel(f.kind)}</div></td>
+      <td>{fromLabel(f, lookups)}<div className="muted">{FILL_KINDS.find((k) => k.value === f.kind)?.short || fillKindLabel(f.kind)}</div></td>
       <td>{driver ? staffName(driver) : <span className="muted">—</span>}</td>
       <td className="is-num">{fmtLitres(f.litres)}{f.fullTank ? <div className="muted">full</div> : null}</td>
       <td className="is-num">{f.meterReading != null ? fmtNumber(f.meterReading, 1) : '—'}</td>
@@ -237,7 +237,7 @@ function MyFills({ lookups, onAdd }) {
               const fresh = !f.voided && f.reviewStatus === 'new' && Date.now() - (f.recordedAt || f.createdAt) < 86_400_000;
               return (
                 <tr key={f.id} className={f.voided ? 'is-muted' : ''}>
-                  <td>{fmtWhen(f.at)}</td>
+                  <td className="fuel-nowrap">{fmtShort(f.at)}</td>
                   <td>{assetLabel(lookups.maps.assets.get(f.assetId))}</td>
                   <td>{fromLabel(f, lookups)}</td>
                   <td className="is-num">{fmtLitres(f.litres)}</td>
@@ -415,7 +415,13 @@ export function FillPanel({ fillId, lookups, onAfterReview }) {
 
       <div className="fuel-panel__facts">
         <div className="fuel-panel__head">
-          <h2 className="section-title">{asset ? assetLabel(asset) : 'Vehicle'} — {fmtLitres(fill.litres)}</h2>
+          <div className="fuel-panel__title">
+            <h2 className="section-title">
+              <span>{asset ? asset.name : 'Vehicle'}</span>
+              <span className="fuel-nowrap"> — {fmtLitres(fill.litres)}</span>
+            </h2>
+            {asset?.plateOrSerial ? <div className="muted fuel-nowrap">{asset.plateOrSerial}</div> : null}
+          </div>
           {fill.voided ? <Badge tone="slate">Void</Badge> : <Badge tone={reviewStatusOf(fill.reviewStatus).tone}>{reviewStatusOf(fill.reviewStatus).label}</Badge>}
         </div>
         {fill.voided ? <p className="muted">Void: {fill.voidReason}</p> : null}
@@ -495,10 +501,10 @@ export function FillPanel({ fillId, lookups, onAfterReview }) {
           <div className="fuel-subsection fuel-review-box">
             {cash ? (
               <div className="form-grid">
-                <Field label={`Amount the pump photo shows (${cur})`} hint="Fill in if it disagrees — that raises a flag.">
+                <Field label={`Pump photo shows (${cur})`} hint="Only if it disagrees — that raises a flag.">
                   {({ id }) => <Input id={id} inputMode="decimal" value={seenAmount} onChange={(e) => setSeenAmount(e.target.value)} />}
                 </Field>
-                <Field label="Litres the pump photo shows">
+                <Field label="Pump photo shows (L)">
                   {({ id }) => <Input id={id} inputMode="decimal" value={seenLitres} onChange={(e) => setSeenLitres(e.target.value)} />}
                 </Field>
               </div>

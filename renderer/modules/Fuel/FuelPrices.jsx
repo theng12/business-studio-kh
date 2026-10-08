@@ -86,8 +86,8 @@ export function FuelPrices() {
                     const current = !p.voided && p.effectiveFrom <= today && (!p.effectiveTo || p.effectiveTo >= today);
                     return (
                       <tr key={p.id} className={cx(p.voided && 'is-muted')}>
-                        <td>{p.effectiveFrom}</td>
-                        <td>{p.effectiveTo || <span className="muted">open</span>}</td>
+                        <td className="fuel-nowrap">{fmtDay(p.effectiveFrom)}</td>
+                        <td className="fuel-nowrap">{p.effectiveTo ? fmtDay(p.effectiveTo) : <span className="muted">open</span>}</td>
                         <td className="is-num"><strong>{fmtMoney(p.priceMinorPerL, p.currency)}</strong></td>
                         <td>{p.sourceNote || <span className="muted">—</span>}</td>
                         <td>{p.voided ? <Badge tone="slate">Void</Badge> : current ? <Badge tone="emerald">Current</Badge> : p.effectiveFrom > today ? <Badge tone="blue">Upcoming</Badge> : <Badge tone="slate">Past</Badge>}</td>
@@ -136,7 +136,7 @@ export function FuelPrices() {
       <ReasonModal
         open={!!voiding}
         title="Void this price?"
-        message={voiding ? `${fuelTypeLabel(voiding.fuelType)} ${fmtMoney(voiding.priceMinorPerL, voiding.currency)} from ${voiding.effectiveFrom}. It stays in the history, marked void, and cash fills are checked again without it.` : ''}
+        message={voiding ? `${fuelTypeLabel(voiding.fuelType)} ${fmtMoney(voiding.priceMinorPerL, voiding.currency)} from ${fmtDay(voiding.effectiveFrom)}. It stays in the history, marked void, and cash fills are checked again without it.` : ''}
         confirmLabel="Void price"
         danger
         onCancel={() => setVoiding(null)}

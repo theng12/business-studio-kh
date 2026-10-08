@@ -29,7 +29,7 @@ function buildFuelWorkbook(report, extra = {}) {
   const assetsSheet = [[
     'Asset', 'Plate / serial', 'Type', 'Meter', 'Distance / hours', 'Litres', 'Tank L', 'Farm L', 'Cash L',
     'Fills', 'Cash paid', 'Value (KHR)', 'Actual rate', 'Baseline', 'Rate unit', 'Cost per km/h (KHR)',
-    'Expected L', 'Excess L', 'Excess KHR', 'Open flags', 'Red flags',
+    'Expected L', 'Excess L', 'Excess KHR', 'Open flags', 'Red flags', 'Cash above posted price (KHR)', 'Suspected loss (KHR)',
   ]];
   for (const a of report.assets) {
     assetsSheet.push([
@@ -37,15 +37,18 @@ function buildFuelWorkbook(report, extra = {}) {
       a.litresByKind.warehouse_tank, a.litresByKind.farm_store, a.litresByKind.cash_station,
       a.fills, money(a.cashPaid), a.valueRiel, a.actualRate ?? '', a.baseline ?? '', a.rateUnit,
       a.costPerUnitRiel ?? '', a.expectedLitres ?? '', a.excessLitres ?? '', a.excessRiel ?? '', a.openFlags, a.redFlags,
+      a.cashOverpaidRiel ?? 0, a.suspectedLossRiel ?? 0,
     ]);
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(assetsSheet), 'Per asset');
 
-  const driversSheet = [['Driver', 'Staff code', 'Litres', 'Km', 'Hours', 'Fills', 'Cash paid', 'Excess L', 'Excess KHR', 'Open flags', 'Assets used']];
+  const driversSheet = [['Driver', 'Staff code', 'Litres', 'Km', 'Hours', 'Fills', 'Cash paid', 'Excess L', 'Excess KHR', 'Open flags', 'Assets used',
+    'Cash above posted price (KHR)', 'Suspected loss (KHR)']];
   for (const d of report.drivers) {
     driversSheet.push([
       d.name, d.staffCode ?? '', d.litres, d.distanceKm, d.hours, d.fills, money(d.cashPaid),
       d.excessLitres ?? '', d.excessRiel ?? '', d.openFlags, d.assets.map((x) => x.name).join(', '),
+      d.cashOverpaidRiel ?? 0, d.suspectedLossRiel ?? 0,
     ]);
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(driversSheet), 'Per driver');
@@ -81,15 +84,17 @@ function buildFuelWorkbook(report, extra = {}) {
 
   const flagsSheet = [['Rule', 'Severity', 'Status', 'Date', 'Explanation', 'Measured', 'Expected', 'Threshold', 'Unit', 'Review note']];
   for (const fl of extra.flags || []) {
-    flagsSheet.push([fl.ruleKey, fl.severity, fl.status, phnomPenhDate(fl.at), fl.explanation, fl.measured ?? '', fl.expected ?? '', fl.threshold ?? '', fl.unit ?? '', fl.reviewNote ?? '']);
+    flagsSheet.push([fl.ruleKey, fl.severity, `${fl.status}${fl.resolved ? ' (no longer firing)' : ''}`, phnomPenhDate(fl.at), fl.explanation, fl.measured ?? '', fl.expected ?? '', fl.threshold ?? '', fl.unit ?? '', fl.reviewNote ?? '']);
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(flagsSheet), 'Flags');
 
   const notes = [
     ['About this workbook', ''],
     ['Month', report.month],
-    ['Excess litres', 'Litres filled − distance × baseline ÷ 100 (L/100 km), or − hours × baseline (L/h). Positive = more fuel than the vehicle should have used.'],
+    ['Excess litres', 'Over full-to-full intervals closed this month: litres − distance × baseline ÷ 100 (L/100 km), or − hours × baseline (L/h). Positive = more fuel than the vehicle should have used.'],
     ['Excess KHR', 'Excess litres × the asset’s average riel per litre this month.'],
+    ['Cash above posted price', 'Cash paid − litres shown on the pump × the posted price, on fills over the C1 threshold.'],
+    ['Suspected loss', 'Riel of the fuel used beyond normal variation (above expected × the amber allowance, +20 % by default) + cash above posted price. Drivers and assets are ranked by it.'],
     ['Distance', 'Between consecutive meter readings, counted in the month (and for the driver) of the later fill.'],
     ['Tank variance', 'Dip − (previous dip + deliveries + received − fills − sent). Negative = missing.'],
     ['One flag is not proof', 'The monthly pattern is the evidence. Every flag shows its formula and numbers.'],

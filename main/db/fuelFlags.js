@@ -136,13 +136,13 @@ function storeScope(companyId, scopeKey, flags, { from = -FAR, to = FAR } = {}) 
   return { flags: flags.length, opened, reopened };
 }
 
-/** The server's riel-per-dollar rate (Settings), for comparing USD cash with KHR prices. */
-function fxKhrPerUsd() {
-  try {
-    const v = require('../config').loadConfig()?.exchangeRateKhrPerUsd;
-    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
-  } catch (_) { /* no config outside the app (tests) */ }
-  return 4100;
+const { fxKhrPerUsd } = fuel;
+
+/** Staff names for flag explanations ("carried by …", P1), looked up live — never stored on the flag's subject. */
+function nameLookup(companyId) {
+  const map = new Map(getDb().prepare('SELECT id, name_en, name_km, staff_code FROM employees WHERE company_id = ?').all(companyId)
+    .map((r) => [r.id, r.name_en || r.name_km || r.staff_code]));
+  return (id) => map.get(id) || null;
 }
 
 /** Run A1–A7, C0–C5, Q1 for one asset over its whole history (reports, full pass). */
@@ -225,10 +225,10 @@ function computeLocation(loc, settings, now = Date.now(), range = null) {
     if (prev?.fill) meterFills.unshift(prev.fill);
     if (prev?.transfer) meterTransfers.unshift(prev.transfer);
   }
-  const t1 = rules.tankReconciliation({ location: loc, chart, dips, deliveries, fills, transfers, settings: s });
+  const t1 = rules.tankReconciliation({ location: loc, chart, dips, deliveries, fills, transfers, settings: s, now });
   const t2 = rules.shortDeliveries({ location: loc, chart, deliveries, dips, fills, transfers, settings: s });
   const m = rules.meterRules({ location: loc, fills: meterFills, transfers: meterTransfers, resets, settings: s });
-  const f1 = rules.transferLoss({ location: loc, transfers, settings: s });
+  const f1 = rules.transferLoss({ location: loc, transfers, settings: s, nameOf: nameLookup(loc.companyId) });
   const q1 = rules.locationQueuedNotes({ location: loc, dips, deliveries, transfers, settings: s });
   return {
     flags: [...t1.flags, ...t2.flags, ...m.flags, ...f1.flags, ...q1.flags],
@@ -239,10 +239,30 @@ function computeLocation(loc, settings, now = Date.now(), range = null) {
 }
 
 /** T3 needs only the latest dip. */
+/** T3 over the whole dip history (ids and times only — light even after years). */
 function missedDipFlags(loc, settings, now) {
-  const last = getDb().prepare('SELECT * FROM fuel_dips WHERE location_id = ? AND voided_at IS NULL ORDER BY taken_at DESC LIMIT 1').get(loc.id);
-  const dips = last ? [records.getDip(last.id)] : [];
+  const dips = getDb().prepare('SELECT id, taken_at AS takenAt FROM fuel_dips WHERE location_id = ? AND voided_at IS NULL ORDER BY taken_at').all(loc.id);
   return rules.missedDips({ location: loc, dips, now, settings }).flags;
+}
+
+/**
+ * P1 attendant comparison for one company (rules.attendantComparison): the
+ * full-to-full intervals of every metered vehicle, each attributed to the
+ * attendant whose tank/farm fill closed it. Stored in its own scope
+ * `attendants:<company>`. Runs in the full pass (it needs every vehicle).
+ */
+function recomputeAttendants(companyId, settings, now = Date.now()) {
+  const s = settings || fuel.getSettings(companyId);
+  const intervals = [];
+  for (const a of fuel.listAssets(companyId, { status: 'all' })) {
+    if (a.meterUnit !== 'km' && a.meterUnit !== 'hours') continue;
+    for (const iv of computeAsset(a, s).intervals) {
+      if (iv.toKind === 'cash_station' || !iv.toAttendantEmployeeId) continue;
+      intervals.push({ toAt: iv.toAt, ratio: iv.ratio, attendantId: iv.toAttendantEmployeeId, assetId: a.id });
+    }
+  }
+  const out = rules.attendantComparison({ intervals, now, settings: s, nameOf: nameLookup(companyId) });
+  return { ...storeScope(companyId, `attendants:${companyId}`, out.flags), windows: out.windows };
 }
 
 /**
@@ -317,6 +337,7 @@ function recomputeAll({ companyId = null, now = Date.now() } = {}) {
     for (const id of c.locIds) {
       try { const r = recomputeLocation(id, settings, now); out.locations += 1; out.opened += r?.opened ?? 0; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] tank rules failed for ${id}: ${err.message}\n`); }
     }
+    try { out.opened += recomputeAttendants(c.cid, settings, now).opened; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] attendant comparison failed: ${err.message}\n`); }
   }
   return out;
 }
@@ -340,6 +361,8 @@ async function recomputeAllAsync({ companyId = null, now = Date.now() } = {}) {
       try { const r = recomputeLocation(id, settings, now); out.locations += 1; out.opened += r?.opened ?? 0; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] tank rules failed for ${id}: ${err.message}\n`); }
       await tick();
     }
+    try { out.opened += recomputeAttendants(c.cid, settings, now).opened; } catch (err) { out.errors += 1; process.stderr.write(`[fuel] attendant comparison failed: ${err.message}\n`); }
+    await tick();
   }
   return out;
 }
@@ -418,6 +441,6 @@ function overview(companyId, now = Date.now()) {
 module.exports = {
   STATUSES,
   rowToFlag, storeScope, worsened, computeAsset, computeLocation, recomputeAsset, recomputeLocation, recomputeForRecord,
-  recomputeAll, recomputeAllAsync, assetWindow, locationWindow,
+  recomputeAll, recomputeAllAsync, recomputeAttendants, assetWindow, locationWindow, nameLookup,
   listFlags, getFlag, flagsForFill, flagsForDip, reviewFlag, overview,
 };

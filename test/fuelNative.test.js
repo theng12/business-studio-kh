@@ -346,10 +346,12 @@ test('monthly report and workbook build from the tables', { skip: skipReason }, 
   const row = report.assets.find((a) => a.assetId === truck.id);
   assert.equal(row.distance, 400);
   assert.equal(row.litres, 230);
+  // Excess only over the complete full-to-full interval (the first fill has no distance before it):
+  // 130 L over 400 km at 25 L/100 km = 100 L expected → 30 L excess.
   assert.equal(row.expectedLitres, 100);
-  assert.equal(row.excessLitres, 130);
+  assert.equal(row.excessLitres, 30);
   assert.equal(row.valueRiel, 230 * 4500);
-  assert.equal(row.excessRiel, 130 * 4500);
+  assert.equal(row.excessRiel, 30 * 4500);
   assert.equal(report.drivers[0].employeeId, driver.id);
   const wb = reports.monthlyWorkbook(company.id, prevMonth);
   assert.ok(wb.filename.endsWith(`${prevMonth}.xlsx`));

@@ -20,7 +20,7 @@ const { uuid, audit, str, num, int, badRequest, currency, getCallerUserId } = re
 const fuel = require('./fuel');
 const employees = require('./employees');
 const { lookup } = require('../util/tankCalibration');
-const { resolvePumpMeterLitres, phnomPenhDate } = require('../util/fuelAnomalies');
+const { resolvePumpMeterLitres, phnomPenhDate, comparableAmount } = require('../util/fuelAnomalies');
 
 const FILL_KINDS = ['warehouse_tank', 'farm_store', 'cash_station'];
 const SOURCES = ['phone', 'mac', 'import'];
@@ -86,13 +86,22 @@ function readingValue(v, label) {
   return n;
 }
 
-function employeeIn(companyId, id, label, { allowLeft = false } = {}) {
+/** The last millisecond of a 'YYYY-MM-DD' day in Phnom Penh (UTC+7). */
+function endOfDayPP(date) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date || ''));
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]) + 1) - 7 * 3600e3 - 1;
+}
+
+function employeeIn(companyId, id, label, { allowLeft = false, at = null } = {}) {
   if (!id) return null;
   const row = employees.getRow(id);
   if (!row || row.company_id !== companyId) throw badRequest(`${label} is not on this company's staff list`);
   // Someone who has left cannot be put on a NEW record; corrections of old
-  // records keep the people they already name.
-  if (row.status === 'left' && !allowLeft) {
+  // records keep the people they already name, and a paper slip from before
+  // (or on) the leaving day can still be entered.
+  const workedThen = row.left_on && Number.isFinite(at) && at <= endOfDayPP(row.left_on);
+  if (row.status === 'left' && !allowLeft && !workedThen) {
     throw badRequest(`${row.name_en || row.name_km || row.staff_code} has left and cannot be chosen — pick someone on the staff list`);
   }
   return id;
@@ -358,9 +367,12 @@ function normalizeFill(companyId, input, { settings, existing = null, recordAt =
     litresSource = 'pump_display';
   } else if (kind === 'cash_station') {
     // The price of the day the record is placed at (a queued phone record's computed time).
+    // A payment in the other currency is converted at the server's exchange
+    // rate, the same way the cash rules compare it (comparableAmount).
     const price = fuel.priceOn(companyId, asset.fuelType, recordAt ?? input.at ?? Date.now());
-    if (!price || price.currency !== cur) throw badRequest('Enter the litres shown on the pump (there is no published price for that day to work it out)');
-    litres = Math.round((amountPaidMinor / price.priceMinorPerL) * 1000) / 1000;
+    const amount = price ? comparableAmount({ amountPaidMinor, currency: cur }, price.currency, fuel.fxKhrPerUsd()) : null;
+    if (!price || !Number.isFinite(amount)) throw badRequest('Enter the litres shown on the pump (there is no published price for that day to work it out)');
+    litres = Math.round((amount / price.priceMinorPerL) * 1000) / 1000;
     litresSource = 'derived_from_price';
   } else {
     throw badRequest('Enter the litres');
@@ -373,8 +385,8 @@ function normalizeFill(companyId, input, { settings, existing = null, recordAt =
     locationId: location?.id ?? null,
     stationId,
     assetId: asset.id,
-    driverEmployeeId: employeeIn(companyId, input.driverEmployeeId, 'The driver', { allowLeft: !!existing && input.driverEmployeeId === existing.driverEmployeeId }),
-    attendantEmployeeId: employeeIn(companyId, input.attendantEmployeeId, 'The attendant', { allowLeft: !!existing && input.attendantEmployeeId === existing.attendantEmployeeId }),
+    driverEmployeeId: employeeIn(companyId, input.driverEmployeeId, 'The driver', { allowLeft: !!existing && input.driverEmployeeId === existing.driverEmployeeId, at: recordAt }),
+    attendantEmployeeId: employeeIn(companyId, input.attendantEmployeeId, 'The attendant', { allowLeft: !!existing && input.attendantEmployeeId === existing.attendantEmployeeId, at: recordAt }),
     litres,
     litresSource,
     typedLitres,
@@ -592,8 +604,8 @@ function prepareDip(input = {}) {
   return {
     values: {
       id, companyId, locationId: loc.id, takenAt, workDate: phnomPenhDate(takenAt), dipCm, litres, litresSource, outOfChart,
-      takenBy: employeeIn(companyId, input.takenByEmployeeId, 'The person dipping') ?? (me?.id ?? null),
-      witness: employeeIn(companyId, input.witnessEmployeeId, 'The witness'),
+      takenBy: employeeIn(companyId, input.takenByEmployeeId, 'The person dipping', { at: takenAt }) ?? (me?.id ?? null),
+      witness: employeeIn(companyId, input.witnessEmployeeId, 'The witness', { at: takenAt }),
       by: getCallerUserId(), source, clientRef, note: str(input.note, 1000), now: Date.now(),
       queuedForMs: queuedMs(source, input.queuedForMs), clientRefHash: hash,
     },
@@ -684,7 +696,7 @@ function prepareDelivery(input = {}) {
       id: uuid(), companyId, locationId: loc.id, supplier: str(input.supplier, 120), invoiceNo: str(input.invoiceNo, 60),
       at, workDate: phnomPenhDate(at), litresInvoiced, price, amount, currency: currency(input.currency),
       dipBefore: dips.before, dipAfter: dips.after,
-      receivedBy: employeeIn(companyId, input.receivedByEmployeeId, 'The person receiving') ?? (me?.id ?? null),
+      receivedBy: employeeIn(companyId, input.receivedByEmployeeId, 'The person receiving', { at }) ?? (me?.id ?? null),
       by: getCallerUserId(), source, clientRef, note: str(input.note, 1000), now: Date.now(),
       queuedForMs: queuedMs(source, input.queuedForMs), clientRefHash: hash,
     },
@@ -747,6 +759,7 @@ function rowToTransfer(r) {
     sentAt: r.sent_at, workDate: r.work_date, sentByEmployeeId: r.sent_by_employee_id ?? null,
     litresReceived: r.litres_received ?? null, receivedAt: r.received_at ?? null, receivedByEmployeeId: r.received_by_employee_id ?? null,
     receivedNote: r.received_note ?? null, received: r.litres_received != null,
+    carriedByEmployeeId: r.carried_by_employee_id ?? null,
     recordedByUserId: r.recorded_by_user_id ?? null, receivedRecordedByUserId: r.received_recorded_by_user_id ?? null,
     source: r.source, clientRef: r.client_ref ?? null, note: r.note ?? null, createdAt: r.created_at,
     voided: !!r.voided_at, voidedAt: r.voided_at ?? null, voidReason: r.void_reason ?? null,
@@ -797,7 +810,8 @@ function prepareTransfer(input = {}) {
     values: {
       id: uuid(), companyId, from: from.id, to: to?.id ?? null, litres, typed, containers, containerNote: str(input.containerNote, 500),
       pumpBefore, pumpAfter, at, workDate: phnomPenhDate(at),
-      sentBy: employeeIn(companyId, input.sentByEmployeeId, 'The sender') ?? (me?.id ?? null),
+      sentBy: employeeIn(companyId, input.sentByEmployeeId, 'The sender', { at }) ?? (me?.id ?? null),
+      carriedBy: employeeIn(companyId, input.carriedByEmployeeId, 'The person carrying it', { at }),
       by: getCallerUserId(), source, clientRef, note: str(input.note, 1000), now: Date.now(),
       queuedForMs: queuedMs(source, input.queuedForMs), clientRefHash: hash,
     },
@@ -810,10 +824,10 @@ function insertTransfer(values, photoRows = []) {
     db.transaction(() => {
       db.prepare(`
         INSERT INTO fuel_transfers (id, company_id, from_location_id, to_location_id, litres_sent, typed_litres, containers, container_note,
-          pump_meter_before, pump_meter_after, sent_at, work_date, sent_by_employee_id, recorded_by_user_id, source, client_ref, note,
+          pump_meter_before, pump_meter_after, sent_at, work_date, sent_by_employee_id, carried_by_employee_id, recorded_by_user_id, source, client_ref, note,
           queued_for_ms, client_ref_hash, created_at)
         VALUES (@id, @companyId, @from, @to, @litres, @typed, @containers, @containerNote,
-          @pumpBefore, @pumpAfter, @at, @workDate, @sentBy, @by, @source, @clientRef, @note, @queuedForMs, @clientRefHash, @now)
+          @pumpBefore, @pumpAfter, @at, @workDate, @sentBy, @carriedBy, @by, @source, @clientRef, @note, @queuedForMs, @clientRefHash, @now)
       `).run(values);
       for (const p of photoRows) insertPhotoRow({ ...p, companyId: values.companyId, ownerKind: 'transfer', ownerId: values.id });
     })();
@@ -875,7 +889,7 @@ function receiveTransfer(id, input = {}, { forbidSelf = false, photoRows = [] } 
   const at = source === 'phone' ? Math.max(recordTime(source, input.at, input.queuedForMs), t.sentAt) : recordTime(source, input.at);
   if (at < t.sentAt) throw badRequest('Received cannot be earlier than sent');
   const me = callerEmployee(t.companyId);
-  const receiver = employeeIn(t.companyId, input.receivedByEmployeeId, 'The receiver') ?? (me?.id ?? null);
+  const receiver = employeeIn(t.companyId, input.receivedByEmployeeId, 'The receiver', { at }) ?? (me?.id ?? null);
   const db = getDb();
   let changes = 0;
   db.transaction(() => {

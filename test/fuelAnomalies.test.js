@@ -20,12 +20,12 @@ const ULLAGE = normalizeChart([
 const TANK = { id: 'tank-1', name: 'Warehouse tank', kind: 'tank', status: 'active', createdAt: T0 - 30 * DAY };
 
 function fill(over) {
-  return { id: over.id, rootId: over.id, kind: 'warehouse_tank', locationId: TANK.id, assetId: 'bike', at: T0, litres: 10, fullTank: false, photoKinds: ['meter'], ...over };
+  return { id: over.id, rootId: over.id, kind: 'warehouse_tank', locationId: TANK.id, assetId: 'bike', at: T0, litres: 10, fullTank: false, photoKinds: ['meter'], source: 'phone', ...over };
 }
 
 /* ─── §4.1 worked example ─── */
 
-test('T1 worked example: 1,850 + 2,000 − 1,420 − 200 = 2,230 expected; 2,090 measured → −140 L, tolerance ≈ 30 L → red', () => {
+test('T1 worked example: 1,850 + 2,000 − 1,420 − 200 = 2,230 expected; 2,090 measured → −140 L, tolerance ≈ 40 L → red', () => {
   const dips = [
     { id: 'd0', locationId: TANK.id, takenAt: T0, dipCm: 120, litres: 1850 },
     { id: 'd1', locationId: TANK.id, takenAt: T0 + 4 * DAY, dipCm: 98, litres: 2090 },
@@ -41,8 +41,9 @@ test('T1 worked example: 1,850 + 2,000 − 1,420 − 200 = 2,230 expected; 2,090
   const iv = out.intervals[0];
   assert.equal(iv.expected, 2230);
   assert.equal(iv.variance, -140);
-  assert.equal(iv.dipError, 22);
-  assert.equal(iv.tolerance, 30.1);
+  // Both dips can be misread: 22 L/cm at 98 cm + 9.8 L/cm at 120 cm, plus 0.5 % of 1,620 L.
+  assert.equal(iv.dipError, 31.8);
+  assert.equal(iv.tolerance, 39.9);
   assert.deepEqual(iv.fillsByAttendant, { 'att-a': { litres: 700, count: 1 }, 'att-b': { litres: 720, count: 1 } });
   assert.equal(out.flags.length, 1);
   const f = out.flags[0];
@@ -69,28 +70,37 @@ test('T2 short delivery: dips either side show less than the invoice', () => {
   const chart = normalizeChart([{ dipCm: 0, litres: 0 }, { dipCm: 200, litres: 4000 }]); // 20 L/cm
   const dips = [
     { id: 'b', locationId: TANK.id, takenAt: T0, dipCm: 50, litres: 1000 },
-    { id: 'a', locationId: TANK.id, takenAt: T0 + 3600e3, dipCm: 145, litres: 2900 },
+    { id: 'a', locationId: TANK.id, takenAt: T0 + 3600e3, dipCm: 140, litres: 2800 },
   ];
   const deliveries = [{ id: 'del', locationId: TANK.id, deliveredAt: T0 + 1800e3, litresInvoiced: 2000, dipBeforeId: 'b', dipAfterId: 'a' }];
   const out = rules.shortDeliveries({ location: TANK, chart, deliveries, dips });
-  // received 1,900; tolerance 20 + 0.5% × 2,000 = 30; short 100 > 2 × 30 → red
-  assert.equal(out.checks[0].received, 1900);
-  assert.equal(out.checks[0].tolerance, 30);
+  // received 1,800; tolerance 20 + 20 (both dips) + 0.5% × 2,000 = 50; short 200 > 2 × 50 → red
+  assert.equal(out.checks[0].received, 1800);
+  assert.equal(out.checks[0].tolerance, 50);
   assert.equal(out.flags[0].ruleKey, 'T2');
   assert.equal(out.flags[0].severity, 'red');
   // A fill taken from the tank between the dips counts as received.
-  const withFill = rules.shortDeliveries({ location: TANK, chart, deliveries, dips, fills: [fill({ id: 'z', at: T0 + 2000e3, litres: 90 })] });
+  const withFill = rules.shortDeliveries({ location: TANK, chart, deliveries, dips, fills: [fill({ id: 'z', at: T0 + 2000e3, litres: 160 })] });
   assert.equal(withFill.flags.length, 0);
 });
 
-test('T3 missed dip: none for more than 2 days → amber, keyed to the last dip', () => {
-  const now = T0 + 5 * DAY;
-  const none = rules.missedDips({ location: { ...TANK, createdAt: T0 }, dips: [], now });
+test('T3: every gap longer than 2 days is a flag, kept after the next dip (same subject open → closed)', () => {
+  const now = T0 + 20 * DAY;
+  const loc = { ...TANK, createdAt: T0 - DAY };
+  const none = rules.missedDips({ location: { ...TANK, createdAt: T0 }, dips: [], now: T0 + 5 * DAY });
   assert.equal(none.flags[0].subject, 'nodip:tank-1:none');
-  const old = rules.missedDips({ location: TANK, dips: [{ id: 'd', takenAt: T0 }], now });
-  assert.equal(old.flags[0].subject, 'nodip:tank-1:d');
-  assert.equal(old.flags[0].severity, 'amber');
-  assert.equal(rules.missedDips({ location: TANK, dips: [{ id: 'd', takenAt: now - DAY }], now }).flags.length, 0);
+  // Open gap: last dip 5 days ago.
+  const open = rules.missedDips({ location: loc, dips: [{ id: 'd1', takenAt: T0 }], now: T0 + 5 * DAY });
+  assert.deepEqual(open.flags.map((f) => f.subject), ['nodip:tank-1:d1']);
+  assert.equal(open.flags[0].details.open, true);
+  // The tank is dipped again 6 days later: the same gap, now closed, is still a flag.
+  const dips = [{ id: 'd1', takenAt: T0 }, { id: 'd2', takenAt: T0 + 6 * DAY }, { id: 'd3', takenAt: T0 + 7 * DAY },
+    { id: 'd4', takenAt: T0 + 11 * DAY }, { id: 'd5', takenAt: now - DAY }];
+  const closed = rules.missedDips({ location: loc, dips, now });
+  assert.deepEqual(closed.flags.map((f) => f.subject), ['nodip:tank-1:d1', 'nodip:tank-1:d3', 'nodip:tank-1:d4']);
+  assert.equal(closed.flags[0].measured, 6);
+  assert.match(closed.flags[0].explanation, /went 6 days without a dip/);
+  assert.equal(closed.flags[0].details.open, false);
   assert.equal(rules.missedDips({ location: { ...TANK, kind: 'farm_store' }, dips: [], now }).flags.length, 0);
 });
 
@@ -201,9 +211,9 @@ test('A1 thresholds: +20% amber, +35% red, learned baseline = median of recent i
     fill({ id: 'a', at: T0, fullTank: true, meterReading: 0 }),
     fill({ id: 'b', at: T0 + DAY, fullTank: true, meterReading: 100, litres }),
   ];
-  const amber = rules.assetRules({ asset: { ...BIKE, tankCapacityL: 10 }, fills: mk(3.1) });
+  const amber = rules.assetRules({ asset: { ...BIKE, tankCapacityL: 5 }, fills: mk(3.1) });
   assert.equal(amber.flags.find((f) => f.ruleKey === 'A1').severity, 'amber');
-  const fine = rules.assetRules({ asset: { ...BIKE, tankCapacityL: 10 }, fills: mk(2.9) });
+  const fine = rules.assetRules({ asset: { ...BIKE, tankCapacityL: 5 }, fills: mk(2.9) });
   assert.equal(fine.flags.find((f) => f.ruleKey === 'A1'), undefined);
   const learned = rules.resolveBaseline({ baselineRate: 9, baselineSource: 'learned' }, [
     { toAt: T0 - 3 * DAY, rate: 2 }, { toAt: T0 - 2 * DAY, rate: 3 }, { toAt: T0 - DAY, rate: 10 },
@@ -333,4 +343,110 @@ test('USD cash is compared with a KHR price at the exchange rate; no price → a
   assert.ok(!noRate.flags.some((f) => f.ruleKey === 'C1'));
   const noPrice = rules.assetRules({ asset: BIKE, fills: [usd], priceFor: () => null, fxKhrPerUsd: 4100 });
   assert.match(noPrice.flags.find((f) => f.ruleKey === 'C0').explanation, /No published/);
+});
+
+/* ─── realistic-data review (2026-10-08) ─── */
+
+function attendantSet({ vuthyExtra = 0, n = 40, seed = 1 }) {
+  // Two attendants fill the same three vehicles; ratios jitter ±3 %.
+  let x = seed;
+  const rnd = () => { x = (x * 16807) % 2147483647; return x / 2147483647; };
+  const out = [];
+  const end = Date.UTC(2026, 5, 30, 10);
+  for (let i = 0; i < n * 2; i += 1) {
+    const who = i % 2 ? 'vuthy' : 'sokha';
+    const assetId = ['p1', 'p2', 'tk'][i % 3];
+    const base = assetId === 'tk' ? 1.07 : 1.0; // one vehicle's owner baseline is off — cancels out
+    out.push({ toAt: end - i * DAY * 0.7, ratio: base * (1 + (who === 'vuthy' ? vuthyExtra : 0) + (rnd() - 0.5) * 0.06), attendantId: who, assetId });
+  }
+  return out;
+}
+
+test('P1 attendant comparison: a short-filling attendant stands out against the others on the same vehicles', () => {
+  const now = Date.UTC(2026, 5, 30, 12);
+  const names = { vuthy: 'Touch Vuthy', sokha: 'Vann Sokha' };
+  const honest = rules.attendantComparison({ intervals: attendantSet({ vuthyExtra: 0 }), now, nameOf: (id) => names[id] });
+  assert.deepEqual(honest.flags, [], 'honest attendants are not flagged');
+  const amber = rules.attendantComparison({ intervals: attendantSet({ vuthyExtra: 0.036 }), now, nameOf: (id) => names[id] });
+  assert.equal(amber.flags.length, 1);
+  assert.equal(amber.flags[0].ruleKey, 'P1');
+  assert.equal(amber.flags[0].severity, 'amber');
+  assert.equal(amber.flags[0].subject, 'attendant:vuthy:2026-06');
+  assert.equal(amber.flags[0].refs.employeeId, 'vuthy');
+  assert.match(amber.flags[0].explanation, /Touch Vuthy: in the 60 days to 2026-06-30/);
+  const red = rules.attendantComparison({ intervals: attendantSet({ vuthyExtra: 0.07 }), now });
+  assert.equal(red.flags[0].severity, 'red');
+  // Too few fills on either side → no judgement.
+  assert.deepEqual(rules.attendantComparison({ intervals: attendantSet({ vuthyExtra: 0.07, n: 12 }), now }).flags, []);
+  // An attendant who is the only one to fill a vehicle cannot be compared on it.
+  const alone = attendantSet({ vuthyExtra: 0.07 }).map((r) => ({ ...r, assetId: r.attendantId === 'vuthy' ? 'farm-only' : r.assetId }));
+  assert.deepEqual(rules.attendantComparison({ intervals: alone, now }).flags, []);
+});
+
+test('F1 transfer loss names the carrier and the receiver, and is filed under the carrier', () => {
+  const names = { car: 'Sok Dara', rec: 'Ouk Samnang' };
+  const out = rules.transferLoss({
+    location: TANK, nameOf: (id) => names[id],
+    transfers: [{ id: 'x', fromLocationId: TANK.id, sentAt: T0, litresSent: 160, litresReceived: 140, carriedByEmployeeId: 'car', receivedByEmployeeId: 'rec' }],
+  });
+  assert.equal(out.flags[0].refs.employeeId, 'car');
+  assert.match(out.flags[0].explanation, /carried by Sok Dara, received by Ouk Samnang/);
+});
+
+test('T1/T2: both dips\' read errors count; a level read without a chart uses max(5 L, 1 % of capacity)', () => {
+  const farm = { id: 'farm', name: 'Farm store', kind: 'farm_store', capacityL: 500 };
+  const dips = [
+    { id: 'a', locationId: 'farm', takenAt: T0, litres: 400, litresSource: 'typed' },
+    { id: 'b', locationId: 'farm', takenAt: T0 + 7 * DAY, litres: 290, litresSource: 'typed' },
+  ];
+  const fills = [fill({ id: 'f', locationId: 'farm', at: T0 + DAY, litres: 100 })];
+  const out = rules.tankReconciliation({ location: farm, chart: [], dips, fills });
+  assert.equal(out.intervals[0].dipError, 10); // 5 + 5
+  assert.equal(out.intervals[0].tolerance, 10.5);
+  assert.deepEqual(out.flags, [], '−10 L is within ±10.5 L');
+  const big = rules.tankReconciliation({ location: { ...farm, capacityL: 2000 }, chart: [], dips, fills, settings: { typedDipErrorPct: 1 } });
+  assert.equal(big.intervals[0].dipError, 40); // 1 % of 2,000 L each
+});
+
+test('T1 grace: "more fuel than recorded" on a fresh dip waits for the delivery to be typed in', () => {
+  const dips = [
+    { id: 'a', locationId: TANK.id, takenAt: T0, dipCm: 120, litres: 1850 },
+    { id: 'b', locationId: TANK.id, takenAt: T0 + 3600e3, dipCm: 100, litres: 2550 },
+  ];
+  assert.deepEqual(rules.tankReconciliation({ location: TANK, chart: ULLAGE, dips, now: T0 + 3600e3 + 10 * 60000 }).flags, []);
+  assert.equal(rules.tankReconciliation({ location: TANK, chart: ULLAGE, dips, now: T0 + 4 * 3600e3 }).flags[0].severity, 'amber');
+  // Missing fuel is never held back.
+  const short = [dips[0], { ...dips[1], litres: 1500 }];
+  assert.equal(rules.tankReconciliation({ location: TANK, chart: ULLAGE, dips: short, now: T0 + 3600e3 + 60000 }).flags[0].severity, 'red');
+});
+
+test('A1 is judged over at least 20 L (half a small tank) and, for a machine without a meter, at least 7 days', () => {
+  const truck = { ...BIKE, id: 'tk', tankCapacityL: 300, baselineRate: 25 };
+  // Five 6 L top-ups 25 km apart at 24 L/100 km (normal), then one at 48 L/100 km.
+  const fills = [fill({ id: 'f0', at: T0, fullTank: true, meterReading: 0, litres: 50 })];
+  for (let i = 1; i <= 5; i += 1) fills.push(fill({ id: `f${i}`, at: T0 + i * DAY, fullTank: true, meterReading: 25 * i, litres: i === 5 ? 12 : 6 }));
+  const out = rules.assetRules({ asset: truck, fills });
+  // 6+6+6 = 18 L < 20 → merged with the next: 24 L over 100 km, then the last 12 L over 25 km alone is < 20 L → not judged.
+  assert.ok(!out.flags.some((f) => f.ruleKey === 'A1'), 'small top-ups are not judged on their own');
+  const pump = { ...BIKE, id: 'wt', meterUnit: 'none', tankCapacityL: 60, baselineRate: 3 };
+  const daily = [];
+  for (let i = 0; i <= 14; i += 1) daily.push(fill({ id: `d${i}`, at: T0 + i * 2 * DAY, fullTank: true, litres: i ? 8 : 30, photoKinds: [] }));
+  const machine = rules.assetRules({ asset: pump, fills: daily });
+  const a1 = machine.flags.filter((f) => f.ruleKey === 'A1');
+  assert.ok(a1.length > 0 && a1.every((f) => f.details.distance >= 7), 'judged over ≥ 7 days only');
+  assert.match(a1[0].explanation, /fills taken together/);
+});
+
+test('C1: a USD payment gets the street-rate allowance; A7: a Mac paper slip with a photo is only noted', () => {
+  // $3.75 at the station's street rate of 4,000 = 15,000 KHR for 3.75 L at 4,000: honest.
+  const usd = fill({ id: 'u', kind: 'cash_station', amountPaidMinor: 375, currency: 'USD', litresShownOnPump: 3.75, meterReading: 5, photoKinds: ['meter', 'pump_display'] });
+  const out = rules.assetRules({ asset: { ...BIKE, tankCapacityL: 10 }, fills: [usd], priceFor: PRICE_4000, fxKhrPerUsd: 4100 });
+  assert.ok(!out.flags.some((f) => f.ruleKey === 'C1'), '2.5 % over at the office rate is within 2 % × 3 % allowance');
+  const slip = fill({ id: 's', source: 'mac', meterReading: 5, photoKinds: ['receipt'] });
+  const noted = rules.assetRules({ asset: BIKE, fills: [slip] }).flags.find((f) => f.ruleKey === 'A7');
+  assert.equal(noted.severity, 'info');
+  assert.match(noted.explanation, /Paper slip/);
+  const bare = rules.assetRules({ asset: BIKE, fills: [{ ...slip, photoKinds: [] }] }).flags.find((f) => f.ruleKey === 'A7');
+  assert.equal(bare.severity, 'amber');
+  assert.match(bare.explanation, /no photo at all/);
 });

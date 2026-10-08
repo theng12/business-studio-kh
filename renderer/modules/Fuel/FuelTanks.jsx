@@ -14,7 +14,7 @@ import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { newClientRef, useFuelCaps, useFuelIntent, useFuelLookups, useFuelTick } from './fuelHooks.js';
 import { LocationSelect, PhotoPicker, PhotoStrip, PhotoViewer, ReasonModal, StaffSelect, WhenField, photosPayload, revokePreviews } from './FuelShared.jsx';
 import {
-  FUEL_TYPES, PHOTO_KINDS, chartError, chartPoints, dipAge, errText, fmtDay, fmtLitres, fmtMoney, fmtNumber, fmtWhen,
+  FUEL_TYPES, PHOTO_KINDS, chartError, chartPoints, dipAge, errText, fmtDay, fmtLitres, fmtMoney, fmtNumber, fmtShort,
   fuelTypeLabel, intervalVerdict, monthLabel, parseChartText, parseNumber, parsePpInput, ppInputValue, ppMonthKey,
   recentMonths, staffName, toMinor,
 } from './fuelModel.js';
@@ -110,7 +110,7 @@ export function FuelTanks() {
                   </div>
                   {canManage ? (
                     <div className="card__meta">
-                      {last ? <>Last dip {fmtWhen(last.takenAt)} · {fmtLitres(last.litres, 0)}</> : 'Never dipped'}
+                      {last ? <>Last dip {fmtShort(last.takenAt)} · {fmtLitres(last.litres, 0)}</> : 'Never dipped'}
                       {l.kind === 'tank' && age.stale && l.status !== 'retired' ? <> <Badge tone="amber">{age.never ? 'Dip it' : `${age.days} days ago`}</Badge></> : null}
                     </div>
                   ) : null}
@@ -136,7 +136,7 @@ export function FuelTanks() {
               <tbody>
                 {pending.map((t) => (
                   <tr key={t.id}>
-                    <td>{fmtWhen(t.sentAt)}</td>
+                    <td className="fuel-nowrap">{fmtShort(t.sentAt)}</td>
                     <td>{lookups.maps.locations.get(t.fromLocationId)?.name || '—'}</td>
                     <td>{lookups.maps.locations.get(t.toLocationId)?.name || '—'}</td>
                     <td className="is-num">{fmtLitres(t.litresSent)}</td>
@@ -224,27 +224,32 @@ function TankDetail({ location, lookups, tick }) {
         <p className="muted">Two dips in {monthLabel(month)} are needed to compare. Dip at the same time each day.</p>
       ) : (
         <div className="data-table-wrap">
-          <table className="data-table">
+          {/* 1280 px fit: the two dips share one cell, "in" adds delivered +
+              received (each in its tooltip), and the allowance sits under the
+              difference. Same T1 numbers, nine columns instead of twelve. */}
+          <table className="data-table fuel-recon-table">
             <thead>
-              <tr><th>From dip</th><th>To dip</th><th className="is-num">Start</th><th className="is-num">+ Delivered</th><th className="is-num">+ Received</th><th className="is-num">− Filled</th><th className="is-num">− Sent</th><th className="is-num">Expected</th><th className="is-num">Measured</th><th className="is-num">Difference</th><th className="is-num">Allowed ±</th><th>Result</th></tr>
+              <tr>
+                <th>Between dips</th><th className="is-num">Start</th><th className="is-num" title="Delivered + received from another tank">+ In</th>
+                <th className="is-num">− Filled</th><th className="is-num">− Sent</th><th className="is-num">Expected</th><th className="is-num">Measured</th>
+                <th className="is-num" title="Measured − expected; under it, how much either way is allowed">Difference</th><th>Result</th>
+              </tr>
             </thead>
             <tbody>
               {intervals.map((iv) => {
                 const v = intervalVerdict(iv);
+                const inL = (iv.delivered || 0) + (iv.received || 0);
                 return (
                   <tr key={`${iv.fromDipId}-${iv.toDipId}`}>
-                    <td>{fmtWhen(iv.fromAt)}</td>
-                    <td>{fmtWhen(iv.toAt)}</td>
+                    <td className="fuel-nowrap">{fmtShort(iv.fromAt)}<div className="muted">→ {fmtShort(iv.toAt)}</div></td>
                     <td className="is-num">{fmtNumber(iv.startLitres, 0)}</td>
-                    <td className="is-num">{fmtNumber(iv.delivered, 0)}</td>
-                    <td className="is-num">{fmtNumber(iv.received, 0)}</td>
+                    <td className="is-num" title={`Delivered ${fmtNumber(iv.delivered, 0)} L · received ${fmtNumber(iv.received, 0)} L`}>{fmtNumber(inL, 0)}</td>
                     <td className="is-num">{fmtNumber(iv.filled, 0)}</td>
                     <td className="is-num">{fmtNumber(iv.sent, 0)}</td>
                     <td className="is-num">{fmtNumber(iv.expected, 0)}</td>
                     <td className="is-num">{fmtNumber(iv.measured, 0)}</td>
-                    <td className="is-num"><strong>{iv.variance > 0 ? '+' : ''}{fmtNumber(iv.variance, 1)}</strong></td>
-                    <td className="is-num">{fmtNumber(iv.tolerance, 1)}</td>
-                    <td>{v === 'red' ? <Badge tone="rose">Missing</Badge> : v === 'amber' ? <Badge tone="amber">More than recorded</Badge> : <Badge tone="emerald">OK</Badge>}</td>
+                    <td className="is-num"><strong>{iv.variance > 0 ? '+' : ''}{fmtNumber(iv.variance, 1)}</strong><div className="muted">± {fmtNumber(iv.tolerance, 1)}</div></td>
+                    <td>{v === 'red' ? <Badge tone="rose">Missing</Badge> : v === 'amber' ? <Badge tone="amber">Extra</Badge> : <Badge tone="emerald">OK</Badge>}</td>
                   </tr>
                 );
               })}
@@ -265,7 +270,7 @@ function TankDetail({ location, lookups, tick }) {
               {lists.dips.map((d) => (
                 <tr key={d.id} className={d.voided ? 'is-muted' : ''}>
                   <td><PhotoStrip photos={d.photos} size={36} max={2} onOpen={(i) => setViewer({ photos: d.photos, index: i })} /></td>
-                  <td>{fmtWhen(d.takenAt)}{d.voided ? <div className="muted">void: {d.voidReason}</div> : null}</td>
+                  <td className="fuel-nowrap">{fmtShort(d.takenAt)}{d.voided ? <div className="muted">void: {d.voidReason}</div> : null}</td>
                   <td className="is-num">{d.dipCm != null ? `${fmtNumber(d.dipCm, 1)} cm` : '—'}</td>
                   <td className="is-num">{fmtLitres(d.litres, 0)}{d.outOfChart ? <div className="muted">outside the chart</div> : null}</td>
                   <td>{name(d.takenByEmployeeId)}</td>
@@ -289,7 +294,7 @@ function TankDetail({ location, lookups, tick }) {
                   {lists.deliveries.map((d) => (
                     <tr key={d.id} className={d.voided ? 'is-muted' : ''}>
                       <td><PhotoStrip photos={d.photos} size={36} max={2} onOpen={(i) => setViewer({ photos: d.photos, index: i })} /></td>
-                      <td>{fmtWhen(d.deliveredAt)}{d.voided ? <div className="muted">void: {d.voidReason}</div> : null}</td>
+                      <td className="fuel-nowrap">{fmtShort(d.deliveredAt)}{d.voided ? <div className="muted">void: {d.voidReason}</div> : null}</td>
                       <td>{d.supplier || '—'}{d.invoiceNo ? <div className="muted">#{d.invoiceNo}</div> : null}</td>
                       <td className="is-num">{fmtLitres(d.litresInvoiced, 0)}</td>
                       <td className="is-num">{d.priceMinorPerL != null ? fmtMoney(d.priceMinorPerL, d.currency) : '—'}</td>
@@ -316,7 +321,7 @@ function TankDetail({ location, lookups, tick }) {
               {lists.transfers.map((t) => (
                 <tr key={t.id} className={t.voided ? 'is-muted' : ''}>
                   <td><PhotoStrip photos={t.photos} size={36} max={2} onOpen={(i) => setViewer({ photos: t.photos, index: i })} /></td>
-                  <td>{fmtWhen(t.sentAt)}{t.voided ? <div className="muted">void: {t.voidReason}</div> : null}</td>
+                  <td className="fuel-nowrap">{fmtShort(t.sentAt)}{t.voided ? <div className="muted">void: {t.voidReason}</div> : null}</td>
                   <td>{lookups.maps.locations.get(t.fromLocationId)?.name || '—'} → {lookups.maps.locations.get(t.toLocationId)?.name || 'outside'}</td>
                   <td className="is-num">{fmtLitres(t.litresSent)}</td>
                   <td className="is-num">{t.received ? fmtLitres(t.litresReceived) : <span className="muted">not yet</span>}</td>
@@ -349,7 +354,7 @@ function TankDetail({ location, lookups, tick }) {
 }
 
 function dipOption(d) {
-  return `${fmtWhen(d.takenAt)} · ${d.dipCm != null ? `${fmtNumber(d.dipCm, 1)} cm · ` : ''}${fmtLitres(d.litres, 0)}`;
+  return `${fmtShort(d.takenAt)} · ${d.dipCm != null ? `${fmtNumber(d.dipCm, 1)} cm · ` : ''}${fmtLitres(d.litres, 0)}`;
 }
 
 function DeliveryDipsModal({ delivery, dips, onClose }) {

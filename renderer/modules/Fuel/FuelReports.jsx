@@ -11,7 +11,7 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { useFuelCaps, useFuelTick } from './fuelHooks.js';
 import { LoadError, ManageOnlyNote } from './FuelShared.jsx';
-import { errText, fmtLitres, fmtMoney, fmtNumber, fmtRiel, fmtWhen, monthLabel, ppMonthKey, rankDrivers, recentMonths, ruleTitle } from './fuelModel.js';
+import { errText, fmtLitres, fmtMoney, fmtNumber, fmtRiel, fmtShort, monthLabel, ppMonthKey, rankDrivers, recentMonths, ruleTitle } from './fuelModel.js';
 
 const VIEWS = [
   { value: 'assets', label: 'Per vehicle' },
@@ -108,18 +108,23 @@ export function FuelReports() {
           report.assets.length ? (
             <div className="data-table-wrap">
               <table className="data-table">
-                <thead><tr><th>Vehicle or machine</th><th className="is-num">Distance</th><th className="is-num">Litres</th><th className="is-num">Tank / farm / cash</th><th className="is-num">Cash paid</th><th className="is-num">Value</th><th className="is-num">Actual</th><th className="is-num">Normal</th><th className="is-num">Cost per km/h</th><th className="is-num">Excess</th><th>Flags</th></tr></thead>
+                {/* 1280 px fit: litres carry their tank / farm / cash split, value
+                    carries the cash paid, and actual sits over normal. */}
+                <thead><tr><th>Vehicle or machine</th><th className="is-num">Distance</th><th className="is-num" title="Tank / farm / cash under the total">Litres</th><th className="is-num" title="Cash paid at stations under the value">Value</th><th className="is-num" title="Actual over the vehicle's normal">Use</th><th className="is-num">Cost per km/h</th><th className="is-num">Excess</th><th>Flags</th></tr></thead>
                 <tbody>
                   {report.assets.map((a) => (
                     <tr key={a.assetId}>
-                      <td><strong>{a.name}</strong>{a.plateOrSerial ? <div className="muted">{a.plateOrSerial}</div> : null}<div className="muted">{a.typeName}</div></td>
+                      <td><strong>{a.name}</strong><div className="muted">{[a.plateOrSerial, a.typeName].filter(Boolean).join(' · ')}</div></td>
                       <td className="is-num">{a.distance != null ? `${fmtNumber(a.distance, 1)} ${a.meterUnit === 'hours' ? 'h' : 'km'}` : '—'}</td>
-                      <td className="is-num">{fmtLitres(a.litres)}<div className="muted">{a.fills} fill{a.fills === 1 ? '' : 's'}</div></td>
-                      <td className="is-num">{fmtNumber(a.litresByKind?.warehouse_tank, 0)} / {fmtNumber(a.litresByKind?.farm_store, 0)} / {fmtNumber(a.litresByKind?.cash_station, 0)}</td>
-                      <td className="is-num">{cashText(a.cashPaid)}</td>
-                      <td className="is-num">{fmtRiel(a.valueRiel)}</td>
-                      <td className="is-num">{a.actualRate != null ? `${fmtNumber(a.actualRate, 2)}` : '—'}<div className="muted">{a.rateUnit}</div></td>
-                      <td className="is-num">{a.baseline != null ? fmtNumber(a.baseline, 2) : '—'}</td>
+                      <td className="is-num">
+                        {fmtLitres(a.litres, 1)}
+                        <div className="muted" title="Tank / farm / cash">{fmtNumber(a.litresByKind?.warehouse_tank, 0)} / {fmtNumber(a.litresByKind?.farm_store, 0)} / {fmtNumber(a.litresByKind?.cash_station, 0)} · {a.fills} fill{a.fills === 1 ? '' : 's'}</div>
+                      </td>
+                      <td className="is-num">{fmtRiel(a.valueRiel)}{cashText(a.cashPaid) !== '—' ? <div className="muted">cash {cashText(a.cashPaid)}</div> : null}</td>
+                      <td className="is-num">
+                        {a.actualRate != null ? fmtNumber(a.actualRate, 2) : '—'}<span className="muted"> / {a.baseline != null ? fmtNumber(a.baseline, 2) : '—'}</span>
+                        <div className="muted">{a.rateUnit}</div>
+                      </td>
                       <td className="is-num">{a.costPerUnitRiel != null ? fmtRiel(a.costPerUnitRiel) : '—'}</td>
                       <td className="is-num"><Excess litres={a.excessLitres} riel={a.excessRiel} /></td>
                       <td>{a.openFlags ? <Badge tone={a.redFlags ? 'rose' : 'amber'}>{a.openFlags} open</Badge> : <span className="muted">—</span>}</td>
@@ -139,7 +144,7 @@ export function FuelReports() {
                     <tr key={d.employeeId || 'none'}>
                       <td className="muted">{i + 1}</td>
                       <td><strong>{d.employeeId ? d.name : 'No driver recorded'}</strong>{d.staffCode ? <div className="muted">{d.staffCode}</div> : null}</td>
-                      <td className="is-num">{fmtLitres(d.litres)}</td>
+                      <td className="is-num">{fmtLitres(d.litres, 1)}</td>
                       <td className="is-num">{d.distanceKm ? `${fmtNumber(d.distanceKm, 0)} km` : ''}{d.hours ? `${d.distanceKm ? ' · ' : ''}${fmtNumber(d.hours, 1)} h` : ''}{!d.distanceKm && !d.hours ? '—' : ''}</td>
                       <td className="is-num">{d.fills}</td>
                       <td className="is-num">{cashText(d.cashPaid)}</td>
@@ -169,7 +174,7 @@ export function FuelReports() {
                         <td className="is-num">{fmtLitres(k.received, 0)}</td>
                         <td className="is-num"><strong className={k.varianceTotal < 0 ? 'fuel-excess is-over' : ''}>{k.varianceTotal == null ? '—' : `${k.varianceTotal > 0 ? '+' : ''}${fmtLitres(k.varianceTotal, 0)}`}</strong><div className="muted">{(k.intervals || []).length} dip-to-dip</div></td>
                         <td>{short.length ? short.map((d) => `${fmtLitres(d.shortfall, 0)} short`).join(', ') : <span className="muted">—</span>}</td>
-                        <td>{k.lastDip ? fmtWhen(k.lastDip.takenAt) : <span className="muted">never</span>}</td>
+                        <td className="fuel-nowrap">{k.lastDip ? fmtShort(k.lastDip.takenAt) : <span className="muted">never</span>}</td>
                         <td>{k.openFlags ? <Badge tone="amber">{k.openFlags} open</Badge> : <span className="muted">—</span>}</td>
                       </tr>
                     );
