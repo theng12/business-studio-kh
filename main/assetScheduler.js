@@ -4,8 +4,11 @@
  * 60 s after start, then every 12 hours, for each company that has asset
  * settings with `autoPostDepreciation` on and at least one depreciating asset:
  *   - post every month still due, oldest first, up to LAST month (a month that
- *     has not ended is never posted; locked months are caught up in the first
- *     open month, which is the run rule itself);
+ *     has not ended is never posted; each month is re-checked just before it is
+ *     posted, and the pass stops quietly at one that cannot be). A month whose
+ *     run was reversed BY HAND is left alone until someone posts it again by
+ *     hand — the reversed run row (status 'reversed', latest attempt) is the
+ *     persisted flag;
  *   - re-check that every entry balances and that the register's sub-ledger
  *     equals the GL (logged, never "fixed" silently).
  * Standalone / server only (main/index.js starts it after client mode has
@@ -38,9 +41,16 @@ async function runOnce({ log = () => {} } = {}) {
         if (config.getSettings(companyId).autoPostDepreciation) {
           for (const period of dep.dueMonths(companyId)) {
             await yieldToLoop();
+            // Review 2: re-checked every month (the world may have moved during the
+            // yield); a month that cannot be posted ends this company's pass quietly,
+            // and a month whose run was reversed by hand waits for a manual post.
+            if (dep.reversedByHand(companyId, period)) { out.skipped = (out.skipped || []).concat({ companyId, period, reason: 'reversed by hand' }); break; }
+            if (dep.cannotPostReason(companyId, period)) break;
             const r = dep.runDepreciation(companyId, period, { kind: 'auto' });
             out.posted.push({ companyId, period, totalMinor: r.totalMinor });
             log('assets:depreciation', `company=${companyId} period=${period} total=${r.totalMinor} catchUp=${r.catchUpMinor}`);
+            // Open screens (Depreciation, the register, the Home badge) refresh, as for a manual post.
+            require('./ipc/assetAccess').emitAssetChange('run', 'post', period, companyId);
           }
         }
       } catch (err) {

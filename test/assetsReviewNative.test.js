@@ -199,17 +199,21 @@ test('L4: the first house rate is seeded at the register start, from the server 
 test('M5 / L6: closed-through locks and their limits', { skip: skipReason }, () => {
   const { C, ledger, dep, assets, cat } = fixture();
   assets.activate(assets.create({ companyId: C, categoryId: cat('computer'), name: 'PC', purchaseDate: '2026-01-05', inServiceDate: '2026-01-05', costMinor: 120_000, usefulLifeMonths: 12 }).id);
+  // Review 2: a month whose depreciation is still to be posted cannot be closed.
+  assert.throws(() => ledger.lockPeriod(C, '2026-03', 'Q1'), /Depreciation for January 2026 is not posted yet — post the months up to March 2026 before locking it/);
+  for (const p of ['2026-01', '2026-02', '2026-03']) dep.runDepreciation(C, p);
   ledger.lockPeriod(C, '2026-03', 'Q1 closed');
-  // Months closed without a run are caught up in the first open month.
   assert.equal(dep.nextDuePeriod(C), '2026-04');
   assert.match(dep.previewDepreciation(C, '2026-02').reason, /locked/);
-  const r = dep.runDepreciation(C, '2026-04');
-  assert.equal(r.totalMinor, 40_000);
-  assert.equal(r.catchUpMinor, 30_000, 'Jan–Mar caught up in April');
+  assert.throws(() => dep.reverseRun(C, '2026-03', 'x'), /March 2026 is locked/);
   assert.throws(() => ledger.lockPeriod(C, require('../main/db/_assetUtil').todayPhnomPenh().slice(0, 7)), /has not ended/);
+  dep.runDepreciation(C, '2026-04');
   ledger.lockPeriod(C, '2026-04');
   assert.throws(() => dep.reverseRun(C, '2026-04', 'x'), /April 2026 is locked/);
   assert.equal(dep.nextDuePeriod(C), '2026-05');
+  // A company with nothing to depreciate can close any ended month.
+  const other = require('../main/db/companies').create({ name: 'Empty', isActive: false });
+  assert.equal(ledger.lockPeriod(other.id, '2026-06').closedThrough, '2026-06');
 });
 
 test('M6: History hides asset and ledger rows from callers without assets.view; Clear keeps them; sensitivity kept when the column exists', { skip: skipReason }, () => {

@@ -94,6 +94,11 @@ const FuelTanks = lazy(() => import('./modules/Fuel/FuelTanks.jsx').then((m) => 
 const FuelPrices = lazy(() => import('./modules/Fuel/FuelPrices.jsx').then((m) => ({ default: m.FuelPrices })));
 const FuelReports = lazy(() => import('./modules/Fuel/FuelReports.jsx').then((m) => ({ default: m.FuelReports })));
 const Staff = lazy(() => import('./modules/Staff/index.jsx').then((m) => ({ default: m.Staff })));
+// Fixed Assets A1 + A2 — lazy: only the people who keep the register open them.
+const AssetRegister = lazy(() => import('./modules/Assets/AssetRegister.jsx').then((m) => ({ default: m.AssetRegister })));
+const AssetDepreciation = lazy(() => import('./modules/Assets/AssetDepreciation.jsx').then((m) => ({ default: m.AssetDepreciation })));
+const AssetTaxYear = lazy(() => import('./modules/Assets/AssetTaxYear.jsx').then((m) => ({ default: m.AssetTaxYear })));
+const AssetReports = lazy(() => import('./modules/Assets/AssetReports.jsx').then((m) => ({ default: m.AssetReports })));
 
 const PAGES = {
   home:      Home,
@@ -123,6 +128,10 @@ const PAGES = {
   fuelprices: FuelPrices,
   fuelreports: FuelReports,
   staff: Staff,
+  assetregister: AssetRegister,
+  assetdepreciation: AssetDepreciation,
+  assettax: AssetTaxYear,
+  assetreports: AssetReports,
   history:   History,
   settings:  Settings,
   support:   Support,

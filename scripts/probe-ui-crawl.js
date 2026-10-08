@@ -3055,6 +3055,94 @@ async function deepModalFocusFlow(crawl) {
     JSON.stringify({ focusedAfter, steps: steps.map((s) => (s.focused ? s.value : `LOST@${s.value}`)) }));
 }
 
+/**
+ * Fixed Assets (A1 + A2) on the crawl's own empty company: the empty
+ * register, "+ New asset" → a draft → Activate with its preview of what posts
+ * → the register's totals row → Dispose with the live gain / loss preview →
+ * the Depreciation page and "Check the books" → Tax year (the estimate notice)
+ * → every report. Settings → Assets / Branches are covered by the tab leg.
+ */
+async function deepAssetsFlow(crawl) {
+  crawl.phase = 'deep: assets';
+  await crawl.goto('Register', 'assets');
+  const empty = await crawl.eval(`window.__ui.textOf(document.querySelector('.empty__title'))`);
+  crawl.step('deep assets: an empty register says so, with one action', /No assets yet/.test(empty), empty);
+  const opened = await crawl.eval(`window.__ui.clickExact('+ New asset')`);
+  if (opened !== 'ok') { crawl.step('deep assets: + New asset opens', false, opened); return; }
+  await crawl.waitFor(`window.__ui.fieldInput('Category') !== null && !!document.querySelector('.modal .assets-kinds')`, 8000, 'the new-asset modal');
+  const catId = await crawl.eval(`(Array.from(window.__ui.fieldInput('Category').options).find((o) => /Computers/.test(o.text)) || {}).value || ''`);
+  const day = new Date().toISOString().slice(0, 10); // UTC is never ahead of Phnom Penh
+  await crawl.eval(`window.__ui.fieldSet('Category', ${JSON.stringify(catId)})`);
+  await crawl.eval(`window.__ui.fieldSet('Name', 'UI Crawl laptop')`);
+  await crawl.eval(`window.__ui.fieldSet('Cost', '950')`);
+  await crawl.eval(`window.__ui.fieldSet('Bought on', ${JSON.stringify(day)})`);
+  await crawl.eval(`window.__ui.fieldSet('In use since', ${JSON.stringify(day)})`);
+  await crawl.settle(200);
+  const explain = await crawl.eval(`window.__ui.textOf(document.querySelector('.modal .assets-choice__explain'))`);
+  crawl.step('deep assets: "Depreciate this item" explains the threshold', /\$950\.00, which is \$300\.00 or more/.test(explain), explain);
+  await crawl.shot('assets-new');
+  await crawl.eval(`window.__ui.clickExact('Save draft')`);
+  await crawl.waitFor(`window.__ui.modalCount() === 0 && !!document.querySelector('.assets-tabs')`, 10_000, 'the draft page');
+  await crawl.eval(`window.__ui.clickExact('Activate…')`);
+  await crawl.waitFor(`!!document.querySelector('.modal .assets-entry')`, 10_000, 'the activation preview');
+  const preview = await crawl.eval(`window.__ui.textOf(document.querySelector('.modal .assets-entry'))`);
+  crawl.step('deep assets: activation previews a balanced entry', /Cost/.test(preview) && /Clearing/.test(preview) && /\$950\.00\s+\$950\.00/.test(preview.replace(/\s+/g, ' ')), preview.replace(/\s+/g, ' ').slice(0, 160));
+  await crawl.shot('assets-activate');
+  await crawl.eval(`window.__ui.clickExact('Activate and post')`);
+  await crawl.waitFor(`window.__ui.modalCount() === 0 && !!document.querySelector('.assets-stats')`, 10_000, 'activated');
+  await crawl.settle(300);
+  const stats = await crawl.eval(`window.__ui.textOf(document.querySelector('.assets-stats'))`);
+  crawl.step('deep assets: activated — on the books at cost', /\$950\.00/.test(stats), stats.replace(/\s+/g, ' ').slice(0, 120));
+  for (const tab of ['Photos & documents', 'Schedule', 'History', 'Journal', 'Details']) {
+    await crawl.eval(`window.__ui.click('.assets-tabs button', ${JSON.stringify(tab)})`);
+    await crawl.settle(450);
+    const crash = await crawl.eval('window.__ui.crash()');
+    if (crash) crawl.step(`deep assets: tab ${tab}`, false, `CRASHED: ${crash}`);
+  }
+  await crawl.shot('assets-asset-page');
+  // Dispose of it with the live preview.
+  await crawl.eval(`window.__ui.clickExact('Actions')`);
+  await crawl.settle(150);
+  await crawl.eval(`window.__ui.click('.assets-menu button', 'Dispose…')`);
+  await crawl.waitFor(`!!document.querySelector('.modal .assets-preview')`, 6000, 'the dispose dialog');
+  await crawl.eval(`window.__ui.fieldSet('Sold for', '900')`);
+  await crawl.waitFor(`/Loss|Gain/.test(window.__ui.textOf(document.querySelector('.modal .assets-preview')))`, 8000, 'the disposal preview');
+  const disp = await crawl.eval(`window.__ui.textOf(document.querySelector('.modal .assets-preview'))`);
+  crawl.step('deep assets: disposal previews the loss', /Loss\s*\$50\.00/.test(disp.replace(/\s+/g, ' ')), disp.replace(/\s+/g, ' ').slice(0, 160));
+  await crawl.shot('assets-dispose');
+  await crawl.eval(`window.__ui.clickExact('Dispose of it')`);
+  await crawl.waitFor(`window.__ui.modalCount() === 0`, 8000, 'disposed');
+  await crawl.settle(400);
+  const badge = await crawl.eval(`window.__ui.textOf(document.querySelector('.assets-head-badges'))`);
+  crawl.step('deep assets: disposed', /Disposed/.test(badge), badge);
+  // The register's totals row covers every matching asset.
+  await crawl.eval(`window.__ui.click('.page__back')`);
+  await crawl.waitFor(`!!document.querySelector('.assets-register')`, 8000, 'the register');
+  const totals = await crawl.eval(`window.__ui.textOf(document.querySelector('.assets-totals'))`);
+  crawl.step('deep assets: the register has a totals row', /Totals/.test(totals) && /1 asset/.test(totals), totals.replace(/\s+/g, ' ').slice(0, 120));
+  // Depreciation, the books check, Tax year and the reports.
+  await crawl.goto('Depreciation', 'assets');
+  await crawl.eval(`window.__ui.clickExact('Check the books')`);
+  await crawl.waitFor(`/check out|do not check out/.test(window.__ui.textOf(document.body))`, 8000, 'the books check');
+  const books = await crawl.eval(`/The books check out/.test(window.__ui.textOf(document.body))`);
+  crawl.step('deep assets: the books check out', books === true);
+  await crawl.shot('assets-depreciation');
+  await crawl.goto('Tax year', 'assets');
+  const est = await crawl.eval(`window.__ui.textOf(document.querySelector('.assets-notice'))`);
+  crawl.step('deep assets: the tax view says it is an estimate', /Estimate — confirm with an accountant/.test(est), est.slice(0, 80));
+  await crawl.goto('Reports', 'assets');
+  const pills = await crawl.eval(`window.__ui.all('.assets-report-pick__item').map(window.__ui.textOf)`);
+  let bad = [];
+  for (const pill of pills || []) {
+    await crawl.eval(`window.__ui.click('.assets-report-pick__item', ${JSON.stringify(pill)})`);
+    await crawl.settle(500);
+    const crash = await crawl.eval('window.__ui.crash()');
+    if (crash) bad.push(`${pill}: ${crash}`);
+  }
+  crawl.step('deep assets: all eight reports render', (pills || []).length === 8 && !bad.length, bad.join('; ') || `${(pills || []).length} reports`);
+  await crawl.shot('assets-reports');
+}
+
 /* [page id, sidebar label, module] — the module is the Home tile that holds
  * the page (renderer/lib/modules.js). test/launcher.test.js checks this list
  * against the registry, so a moved or renamed page fails there first. */
@@ -3084,6 +3172,11 @@ const PAGE_LABELS = [
   ['fueltanks', 'Tanks & dips', 'fuel'],
   ['fuelprices', 'Prices', 'fuel'],
   ['fuelreports', 'Reports', 'fuel'],
+  // Fixed Assets A1 + A2.
+  ['assetregister', 'Register', 'assets'],
+  ['assetdepreciation', 'Depreciation', 'assets'],
+  ['assettax', 'Tax year', 'assets'],
+  ['assetreports', 'Reports', 'assets'],
   ['staff', 'Staff', 'people'],
   ['history', 'History', 'system'],
 ];
@@ -3400,6 +3493,11 @@ async function main() {
   crawl.step('support page renders', !supportCrash, supportCrash || '');
 
   /* 8 ── real data behind the screens that need it */
+  try {
+    await deepAssetsFlow(crawl);
+  } catch (err) {
+    crawl.step('deep assets', false, `crawl error: ${err.message}`);
+  }
   try {
     await deepImageFlow(crawl, photoPath);
   } catch (err) {

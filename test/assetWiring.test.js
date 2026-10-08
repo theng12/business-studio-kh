@@ -153,5 +153,5 @@ test('additive only: SCHEMA_VERSION untouched, and the native tests are in the t
     assert.ok(!/DROP TABLE|ALTER TABLE \w+ (DROP|RENAME)|SCHEMA_VERSION/.test(src), `${f} must stay additive`);
   }
   const native = JSON.parse(read('package.json')).scripts['test:native'];
-  for (const f of ['test/assetsNative.test.js', 'test/ledgerNative.test.js', 'test/assetsBackupNative.test.js', 'test/assetsReviewNative.test.js', 'test/assetsDepreciationNative.test.js']) assert.ok(native.includes(f), `${f} is not in test:native`);
+  for (const f of ['test/assetsNative.test.js', 'test/ledgerNative.test.js', 'test/assetsBackupNative.test.js', 'test/assetsReviewNative.test.js', 'test/assetsDepreciationNative.test.js', 'test/assetsLagNative.test.js']) assert.ok(native.includes(f), `${f} is not in test:native`);
 });

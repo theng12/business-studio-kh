@@ -135,10 +135,14 @@ const ATTENTION = {
  * branchId ('none' = no branch), categoryId, status, recordState (default:
  * everything but cancelled), custodianEmployeeId, attention (one of
  * ATTENTION's keys), fuelLinked, limit/offset. Also returns the counts the
- * banners need ("16 vehicles and machines came from Fuel…").
+ * banners need ("16 vehicles and machines came from Fuel…"), and the
+ * register screen's totals row for the WHOLE filtered set (not just the page):
+ * book cost, accumulated depreciation, impairment and NBV from the posted
+ * ledger (so they equal the reports and the GL), plus each item's
+ * `bookCostMinor` (its posted cost; null while nothing is posted).
  */
 function list(companyId, filters = {}) {
-  if (!companyId) return { items: [], total: 0, counts: {} };
+  if (!companyId) return { items: [], total: 0, counts: {}, totals: emptyListTotals() };
   const f = filters || {};
   const where = ['a.company_id = @companyId'];
   const today = todayPhnomPenh();
@@ -165,6 +169,31 @@ function list(companyId, filters = {}) {
   const total = db.prepare(`SELECT COUNT(*) AS n FROM fixed_assets a WHERE ${whereSql}`).get(params).n;
   const items = db.prepare(`${SELECT} WHERE ${whereSql} ORDER BY a.tag_seq IS NULL, a.tag_seq, a.tag_code LIMIT @limit OFFSET @offset`)
     .all({ ...params, limit, offset }).map(rowToAsset);
+  // Posted figures: the page's own book cost, then the whole filtered set's totals.
+  const LEDGER_SUMS = `
+    SUM(CASE WHEN l.line_role = 'cost' THEN l.debit_minor - l.credit_minor ELSE 0 END) AS cost,
+    SUM(CASE WHEN l.line_role IN ('accum_dep', 'accum_disposal', 'accum_reval') THEN l.credit_minor - l.debit_minor ELSE 0 END) AS accum,
+    SUM(CASE WHEN l.line_role = 'impairment' THEN l.credit_minor - l.debit_minor ELSE 0 END) AS impairment`;
+  const LEDGER_ROLES = "l.line_role IN ('cost', 'accum_dep', 'accum_disposal', 'accum_reval', 'impairment')";
+  if (items.length) {
+    const ph = items.map((_, i) => `@id${i}`).join(', ');
+    const byId = new Map(db.prepare(`SELECT l.asset_id AS id, ${LEDGER_SUMS} FROM journal_lines l WHERE ${LEDGER_ROLES} AND l.asset_id IN (${ph}) GROUP BY l.asset_id`)
+      .all(Object.fromEntries(items.map((it, i) => [`id${i}`, it.id]))).map((r) => [r.id, r]));
+    for (const it of items) it.bookCostMinor = byId.has(it.id) ? byId.get(it.id).cost : null;
+  }
+  const led = db.prepare(`SELECT ${LEDGER_SUMS} FROM journal_lines l JOIN fixed_assets a ON a.id = l.asset_id WHERE ${LEDGER_ROLES} AND ${whereSql}`).get(params);
+  const held = db.prepare(`
+    SELECT SUM(a.record_state = 'active' AND a.status NOT IN ('disposed', 'lost') AND a.accounting_treatment IN ('capitalised', 'not_depreciated')) AS books,
+           SUM(a.record_state = 'active' AND a.status NOT IN ('disposed', 'lost') AND a.accounting_treatment = 'tracked_only') AS tracked,
+           SUM(CASE WHEN a.record_state = 'active' AND a.status NOT IN ('disposed', 'lost') AND a.accounting_treatment = 'tracked_only' THEN COALESCE(a.cost_usd_minor, 0) ELSE 0 END) AS tracked_cost,
+           SUM(a.record_state = 'draft') AS drafts
+      FROM fixed_assets a WHERE ${whereSql}
+  `).get(params);
+  const totals = {
+    assets: total, onBooks: held.books || 0, trackedOnly: held.tracked || 0, trackedCostMinor: held.tracked_cost || 0, drafts: held.drafts || 0,
+    costMinor: led.cost || 0, accumMinor: led.accum || 0, impairmentMinor: led.impairment || 0,
+    nbvMinor: (led.cost || 0) - (led.accum || 0) - (led.impairment || 0),
+  };
   const c = db.prepare(`
     SELECT SUM(record_state = 'draft') AS drafts, SUM(record_state = 'active') AS active, SUM(record_state = 'cancelled') AS cancelled,
            SUM(needs_cost = 1 AND record_state = 'draft') AS needs_cost, SUM(origin = 'fuel' AND needs_cost = 1 AND record_state = 'draft') AS from_fuel_needs_cost
@@ -173,7 +202,12 @@ function list(companyId, filters = {}) {
   return {
     items, total, limit, offset,
     counts: { drafts: c.drafts || 0, active: c.active || 0, cancelled: c.cancelled || 0, needsCost: c.needs_cost || 0, fromFuelNeedsCost: c.from_fuel_needs_cost || 0 },
+    totals,
   };
+}
+
+function emptyListTotals() {
+  return { assets: 0, onBooks: 0, trackedOnly: 0, trackedCostMinor: 0, drafts: 0, costMinor: 0, accumMinor: 0, impairmentMinor: 0, nbvMinor: 0 };
 }
 
 /* ─── validation helpers ──────────────────────────────────────── */
@@ -711,12 +745,12 @@ function insertEvent(e) {
     INSERT INTO asset_events (id, company_id, asset_id, batch_id, event_date, effective_period, kind,
       from_branch_id, to_branch_id, from_employee_id, to_employee_id, from_status, to_status,
       amount_minor, currency, fx_khr_per_usd, amount_usd_minor, proceeds_minor, buyer, qty, new_life_months, new_salvage_minor,
-      extends_life_months, vendor, supplier_id, reason, detail_json, document_file_ids, journal_entry_id, reverses_event_id,
+      extends_life_months, vendor, supplier_id, reason, detail_json, document_file_ids, journal_entry_id, reverses_event_id, stocktake_result_id,
       recorded_by_user_id, created_at)
     VALUES (@id, @companyId, @assetId, @batchId, @eventDate, @effectivePeriod, @kind,
       @fromBranchId, @toBranchId, @fromEmployeeId, @toEmployeeId, @fromStatus, @toStatus,
       @amountMinor, @currency, @fx, @amountUsdMinor, @proceedsMinor, @buyer, @qty, @newLifeMonths, @newSalvageMinor,
-      @extendsLifeMonths, @vendor, @supplierId, @reason, @detail, @documentFileIds, @journalEntryId, @reversesEventId,
+      @extendsLifeMonths, @vendor, @supplierId, @reason, @detail, @documentFileIds, @journalEntryId, @reversesEventId, @stocktakeResultId,
       @by, @now)
   `).run({
     id, companyId: e.companyId, assetId: e.assetId, batchId: e.batchId ?? null, eventDate: e.eventDate,
@@ -729,7 +763,7 @@ function insertEvent(e) {
     vendor: e.vendor ?? null, supplierId: e.supplierId ?? null, reason: e.reason ?? null,
     detail: e.detail ? JSON.stringify(e.detail) : null,
     documentFileIds: e.documentFileIds && e.documentFileIds.length ? JSON.stringify(e.documentFileIds) : null,
-    journalEntryId: e.journalEntryId ?? null, reversesEventId: e.reversesEventId ?? null,
+    journalEntryId: e.journalEntryId ?? null, reversesEventId: e.reversesEventId ?? null, stocktakeResultId: e.stocktakeResultId ?? null,
     by: getCallerUserId(), now: Date.now(),
   });
   return id;
@@ -748,7 +782,7 @@ function rowToEvent(r) {
     newLifeMonths: r.new_life_months ?? null, newSalvageMinor: r.new_salvage_minor ?? null, extendsLifeMonths: r.extends_life_months ?? null,
     vendor: r.vendor ?? null, supplierId: r.supplier_id ?? null, reason: r.reason ?? null, detail: parseJson(r.detail_json, null),
     documentFileIds: parseJson(r.document_file_ids, []), journalEntryId: r.journal_entry_id ?? null,
-    reversesEventId: r.reverses_event_id ?? null, reversedByEventId: r.reversed_by_event_id ?? null,
+    reversesEventId: r.reverses_event_id ?? null, reversedByEventId: r.reversed_by_event_id ?? null, stocktakeResultId: r.stocktake_result_id ?? null,
     recordedByUserId: r.recorded_by_user_id ?? null, createdAt: r.created_at,
     voided: !!r.voided_at, voidedAt: r.voided_at ?? null, voidReason: r.void_reason ?? null,
   };
@@ -804,6 +838,28 @@ function eventDateFor(a, v, group = null) {
     if (last && d < last) throw badRequest(`A later ${group === 'status' ? 'status change' : 'move'} is recorded on ${last} — date this one on or after it`);
   }
   return d;
+}
+
+/**
+ * The branch an asset was in on `date` (§11: lines carry the branch of their
+ * date): the latest live transfer on or before it, else the "from" branch of
+ * the first transfer after it, else its current branch.
+ */
+function branchAt(a, date) {
+  const db = getDb();
+  const before = db.prepare(`SELECT to_branch_id FROM asset_events WHERE asset_id = ? AND kind = 'transfer' AND voided_at IS NULL AND event_date <= ?
+     ORDER BY event_date DESC, created_at DESC LIMIT 1`).get(a.id, date);
+  if (before) return before.to_branch_id;
+  const after = db.prepare(`SELECT from_branch_id FROM asset_events WHERE asset_id = ? AND kind = 'transfer' AND voided_at IS NULL AND event_date > ?
+     ORDER BY event_date, created_at LIMIT 1`).get(a.id, date);
+  if (after) return after.from_branch_id;
+  return a.branchId;
+}
+
+/** Refuse leaving the register before a move recorded later (review 2, LOW). */
+function assertNoLaterMove(a, d) {
+  const later = getDb().prepare(`SELECT MAX(event_date) AS d FROM asset_events WHERE asset_id = ? AND voided_at IS NULL AND kind IN ('transfer', 'custodian', 'status') AND event_date > ?`).get(a.id, d).d;
+  if (later) throw badRequest(`${a.tagCode} has a move or status change recorded on ${later} — it cannot leave the register before that`);
 }
 
 /**
@@ -984,9 +1040,10 @@ function recordCapex({ id, date, amountMinor, currency, fxKhrPerUsd, extendsLife
   const eventId = uuid();
   let entry;
   getDb().transaction(() => {
+    const branchOn = branchAt(a, d);
     const lines = [
-      { accountId: category.glCostAccountId, debitMinor: usd, lineRole: 'cost', txnCurrency: cur, txnAmountMinor: amount, assetId: a.id, branchId: a.branchId },
-      { accountKey: 'fa.clearing.purchase', creditMinor: usd, lineRole: 'clearing', assetId: a.id, branchId: a.branchId },
+      { accountId: category.glCostAccountId, debitMinor: usd, lineRole: 'cost', txnCurrency: cur, txnAmountMinor: amount, assetId: a.id, branchId: branchOn },
+      { accountKey: 'fa.clearing.purchase', creditMinor: usd, lineRole: 'clearing', assetId: a.id, branchId: branchOn },
     ];
     if (cur === 'KHR') lines[0].khrMinor = amount;
     entry = ledger.post({
@@ -1116,7 +1173,8 @@ function postedDepreciation(assetId, { throughPeriod = null } = {}) {
  * re-activation on the same date never leaves the cost counted twice at any
  * month-end (a locked month still redirects it, like the re-activation).
  * Depreciation already posted for it is taken back by one adjustment entry
- * in the current open month; the next run catches up from the start.
+ * dated the first day after the last posted month; that month's run catches
+ * up from the start.
  */
 function reverseEvent(id, reason) {
   const e = getEvent(id);
@@ -1154,7 +1212,10 @@ function reverseEvent(id, reason) {
         const n = db.prepare("SELECT COUNT(*) AS n FROM journal_entries WHERE company_id = ? AND idempotency_key LIKE ?").get(a.companyId, `asset:${a.id}:undo-dep:%`).n;
         const dims = { assetId: a.id, branchId: a.branchId };
         ledger.post({
-          companyId: a.companyId, entryDate: todayPhnomPenh(), sourceKind: 'reversal', sourceId: revEventId,
+          // Dated the first day after the last posted month (review 2): the next run —
+          // that month's — catches up on the corrected figures, so every month-end
+          // from then on equals the schedule.
+          companyId: a.companyId, entryDate: lastDepreciationPeriod(a.companyId) ? `${book.addMonths(lastDepreciationPeriod(a.companyId), 1)}-01` : todayPhnomPenh(), sourceKind: 'reversal', sourceId: revEventId,
           idempotencyKey: `asset:${a.id}:undo-dep:${n + 1}`,
           memo: `Depreciation taken back: ${a.tagCode} ${a.name} returned to draft (${why})`,
           lines: charged > 0
@@ -1287,5 +1348,5 @@ module.exports = {
   planActivation, previewActivation, activate,
   insertEvent, getEvent, listEvents, transfer, setCustodian, setStatus, recordRepair, recordCapex, changeLife, changeSalvage, addNote,
   voidEvent, reverseEvent, scheduleSpec, getSchedule, rowToAsset, checkEmployee,
-  postedDepreciation, lastDepreciationPeriod, assertAfterPosted, eventDateFor, eventDate, liveAsset, touch, pastDateOrNull, assertDepreciating, amountInUsd,
+  postedDepreciation, lastDepreciationPeriod, assertAfterPosted, eventDateFor, eventDate, branchAt, assertNoLaterMove, liveAsset, touch, pastDateOrNull, assertDepreciating, amountInUsd,
 };

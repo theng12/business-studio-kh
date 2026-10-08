@@ -676,8 +676,9 @@ test('/api/rpc: assets.view reads, assets.manage writes, assets.count sees photo
   assert.ok((await ok(viewer.token, 'fx:rateOn', { date: '2026-03-12' })).rate);
 
   // Admin only: locking a month; making Fuel vehicles needs fuel.manage too.
-  await forbidden(manager.token, 'ledger:lockPeriod', { period: '2026-03' });
-  assert.deepEqual(await ok(admin.token, 'ledger:lockPeriod', { period: '2026-03' }), { period: '2026-03', status: 'locked', closedThrough: '2026-03' });
+  await forbidden(manager.token, 'ledger:lockPeriod', { period: '2025-12' });
+  // (2025-12 is before the register start: nothing is due there, so it can be closed.)
+  assert.deepEqual(await ok(admin.token, 'ledger:lockPeriod', { period: '2025-12' }), { period: '2025-12', status: 'locked', closedThrough: '2025-12' });
   const fuelTry = await call(manager.token, 'assets:createFuelAsset', { id: created.id, typeId: types.truck.id });
   assert.match(fuelTry.body.error, /Manage fuel/);
   assert.ok((await ok(admin.token, 'assets:createFuelAsset', { id: created.id, typeId: types.truck.id })).fuelAsset.id);

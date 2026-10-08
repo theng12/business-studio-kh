@@ -40,20 +40,8 @@ function monthLabel(p) { return ledger.humanMonth(p); }
 /** The last month that has ended (Phnom Penh time). */
 function lastEndedPeriod() { return book.addMonths(todayPhnomPenh().slice(0, 7), -1); }
 
-/**
- * The branch an asset was in on `date`: the latest live transfer on or before
- * it, else the "from" branch of the first transfer after it, else its current one.
- */
-function branchAt(a, date) {
-  const db = getDb();
-  const before = db.prepare(`SELECT to_branch_id FROM asset_events WHERE asset_id = ? AND kind = 'transfer' AND voided_at IS NULL AND event_date <= ?
-     ORDER BY event_date DESC, created_at DESC LIMIT 1`).get(a.id, date);
-  if (before) return before.to_branch_id;
-  const after = db.prepare(`SELECT from_branch_id FROM asset_events WHERE asset_id = ? AND kind = 'transfer' AND voided_at IS NULL AND event_date > ?
-     ORDER BY event_date, created_at LIMIT 1`).get(a.id, date);
-  if (after) return after.from_branch_id;
-  return a.branchId;
-}
+/** The branch an asset was in on `date` (main/db/fixedAssets.js). */
+function branchAt(a, date) { return fixedAssets.branchAt(a, date); }
 
 /** The next month a run may post, or null when nothing has been set up yet. */
 function nextDuePeriod(companyId) {
@@ -67,23 +55,33 @@ function nextDuePeriod(companyId) {
   return next;
 }
 
+/**
+ * Every asset a run looks at: active, capitalised, in service — disposed and
+ * lost ones included (review 2): their schedule ends at the disposal, so a
+ * run for a month before it still posts that month, and a run after it takes
+ * back anything a disposal settled ahead of the runs. For most of them the
+ * due is simply 0.
+ */
 function runnableAssets(companyId) {
   return getDb().prepare(`
     SELECT id FROM fixed_assets WHERE company_id = ? AND record_state = 'active' AND accounting_treatment = 'capitalised'
-       AND depreciation_start_period IS NOT NULL AND status NOT IN ('disposed', 'lost')
+       AND depreciation_start_period IS NOT NULL
      ORDER BY tag_seq, tag_code
   `).all(companyId).map((r) => fixedAssets.get(r.id));
 }
 
 /**
- * What one asset owes for `period`: { due, monthPart, catchUp, fromPeriod }.
- * `postedDep` defaults to what is posted now.
+ * What one asset owes for `period`: { due, monthPart, catchUp }.
+ * Posted means posted IN or BEFORE that month (review 2): an entry dated
+ * later — a disposal, partial disposal or revaluation that settled months
+ * ahead of the runs — is not counted, so every month-end equals the schedule;
+ * the run for the event's own month takes back what it settled twice.
  */
 function dueFor(a, period, postedDep = null) {
   const spec = fixedAssets.scheduleSpec(a);
   if (!spec || period < spec.startPeriod) return { due: 0, monthPart: 0, catchUp: 0, computed: 0, posted: 0 };
   const computed = book.chargedThrough(spec, period);
-  const posted = postedDep == null ? fixedAssets.postedDepreciation(a.id) : postedDep;
+  const posted = postedDep == null ? fixedAssets.postedDepreciation(a.id, { throughPeriod: period }) : postedDep;
   const due = computed - posted;
   const current = book.amountFor(spec, period);
   const monthPart = Math.min(Math.max(due, 0), current);
@@ -211,6 +209,20 @@ function reverseRun(companyId, period, reason) {
   const last = fixedAssets.lastDepreciationPeriod(companyId);
   if (last !== period) throw badRequest(`Only the latest run (${monthLabel(last)}) can be reversed`);
   if (ledger.isLocked(companyId, period)) throw badRequest(`${monthLabel(period)} is locked — its run cannot be reversed`);
+  // Review 2 (HIGH 1): an asset that has left the register (or gone back to
+  // draft) since this run would keep a balance for good — undo that first.
+  if (run.journalEntryId) {
+    const gone = getDb().prepare(`
+      SELECT DISTINCT a.tag_code, a.status, a.record_state FROM journal_lines l JOIN fixed_assets a ON a.id = l.asset_id
+       WHERE l.entry_id = ? AND (a.status IN ('disposed', 'lost') OR a.record_state <> 'active') ORDER BY a.tag_code
+    `).all(run.journalEntryId);
+    if (gone.length) {
+      const g = gone[0];
+      const what = g.record_state !== 'active' ? `the return to draft of ${g.tag_code} (activate it again)`
+        : g.status === 'lost' ? `the write-off of ${g.tag_code} ("Found again")` : `the disposal of ${g.tag_code}`;
+      throw badRequest(`Undo ${what} first — reversing this run would leave a balance on it${gone.length > 1 ? ` (and ${gone.length - 1} more)` : ''}`);
+    }
+  }
   const db = getDb();
   let rev = null;
   db.transaction(() => {
@@ -258,6 +270,24 @@ function dueMonths(companyId, through = null) {
   return out;
 }
 
+/**
+ * Is depreciation still to be posted for `period` or earlier? (a month with
+ * depreciating assets and no run). Used to refuse closing such a month.
+ */
+function dueThrough(companyId, period) {
+  const next = nextDuePeriod(companyId);
+  if (next > period) return null;
+  const any = getDb().prepare(`SELECT 1 FROM fixed_assets WHERE company_id = ? AND record_state = 'active' AND accounting_treatment = 'capitalised'
+      AND depreciation_start_period IS NOT NULL AND depreciation_start_period <= ? LIMIT 1`).get(companyId, period);
+  return any ? next : null;
+}
+
+/** The latest run row for a month was reversed (by hand) and not posted again. */
+function reversedByHand(companyId, period) {
+  const r = getDb().prepare('SELECT status FROM depreciation_runs WHERE company_id = ? AND period = ? ORDER BY attempt DESC LIMIT 1').get(companyId, period);
+  return r?.status === 'reversed';
+}
+
 /* ─── snapshots and integrity (§7) ────────────────────────────── */
 
 /**
@@ -287,16 +317,45 @@ function checkIntegrity(companyId) {
   const db = getDb();
   const entries = ledger.checkIntegrity(companyId);
   const assets = [];
+  const lastRunEarly = fixedAssets.lastDepreciationPeriod(companyId);
   for (const r of db.prepare("SELECT id FROM fixed_assets WHERE company_id = ? AND record_state = 'active' AND accounting_treatment <> 'tracked_only'").all(companyId)) {
     const a = fixedAssets.get(r.id);
     const t = ledger.assetLedgerTotals(a.id);
     const nbv = t.costMinor - t.accumDepMinor - t.impairmentMinor;
     if (a.status === 'disposed' || a.status === 'lost') {
-      if (t.costMinor !== 0 || t.accumDepMinor !== 0 || t.impairmentMinor !== 0) assets.push({ assetId: a.id, tagCode: a.tagCode, problem: 'gone from the register but still has a balance', ...t });
+      // While the runs are behind its disposal, the runs still to come take back
+      // what the disposal settled ahead of them; after that, nothing may be left.
+      const spec = fixedAssets.scheduleSpec(a);
+      const runsBehind = spec && spec.endPeriod && (!lastRunEarly || spec.endPeriod > lastRunEarly);
+      if (!runsBehind && (t.costMinor !== 0 || t.accumDepMinor !== 0 || t.impairmentMinor !== 0)) assets.push({ assetId: a.id, tagCode: a.tagCode, problem: 'gone from the register but still has a balance', ...t });
+      if (a.accumMinor !== t.accumDepMinor || a.nbvMinor !== nbv) assets.push({ assetId: a.id, tagCode: a.tagCode, problem: 'snapshot differs from the ledger', snapshotAccum: a.accumMinor, snapshotNbv: a.nbvMinor, ledgerAccum: t.accumDepMinor, ledgerNbv: nbv });
       continue;
     }
     if (a.accumMinor !== t.accumDepMinor || a.nbvMinor !== nbv) {
       assets.push({ assetId: a.id, tagCode: a.tagCode, problem: 'snapshot differs from the ledger', snapshotAccum: a.accumMinor, snapshotNbv: a.nbvMinor, ledgerAccum: t.accumDepMinor, ledgerNbv: nbv });
+    }
+  }
+  // Review 2 (HIGH 1): posted depreciation = the schedule, per asset. A live
+  // asset compares through the last run month; one that changed after that run
+  // (activated late, found again, given an in-service date…) is only "due at the
+  // next run". A gone asset must have posted exactly its schedule to the end.
+  const lastRun = fixedAssets.lastDepreciationPeriod(companyId);
+  const lastRunAt = lastRun ? db.prepare("SELECT MAX(run_at) AS t FROM depreciation_runs WHERE company_id = ? AND status = 'posted'").get(companyId).t : null;
+  const schedule = [];
+  const pending = [];
+  if (lastRun) {
+    for (const a of runnableAssets(companyId)) {
+      const spec = fixedAssets.scheduleSpec(a);
+      if (!spec) continue;
+      const gone = a.status === 'disposed' || a.status === 'lost';
+      const through = gone && spec.endPeriod && spec.endPeriod > lastRun ? spec.endPeriod : lastRun;
+      const computed = book.chargedThrough(spec, through);
+      const posted = gone ? fixedAssets.postedDepreciation(a.id) : fixedAssets.postedDepreciation(a.id, { throughPeriod: lastRun });
+      if (computed === posted) continue;
+      const changedAt = Math.max(a.activatedAt || 0, db.prepare('SELECT MAX(created_at) AS t FROM asset_events WHERE asset_id = ?').get(a.id).t || 0);
+      const row = { assetId: a.id, tagCode: a.tagCode, throughPeriod: through, computedMinor: computed, postedMinor: posted };
+      if (!gone && changedAt > lastRunAt) pending.push(row);
+      else schedule.push({ ...row, problem: 'posted depreciation differs from the schedule' });
     }
   }
   const accountKeys = ['fa.cost.%', 'fa.accum.%', 'fa.impairment'];
@@ -312,17 +371,18 @@ function checkIntegrity(companyId) {
   `).all(companyId, ...accountKeys, companyId, companyId);
   const accountProblems = accounts.filter((x) => x.gl !== x.sub).map((x) => ({ accountId: x.id, code: x.code, name: x.name_en, glMinor: x.gl, subledgerMinor: x.sub }));
   // Total: the register's NBV (from snapshots) = the GL's net fixed-asset balance.
+  // Gone assets are 0 here unless the runs are still behind their disposal (then both sides carry it).
   const registerNbv = db.prepare(`SELECT COALESCE(SUM(nbv_minor), 0) AS n FROM fixed_assets WHERE company_id = ? AND record_state = 'active'
-      AND accounting_treatment <> 'tracked_only' AND status NOT IN ('disposed', 'lost')`).get(companyId).n;
+      AND accounting_treatment <> 'tracked_only'`).get(companyId).n;
   const glNet = accounts.reduce((t, x) => t + x.gl, 0);
   return {
-    checked: entries.checked, unbalanced: entries.unbalanced, assets, accounts: accountProblems,
+    checked: entries.checked, unbalanced: entries.unbalanced, assets, accounts: accountProblems, schedule, pendingAtNextRun: pending, lastRun,
     totals: { registerNbvMinor: registerNbv, glNetMinor: glNet, matches: registerNbv === glNet },
-    ok: !entries.unbalanced.length && !assets.length && !accountProblems.length && registerNbv === glNet,
+    ok: !entries.unbalanced.length && !assets.length && !accountProblems.length && !schedule.length && registerNbv === glNet,
   };
 }
 
 module.exports = {
   lastDayOf, lastEndedPeriod, branchAt, nextDuePeriod, dueFor, buildRun, previewDepreciation, runDepreciation, reverseRun,
-  listRuns, dueMonths, getRun, refreshSnapshot, checkIntegrity, cannotPostReason,
+  listRuns, dueMonths, getRun, refreshSnapshot, checkIntegrity, cannotPostReason, dueThrough, reversedByHand,
 };

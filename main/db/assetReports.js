@@ -78,11 +78,14 @@ function register(companyId, { asOf = null, branchId = null, categoryId = null }
   const n = names(companyId);
   const rows = [];
   for (const a of allAssets(companyId)) {
-    if (!heldAt(a, date, settings)) continue;
+    const tracked = a.accountingTreatment === 'tracked_only';
+    const b = bal.get(a.id) || { cost: 0, accum: 0, impairment: 0 };
+    // Review 2 (MEDIUM 3): an asset on the books is held exactly while the
+    // ledger carries it (its acquisition and disposal ENTRY dates), so the
+    // register always equals the GL; tracked-only items follow their dates.
+    if (tracked ? !heldAt(a, date, settings) : (b.cost === 0 && b.accum === 0 && b.impairment === 0)) continue;
     const branch = branchAt(a, date);
     if (!inScope(a, { branchId, categoryId }, branch)) continue;
-    const b = bal.get(a.id) || { cost: 0, accum: 0, impairment: 0 };
-    const tracked = a.accountingTreatment === 'tracked_only';
     let unposted = 0;
     const spec = fixedAssets.scheduleSpec(a);
     if (spec) {
@@ -128,7 +131,7 @@ function movements(companyId, { from, to, branchId = null, categoryId = null } =
      WHERE e.company_id = ? AND e.entry_date <= ? AND l.line_role IN ('cost', 'accum_dep', 'accum_disposal', 'accum_reval', 'impairment')
   `).all(companyId, t);
   const cats = new Map();
-  const blank = () => ({ cost: { opening: 0, additions: 0, disposals: 0, revaluation: 0, closing: 0 }, accum: { opening: 0, charge: 0, disposals: 0, revaluation: 0, closing: 0 }, impairment: { opening: 0, charge: 0, disposals: 0, closing: 0 } });
+  const blank = () => ({ cost: { opening: 0, additions: 0, disposals: 0, revaluation: 0, closing: 0 }, accum: { opening: 0, charge: 0, disposals: 0, revaluation: 0, closing: 0 }, impairment: { opening: 0, charge: 0, disposals: 0, revaluation: 0, closing: 0 } });
   for (const l of lines) {
     if (categoryId && l.category_id !== categoryId) continue;
     if (branchId && (branchId === 'none' ? l.branch_id : l.branch_id !== branchId)) continue;
@@ -143,7 +146,8 @@ function movements(companyId, { from, to, branchId = null, categoryId = null } =
       c.cost.closing += v;
     } else if (l.line_role === 'impairment') {
       const v = l.credit_minor - l.debit_minor;
-      if (before) c.impairment.opening += v; else c.impairment[bucket === 'impairment' ? 'charge' : 'disposals'] += v;
+      // Impairment eliminated by a revaluation is a revaluation movement, not a disposal (review 2).
+      if (before) c.impairment.opening += v; else c.impairment[bucket === 'impairment' ? 'charge' : bucket === 'revaluation' ? 'revaluation' : 'disposals'] += v;
       c.impairment.closing += v;
     } else {
       const v = l.credit_minor - l.debit_minor;

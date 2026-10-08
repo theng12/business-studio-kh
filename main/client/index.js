@@ -1934,11 +1934,12 @@ function registerClientFileHandlers() {
       } catch (err) {
         if (!tracked || err?.code !== 'RPC_OUTCOME_UNKNOWN') throw err;
 
-        const deadline = Date.now() + 30_000;
+        const clock = _reconcileClock;
+        const deadline = clock.now() + 30_000;
         let outcome;
         let lastOutcomeError;
-        while (Date.now() < deadline) {
-          const remainingMs = deadline - Date.now();
+        while (clock.now() < deadline) {
+          const remainingMs = deadline - clock.now();
           if (remainingMs <= 0) break;
           try {
             outcome = await rpc('templates:getApplyOutcome', { operationId }, remainingMs);
@@ -1953,9 +1954,9 @@ function registerClientFileHandlers() {
             lastOutcomeError = outcomeError;
           }
           if (outcome?.status !== 'pending' && outcome) break;
-          const waitMs = Math.min(250, deadline - Date.now());
+          const waitMs = Math.min(250, deadline - clock.now());
           if (waitMs <= 0) break;
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          await clock.sleep(waitMs);
         }
 
         if (outcome?.status === 'succeeded') {
@@ -2863,8 +2864,18 @@ function registerClientImageImportBridges() {
   });
 }
 
+/**
+ * The overlay reconciliation's clock (the 30-second status budget and the
+ * 250 ms pause between status reads). A test swaps it for a fake one so the
+ * loop is driven by events, not by real timers racing a loaded machine.
+ */
+const REAL_RECONCILE_CLOCK = { now: () => Date.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
+let _reconcileClock = REAL_RECONCILE_CLOCK;
+function setReconcileClockForTests(clock) { _reconcileClock = clock || REAL_RECONCILE_CLOCK; }
+
 module.exports = {
   registerClientProxies,
+  setReconcileClockForTests,
   getConnectionState,
   reconnectNow,
   // Pure timing rules, exported for test/connectivity.test.js.
