@@ -29,6 +29,27 @@ function rates() {
 const line = (patch = {}) => ({ currency: 'KHR', baseMinor: 3000, applyTax: true, taxResident: true, rateSet: rates(), ...patch });
 const component = (patch = {}) => ({ code: 'bonus', label: 'Bonus', kind: 'earning', amountMinor: 100, taxable: true, nssfContributory: true, isFringeBenefit: false, ...patch });
 
+test('draft previews allow an absent disabled statutory domain without inventing tables', () => {
+  const { calculatePayrollLine } = calculator();
+  for (const nssf of [undefined, null, { components: [] }]) {
+    const rateSet = { status: 'draft', tax: rates().tax, nssf };
+    const result = calculatePayrollLine(line({ rateSet }));
+    assert.equal(result.salaryTaxKhr, 300);
+    assert.equal(result.nssfEmployeeMinor, 0);
+    assert.equal(result.estimate, true);
+    assert.throws(() => calculatePayrollLine(line({ rateSet, applyNssf: true })), /NSSF/);
+    assert.throws(() => calculatePayrollLine(line({ rateSet: { ...rateSet, status: 'confirmed' } })), /NSSF/);
+  }
+  const rateSet = { status: 'draft', nssf: rates().nssf, tax: null };
+  const result = calculatePayrollLine(line({ rateSet, applyTax: false, applyNssf: true }));
+  assert.equal(result.nssfEmployeeMinor, 48);
+  assert.equal(result.salaryTaxKhr, 0);
+  assert.equal(result.estimate, true);
+  assert.throws(() => calculatePayrollLine(line({ rateSet })), /Tax/);
+  assert.throws(() => calculatePayrollLine(line({ rateSet: { ...rateSet, status: 'confirmed' }, applyTax: false })), /Tax/);
+  assert.throws(() => calculatePayrollLine(line({ rateSet: { status: 'draft', tax: rates().tax, nssf: { components: [{ key: 'pension', employeePercent: 2, employerPercent: 2 }] } } })), /bands/);
+});
+
 test('minor-unit conversions use cents, whole riel and exact decimal half-up rounding', () => {
   const { convertMinor } = calculator();
   for (const [amount, from, to, rate, want] of [
