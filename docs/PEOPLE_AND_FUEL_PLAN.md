@@ -1,6 +1,6 @@
 # People & Fuel — design plan (2026-10-08)
 
-**Status: F1 shipped in 0.1.95; HR1 shipped in 0.1.97 (API §10). The original plan was approved on 2026-10-08 with §7a/§7b. HR2 owner decisions are recorded in §7c (2026-10-09); its design additions below await review before implementation.** Written for the owner (Theng) after he asked for employee
+**Status: F1 shipped in 0.1.95; HR1 shipped in 0.1.97 (API §10). The original plan was approved on 2026-10-08 with §7a/§7b. HR2 owner decisions are recorded in §7c (2026-10-09); phased implementation and independent review are underway on draft PR #119, not yet released.** Written for the owner (Theng) after he asked for employee
 management (20+ staff on paper today) and reported fuel theft. §0 is the short version; the rest is
 the spec an implementation would follow.
 
@@ -371,10 +371,11 @@ client proxy, preload, `CHANNEL_RULES`).
 | Leave types | Prefilled with **Cambodian law defaults** (annual 1.5 days per month worked, sick, special 7 days, maternity 90 days) for the owner to edit and confirm with the accountant. |
 | Public holidays | **Prefilled with Cambodia's official list** for 2026 (and 2027 where announced), editable each year. *Built:* 2026 from Sub-Decree No. 167 (18 Sep 2025); for 2027 only the fixed-date holidays (no 2027 sub-decree yet on 2026-10-08) — see §10. |
 
-## 7c. HR2 owner decisions and design for review (2026-10-09)
+## 7c. HR2 owner decisions and implementation boundaries (2026-10-09)
 
 This section supersedes older HR2 questions and conflicting defaults in §§3.3–3.4 and §7.
-The business answers below are confirmed; the detailed implementation has NOT been built.
+The business answers below are confirmed; implementation progress and remaining acceptance gates
+are tracked in `docs/tasks/HR2_IMPLEMENTATION_PLAN.md`. Unmerged work is not a release.
 Keep this in the existing plan rather than creating another handoff or parallel policy document.
 
 ### Confirmed decisions
@@ -395,7 +396,7 @@ Keep this in the existing plan rather than creating another handoff or parallel 
 | Statutory estimates | No accountant yet. Estimated NSSF/tax tables remain draft; they do not satisfy the existing confirmation gate for final payroll approval. |
 | Rollout | Start with synthetic numbers and compare with the owner's manual workflow for several months. No migration, automatic switch-over or live-data testing is authorized. |
 
-### Proposed design boundaries
+### Design boundaries
 
 Use ordinary company settings, dated policy/rate records and the existing permissions and audit
 helpers, not a generic policy engine, plugin framework or new dependency. The initial screens are
@@ -417,7 +418,10 @@ balance; no broad payroll or loan list is exposed through a kiosk identity.
    Cambodian salary-tax source. Official publications were located at
    `https://www.tax.gov.kh/kh/exchange-rate` and
    `https://www.nbc.gov.kh/english/economic_research/exchange_rate.php`; a documented suitable
-   API has NOT yet been verified. No paid subscription, credentials or employee-data upload.
+   JSON API has not been established. The implementation instead retrieves the official GDT
+   monthly salary-tax workbook through a bounded fixed-origin helper; its dated candidate requires
+   explicit confirmation and is not an NSSF rate. Evidence: `docs/HR2_STATUTORY_RESEARCH.md`.
+   No paid subscription, credentials or employee-data upload.
 3. **Loans and interest.** Keep principal, unpaid interest, repayments and any capitalization
    separately auditable. Select the interest policy at loan creation, show its consequences and
    date future changes; no retrospective rewrite. A capitalization moves unpaid interest into
@@ -470,11 +474,13 @@ Exercise only changed screens with realistic synthetic data; rerun `npm run chec
 `npm run test:native` before merging implementation. Follow the handoff's release process and
 packaged client/server checks when HR2 ships, with no schema-version bump.
 
-**Design review still needed before code:** resolve mid-month hire/leave/rate-change proration,
-partial-day attendance versus the whole-day wage policy, exact interest-start and capitalization
-dates, and twice-monthly statutory settlement through a short set of worked examples. Research
-the statutory constraints and the rate provider first; propose explicit configurable rules rather
-than inventing a legal default. These are remaining design tasks, not claims of owner approval.
+**Implementation conventions:** the execution plan records dated-rate proration, explicit whole-day
+decisions, disbursement-anniversary interest grace and cumulative twice-monthly settlement. These
+are configurable calculation conventions, not legal certification. “Principal repayments start
+immediately” means the first actual salary payment after disbursement can withhold a repayment,
+including a payment for the previous earning month; the payment itself cannot predate disbursement.
+Statutory applicability and professional confirmation remain outstanding. See the implementation
+plan for open review findings and `docs/tasks/HR2_API.md` for the current service contract.
 
 ## 7. Original open questions (historical — answers in §7a/§7b/§7c take precedence)
 
