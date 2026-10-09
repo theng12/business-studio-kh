@@ -165,7 +165,7 @@ test('leave output distinguishes unknown, empty, legacy, zero and negative balan
 
 test('leave snapshots reject malformed arrays, unsafe days and impossible dates in every builder', () => {
   const invalid = [
-    ...[null, {}, 'annual', [null], [,]].map((leaveBalances) => ({ leaveBalances })),
+    ...[null, {}, 'annual', [null], Array(1)].map((leaveBalances) => ({ leaveBalances })),
     ...[NaN, Infinity, -Infinity, 1000000.5, -1000000.5, '4.5', null, undefined].map((days) => ({ leaveBalances: [{ code: 'annual', days }] })),
     ...[NaN, Infinity, -1000001, '4.5'].map((leaveBalanceDays) => ({ leaveBalanceDays })),
     ...['2026-02-29', '2026-02-30', '2026-13-01', '2026-9-01', '<img src=x>', '', null].map((leaveBalanceAsOf) => ({ leaveBalanceAsOf })),
