@@ -106,6 +106,8 @@ const AttCorrections = lazy(() => import('./modules/People/Corrections.jsx').the
 const Overtime = lazy(() => import('./modules/People/Overtime.jsx').then((m) => ({ default: m.Overtime })));
 const Lateness = lazy(() => import('./modules/People/Lateness.jsx').then((m) => ({ default: m.Lateness })));
 const Leave = lazy(() => import('./modules/People/Leave.jsx').then((m) => ({ default: m.Leave })));
+const Payroll = lazy(() => import('./modules/People/Payroll.jsx').then((m) => ({ default: m.Payroll })));
+const Loans = lazy(() => import('./modules/People/Loans.jsx').then((m) => ({ default: m.Loans })));
 // HR1: the attendance kiosk screen, previewed inside the app (hidden page; the
 // real kiosk is its own window — renderer/main.jsx #kiosk).
 const KioskPreview = lazy(() => import('./modules/Kiosk/KioskPreview.jsx').then((m) => ({ default: m.KioskPreview })));
@@ -148,6 +150,8 @@ const PAGES = {
   overtime: Overtime,
   lateness: Lateness,
   leave: Leave,
+  payroll: Payroll,
+  loans: Loans,
   kiosk: KioskPreview,
   history:   History,
   settings:  Settings,

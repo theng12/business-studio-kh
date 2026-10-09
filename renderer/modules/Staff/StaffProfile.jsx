@@ -9,6 +9,7 @@
  *   Documents      hr.manage: ID card, contract, … — view, add, void (never deleted)
  *   Attendance     the person's month, day by day; a day opens its detail
  *   Leave          balances, requests, ledger; request leave / adjust (hr.manage)
+ *   Pay            payroll.manage: dated rates and optional compensation
  *   Account & PIN  hr.manage: the linked app account, kiosk PIN set / reset /
  *                  clear / unlock (incl. a manager-only lock)
  *
@@ -19,6 +20,8 @@
 
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/index.js';
+import { useUserCaps } from '../../components/Sidebar.jsx';
+import { hasCap } from '../../lib/capabilities.js';
 import { Badge, Button, EmptyState, Field, Input, Modal, Pagination, Select, Textarea, paginate } from '../../components/ui.jsx';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
@@ -35,24 +38,30 @@ import {
   profilePatch, scheduleLine, scheduleOn, staffStatus, validateProfileForm, validateSuspendForm, visibleFields,
 } from '../People/hrModel.js';
 import { MarkLeftModal, StaffEditorModal } from './index.jsx';
+import { PayrollStaffPay } from '../People/PayrollStaffPay.jsx';
 
 const SECTIONS = [
   { value: 'details', label: 'Details' },
   { value: 'documents', label: 'Documents', manage: true },
   { value: 'attendance', label: 'Attendance' },
   { value: 'leave', label: 'Leave' },
+  { value: 'pay', label: 'Pay', capability: 'payroll.manage' },
   { value: 'account', label: 'Account & PIN', manage: true },
 ];
 
 export function StaffProfile({ id, onBack }) {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const addToast = useAppStore((s) => s.addToast);
+  const caps = useUserCaps();
+  const canManagePayroll = hasCap(caps, 'payroll.manage');
   const { canManage, fuelManage } = useHrCaps();
   const lookups = useHrLookups();
   const staffTick = useStaffTick();
   const tick = useHrTick(['staff', 'document', 'schedule', 'position']);
   const [profile, setProfile] = useState(null);
+  const [profileContext, setProfileContext] = useState({ companyId: null, id: null });
   const [error, setError] = useState(null);
+  const [errorContext, setErrorContext] = useState(null);
   const [retry, setRetry] = useState(0);
   const [section, setSection] = useState('details');
   const [editingBasics, setEditingBasics] = useState(false);
@@ -74,17 +83,28 @@ export function StaffProfile({ id, onBack }) {
       .then((p) => {
         if (!alive) return;
         setProfile(p);
+        setProfileContext({ companyId: activeCompanyId, id });
         setError(null);
         // Never overwrite a value still being typed or waiting to save.
         if (!autosave.hasPending()) setDraft(profileForm(p));
       })
-      .catch((err) => { if (alive) setError(errText(err)); });
+      .catch((err) => {
+        if (!alive) return;
+        setError(errText(err));
+        setErrorContext({ companyId: activeCompanyId, id });
+      });
     return () => { alive = false; };
   }, [id, activeCompanyId, staffTick, tick, retry]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const reload = () => setRetry((n) => n + 1);
+  const profileIsCurrent = Boolean(profile
+    && profile.id === id
+    && profileContext.companyId === activeCompanyId
+    && profileContext.id === id);
+  const errorIsCurrent = errorContext?.companyId === activeCompanyId && errorContext?.id === id;
   const fields = visibleFields(profile);
-  const visibleSections = SECTIONS.filter((s) => !s.manage || canManage);
+  const visibleSections = SECTIONS.filter((s) => (!s.manage || canManage)
+    && (!s.capability || hasCap(caps, s.capability)));
 
   function change(key, value) {
     const next = { ...draft, [key]: value };
@@ -101,7 +121,7 @@ export function StaffProfile({ id, onBack }) {
     catch (err) { addToast(errText(err), 'error'); }
   }
 
-  if (error && !profile) {
+  if (error && errorIsCurrent && !profileIsCurrent) {
     return (
       <div className="page">
         <PageHeader title="Staff member" backTo={{ label: 'Staff', onClick: onBack }} />
@@ -109,7 +129,7 @@ export function StaffProfile({ id, onBack }) {
       </div>
     );
   }
-  if (!profile) {
+  if (!profileIsCurrent) {
     return <div className="page"><PageHeader title="Staff member" backTo={{ label: 'Staff', onClick: onBack }} /><p className="muted">Loading…</p></div>;
   }
 
@@ -159,6 +179,7 @@ export function StaffProfile({ id, onBack }) {
       {section === 'attendance' ? <AttendanceSection profile={profile} canManage={canManage} /> : null}
       {section === 'leave' ? <LeaveSection profile={profile} lookups={lookups} canManage={canManage} /> : null}
       {section === 'account' && canManage ? <AccountSection profile={profile} onChanged={reload} /> : null}
+      {section === 'pay' && canManagePayroll && profileIsCurrent ? <PayrollStaffPay key={`${activeCompanyId}:${id}`} employeeId={id} /> : null}
 
       <StaffEditorModal open={editingBasics} employee={profile} onSaved={() => {}} onClose={() => { setEditingBasics(false); reload(); }} />
       <SuspendModal open={suspending} employee={profile} onClose={() => { setSuspending(false); reload(); }} />
@@ -870,4 +891,3 @@ function PinModal({ open, employee, onClose }) {
     </Modal>
   );
 }
-
