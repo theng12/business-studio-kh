@@ -998,7 +998,7 @@ const VALIDATORS = {
   'files:readImageThumb':        (a) => (isImagePath(a) ? true
     : 'an absolute path to an image file (.jpg, .jpeg, .png, .webp, .heic, .heif) is required'),
   'files:scanImageFiles':        requireNonEmptyStringArg('absolute folder path'),
-  'files:parseWorkbook':         (a) => (isWorkbookPath(a) ? true
+  'files:parseWorkbook':         (a) => (isAbsolutePath(a) && isWorkbookPath(a) ? true
     : 'an absolute path to a workbook (.xlsx, .xls, .csv, .tsv) is required'),
   // "Show in Finder" / "Open folder" after a run: an absolute path that
   // exists on this Mac (checked here so client mode applies the same rule).
@@ -1138,9 +1138,10 @@ Object.assign(VALIDATORS, require('./assetValidators').ASSET_VALIDATORS);
 const { FUEL_VALIDATORS } = require('./fuelValidators');
 // HR1: hr:*, attendance:*, leave:* and kiosk:* (main/server/hrValidators.js).
 const { HR_VALIDATORS } = require('./hrValidators');
+const { PAYROLL_VALIDATORS } = require('./payrollValidators');
 
 function getValidator(channel) {
-  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? null;
+  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? PAYROLL_VALIDATORS[channel] ?? null;
 }
 
 module.exports = {

@@ -24,6 +24,17 @@ const HISTORY_TABLES = [
   ['employee_documents', 'staff document'],
   ['employee_suspensions', 'suspension'],
   ['attendance_alerts', 'attendance alert'],
+  ['employee_pay_rates', 'pay rate'],
+  ['employee_components', 'staff pay component'],
+  ['statutory_rate_sets', 'statutory configuration'],
+  ['payroll_runs', 'payroll run'],
+  ['payroll_lines', 'payroll line'],
+  ['payroll_payments', 'payroll payment'],
+  ['payroll_reviews', 'payroll review'],
+  ['employee_loans', 'staff loan'],
+  ['loan_rate_changes', 'loan rate change'],
+  ['loan_entries', 'loan entry'],
+  ['loan_postponements', 'loan postponement'],
 ];
 
 function companyHistoryCounts(companyId) {

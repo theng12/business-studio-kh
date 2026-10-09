@@ -1,6 +1,6 @@
 # Business Studio KH — Development Status
 
-Updated: **2026-10-09, at 0.1.98.** This is the short "where is the project" page. The operating
+Updated: **2026-10-09, at 0.1.99.** This is the short "where is the project" page. The operating
 loop, paths, traps and the full list of open gaps live in [the session handoff](tasks/HANDOFF.md),
 which is updated on every release — read that first in a new session. If either document disagrees
 with the code, the code wins.
@@ -18,21 +18,22 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
   a spec/quality review from another agent in the same model family. No human or third-party model
   has reviewed the tree.
 
-## Current release — 0.1.98
+## Current release — 0.1.99
 
 | | |
 |---|---|
-| Version | `0.1.98` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
-| Integration | [PR #117](https://github.com/theng12/media-studio-kh/pull/117) merged as `794f05f`. |
-| Installed | **0.1.98** on the MacBook (`$HOME`), 2026-10-09. The Mac mini is still on 0.1.93. |
-| DMG | Owner `dist/Business Studio KH-0.1.98-arm64.dmg` (and 0.1.97) on the MacBook; older ones in `_trash/old-dmgs/`. |
-| Next | HR2 payroll — see the ROADMAP in [the handoff](tasks/HANDOFF.md). |
+| Version | `0.1.99` in package/lock, matching the top in-app changelog entry. |
+| Integration | [PR #119](https://github.com/theng12/media-studio-kh/pull/119) is the authoritative merge record. |
+| Installed | **0.1.99** on the verified Mac Studio M2 Max (`$HOME`), 2026-10-09. Other Macs were not checked; the Mini's last inherited report was 0.1.93. |
+| DMG | Owner `dist/Business Studio KH-0.1.99-arm64.dmg` (and 0.1.98); older installers and the prior app remain recoverable in `_trash/`. SHA-256 is in the handoff. |
+| Next | Assets A3 QR tags / stock-take, after its owner questions; HR2 comparison and professional confirmation remain. |
 
 **What changed since the last version of this page (0.1.72).** One line per release; the full
 wording is in the "What's new" changelog.
 
 | Version | Main change |
 |---|---|
+| 0.1.99 | HR2 payroll, statutory draft/confirmation gates, staff loans/opening imports, durable exact retries, bilingual payslips/run PDFs, frozen leave and own-record kiosk access |
 | 0.1.98 | Fixed Assets & Branches: branches, accounting core, asset register (Fuel vehicles linked), book depreciation from 1 Jan 2026, disposals/revaluation, tax year in riel (estimates), reports |
 | 0.1.97 | HR1: staff profiles, attendance (shop-Mac kiosk, phone selfie, supervisor), approvals for overtime and lateness, leave, Settings → People |
 | 0.1.96 | Home grid of module squares; per-module sidebar |
@@ -54,7 +55,7 @@ wording is in the "What's new" changelog.
 
 ## Checks
 
-At 0.1.98: `npm run check` 2,067 pass (0 lint errors, 4 old warnings), `npm run test:native` 375 pass, check:client-server pass; Fuel, HR and Assets each verified on `scripts/seed-realistic.js` data (planted fuel thefts all caught; HR manager flows driven by hand; assets checked at every month-end against an independent model). Per release evidence is in the handoff's release sections. Real hardware (kiosk webcam, phones, two Macs over Tailscale, printer) is still untested.
+At 0.1.99: `npm run check` **2,427 pass** (0 lint errors, 4 old warnings), `npm run test:native` **463 pass**, client/server, render and image checks pass; both audits report zero vulnerabilities. Focused HR2 screens, synthetic financial truth, real A5 exports, lost-reply/restart recovery and the installed app's disposable server/client smoke passed. The handoff records exact commands, evidence roots and review fixes. Real webcam, phones, two physical Macs/Tailscale, printer and macOS 12 remain untested.
 
 ## Release and install
 
@@ -92,9 +93,23 @@ The full step list is the handoff's "working loop". In short:
 
 ## Open
 
-The roadmap (HR2 payroll next, then Assets QR tags + stock-take, branches in the UI, fuel analysis, tasks, Finance, one shared exchange rate, Pick & Pack) and every known gap are in [the handoff](tasks/HANDOFF.md) — ROADMAP near the top, OPEN table at the end. Headlines:
+### HR2 software delivery — 0.1.99
+
+- [x] Owner decisions, practical defaults and phased plan recorded.
+- [x] Integer-money calculators and company-scoped immutable payroll/loan services.
+- [x] Validated local/client API, separately gated People screens, imports and bilingual exports.
+- [x] Independent packet and integration reviews; reproduced payment/restart/kiosk bugs fixed and re-reviewed.
+- [x] Focused synthetic/UI/PDF checks, full suites, audits, packaged and installed smoke.
+- [x] Patch metadata/changelog, verified arm64 DMG in owner dist, installed app; integration record PR #119.
+- [ ] Professional confirmation and several months' comparison against the owner's manual figures.
+- [ ] Real-device checks in the hardware runbook; no live-data migration or automatic cutover.
+
+See [the completed implementation plan](tasks/HR2_IMPLEMENTATION_PLAN.md) and
+[API reference](tasks/HR2_API.md). Runtime evidence uses fresh synthetic profiles only.
+
+The software roadmap (Assets QR tags + stock-take next, branches in the UI, fuel analysis, tasks, Finance, one shared exchange rate, Pick & Pack) and every known gap are in [the handoff](tasks/HANDOFF.md). Headlines:
 
 - **Hardware validation has not been performed** — see [the runbook](HARDWARE_VALIDATION_RUNBOOK.md).
-- **No accountant yet** — tax depreciation and (soon) payroll tax figures are labelled estimates.
+- **No accountant yet** — tax depreciation and payroll statutory figures remain estimates until confirmed.
 - **Signing / notarization** is not configured; unsigned DMGs with `xattr -cr` are the intended workflow.
 - **Pick & Pack** — [`PICK_AND_PACK_PLAN.md`](PICK_AND_PACK_PLAN.md) waits for the owner's review.

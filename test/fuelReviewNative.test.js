@@ -255,7 +255,7 @@ test('phone RPC: no backdating, queued records after the latest dip, History hid
   const pump = users.create({ name: 'Pump', role: recRole.key });
   const farm = users.create({ name: 'Farm', role: recRole.key });
   const auditor = users.create({ name: 'Auditor', role: histRole.key });
-  const sender = employees.create({ companyId: company.id, staffCode: 'P1', nameEn: 'Sender', isFuelAttendant: true, userId: pump.id, phone: '012 999 888' });
+  const sender = employees.create({ companyId: company.id, staffCode: 'P1', nameEn: 'Sender 999', isFuelAttendant: true, userId: pump.id, phone: '012 999 888' });
   const gone = employees.create({ companyId: company.id, staffCode: 'X1', nameEn: 'Gone', isDriver: true });
   employees.markLeft(gone.id, { leftOn: new Date(Date.now() + 7 * 3600e3 - 10 * DAY).toISOString().slice(0, 10), reason: 'left' });
   const { tank, truck } = tankAndTruck(company.id);
@@ -316,7 +316,10 @@ test('phone RPC: no backdating, queued records after the latest dip, History hid
   assert.equal((await rpc(auditor.token, 'audit:countRecent', { entityType: 'fuel_fill' })).body.result, 0);
   // …and the staff phone number never reached History at all.
   const empAudit = db.getDb().prepare("SELECT after_json FROM audit_log WHERE entity_type = 'employee' AND entity_id = ? AND action = 'create'").get(sender.id);
-  assert.ok(!empAudit.after_json.includes('999'));
+  // A public name, random ID or timestamp may legitimately contain "999".
+  // Check the actual private field and complete phone value, not that fragment.
+  assert.equal(JSON.parse(empAudit.after_json).phone, '(set)');
+  assert.ok(!empAudit.after_json.includes(sender.phone));
 
   // At most 12 photos per record.
   const shot = (await jpeg()).toString('base64');

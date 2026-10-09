@@ -469,6 +469,25 @@ function IconLeave({ className }) {
   );
 }
 
+function IconPayroll({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="3" y="2.5" width="12" height="13" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M6 6h6M6 9h2.5M6 12h2.5M11.5 9.4c.4-.5 1.8-.5 1.8.2 0 .8-1.8.5-1.8 1.4 0 .7 1.4.8 1.9.2M12.4 8.8v2.9" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function IconLoans({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M2.5 6.5h13v8h-13zM4.5 4.5h9M6.5 2.5h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="9" cy="10.5" r="2" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M9 9.3v2.4M8.3 10h1.4" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export const NAV_ICONS = {
   home: IconHome,
   products: IconProducts,
@@ -510,6 +529,8 @@ export const NAV_ICONS = {
   overtime: IconOvertime,
   lateness: IconLateness,
   leave: IconLeave,
+  payroll: IconPayroll,
+  loans: IconLoans,
   history: IconHistory,
   settings: IconSettings,
 };

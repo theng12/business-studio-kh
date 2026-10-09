@@ -195,7 +195,7 @@ export const APP_MODULES = [
     // manager: clock-ins to review + alerts, correction requests, leave requests.
     id: 'people',
     name: 'People',
-    description: 'Staff, attendance, overtime and leave.',
+    description: 'Staff, attendance, payroll and leave.',
     icon: 'staff',
     badge: {
       caps: ['hr.view', 'hr.manage'],
@@ -228,6 +228,13 @@ export const APP_MODULES = [
           { id: 'attcorrections', name: 'Corrections', icon: 'attcorrection', caps: ['hr.view', 'hr.manage'] },
           { id: 'overtime', name: 'Overtime', icon: 'overtime', caps: ['hr.view', 'hr.manage'] },
           { id: 'lateness', name: 'Lateness', icon: 'lateness', caps: ['hr.view', 'hr.manage'] },
+        ],
+      },
+      {
+        label: 'Pay',
+        pages: [
+          { id: 'payroll', name: 'Payroll', icon: 'payroll', caps: ['payroll.manage'] },
+          { id: 'loans', name: 'Loans', icon: 'loans', caps: ['loans.manage'] },
         ],
       },
     ],
