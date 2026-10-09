@@ -456,6 +456,7 @@ function initDb(dataDir) {
   // HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §3.1–3.2): profiles, attendance, leave,
   // kiosk PINs, audit sensitivity. Additive only, no SCHEMA_VERSION bump.
   require('./hrSchema').ensureHrSchema(db);
+  require('./payrollSchema').ensurePayrollSchema(db);
 
   // v0.49.51: seed the built-in roles (admin/editor/photographer/viewer)
   // if missing. Idempotent + non-destructive (won't clobber edited presets).
