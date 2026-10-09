@@ -47,9 +47,13 @@ questions. Read `docs/PEOPLE_AND_FUEL_PLAN.md` **§7c** before repeating them. M
 day (10th for the preceding month initially), no half-day wages, both twice-monthly modes, saved
 manual + fetched exchange rates, optional extra pay, configurable approval authority with self-approval,
 loan exceptions/postponement review, introductory zero interest with immediate principal repayments,
-and selectable unpaid-interest capitalization are recorded there. The detailed design is still for
-review; statutory research, exact calculation conventions and implementation remain open. No HR2
-application code or new release exists yet. Worker models are now **GPT-6.1 Sol / GPT-6 Luna only**,
+and selectable unpaid-interest capitalization are recorded there. The owner subsequently delegated
+routine defaults and authorized phased execution. [HR2_IMPLEMENTATION_PLAN.md](HR2_IMPLEMENTATION_PLAN.md)
+records the calculation conventions, task ownership, review gates and release checks. Implementation
+is in progress on `codex/hr2-policy-spec` (draft PR #119), not yet an HR2 release. Fresh baseline on
+this Mac: 2,067 standard and 375 native tests pass under Node 26.8.2 / macOS 27.0.1 arm64; this does
+not substitute for macOS 12 or real-device verification. A new high sharp advisory was confirmed
+and its targeted patch is under verification. Worker models are **GPT-6.1 Sol / GPT-6 Luna only**,
 effort chosen by the orchestrator; no Terra (AGENTS.md Working rules).
 
 1. **HR2 — Payroll, NSSF / salary tax, loans, payslips** (next). Spec: `docs/PEOPLE_AND_FUEL_PLAN.md` §3.3 (payroll tables), §3.4 (loans: rate per loan, per month, declining balance, rate changes with history), §5.1 Payroll/Loans screens, §5.4 payslip PDF (Khmer + English, A5, `printToPDF`), §6 (`payroll.manage`, `loans.manage`; ADMIN_ONLY for loan write-off, voiding an approved run, editing a confirmed rate set), §7a (mixed monthly + daily-wage; USD or KHR per employee; salary tax in riel at a per-run rate; NSSF/tax switchable per employee and per run; overtime approved before payroll). **Must consume HR1's capped figures**: approved overtime = min(approved, computed) at the stored approval rate; deductible late minutes = confirmed after review (`attendance:monthSummary`, `overtimeApprovedByRate`). Open questions to ask first: pay day(s) and daily-wage pay frequency; exchange-rate source for tax; seniority indemnity / 13th month / bonus in scope?; loan maximum deduction per payslip and who approves loans; there is **no accountant yet**, so NSSF rates/ceilings and tax brackets must be entered as clearly labelled estimates (research current Cambodian figures, cite sources, mark "confirm with accountant").
