@@ -127,6 +127,12 @@ slot or satisfies payroll's monthly-accrual prerequisite.
 
 ### Opening-loan imports
 
+Renderer methods are `loans.importColumns({companyId})`, `importPlan({rows,companyId})`,
+`importApply({rows,operationId,companyId})`, and `saveImportSample({companyId})`.
+`getImportSample({companyId})` returns workbook bytes for the client-local save bridge.
+Picking and parsing use the existing local `files.pickWorkbook()` / `parseWorkbook(path)`;
+both enforce current workbook capability, and parsing requires an absolute workbook path.
+
 The import service `loanImports` provides `importColumns()`, `preview(companyId,{rows})`,
 `apply(companyId,{rows,operationId})` and `sampleWorkbook(companyId)`. Batches are limited to
 500 rows and are atomic: any invalid row prevents every write. Preview returns per-row actions,
@@ -150,8 +156,9 @@ This feature is not authorization to import or migrate the owner's live data.
 
 ## Exports and kiosk
 
-Payroll `getPayslipPdf({id,companyId})` takes a line ID; `getWorkbook` takes a run
-ID. They return `{companyId, filename, bytes}`. `savePayslipPdf` and `saveWorkbook`
+Payroll `getPayslipPdf({id,companyId})` takes a line ID; `getWorkbook` and `getRunPdf`
+take a run ID. They return `{companyId, filename, bytes}`. `savePayslipPdf`, `saveWorkbook`
+and `saveRunPdf`
 use the same arguments but open the dialog on the calling Mac in both standalone
 and client mode. Permissions, company, document state and session are rechecked
 after asynchronous rendering/dialogs. Names and bank fields come from snapshots.
