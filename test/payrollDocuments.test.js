@@ -44,6 +44,83 @@ test('payslip is self-contained, A5, bilingual, and embeds the Khmer fonts', () 
   assert.doesNotMatch(html, /<script|https?:\/\//i);
 });
 
+test('payslip summarizes built-in payroll amounts once and keeps custom detail with net and balances', () => {
+  const builtins = [
+    ['base', 'Base pay', 20000], ['overtime_0', 'Overtime', 2500], ['late', 'Lateness deduction', 350],
+    ['nssf_employee_pension', 'NSSF employee pension', 500], ['nssf_employer_pension', 'NSSF employer pension', 1000],
+    ['salary_tax', 'Salary tax', 293], ['fringe_tax', 'Fringe benefit tax', 0],
+    ['loan', 'Loan repayment', 5000], ['advance', 'Advance already paid', 0],
+  ].map(([code, label, amountMinor]) => ({ code, label, kind: code === 'late' ? 'deduction' : 'earning', amountMinor }));
+  const custom = [
+    ['base_pay', 'Base pay custom', 'earning', 611], ['nssf_custom', 'Custom NSSF allowance', 'earning', 722],
+    [' base ', 'Whitespace-padded base code', 'earning', 833], ['meal_allowance', 'Meal allowance', 'earning', 944],
+    ['transport_deduction', 'Transport deduction', 'deduction', 1055],
+  ].map(([code, label, kind, amountMinor]) => ({ code, label, kind, amountMinor }));
+  const { run, line } = fixture({ line: { items: [...builtins, ...custom] } });
+  const html = buildPayslipHtml({ companyName: 'Example Co', run, line });
+  const detailTable = html.split('<table class="items"><thead>')[1].split('</table>')[0];
+  const detailRows = detailTable.split('</thead>')[1].split('</tbody>')[0];
+  const css = html.split('<style>')[1].split('</style>')[0];
+  const layoutCss = css.slice(css.indexOf('@page'));
+
+  assert.equal((detailRows.match(/<tr>/g) || []).length, 6);
+  assert.equal((html.match(/<th[^>]*>Net pay/g) || []).length, 1);
+  for (const item of builtins.filter(({ code }) => code !== 'late')) {
+    assert.ok(!detailRows.includes('<small>' + item.code + '</small>'));
+  }
+  assert.match(detailRows, /Lateness deduction<small>late<\/small><\/td><td>deduction<\/td><td class="num">\$3\.50/);
+  const zeroLateHtml = buildPayslipHtml({
+    companyName: 'Example Co', run,
+    line: { ...line, items: [...builtins.map((item) => item.code === 'late' ? { ...item, amountMinor: 0 } : item), ...custom] },
+  });
+  assert.doesNotMatch(zeroLateHtml.split('</thead>')[1].split('</tbody>')[0], /<small>late<\/small>/);
+  for (const item of custom) {
+    assert.ok(detailTable.includes(item.code));
+    assert.ok(detailTable.includes(item.label));
+    assert.ok(detailTable.includes('$' + (item.amountMinor / 100).toFixed(2)));
+  }
+  assert.match(detailRows, /deduction/);
+  const taxNote = html.split('<p class="tax-note">')[1].split('</p>')[0];
+  assert.match(taxNote, /Salary tax \(KHR\): 12,000 ៛/);
+  assert.match(taxNote, /Fringe tax \(KHR\): 0 ៛/);
+  for (const amount of [
+    '$200.00', '$25.00', '$225.00', '$5.00', '$10.00', '$3.50', '902,500 ៛', '12,000 ៛',
+    '0 ៛', '$2.93', '$0.00', '$50.00', '$167.07', '$150.00', '4.5 days',
+  ]) assert.ok(html.includes(amount), `payslip keeps ${amount}`);
+  assert.match(layoutCss, /\.summary\{[^}]*break-inside:\s*avoid[^}]*page-break-inside:\s*avoid/s);
+  assert.match(layoutCss, /thead\{display:\s*table-header-group/);
+  assert.doesNotMatch(layoutCss, /(?:^|[;{])\s*(?:height\s*:\s*[^;]+|overflow\s*:\s*hidden)/i);
+});
+
+test('payslip keeps fringe tax in pay currency alongside its KHR summary', () => {
+  // Calculator output: USD 100 noncash benefit, synthetic 30% fringe rate, FX 4000 KHR/USD.
+  const data = fixture({
+    run: { taxRateKhrPerUsd: 4000 },
+    line: {
+      baseMinor: 20000, overtimeMinor: 0, grossMinor: 20000,
+      applyNssf: false, applyTax: true, nssfEmployeeMinor: 0, nssfEmployerMinor: 0,
+      taxBaseKhr: 800000, salaryTaxKhr: 0, fringeTaxKhr: 120000, salaryTaxMinor: 0,
+      otherDeductionsMinor: 0, loanDeductionMinor: 0, advanceMinor: 0, netMinor: 20000,
+      items: [
+        { code: 'base', label: 'Base pay', kind: 'earning', amountMinor: 20000 },
+        { code: 'noncash_benefit', label: 'Noncash benefit', kind: 'employer_cost', amountMinor: 10000,
+          taxable: true, nssfContributory: false, isFringeBenefit: true },
+        { code: 'late', label: 'Lateness deduction', kind: 'deduction', amountMinor: 0 },
+        { code: 'salary_tax', label: 'Salary tax', kind: 'deduction', amountMinor: 0, amountKhr: 0 },
+        { code: 'fringe_tax', label: 'Fringe benefit tax', kind: 'employer_cost', amountMinor: 3000, amountKhr: 120000 },
+        { code: 'loan', label: 'Loan repayment', kind: 'deduction', amountMinor: 0 },
+        { code: 'advance', label: 'Advance already paid', kind: 'deduction', amountMinor: 0 },
+      ],
+    },
+  });
+  const html = buildPayslipHtml(data);
+  const detailRows = html.split('</thead>')[1].split('</tbody>')[0];
+  assert.match(detailRows, /Fringe benefit tax<small>fringe_tax<\/small><\/td><td>employer_cost<\/td><td class="num">\$30\.00<\/td>/);
+  assert.match(detailRows, /Noncash benefit<small>noncash_benefit<\/small><\/td><td>employer_cost<\/td><td class="num">\$100\.00<\/td>/);
+  assert.match(html, /Fringe tax \(KHR\): 120,000 ៛/);
+  assert.match(html, /<tr class="net">[^]*?<td class="num">\$200\.00<\/td>/);
+});
+
 test('draft and estimate labels survive approval and line estimate status', () => {
   const { run, line } = fixture({ line: { estimate: true } });
   const html = buildPayslipHtml({ companyName: 'Example Co', run, line });
@@ -149,7 +226,8 @@ test('missing NSSF and tax switches remain not provided in both documents', () =
   const totals = html.split('<table class="totals"><tbody>')[1].split('</tbody>')[0];
 
   assert.match(totals, /<th>Employee NSSF[\s\S]*?<td class="num">not provided<\/td>/);
-  assert.match(totals, /<th>Salary tax \(KHR\)[\s\S]*?<td class="num">not provided<\/td>/);
+  assert.match(html, /Salary tax \(KHR\): not provided/);
+  assert.match(html, /Fringe tax \(KHR\): not provided/);
   assert.equal(lineRow[registerHeaders.indexOf('Employee NSSF (minor units)')], 'not provided');
   assert.equal(lineRow[registerHeaders.indexOf('Employer NSSF (minor units)')], 'not provided');
   assert.equal(lineRow[registerHeaders.indexOf('NSSF status')], 'not provided');
@@ -175,7 +253,8 @@ test('missing NSSF and tax switches remain not provided in both documents', () =
   const unappliedTax = XLSX.utils.sheet_to_json(unappliedSheets.Sheets['Salary tax'], { header: 1, raw: true });
 
   assert.match(unappliedTotals, /<th>Employee NSSF[\s\S]*?<td class="num">not applied<\/td>/);
-  assert.match(unappliedTotals, /<th>Salary tax \(KHR\)[\s\S]*?<td class="num">not applied<\/td>/);
+  assert.match(unappliedHtml, /Salary tax \(KHR\): not applied/);
+  assert.match(unappliedHtml, /Fringe tax \(KHR\): not applied/);
   assert.equal(unappliedRegister[1][unappliedRegister[0].indexOf('Employee NSSF (minor units)')], 'not applied');
   assert.equal(unappliedRegister[1][unappliedRegister[0].indexOf('Salary tax (KHR)')], 'not applied');
   assert.equal(unappliedRegister[1][unappliedRegister[0].indexOf('NSSF status')], 'not applied');
