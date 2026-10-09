@@ -1,20 +1,22 @@
 # Business Studio KH
 
-A macOS desktop app (Electron) for the media side of a product business: product photos, labels,
-catalogs, social posts, and the supplier and cost records behind them.
+A macOS desktop app (Electron) for running the owner's businesses in Cambodia: product photos,
+labels, catalogs, purchasing, fuel, fixed assets and people.
 
 One shared Product Library sits at the centre. Product details are entered once and then drive
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release: **0.1.93** (2026-10-06). Seven everyday UX improvements are implemented, reviewed, merged in PR #111 and installed locally. The arm64 DMG and packaged app are verified. It is built for home use — the owner's Macs and his brother's —
-and is not publicly distributed.
+Current release: **0.1.98** (2026-10-09). The **0.1.99 HR2 payroll and loans candidate** is under
+final verification; see the handoff for acceptance and installer evidence. It is built for home
+use — the owner's Macs and his brother's — and is not publicly distributed.
 
 ## Where to read next
 
 | Document | What it is for |
 |---|---|
-| [`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md) | Current 0.1.93 state, commands, paths and release evidence and working rules. Read first. |
+| [`docs/tasks/HANDOFF.md`](docs/tasks/HANDOFF.md) | Current state, commands, paths, release evidence and working rules. Read first. |
+| [`docs/tasks/HR2_API.md`](docs/tasks/HR2_API.md) | Payroll, loans, statutory confirmation gates, exports and kiosk API. |
 | [`docs/tasks/UX_WORKFLOW_PLAN.md`](docs/tasks/UX_WORKFLOW_PLAN.md) | The seven approved everyday UX improvements and verification (2026-10-06). |
 | [`docs/tasks/APP_IMPROVEMENT_PLAN.md`](docs/tasks/APP_IMPROVEMENT_PLAN.md) | The whole-app audit, eight completed fix batches and release evidence (2026-10-06). |
 | [`docs/Business Studio KH Project Status.md`](docs/Media%20Studio%20KH%20Project%20Status.md) | Short status page: current release, checks, release process, closed decisions. |
@@ -50,8 +52,8 @@ unsigned app, not a fault in the file. Requires macOS 12 or newer on Apple Silic
 
 ## What it does
 
-The sidebar has seven sections. Pages outside Workspace and Settings are shown only to accounts
-whose role has the matching permission.
+Home shows square module tiles; each module has its own sidebar. Pages and financial records
+are shown only to accounts whose role has the matching permission. Feature areas include:
 
 - **Workspace** — Company (one app, many companies, each with its own brands, categories,
   products and files), Dashboard, Brands, and the **Product Library**: table and grid views,
@@ -71,6 +73,11 @@ whose role has the matching permission.
 - **Social** — Social Grid: multi-image posts with text/logo watermark overlays.
 - **Operations** — suppliers, purchase orders (lines, cost components, payments, currencies) and
   a landed-cost calculator.
+- **Fuel** — tanks, vehicles, fills, deliveries, transfers, anomaly reviews and a phone entry page.
+- **Assets** — branch-scoped fixed assets, evidence files, depreciation, actions and reports.
+- **People** — staff, attendance, leave, review of overtime and lateness, and kiosk access.
+  The HR2 candidate adds payroll, configurable staff loans and bilingual payslips. Financial
+  permissions are separate from HR access; statutory estimates need professional confirmation.
 - **System** — History (an audit log of who changed what) and Settings (data folder, categories,
   price groups, AI keys, backups, Recently deleted, multi-Mac, roles and permissions, About).
 
