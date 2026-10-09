@@ -92,6 +92,19 @@ The full step list is the handoff's "working loop". In short:
 
 ## Open
 
+### HR2 execution — in progress, not released
+
+- [x] Owner's payroll/loan choices recorded; routine defaults delegated to the orchestrator.
+- [x] Isolated `codex/hr2-policy-spec` worktree and phased implementation plan.
+- [x] Fresh local baseline: 2,067 standard / 375 native tests pass.
+- [ ] Statutory research and reviewed integer-money calculators.
+- [ ] Company-scoped policies, loans and immutable payroll/payment services.
+- [ ] Validated client/server API, People screens and bilingual exports.
+- [ ] Independent reviews, synthetic lifecycle checks, release verification, merged PR and installed DMG.
+
+Follow [the implementation plan](tasks/HR2_IMPLEMENTATION_PLAN.md) for task boundaries and proving
+checks. Current release remains **0.1.98**; draft PR #119 must not be described as shipped HR2.
+
 The roadmap (HR2 payroll next, then Assets QR tags + stock-take, branches in the UI, fuel analysis, tasks, Finance, one shared exchange rate, Pick & Pack) and every known gap are in [the handoff](tasks/HANDOFF.md) — ROADMAP near the top, OPEN table at the end. Headlines:
 
 - **Hardware validation has not been performed** — see [the runbook](HARDWARE_VALIDATION_RUNBOOK.md).
