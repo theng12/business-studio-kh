@@ -8,6 +8,7 @@ import { NoCompanyState } from '../Companies/NoCompanyState.jsx';
 import { LoadError } from '../Fuel/FuelShared.jsx';
 import { useHrTick, usePager } from './hrHooks.js';
 import { LoansModals } from './LoansModals.jsx';
+import { LoansImportModal } from './LoansImportModal.jsx';
 import { endOfMonth, filterLoans, formatMinor, loanDialogIsCurrent, makeOperation, pendingAfterFailure, previousMonth, requestIsCurrent, totalsByCurrency } from './loansModel.js';
 
 const STATUSES = [
@@ -46,6 +47,11 @@ export function Loans() {
   const [dialog, setDialog] = useState(null);
   const [pendingByCompany, setPendingByCompany] = useState({});
   const pendingRef = useRef({});
+  const [loanImportOpen, setLoanImportOpen] = useState(false);
+  const [loanImportCompanyId, setLoanImportCompanyId] = useState(null);
+  const [pendingImportByCompany, setPendingImportByCompany] = useState({});
+  const pendingImportRef = useRef({});
+  pendingImportRef.current = pendingImportByCompany;
   const pager = usePager([activeCompanyId, status, search]);
   const listKey = activeCompanyId;
   const currentList = list.companyId === listKey ? list : emptyList;
@@ -61,6 +67,8 @@ export function Loans() {
   const currentDetail = detail?.key === selectedKey ? detail.loan : null;
   const detailLoading = !!selectedKey && detail?.key !== selectedKey;
   const pending = activeCompanyId ? pendingByCompany[activeCompanyId] : null;
+  const pendingImport = activeCompanyId ? pendingImportByCompany[activeCompanyId] : null;
+  const writesBlocked = Boolean(pending || pendingImport);
   const retryLoad = () => setReload((value) => value + 1);
 
   useEffect(() => {
@@ -107,6 +115,7 @@ export function Loans() {
     setSelected(null);
     setDetail(null);
     setDialog(null);
+    setLoanImportOpen(false);
   }, [activeCompanyId, canManage]);
 
   useEffect(() => {
@@ -152,7 +161,7 @@ export function Loans() {
   }
 
   async function submitAction(type, payload, companyId = activeCompanyId) {
-    if (!companyId || useAppStore.getState().activeCompanyId !== companyId || !canManageRef.current) return false;
+    if (!companyId || useAppStore.getState().activeCompanyId !== companyId || !canManageRef.current || pendingImportRef.current[companyId]) return false;
     const existing = pendingRef.current[companyId];
     if (existing) {
       if (existing.method !== type || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
@@ -203,13 +212,31 @@ export function Loans() {
   const projectionCurrent = projection?.key === selectedKey ? projection : null;
   const projectionBusy = projectionState.key === selectedKey && projectionState.loading;
   const projectionError = projectionState.key === selectedKey ? projectionState.error : null;
+  const openLoanImport = () => {
+    setDialog(null);
+    setLoanImportCompanyId(activeCompanyId);
+    setLoanImportOpen(true);
+  };
+  const retainLoanImport = (operation, companyId = operation?.companyId, completed) => {
+    if (!companyId) return;
+    if (completed && pendingImportRef.current[companyId]?.operationId !== completed.operationId) return;
+    const next = { ...pendingImportRef.current };
+    if (operation) next[companyId] = operation;
+    else delete next[companyId];
+    pendingImportRef.current = next;
+    setPendingImportByCompany(next);
+  };
 
   return (
     <div className="page page--hr-loans">
-      <PageHeader title="Loans" subtitle="Company-scoped staff loans, balances and financial history." actions={<Button variant="primary" onClick={() => openDialog({ type: 'create' })} disabled={!!pending || !currentList.companyId}>+ New loan</Button>} />
+      <PageHeader title="Loans" subtitle="Company-scoped staff loans, balances and financial history." actions={<><Button onClick={openLoanImport} disabled={writesBlocked || !currentList.companyId}>Import opening balances…</Button><Button variant="primary" onClick={() => openDialog({ type: 'create' })} disabled={writesBlocked || !currentList.companyId}>+ New loan</Button></>} />
       {pending ? <div className="card">
         <p><strong>A financial action is waiting for a confirmed result.</strong> Keep the same request key and payload when retrying; do not submit it as a new action.</p>
         <Button size="sm" variant="primary" onClick={async () => { if (await retryPending(activeCompanyId)) setDialog(null); }}>Retry the same request</Button>
+      </div> : null}
+      {pendingImport ? <div className="card">
+        <p><strong>An opening-balance import is waiting for a confirmed result.</strong> Its company, operation key and exact rows are retained. Resolve it before editing or submitting another financial action.</p>
+        <Button size="sm" variant="primary" onClick={openLoanImport}>Review and retry the same import</Button>
       </div> : null}
       {loadError ? <LoadError message={loadError} onRetry={retryLoad} /> : null}
       <div className="toolbar">
@@ -223,7 +250,7 @@ export function Loans() {
         <span className="muted">KHR outstanding: {formatMinor(totals.KHR.totalMinor, 'KHR')}</span>
       </div>
       {listLoading && !currentList.loans.length ? <p className="muted">Loading loans…</p> : null}
-      {!loadError && !filtered.length && !listLoading ? <EmptyState title={search || status !== 'all' ? 'No matching loans' : 'No loans yet'} body={search || status !== 'all' ? 'Change the search or status filter.' : 'Create a draft loan to record agreed terms for a staff member.'} action={!search && status === 'all' ? <Button variant="primary" onClick={() => openDialog({ type: 'create' })} disabled={!!pending || !currentList.companyId}>+ New loan</Button> : null} /> : null}
+      {!loadError && !filtered.length && !listLoading ? <EmptyState title={search || status !== 'all' ? 'No matching loans' : 'No loans yet'} body={search || status !== 'all' ? 'Change the search or status filter.' : 'Create a draft loan to record agreed terms for a staff member.'} action={!search && status === 'all' ? <Button variant="primary" onClick={() => openDialog({ type: 'create' })} disabled={writesBlocked || !currentList.companyId}>+ New loan</Button> : null} /> : null}
       {filtered.length ? <>
         <div className="data-table-wrap">
           <table className="data-table data-table--sticky">
@@ -249,14 +276,14 @@ export function Loans() {
           <div className="section-head">
             <div><h2 className="section-title">{person(currentDetail.employeeId).nameEn || person(currentDetail.employeeId).nameKm || 'Loan'} · {currentDetail.loanNo}</h2><p className="section-hint">{currentDetail.currency} · Disbursed {currentDetail.disbursedOn} · {currentDetail.interestPolicy === 'capitalize' ? 'Unpaid interest capitalized' : 'Interest kept separate'}</p></div>
             <div className="section-head__actions hr-row-actions">
-              {currentDetail.status === 'draft' && mayApprove ? <Button size="sm" variant="primary" disabled={!!pending} onClick={() => openDialog({ type: 'approve', loan: currentDetail })}>Approve loan</Button> : null}
-              {currentDetail.status === 'draft' && canManage ? <Button size="sm" variant="danger" disabled={!!pending} onClick={() => openDialog({ type: 'voidDraft', loan: currentDetail })}>Cancel draft…</Button> : null}
+              {currentDetail.status === 'draft' && mayApprove ? <Button size="sm" variant="primary" disabled={writesBlocked} onClick={() => openDialog({ type: 'approve', loan: currentDetail })}>Approve loan</Button> : null}
+              {currentDetail.status === 'draft' && canManage ? <Button size="sm" variant="danger" disabled={writesBlocked} onClick={() => openDialog({ type: 'voidDraft', loan: currentDetail })}>Cancel draft…</Button> : null}
               {currentDetail.status === 'active' ? <>
-                {currentDetail.interestMethod === 'declining' && (isAdmin || currentList.policy?.rateChangePolicy === 'designated_managers') ? <Button size="sm" disabled={!!pending} onClick={() => openDialog({ type: 'changeRate', loan: currentDetail })}>Change rate…</Button> : null}
-                {currentDetail.interestMethod === 'declining' ? <Button size="sm" disabled={!!pending} onClick={() => openDialog({ type: 'accrue', loan: currentDetail })}>Post month-end interest…</Button> : null}
-                <Button size="sm" disabled={!!pending} onClick={() => openDialog({ type: 'repay', loan: currentDetail })}>Record repayment…</Button>
-                {(isAdmin || currentList.policy?.postponementPolicy === 'designated_managers') ? <Button size="sm" disabled={!!pending} onClick={() => openDialog({ type: 'postpone', loan: currentDetail })}>Postpone instalment…</Button> : null}
-                {isAdmin ? <Button size="sm" variant="danger" disabled={!!pending} onClick={() => openDialog({ type: 'writeOff', loan: currentDetail })}>Write off…</Button> : null}
+                {currentDetail.interestMethod === 'declining' && (isAdmin || currentList.policy?.rateChangePolicy === 'designated_managers') ? <Button size="sm" disabled={writesBlocked} onClick={() => openDialog({ type: 'changeRate', loan: currentDetail })}>Change rate…</Button> : null}
+                {currentDetail.interestMethod === 'declining' ? <Button size="sm" disabled={writesBlocked} onClick={() => openDialog({ type: 'accrue', loan: currentDetail })}>Post month-end interest…</Button> : null}
+                <Button size="sm" disabled={writesBlocked} onClick={() => openDialog({ type: 'repay', loan: currentDetail })}>Record repayment…</Button>
+                {(isAdmin || currentList.policy?.postponementPolicy === 'designated_managers') ? <Button size="sm" disabled={writesBlocked} onClick={() => openDialog({ type: 'postpone', loan: currentDetail })}>Postpone instalment…</Button> : null}
+                {isAdmin ? <Button size="sm" variant="danger" disabled={writesBlocked} onClick={() => openDialog({ type: 'writeOff', loan: currentDetail })}>Write off…</Button> : null}
               </> : null}
             </div>
           </div>
@@ -275,7 +302,7 @@ export function Loans() {
             <p>Projected balance: {formatMinor(projectionCurrent.result.principalMinor, currentDetail.currency)} principal + {formatMinor(projectionCurrent.result.interestMinor, currentDetail.currency)} interest.</p>
           </div> : null}
           <div className="section-head"><h3 className="section-title">Ledger</h3><span className="muted">{currentDetail.entries?.length || 0} entries</span></div>
-          {currentDetail.entries?.length ? <Ledger loan={currentDetail} canAdmin={isAdmin} disabled={!!pending} onReverse={(entry) => openDialog({ type: 'reverseEntry', loan: currentDetail, entry })} /> : <p className="muted">No posted entries. Approval records the disbursement.</p>}
+          {currentDetail.entries?.length ? <Ledger loan={currentDetail} canAdmin={isAdmin} disabled={writesBlocked} onReverse={(entry) => openDialog({ type: 'reverseEntry', loan: currentDetail, entry })} /> : <p className="muted">No posted entries. Approval records the disbursement.</p>}
           {currentDetail.rates?.length ? <><h3 className="section-title">Rate history</h3><div className="data-table-wrap"><table className="data-table"><thead><tr><th>Effective from</th><th className="is-num">Monthly rate</th><th>Reason</th></tr></thead><tbody>{currentDetail.rates.map((rate) => <tr key={rate.id}><td>{rate.effectiveFrom}</td><td className="is-num">{rate.ratePercent}%</td><td>{rate.reason || 'Agreed starting rate'}</td></tr>)}</tbody></table></div></> : null}
           {currentDetail.postponements?.length ? <><h3 className="section-title">Postponements</h3><div className="data-table-wrap"><table className="data-table"><thead><tr><th>Month</th><th>Reason</th></tr></thead><tbody>{currentDetail.postponements.map((item) => <tr key={item.month}><td>{item.month}</td><td>{item.reason}</td></tr>)}</tbody></table></div></> : null}
         </> : detail?.key === selectedKey && detail.error ? <LoadError message={detail.error} onRetry={retryLoad} /> : <p className="muted">Loan details are not available.</p>}
@@ -286,11 +313,20 @@ export function Loans() {
         companyId={activeCompanyId}
         employees={currentList.employees}
         policy={currentList.policy}
-        pending={pending}
+        pending={pending || (pendingImport ? { method: 'import' } : null)}
         onClose={() => setDialog(null)}
         onSubmit={submitAction}
         onRetry={() => retryPending(activeCompanyId)}
         onDone={() => setDialog(null)}
+      />
+      <LoansImportModal
+        key={activeCompanyId}
+        open={loanImportOpen && loanImportCompanyId === activeCompanyId}
+        companyId={loanImportCompanyId}
+        pendingOperation={pendingImport}
+        onClose={() => setLoanImportOpen(false)}
+        onPendingOperation={retainLoanImport}
+        onDone={(companyId) => { if (useAppStore.getState().activeCompanyId === companyId) setReload((value) => value + 1); }}
       />
     </div>
   );
