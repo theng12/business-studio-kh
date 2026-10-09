@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const XLSX = require('xlsx');
 
-const { buildPayslipHtml, buildPayrollWorkbook } = require('../main/util/payrollDocuments');
+const { buildPayslipHtml, buildPayrollRunHtml, buildPayrollWorkbook } = require('../main/util/payrollDocuments');
 
 function fixture(overrides = {}) {
   const run = {
@@ -42,6 +42,78 @@ test('payslip is self-contained, A5, bilingual, and embeds the Khmer fonts', () 
   assert.match(html, /data:font\/ttf;base64,/);
   assert.match(html, /៛|KHR/);
   assert.doesNotMatch(html, /<script|https?:\/\//i);
+});
+
+test('payroll run payslip keeps each employee isolated and in input order', () => {
+  const first = fixture({ line: { nameEn: 'First Employee', staffCode: 'FIRST', netMinor: 1111 } });
+  const second = fixture({ line: { nameEn: 'Second Employee', staffCode: 'SECOND', netMinor: 2222 } });
+  const html = buildPayrollRunHtml({
+    companyName: 'Example Co', run: first.run, lines: [first.line, second.line],
+  });
+  const pages = html.split('<section class="payslip-page">').slice(1);
+
+  assert.equal(pages.length, 2);
+  assert.ok(pages[0].includes('First Employee'));
+  assert.ok(pages[0].includes('FIRST'));
+  assert.ok(pages[0].includes('$11.11'));
+  assert.ok(!pages[0].includes('Second Employee'));
+  assert.ok(pages[1].includes('Second Employee'));
+  assert.ok(pages[1].includes('SECOND'));
+  assert.ok(pages[1].includes('$22.22'));
+  assert.ok(!pages[1].includes('First Employee'));
+  assert.equal((html.match(/section\.payslip-page\+section\.payslip-page\{/g) || []).length, 1);
+  assert.ok(html.endsWith('</body></html>'));
+});
+
+test('single-line payroll run HTML is identical to the existing payslip', () => {
+  const { run, line } = fixture();
+  assert.equal(
+    buildPayrollRunHtml({ companyName: 'Example Co', run, lines: [line] }),
+    buildPayslipHtml({ companyName: 'Example Co', run, line }),
+  );
+});
+
+test('run watermarks are positioned within their own employee section while single payslips retain fixed stamps', () => {
+  const { companyName, run, line } = fixture({ line: { estimate: true } });
+  const second = { ...line, id: 'line-2', employeeId: 'emp-2', nameEn: 'Second Employee', estimate: false };
+  for (const status of ['approved', 'draft', 'void']) {
+    const currentRun = { ...run, status };
+    const html = buildPayrollRunHtml({ companyName, run: currentRun, lines: [line, second] });
+    const pages = html.split('<section class="payslip-page">').slice(1);
+    assert.equal((pages[0].match(/class="watermark"/g) || []).length, 1);
+    assert.equal((pages[1].match(/class="watermark"/g) || []).length, status === 'approved' ? 0 : 1);
+    if (status === 'approved') {
+      assert.match(pages[0], /DRAFT · ESTIMATE/);
+      assert.match(pages[1], /class="status">APPROVED<\/span>/);
+      assert.doesNotMatch(pages[1], /DRAFT|ESTIMATE/);
+    }
+    // Fixed elements repeat on every printed page even when their markup is in one section.
+    const css = html.slice(html.indexOf('@page'), html.indexOf('</style>'));
+    assert.match(css, /section\.payslip-page\{[^}]*position:relative/);
+    assert.match(css, /section\.payslip-page>\.watermark\{[^}]*position:absolute/);
+
+    const single = buildPayslipHtml({ companyName, run: currentRun, line });
+    const singleCss = single.slice(single.indexOf('@page'), single.indexOf('</style>'));
+    assert.match(singleCss, /\.watermark\{position:fixed;/);
+    assert.doesNotMatch(singleCss, /payslip-page/);
+    assert.equal(buildPayrollRunHtml({ companyName, run: currentRun, lines: [line] }), single);
+  }
+});
+
+test('payroll run payslip rejects empty lines and escapes untrusted text', () => {
+  const { run, line } = fixture({
+    companyName: '<img src=x onerror="company()">',
+    line: { nameEn: '<script>employee()</script>' },
+  });
+  assert.throws(
+    () => buildPayrollRunHtml({ companyName: 'Example Co', run, lines: [] }),
+    /at least one payroll line/i,
+  );
+
+  const html = buildPayrollRunHtml({ companyName: '<img src=x onerror="company()">', run, lines: [line, line] });
+  assert.doesNotMatch(html, /<script>|<img src=x/);
+  assert.match(html, /&lt;script&gt;employee\(\)&lt;\/script&gt;/);
+  assert.match(html, /&lt;img src=x onerror=&quot;company\(\)&quot;&gt;/);
 });
 
 test('payslip summarizes built-in payroll amounts once and keeps custom detail with net and balances', () => {
