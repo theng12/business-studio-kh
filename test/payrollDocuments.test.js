@@ -116,6 +116,97 @@ test('payroll run payslip rejects empty lines and escapes untrusted text', () =>
   assert.match(html, /&lt;img src=x onerror=&quot;company\(\)&quot;&gt;/);
 });
 
+test('documents preserve frozen leave balances by type and as-of date without adding them', () => {
+  const data = fixture({ line: {
+    leaveBalanceDays: 99, leaveBalanceAsOf: '2026-09-30',
+    leaveBalances: [
+      { leaveTypeId: 'annual-id', code: 'annual', nameEn: 'Annual leave', nameKm: 'ប្រចាំឆ្នាំ', days: 4.5 },
+      { leaveTypeId: 'special-id', code: 'special', nameEn: 'Special leave', nameKm: 'ពិសេស', days: 2 },
+    ],
+  } });
+  for (const html of [buildPayslipHtml(data), buildPayrollRunHtml({ ...data, lines: [data.line, data.line] })]) {
+    const balance = html.split('<section class="balance">')[1].split('</section>')[0];
+    assert.match(balance, /ប្រចាំឆ្នាំ \/ Annual leave \(annual\): 4\.5 days/);
+    assert.match(balance, /ពិសេស \/ Special leave \(special\): 2 days/);
+    assert.match(balance, /As of: 2026-09-30/);
+    assert.doesNotMatch(balance, /6\.5 days|99 days/);
+    assert.ok(balance.includes('$150.00'), 'loan balance is preserved');
+  }
+  const { bytes } = buildPayrollWorkbook({ ...data, lines: [data.line] });
+  const wb = XLSX.read(bytes, { type: 'buffer' });
+  const rows = XLSX.utils.sheet_to_json(wb.Sheets.Register, { header: 1, raw: true });
+  assert.equal(rows[1][rows[0].indexOf('Leave balance (days)')],
+    'ប្រចាំឆ្នាំ / Annual leave (annual): 4.5 days; ពិសេស / Special leave (special): 2 days; As of: 2026-09-30');
+});
+
+test('leave output distinguishes unknown, empty, legacy, zero and negative balances', () => {
+  for (const [fields, expected] of [
+    [{ leaveBalanceDays: undefined }, 'not provided'],
+    [{ leaveBalances: undefined, leaveBalanceDays: 4.5 }, '4.5 days'],
+    [{ leaveBalances: [], leaveBalanceDays: 99 }, 'No tracked leave balance'],
+    [{ leaveBalances: [{ code: 'annual', days: 0 }], leaveBalanceDays: 99 }, 'annual: 0 days'],
+    [{ leaveBalances: [{ nameKm: 'ប្រចាំឆ្នាំ', days: -1.25 }], leaveBalanceDays: 99 }, 'ប្រចាំឆ្នាំ: -1.25 days'],
+  ]) {
+    const data = fixture({ line: fields });
+    const html = buildPayslipHtml(data);
+    const leave = html.split('Leave balance · សមតុល្យច្បាប់</span>')[1].split('</div>')[0];
+    assert.ok(leave.includes(expected), expected);
+    assert.doesNotMatch(leave, /99 days/);
+    if (fields.leaveBalances !== undefined) assert.match(leave, /As of: not provided/);
+    if (Array.isArray(fields.leaveBalances) && fields.leaveBalances.length === 0) assert.doesNotMatch(leave, /0 days/);
+
+    const { bytes } = buildPayrollWorkbook({ ...data, lines: [data.line] });
+    const wb = XLSX.read(bytes, { type: 'buffer' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets.Register, { header: 1, raw: true });
+    const value = rows[1][rows[0].indexOf('Leave balance (days)')];
+    assert.equal(value, fields.leaveBalances === undefined ? (fields.leaveBalanceDays ?? 'not provided') : expected + '; As of: not provided');
+  }
+});
+
+test('leave snapshots reject malformed arrays, unsafe days and impossible dates in every builder', () => {
+  const invalid = [
+    ...[null, {}, 'annual', [null], [,]].map((leaveBalances) => ({ leaveBalances })),
+    ...[NaN, Infinity, -Infinity, 1000000.5, -1000000.5, '4.5', null, undefined].map((days) => ({ leaveBalances: [{ code: 'annual', days }] })),
+    ...[NaN, Infinity, -1000001, '4.5'].map((leaveBalanceDays) => ({ leaveBalanceDays })),
+    ...['2026-02-29', '2026-02-30', '2026-13-01', '2026-9-01', '<img src=x>', '', null].map((leaveBalanceAsOf) => ({ leaveBalanceAsOf })),
+  ];
+  for (const fields of invalid) {
+    const data = fixture({ line: fields });
+    assert.throws(() => buildPayslipHtml(data), /leave/i);
+    assert.throws(() => buildPayrollRunHtml({ ...data, lines: [fixture().line, data.line] }), /leave/i);
+    assert.throws(() => buildPayrollWorkbook({ ...data, lines: [data.line] }), /leave/i);
+  }
+  for (const days of [-1000000, -0.25, 0, 4.5, 1000000]) {
+    const data = fixture({ line: { leaveBalances: [{ code: 'annual', days }], leaveBalanceAsOf: '2024-02-29' } });
+    assert.doesNotThrow(() => buildPayslipHtml(data));
+  }
+});
+
+test('leave labels are escaped as text including the fallback type identity', () => {
+  const data = fixture({ line: { leaveBalances: [
+    { code: '<svg onload=code()>', nameEn: '<script>name()</script>', nameKm: '<img src=x onerror=km()>', days: -0.5 },
+    { leaveTypeId: '<iframe src=id>', days: 2 },
+  ] } });
+  const html = buildPayslipHtml(data);
+  const leave = html.split('Leave balance · សមតុល្យច្បាប់</span>')[1].split('</div>')[0];
+  assert.doesNotMatch(html, /<script>|<img src=x|<svg onload|<iframe/);
+  for (const escaped of ['&lt;svg onload=code()&gt;', '&lt;script&gt;name()&lt;/script&gt;', '&lt;img src=x onerror=km()&gt;', '&lt;iframe src=id&gt;']) {
+    assert.ok(leave.includes(escaped));
+  }
+  assert.match(leave, /-0\.5 days/);
+});
+
+test('long leave snapshots keep every type without dropping pay items or totals', () => {
+  const data = fixture({ line: { leaveBalances: Array.from({ length: 30 }, (_, index) => ({ code: 'type-' + index, days: index + 0.25 })) } });
+  const html = buildPayslipHtml(data);
+  const leave = html.split('Leave balance · សមតុល្យច្បាប់</span>')[1].split('</div>')[0];
+  for (let index = 0; index < 30; index += 1) assert.ok(leave.includes('type-' + index + ': ' + (index + 0.25) + ' days'));
+  assert.match(html, /Base pay<small>BASE<\/small>/);
+  assert.match(html, /<tr class="net">[^]*?<td class="num">\$167\.07<\/td>/);
+  const css = html.slice(html.indexOf('@page'), html.indexOf('</style>'));
+  assert.doesNotMatch(css, /overflow\s*:\s*hidden|max-height\s*:/);
+});
+
 test('payslip summarizes built-in payroll amounts once and keeps custom detail with net and balances', () => {
   const builtins = [
     ['base', 'Base pay', 20000], ['overtime_0', 'Overtime', 2500], ['late', 'Lateness deduction', 350],
@@ -438,9 +529,15 @@ test('untrusted workbook text is stored as string cells, never formulas or cross
 });
 
 test('builders do not mutate their immutable input snapshots', () => {
-  const { run, line } = fixture();
+  const { run, line } = fixture({ line: {
+    leaveBalanceAsOf: '2026-09-30',
+    leaveBalances: [{ leaveTypeId: 'annual-id', code: 'annual', nameEn: 'Annual leave', days: 4.5 }],
+  } });
   const inputs = structuredClone({ run, line });
+  for (const item of [...line.items, ...line.leaveBalances]) Object.freeze(item);
+  for (const item of [line.items, line.leaveBalances, run, line]) Object.freeze(item);
   buildPayslipHtml({ companyName: 'Example Co', run, line });
+  buildPayrollRunHtml({ companyName: 'Example Co', run, lines: Object.freeze([line, line]) });
   buildPayrollWorkbook({ companyName: 'Example Co', run, lines: [line] });
   assert.deepEqual({ run, line }, inputs);
 });
