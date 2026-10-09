@@ -97,10 +97,20 @@ The full step list is the handoff's "working loop". In short:
 - [x] Owner's payroll/loan choices recorded; routine defaults delegated to the orchestrator.
 - [x] Isolated `codex/hr2-policy-spec` worktree and phased implementation plan.
 - [x] Fresh local baseline: 2,067 standard / 375 native tests pass.
-- [ ] Statutory research and reviewed integer-money calculators.
-- [ ] Company-scoped policies, loans and immutable payroll/payment services.
+- [x] Statutory research and reviewed integer-money calculators; legal applicability still needs professional confirmation.
+- [x] Company-scoped policies, loans and immutable payroll/payment services, independently reviewed.
 - [ ] Validated client/server API, People screens and bilingual exports.
 - [ ] Independent reviews, synthetic lifecycle checks, release verification, merged PR and installed DMG.
+
+Current checkpoint (not release acceptance): first-pass API, Payroll/Staff Pay, Loans, Settings
+and kiosk changes have passed separate reviews and are integrated on the feature branch. Core
+`check` passed 2,240 tests; the existing native suite passed 375; the combined HR2 native/transport/
+options/truth fixture passed 56. The assembled app builds. Individual and combined A5 payslips
+were printed locally from synthetic data, including separate frozen leave types.
+
+Remaining before release: finish opening-loan import and its payroll boundary, review the
+import/override/run-PDF UI and API additions, run the changed-screen probe and final full gates,
+then build/verify/install the arm64 DMG and merge. No owner data has been migrated or tested.
 
 Follow [the implementation plan](tasks/HR2_IMPLEMENTATION_PLAN.md) for task boundaries and proving
 checks. Current release remains **0.1.98**; draft PR #119 must not be described as shipped HR2.
