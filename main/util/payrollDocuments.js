@@ -1,10 +1,13 @@
 const XLSX = require('xlsx');
 const { embeddedFontCss, esc } = require('../studioRenderer');
+const { isDate } = require('./attendanceCalc');
 
 const NOT_PROVIDED = 'not provided';
 const NOT_APPLIED = 'not applied';
 const RUN_STATUSES = new Set(['draft', 'reviewed', 'approved', 'paid', 'void']);
 const KHR_MONEY_FIELDS = new Set(['taxBaseKhr', 'salaryTaxKhr', 'fringeTaxKhr']);
+// Defensive document bound only; balances come from the frozen snapshot, never accrual here.
+const MAX_LEAVE_BALANCE_DAYS = 1000000;
 // Mirrors payrollCalc's generated and reserved item codes; other codes are user components.
 const BUILTIN_PAY_ITEM_CODE = /^(?:base|late|loan|advance|salary_tax|fringe_tax|overtime_\d+|nssf_(?:employee|employer)_.+)$/;
 
@@ -28,6 +31,35 @@ function validateLine(line) {
   if (line?.currency !== 'USD' && line?.currency !== 'KHR') throw new Error('Payroll document currency must be USD or KHR');
   validateMoneyFields(line, 'line');
   for (const item of Array.isArray(line.items) ? line.items : []) validateMoneyFields(item, 'item');
+  if (line.leaveBalances !== undefined) {
+    if (!Array.isArray(line.leaveBalances)) throw new Error('leaveBalances must be an array');
+    for (const balance of line.leaveBalances) validateLeaveDays(balance?.days);
+  } else if (has(line.leaveBalanceDays)) validateLeaveDays(line.leaveBalanceDays);
+  if (line.leaveBalanceAsOf !== undefined && (typeof line.leaveBalanceAsOf !== 'string' || !isDate(line.leaveBalanceAsOf))) {
+    throw new Error('leaveBalanceAsOf must be a real date in YYYY-MM-DD format');
+  }
+}
+
+function validateLeaveDays(days) {
+  if (!Number.isFinite(days) || Math.abs(days) > MAX_LEAVE_BALANCE_DAYS) {
+    throw new Error('Leave balance days must be a finite number between -1000000 and 1000000');
+  }
+}
+
+function leaveBalanceLines(line) {
+  const lines = line.leaveBalances === undefined
+    ? [has(line.leaveBalanceDays) ? String(line.leaveBalanceDays) + ' days' : NOT_PROVIDED]
+    : line.leaveBalances.map((balance) => {
+      const names = [balance.nameKm, balance.nameEn].filter(has).join(' / ');
+      const label = names ? names + (has(balance.code) ? ' (' + balance.code + ')' : '')
+        : balance.code || balance.leaveTypeId || NOT_PROVIDED;
+      return label + ': ' + balance.days + ' days';
+    });
+  if (!lines.length) lines.push('No tracked leave balance');
+  if (line.leaveBalances !== undefined || line.leaveBalanceAsOf !== undefined) {
+    lines.push('As of: ' + date(line.leaveBalanceAsOf));
+  }
+  return lines;
 }
 
 function appliedValue(applies, value, format = cellValue) {
@@ -140,8 +172,9 @@ function buildPayslipPage({ companyName, run, line }) {
     esc(appliedValue(line.applyTax, line.salaryTaxKhr, riel)) + ' · Fringe tax (KHR): ' +
     esc(appliedValue(line.applyTax, line.fringeTaxKhr, riel)) + ' · FX: ' + esc(taxRate) + '</p>' +
     '<section class="balance"><div><span class="label">Loan balance after · សមតុល្យកម្ចី</span><br><b>' +
-    esc(money(line.loanBalanceAfterMinor, line.currency)) + '</b></div><div><span class="label">Leave balance · សមតុល្យច្បាប់</span><br><b>' +
-    esc(has(line.leaveBalanceDays) ? String(line.leaveBalanceDays) + ' days' : NOT_PROVIDED) +
+    esc(money(line.loanBalanceAfterMinor, line.currency)) + '</b></div><div' +
+    (line.leaveBalances !== undefined ? ' class="leave-balances"' : '') + '><span class="label">Leave balance · សមតុល្យច្បាប់</span><br><b>' +
+    leaveBalanceLines(line).map(esc).join('<br>') +
     '</b></div></section></section>';
 }
 
@@ -159,6 +192,7 @@ function payslipStyles(fonts, pageBreaks = false) {
     '.summary{break-inside:avoid;page-break-inside:avoid}.totals{table-layout:fixed;margin-top:2mm}.totals th,.totals td{width:25%;padding:1mm .8mm}' +
     '.net th,.net td{border-top:1.5px solid #222;border-bottom:0;font-size:10pt;font-weight:700;padding-top:2mm}' +
     '.balance{display:flex;gap:8mm;margin-top:3mm;padding:2mm;border:1px solid #ddd}.muted{color:#666}' +
+    '.leave-balances{min-width:0;overflow-wrap:anywhere}' +
     '.watermark{position:fixed;inset:43% 0 auto;text-align:center;color:rgba(170,0,0,.13);font-size:25pt;font-weight:700;transform:rotate(-24deg);pointer-events:none}' +
     '.status{font-size:8pt;font-weight:700;color:#8b1d1d}.tax-note{margin-top:2mm;color:#555;font-size:7pt}' +
     (pageBreaks ? 'section.payslip-page{position:relative}section.payslip-page>.watermark{position:absolute}' +
@@ -238,7 +272,9 @@ function buildPayrollWorkbook({ companyName, run, lines = [] }) {
       cellValue(line.otherDeductionsMinor), cellValue(line.loanDeductionMinor), cellValue(line.advanceMinor),
       cellValue(line.netMinor), appliedStatus(line.applyNssf),
       appliedStatus(line.applyTax), cellValue(line.loanBalanceAfterMinor),
-      cellValue(line.leaveBalanceDays), appliedValue(line.applyNssf, line.nssfNo),
+      line.leaveBalances === undefined && line.leaveBalanceAsOf === undefined
+        ? cellValue(line.leaveBalanceDays) : leaveBalanceLines(line).join('; '),
+      appliedValue(line.applyNssf, line.nssfNo),
       '', '', '', '',
     ];
     register.push(summary);
