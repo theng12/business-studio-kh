@@ -110,18 +110,18 @@ function PayrollRunWorkspace({ companyId, runId, caps, onBack }) {
   return <div className="page">
     <PayrollPending companyId={companyId} requests={requests} onResolved={(record, result) => { if (['pay', 'reversePayment'].includes(record.method)) changed(result); else retry(); }} />
     <PayrollRunView run={run} companyId={companyId} runId={runId} caps={caps} settings={data.settings} onBack={onBack}
-      onAction={next => setAction({ ...next, revision: run.revision })} onLine={line => setEmployeeId(line.employeeId)} onWorkbook={() => exportDocument('saveWorkbook', runId)} exportBusy={exportBusy} />
+      onAction={next => setAction({ ...next, revision: run.revision })} onLine={line => setEmployeeId(line.employeeId)} onWorkbook={() => exportDocument('saveWorkbook', runId)} onRunPdf={() => exportDocument('saveRunPdf', runId)} exportBusy={exportBusy} />
     {action ? <PayrollActionModal key={`${action.method}:${action.line?.id || action.payment?.id || runId}`} companyId={companyId} run={run} action={action} settings={data.settings} onClose={() => setAction(null)} onChanged={changed} /> : null}
     {selectedLine && !decision ? <Modal open wide title={`${nameOf(selectedLine)} · payslip`} onClose={() => setEmployeeId(null)} footer={<Button onClick={() => setEmployeeId(null)}>Close</Button>}>
       <PayrollLineDetails companyId={companyId} run={run} line={selectedLine} caps={caps} settings={data.settings} onAction={next => { setEmployeeId(null); setAction({ ...next, revision: run.revision }); }}
         onDecision={next => setDecision(next)} onPayslip={() => exportDocument('savePayslipPdf', selectedLine.id)} exportBusy={exportBusy} onChanged={changed} />
     </Modal> : null}
-    {decision && selectedLine ? <PayrollDecisionModal key={`${selectedLine.id}:${decision.kind}:${decision.date || decision.plan?.loanId}`} companyId={companyId} run={run} line={selectedLine} {...decision} onClose={() => setDecision(null)} onChanged={changed} /> : null}
+    {decision && selectedLine ? <PayrollDecisionModal key={`${companyId}:${runId}:${selectedLine.employeeId}:${decision.kind}:${decision.date || decision.plan?.loanId}`} companyId={companyId} run={run} line={selectedLine} {...decision} onClose={() => setDecision(null)} onChanged={changed} /> : null}
   </div>;
 }
 
 /** Pure view: explicit render keys also guard the pre-effect paint on context changes. */
-export function PayrollRunView({ run, companyId, runId, caps, settings, onBack, onAction, onLine, onWorkbook, exportBusy }) {
+export function PayrollRunView({ run, companyId, runId, caps, settings, onBack, onAction, onLine, onWorkbook, onRunPdf, exportBusy }) {
   const lines = run?.companyId === companyId && run.id === runId && hasCap(caps, 'payroll.manage') ? run.lines || [] : [];
   const pager = usePayrollPager(lines.length, `${companyId}:${runId}`);
   if (run?.companyId !== companyId || run.id !== runId || !hasCap(caps, 'payroll.manage')) return null;
@@ -133,7 +133,7 @@ export function PayrollRunView({ run, companyId, runId, caps, settings, onBack, 
   return <>
     <PageHeader title="Payroll run" subtitle={`${dateLabel(run.periodStart)} – ${dateLabel(run.periodEnd)} · ${run.kind || 'regular'} · revision ${run.revision}`}
       backTo={onBack ? { label: 'Payroll', onClick: onBack } : null}
-      actions={<><Button disabled={exportBusy || !lines.length} onClick={onWorkbook}>Export workbook…</Button>
+      actions={<><Button disabled={exportBusy || !lines.length} onClick={onRunPdf}>Save run PDF…</Button><Button disabled={exportBusy || !lines.length} onClick={onWorkbook}>Export workbook…</Button>
         {actions.calculate && primary !== 'calculate' ? <Button onClick={() => onAction({ method: 'calculate' })}>Recalculate</Button> : null}
         {primary ? <Button variant="primary" onClick={() => onAction({ method: primary })}>{labels[primary]}</Button> : null}
         {nextPayment ? <Button variant="primary" onClick={() => onAction({ method: 'pay', line: nextPayment })}>Record payment…</Button> : null}
@@ -152,7 +152,7 @@ export function PayrollRunView({ run, companyId, runId, caps, settings, onBack, 
     </>}
     <details className="hr-subhead"><summary>{actions.editable ? 'Calculation inputs and company policy' : 'Frozen inputs and company policy'}</summary>
       <dl className="fuel-dl"><dt>Statutory set</dt><dd>{run.statutoryRateSetId || 'Unavailable'}</dd><dt>Policy confirmation</dt><dd>{(lines[0]?.snapshot?.settings || settings)?.policyConfirmed ? 'Confirmed with professional evidence' : 'Required before approval'}</dd></dl>
-      <p className="muted">Edit company divisor, recovery limits and professional evidence in Settings → Payroll before approval, then recalculate. Run FX and statutory selection are fixed at creation; void a draft and create a replacement to change them.</p>
+      <p className="muted">Edit company divisor, recovery limits and professional evidence in Settings → Payroll before approval, then recalculate. Run FX, statutory selection and run overrides are fixed at creation; void a draft and create a replacement to change them. Overrides do not bypass confirmation gates.</p>
       <pre className="hr-read__value">{JSON.stringify(run.input || {}, null, 2)}</pre>
     </details>
     <details className="hr-subhead"><summary>Reviews and payments · {run.payments?.length || 0} payment events</summary>
@@ -177,11 +177,21 @@ function PayrollPaymentTable({ run, canReverse, onAction }) {
 }
 
 function PayrollLineDetails({ companyId, run, line, caps, settings, onAction, onDecision, onPayslip, exportBusy, onChanged }) {
+  if (run.companyId !== companyId || line.companyId !== companyId || line.runId !== run.id || !run.lines.some(x => x.id === line.id) || !hasCap(caps, 'payroll.manage')) return null;
   const editable = runActions(run, settings, caps).editable;
+  const snapshot = line.snapshot || {};
+  const policies = [['Employee policy', snapshot.employeePolicy, false], ['Run override', snapshot.runStatutoryOverride, true], ['Line override', snapshot.lineStatutoryOverride, true], ['Effective policy', snapshot.effectivePolicy ?? snapshot.policy, false]];
+  const flagLabel = (policy, key, inherit) => typeof policy?.[key] === 'boolean' ? policy[key] ? 'Apply' : 'Do not apply' : policy === undefined ? 'Not captured' : inherit ? 'Inherit' : 'Not set';
   const amounts = [['baseMinor', 'Base pay'], ['overtimeMinor', 'Overtime'], ['grossMinor', 'Gross'], ['nssfEmployeeMinor', 'Employee NSSF'], ['nssfEmployerMinor', 'Employer NSSF'], ['salaryTaxMinor', 'Salary tax'], ['otherDeductionsMinor', 'Other deductions'], ['loanDeductionMinor', 'Loan withholding'], ['remainingLoanDeductionMinor', 'Withholding to post'], ['advanceMinor', 'Advance paid'], ['netMinor', 'Net'], ['paidMinor', 'Paid'], ['remainingMinor', 'Remaining cash']];
   return <div className="hr-sections">
     <p className="hr-note">{runNotice(run)}</p><div className="hr-actions-row"><Button disabled={exportBusy} onClick={onPayslip}>Save payslip PDF…</Button>{runActions(run, settings, caps).pay && canPayLine(line, run.payments) ? <Button onClick={() => onAction({ method: 'pay', line })}>Record payment…</Button> : null}</div>
     <div className="hr-read-grid">{amounts.map(([key, label]) => <div key={key}><div className="hr-read__label">{label}</div><div className="hr-read__value">{moneyLabel(line[key], line.currency)}</div></div>)}</div>
+    <details><summary>Advanced · statutory treatment</summary>
+      <p className="muted">Saved calculation inputs: employee policy, then run override, then line override, per flag. Confirmation gates still apply.</p>
+      <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Source</th><th>Salary tax</th><th>NSSF</th><th>Saved reason</th></tr></thead><tbody>{policies.map(([label, policy, inherit]) => <tr key={label}><th scope="row">{label}</th><td>{flagLabel(policy, 'applyTax', inherit)}</td><td>{flagLabel(policy, 'applyNssf', inherit)}</td><td className="hr-cell-text">{policy?.reason || '—'}</td></tr>)}</tbody></table></div>
+      {editable ? <Button size="sm" onClick={() => onDecision({ kind: 'statutory' })}>Edit statutory treatment…</Button> : null}
+    </details>
+    <PayrollLeaveBalances snapshot={snapshot} lineId={line.id} />
     {line.blockers.length ? <section><h3 className="section-title">Blockers</h3><ul>{line.blockers.map((block, i) => <li key={i}>{block.date ? `${dateLabel(block.date)} · ` : ''}{block.message}{editable && block.code === 'whole_day_decision' ? <Button size="sm" onClick={() => onDecision({ kind: 'day', date: block.date })}>Decide whole day…</Button> : null}</li>)}</ul></section> : null}
     <details><summary>Whole-day decisions · {line.decisions?.dayDecisions?.length || 0}</summary>
       {(line.decisions?.dayDecisions || []).map(day => <p key={day.date}>{dateLabel(day.date)} · {day.payable ? 'Payable' : 'Unpaid'} · {day.reason} {editable ? <Button size="sm" onClick={() => onDecision({ kind: 'day', date: day.date })}>Edit decision…</Button> : null}</p>)}
@@ -199,4 +209,16 @@ function PayrollLineDetails({ companyId, run, line, caps, settings, onAction, on
       <pre className="hr-read__value">{JSON.stringify(line.snapshot, null, 2)}</pre>
     </details>
   </div>;
+}
+
+function PayrollLeaveBalances({ snapshot, lineId }) {
+  const balances = snapshot.leaveBalances;
+  const pager = usePayrollPager(balances?.length || 0, lineId);
+  return <details><summary>Leave balances{snapshot.leaveBalanceAsOf ? ` · as of ${dateLabel(snapshot.leaveBalanceAsOf)}` : ''}</summary>
+    {!balances ? <p className="muted">Leave balances were not captured for this payslip.</p> : !balances.length ? <p className="muted">No tracked leave types were captured for this payslip.</p> : <>
+      <p className="muted">Saved balances at the period end, shown separately by leave type.</p>
+      <div className="data-table-wrap"><table className="data-table"><thead><tr><th>Leave type</th><th>Code</th><th className="is-num">Days</th></tr></thead><tbody>{balances.slice(pager.pageStart, pager.pageEnd).map(balance => <tr key={balance.leaveTypeId}><td>{balance.nameEn || balance.nameKm || balance.code}</td><td>{balance.code}</td><td className="is-num">{balance.days}</td></tr>)}</tbody></table></div>
+      <PayrollPagination total={balances.length} pager={pager} />
+    </>}
+  </details>;
 }
