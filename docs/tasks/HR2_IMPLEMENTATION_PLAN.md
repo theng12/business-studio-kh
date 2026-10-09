@@ -116,7 +116,8 @@ All totals checked for safe integer bounds; negative net refused rather than cla
   loanDeductionMinor:10000,advanceMinor:2500}).netMinor === 7500`.
 - [x] GREEN: `node --test test/payrollCalc.test.js` (28 pass at integration); preserve draft `estimate` output.
 - [x] Independent review then controller integration in `af005a5`; no database work in this packet.
-  A follow-up draft-only missing-domain regression now passes (29 tests); its separate review is pending.
+  A follow-up draft-only missing-domain regression passes (29 tests); separate reviews by Kant and
+  the DB implementer passed, including independent boundary probes. Integrated in `0dd3e29`.
 
 ### Task 3: Additive schema, policies and transactional services (Sol, high)
 
