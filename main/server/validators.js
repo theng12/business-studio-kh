@@ -1138,9 +1138,10 @@ Object.assign(VALIDATORS, require('./assetValidators').ASSET_VALIDATORS);
 const { FUEL_VALIDATORS } = require('./fuelValidators');
 // HR1: hr:*, attendance:*, leave:* and kiosk:* (main/server/hrValidators.js).
 const { HR_VALIDATORS } = require('./hrValidators');
+const { PAYROLL_VALIDATORS } = require('./payrollValidators');
 
 function getValidator(channel) {
-  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? null;
+  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? PAYROLL_VALIDATORS[channel] ?? null;
 }
 
 module.exports = {

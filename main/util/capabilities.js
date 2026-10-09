@@ -58,10 +58,12 @@ const CAPABILITIES = [
   { key: 'attendance.supervise', group: 'People',  label: 'Mark my crew',                   description: 'Mark the people you supervise in and out away from the shop, with an optional photo. Every mark is listed for a manager to review.' },
   { key: 'hr.view',          group: 'People',      label: 'View staff & attendance',       description: 'Staff directory, attendance, overtime, leave and the monthly export — without ID / NSSF numbers, bank details, documents or clock-in photos.' },
   { key: 'hr.manage',        group: 'People',      label: 'Manage staff & attendance',     description: 'Edit staff records and documents, set kiosk PINs, schedules and holidays, review clock-ins, approve corrections, overtime, lateness and leave.' },
+  { key: 'payroll.manage', group: 'People', label: 'Manage payroll', description: 'Staff pay rates, payroll calculation, review, payments and payslips. Approval follows company policy.' },
+  { key: 'loans.manage', group: 'People', label: 'Manage staff loans', description: 'Staff loans, repayments and projections. Approval, rate changes and postponements follow separate company policies.' },
 ];
 
 /** Capabilities that are never part of a preset by default (granted per role on purpose). */
-const OPT_IN_CAPABILITIES = new Set(['fuel.record', 'fuel.manage', 'attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage']);
+const OPT_IN_CAPABILITIES = new Set(['fuel.record', 'fuel.manage', 'attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage', 'payroll.manage', 'loans.manage']);
 
 const CAPABILITY_KEYS = new Set(CAPABILITIES.map((c) => c.key));
 
@@ -208,6 +210,10 @@ const CHANNEL_RULES = [
   //   hr.view or hr.manage (handlers narrow what hr.view sees: no ID / bank /
   //   documents / clock-in photos); everything else under hr:/attendance:/
   //   leave: is hr.manage. Must sit before the staff:/fuel: rules.
+  [/^payroll:(updateSettings|confirmRateSet|reversePayment)$/, ADMIN_ONLY],
+  [/^loans:(writeOff|reverseEntry)$/,                     ADMIN_ONLY],
+  [/^payroll:/,                                         'payroll.manage'],
+  [/^loans:/,                                           'loans.manage'],
   [/^kiosk:/,                                            ['attendance.kiosk', 'hr.manage']],
   [/^attendance:(clockSelf|mine|requestCorrectionSelf)$/, ['attendance.self']],
   [/^leave:(requestSelf|cancelSelf)$/,                    ['attendance.self']],
