@@ -125,6 +125,29 @@ or capitalized; capitalization transfers debt once and requires confirmed policy
 evidence for real posting. Reversed interest no longer occupies an active monthly
 slot or satisfies payroll's monthly-accrual prerequisite.
 
+### Opening-loan imports
+
+The import service `loanImports` provides `importColumns()`, `preview(companyId,{rows})`,
+`apply(companyId,{rows,operationId})` and `sampleWorkbook(companyId)`. Batches are limited to
+500 rows and are atomic: any invalid row prevents every write. Preview returns per-row actions,
+warnings/errors and a summary; apply replans rather than trusting the preview. A rejected batch
+returns `applied:false`; a timeout is still an unknown outcome requiring the exact original retry.
+
+The natural key is the **trimmed** company-scoped `loanNo`. `staffCode` resolves inside that
+company, never by a caller-supplied employee ID. Money columns are explicitly integer USD cents
+or whole KHR—not dollars. New rows require original principal, current principal, unpaid interest,
+currency, original disbursement date, month-end `balanceAsOf` and the ordinary loan terms.
+An interest-only opening may have zero current principal but still records the original positive
+principal. No currency conversion or historical payments are invented.
+
+Imports create or update **draft opening loans**. Only nonempty cells update an existing draft;
+zero and false are values. Ordinary loans cannot be converted into openings by import. Identical
+approved openings may be skipped, but changed approved terms/history are refused. Approval uses
+the usual loan authority and posts one explicit opening entry, not a new cash disbursement.
+Interest before/through the opening date is already included; future months still need accrual.
+Original interest-free anniversaries are retained. Payments cannot predate the opening boundary.
+This feature is not authorization to import or migrate the owner's live data.
+
 ## Exports and kiosk
 
 Payroll `getPayslipPdf({id,companyId})` takes a line ID; `getWorkbook` takes a run
