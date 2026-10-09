@@ -6,6 +6,7 @@
  *
  * Run: node scripts/probe-packaged-client-server.js --app /absolute/Media\ Studio\ KH.app
  * Optional: --expected-version X.Y.Z --artifacts /absolute/probe-artifacts
+ *          --smoke-only (current Home → Products navigation; skips legacy Catalog/Workspace UI flows)
  */
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
@@ -31,15 +32,16 @@ const DEFAULT_TIMEOUT_MS = 45_000;
 function usage() {
   return [
     'Usage: node scripts/probe-packaged-client-server.js --app /absolute/path.app',
-    '       [--expected-version X.Y.Z] [--artifacts /absolute/output-dir]',
+    '       [--expected-version X.Y.Z] [--artifacts /absolute/output-dir] [--smoke-only]',
   ].join('\n');
 }
 
 function parseArgs(argv) {
-  const out = { app: null, expectedVersion: null, artifacts: null };
+  const out = { app: null, expectedVersion: null, artifacts: null, smokeOnly: false };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--help' || flag === '-h') return { help: true };
+    if (flag === '--smoke-only') { out.smokeOnly = true; continue; }
     const value = argv[++i];
     if (!value) throw new Error(`Missing value for ${flag}`);
     if (flag === '--app') out.app = value;
@@ -145,6 +147,26 @@ async function debugTarget(debugPort, processInfo, role) {
   } catch (err) {
     throw new Error(`${err.message}\n${processInfo.getOutput()}`, { cause: err });
   }
+}
+
+async function openProductsModuleFromHome(target, role) {
+  const opened = await evaluate(target, `(() => {
+    const home = document.querySelector('.sidebar__home.is-active');
+    const title = document.querySelector('.page__title')?.textContent.trim();
+    const tile = document.querySelector('.home-tile[data-module="products"]');
+    if (title !== 'Home' || !home || !tile || tile.getAttribute('aria-disabled') === 'true') return false;
+    tile.click();
+    return true;
+  })()`);
+  assert.ok(opened, `${role} could not open Products from the visible Home module grid`);
+  await waitFor(
+    () => evaluate(target, `Boolean(
+      document.querySelector('.sidebar__nav [data-module="products"]:not(.sidebar__item)')
+      && [...document.querySelectorAll('.sidebar__item')].some((item) =>
+        item.querySelector('span:not(.sidebar__item-shortcut)')?.textContent.trim() === 'Product Library')
+    )`),
+    `${role} Products module navigation`,
+  );
 }
 
 function cdp(target, method, params = {}) {
@@ -853,28 +875,35 @@ async function main() {
     assert.equal(serverUi.dataDir, serverData, 'server did not load its isolated data directory');
     assert.equal(clientUi.dataDir, clientData, 'client did not load its isolated data directory');
     assert.ok(serverUi.visible && clientUi.visible, 'sidebar was not visible');
-    assert.match(serverUi.sidebarText, /Product Library/);
-    assert.match(clientUi.sidebarText, /Product Library/);
+    if (options.smokeOnly) {
+      await Promise.all([
+        openProductsModuleFromHome(serverTarget, 'server'),
+        openProductsModuleFromHome(clientTarget, 'client'),
+      ]);
+    } else {
+      assert.match(serverUi.sidebarText, /Product Library/);
+      assert.match(clientUi.sidebarText, /Product Library/);
 
-    await runCatalogEditorConflictScenario({
-      serverTarget,
-      clientTarget,
-      projectId: seed.catalogProjectId,
-      projectName: 'Packaged conflict fixture',
-    });
-    await runWorkspaceStripScenario({
-      clientTarget,
-      productId: seed.productId,
-      productSku: seed.productSku,
-      imageId: seed.imageId,
-    });
-    await runWorkspaceEditorConflictScenario({
-      serverTarget,
-      clientTarget,
-      productId: seed.productId,
-      imageId: seed.imageId,
-      productSku: seed.productSku,
-    });
+      await runCatalogEditorConflictScenario({
+        serverTarget,
+        clientTarget,
+        projectId: seed.catalogProjectId,
+        projectName: 'Packaged conflict fixture',
+      });
+      await runWorkspaceStripScenario({
+        clientTarget,
+        productId: seed.productId,
+        productSku: seed.productSku,
+        imageId: seed.imageId,
+      });
+      await runWorkspaceEditorConflictScenario({
+        serverTarget,
+        clientTarget,
+        productId: seed.productId,
+        imageId: seed.imageId,
+        productSku: seed.productSku,
+      });
+    }
 
     const clientRead = await evaluate(clientTarget, `window.api.products.get(${JSON.stringify(seed.productId)})`);
     assert.equal(clientRead.name, 'Synthetic Product');
@@ -910,11 +939,15 @@ async function main() {
       pass: true,
       version: clientUi.version,
       checks: [
-        'real server and client BrowserWindows/preloads rendered matching version and modes',
-        'visible Product Library sidebar navigation in both real renderers',
-        'real Catalog editor conflict UI retained a cancelled client draft, refreshed the server version, and intentionally overwrote it only after explicit confirmation',
-        'real Image Workspace settings conflict UI retained Cancel, Refresh and Overwrite behavior against a server API competing write, with persisted-row assertions and removeBackground=false',
-        'real Image Workspace strip switch flushed the leaving image draft before selecting another image',
+        'real server and client BrowserWindows/preloads rendered matching version and modes with isolated profiles/data directories',
+        options.smokeOnly
+          ? 'both renderers navigated from the visible Home module grid into Products and showed Product Library in the module sidebar'
+          : 'visible Product Library sidebar navigation in both real renderers',
+        ...(!options.smokeOnly ? [
+          'real Catalog editor conflict UI retained a cancelled client draft, refreshed the server version, and intentionally overwrote it only after explicit confirmation',
+          'real Image Workspace settings conflict UI retained Cancel, Refresh and Overwrite behavior against a server API competing write, with persisted-row assertions and removeBackground=false',
+          'real Image Workspace strip switch flushed the leaving image draft before selecting another image',
+        ] : []),
         'client renderer read and updated synthetic product; server renderer observed it',
         'client app-image protocol fetched synthetic product image',
         'client WebSocket reconnected after server restart and read refreshed state',
