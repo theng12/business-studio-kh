@@ -104,7 +104,12 @@ test('kiosk: no-photo clock is server-checked; preview writes nothing', { skip: 
   const K = kioskUser.token;
 
   /* ─── M4: no photo ─── */
-  const tokenA = (await ok(K, 'kiosk:signIn', { employeeId: A.id, pin: '4071' })).sessionToken;
+  const signedInA = await ok(K, 'kiosk:signIn', { employeeId: A.id, pin: '4071' });
+  assert.deepEqual(Object.keys(signedInA.employee).sort(), ['companyId', 'hasPhoto', 'id', 'nameEn', 'nameKm']);
+  assert.equal(signedInA.employee.companyId, company.id);
+  assert.equal(JSON.stringify(signedInA.employee).includes(kioskUser.id), false, 'sign-in does not expose caller identity');
+  const tokenA = signedInA.sessionToken;
+  assert.equal((await ok(K, 'kiosk:me', { sessionToken: tokenA })).employee.companyId, company.id);
   await fails(K, 'kiosk:clock', { sessionToken: tokenA, noPhoto: true }, 422, /photo is needed/);
   await fails(K, 'kiosk:verifyManagerPin', { employeeId: M.id, pin: '5820', purpose: 'no-photo' }, 400, /sessionToken is required/);
   // A manager cannot allow their own clock-in without a photo.
@@ -164,6 +169,10 @@ test('kiosk: no-photo clock is server-checked; preview writes nothing', { skip: 
   assert.ok(!rowB.pin_locked_until);
   const pv = await ok(manager.token, 'kiosk:signIn', { employeeId: B.id, pin: '6284', preview: true });
   assert.equal(pv.preview, true);
+  assert.deepEqual(Object.keys(pv.employee).sort(), ['companyId', 'hasPhoto', 'id', 'nameEn', 'nameKm']);
+  assert.equal(pv.employee.companyId, company.id);
+  assert.equal(JSON.stringify(pv.employee).includes(manager.id), false, 'preview sign-in does not expose caller identity');
+  assert.equal((await ok(manager.token, 'kiosk:me', { sessionToken: pv.sessionToken })).employee.companyId, company.id);
   const jpeg = await require('sharp')({ create: { width: 64, height: 48, channels: 3, background: { r: 1, g: 2, b: 3 } } }).jpeg().toBuffer();
   const pclock = await ok(manager.token, 'kiosk:clock', { sessionToken: pv.sessionToken, photo: { __bin: true, b64: jpeg.toString('base64') } });
   assert.equal(pclock.preview, true);
