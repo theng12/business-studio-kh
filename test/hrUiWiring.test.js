@@ -45,12 +45,16 @@ test('the People module lists Staff, the attendance pages and Leave, gated by hr
   const people = reg.getModule('people');
   assert.ok(people.description.length <= 60);
   const ids = (caps) => reg.visiblePages(people, caps).map((p) => p.id);
-  assert.deepEqual(ids(['*']), ['staff', 'leave', 'attendance', 'attreview', 'attcorrections', 'overtime', 'lateness']);
-  assert.deepEqual(ids(['hr.view']), ids(['*']), 'hr.view sees every page (read-only)');
-  assert.deepEqual(ids(['hr.manage']), ids(['*']));
+  const hrPages = ['staff', 'leave', 'attendance', 'attreview', 'attcorrections', 'overtime', 'lateness'];
+  assert.deepEqual(ids(['*']), [...hrPages, 'payroll', 'loans']);
+  assert.deepEqual(ids(['hr.view']), hrPages, 'hr.view sees HR pages, not private financial pages');
+  assert.deepEqual(ids(['hr.manage']), hrPages);
+  assert.deepEqual(ids(['payroll.manage']), ['payroll']);
+  assert.deepEqual(ids(['loans.manage']), ['loans']);
   assert.deepEqual(ids(['fuel.manage']), ['staff'], 'fuel.manage keeps the F1 staff list, nothing else');
   assert.deepEqual(ids(['fuel.record']), [], 'a recorder has no People page');
-  assert.deepEqual(reg.visibleSections(people, ['*']).map((s) => s.label), [null, 'Attendance']);
+  assert.deepEqual(reg.visibleSections(people, ['*']).map((s) => s.label), [null, 'Attendance', 'Pay']);
+  assert.deepEqual(reg.visibleSections(people, ['hr.view']).map((s) => s.label), [null, 'Attendance']);
   for (const [id, [name]] of Object.entries(HR_PAGES)) {
     const page = reg.getPage(id);
     assert.equal(page.name, name);
