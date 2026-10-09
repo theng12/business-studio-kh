@@ -998,7 +998,7 @@ const VALIDATORS = {
   'files:readImageThumb':        (a) => (isImagePath(a) ? true
     : 'an absolute path to an image file (.jpg, .jpeg, .png, .webp, .heic, .heif) is required'),
   'files:scanImageFiles':        requireNonEmptyStringArg('absolute folder path'),
-  'files:parseWorkbook':         (a) => (isWorkbookPath(a) ? true
+  'files:parseWorkbook':         (a) => (isAbsolutePath(a) && isWorkbookPath(a) ? true
     : 'an absolute path to a workbook (.xlsx, .xls, .csv, .tsv) is required'),
   // "Show in Finder" / "Open folder" after a run: an absolute path that
   // exists on this Mac (checked here so client mode applies the same rule).

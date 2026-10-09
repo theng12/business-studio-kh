@@ -118,7 +118,7 @@ const CHANNEL_RULES = [
   [/^products:(create|update|bulkUpdate|bulkUpsert|duplicate)$/, 'products.edit'],
   // CSV import + sample sheet feed product create/update.
   // Fixed Assets: the asset import reads its workbook the same way (§2 gap 5).
-  [/^files:(pickWorkbook|parseWorkbook)$/,             ['products.edit', 'assets.manage']],
+  [/^files:(pickWorkbook|parseWorkbook)$/,             ['products.edit', 'assets.manage', 'loans.manage']],
   [/^samples:/,                                         'products.edit'],
 
   // — Images. Deleting image content is a "delete" capability; importing

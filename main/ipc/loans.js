@@ -1,5 +1,6 @@
 const access = require('./payrollAccess');
 const service = () => require('../db/employeeLoans');
+const imports = () => require('../db/loanImports');
 const CAP = 'loans.manage';
 function read(args, fn) { return fn(access.company(args, CAP), access.input(args)); }
 function write(args, op, fn, { admin = false, policy = null } = {}) {
@@ -9,7 +10,10 @@ function write(args, op, fn, { admin = false, policy = null } = {}) {
     return access.changed('loan', op, fn(companyId, input), companyId);
   });
 }
-function register({ expose }) {
+function sample(args) {
+  return read(args, companyId => ({ companyId, ...imports().sampleWorkbook(companyId) }));
+}
+function register({ expose, exposeLocal }) {
   expose('loans:listEmployees', args => read(args, companyId => access.listEmployees(companyId)));
   expose('loans:getPolicy', args => read(args, companyId => {
     const settings = require('../db/payrollConfig').getSettings(companyId);
@@ -28,5 +32,23 @@ function register({ expose }) {
   expose('loans:reverseEntry', args => write(args, 'reverse', (c, p) => service().reverseEntry(c, p), { admin: true }));
   expose('loans:writeOff', args => write(args, 'writeoff', (c, p) => service().writeOff(c, p), { admin: true }));
   expose('loans:project', args => read(args, (c, p) => service().project(c, p.id, { through: p.through })));
+  expose('loans:importColumns', args => read(args, () => imports().importColumns()));
+  expose('loans:importPlan', args => read(args, (c, p) => imports().preview(c, p)));
+  expose('loans:importApply', args => read(args, (c, p) => {
+    const result = imports().apply(c, p);
+    return result.applied ? access.changed('loan', 'import', result, c) : result;
+  }));
+  expose('loans:getImportSample', sample);
+  exposeLocal('loans:saveImportSample', async args => {
+    const first = sample(args);
+    const { dialog } = require('electron');
+    const result = await dialog.showSaveDialog({ title: 'Save opening loans sample', defaultPath: first.filename,
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }] });
+    if (result.canceled || !result.filePath) return null;
+    access.recheck(first.companyId, CAP);
+    const fresh = sample(args);
+    require('node:fs').writeFileSync(result.filePath, fresh.bytes);
+    return result.filePath;
+  });
 }
 module.exports = { register };

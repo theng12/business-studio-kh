@@ -29,7 +29,11 @@ const fixtures = {
   'payroll:fetchSalaryTaxRate': { month: '2026-09' },
   'payroll:getPayslipPdf': { id: 'l' }, 'payroll:savePayslipPdf': { id: 'l' },
   'payroll:getWorkbook': { id: 'r' }, 'payroll:saveWorkbook': { id: 'r' },
+  'payroll:getRunPdf': { id: 'r' }, 'payroll:saveRunPdf': { id: 'r' },
   'loans:list': {}, 'loans:get': { id: 'loan' }, 'loans:listEmployees': {}, 'loans:getPolicy': {},
+  'loans:importColumns': {}, 'loans:importPlan': { rows: [{ loanNo: 'OPEN-1', staffCode: 'A1' }] },
+  'loans:importApply': { rows: [{ loanNo: 'OPEN-1', staffCode: 'A1' }], operationId: 'opening-import' },
+  'loans:getImportSample': {}, 'loans:saveImportSample': {},
   'loans:create': { employeeId: 'e', principalMinor: 50000, currency: 'USD', disbursedOn: '2026-09-01', interestMethod: 'declining', interestPolicy: 'separate', ratePercent: 1, interestFreeMonths: 3, installmentMinor: 10000, operationId: 'loan-new' },
   'loans:approve': { id: 'loan' },
   'loans:voidDraft': { id: 'loan', reason: 'Mistaken draft', operationId: 'cancel-draft' },
@@ -119,7 +123,69 @@ test('HR2 financial privileges are opt-in and admin control channels cannot be g
   assert.equal(allowedByCaps(new Set(['attendance.kiosk']), 'payroll:getPayslipPdf'), false);
 });
 
+test('loan managers can pick and parse spreadsheets without broader file or HR permissions', () => {
+  const caps = new Set(['loans.manage']);
+  for (const ch of ['files:pickWorkbook', 'files:parseWorkbook']) assert.equal(allowedByCaps(caps, ch), true, ch);
+  for (const ch of ['hr:getProfile', 'staff:list', 'files:pickFolder', 'files:scanImageFiles', 'files:readImageThumb']) {
+    assert.notEqual(allowedByCaps(caps, ch), true, ch);
+  }
+  assert.throws(() => validateArgs('files:parseWorkbook', '/tmp/private.txt'), /Bad request:/);
+  assert.throws(() => validateArgs('files:parseWorkbook', 'relative/sample.xlsx'), /Bad request: an absolute path to a workbook/);
+  assert.equal(getValidator('files:parseWorkbook')('/tmp/sample.xlsx'), true);
+});
+
+test('opening import bounds raw mapped cells while leaving row feedback to the service', () => {
+  for (const channel of ['loans:importPlan', 'loans:importApply']) {
+    const args = rows => ({ ...fixtures[channel], rows });
+    const row = { loanNo: 'OPEN-1', staffCode: 'A1', originalPrincipalMinor: 50000, currentPrincipalMinor: 0,
+      unpaidInterestMinor: 'bad spreadsheet value', balanceAsOf: '2026-09-30', currency: 'KHR', disbursedOn: '2026-01-01',
+      interestMethod: 'none', interestPolicy: 'separate', ratePercent: 0, interestFreeMonths: 0,
+      installmentMinor: 10000, maxDeductionPercent: null, deductViaPayroll: false, purpose: '', rowNo: 2 };
+    assert.equal(getValidator(channel)(args([row])), true);
+    assert.equal(getValidator(channel)(args(Array.from({ length: 500 }, () => row))), true);
+    for (const rows of [[], Array.from({ length: 501 }, () => row), [null], [[row]],
+      [{ ...row, actor: 'forged' }], [{ ...row, employeeId: 'foreign' }], [{ ...row, companyId: 'foreign' }],
+      [{ ...row, status: 'active' }], [{ ...row, values: {} }], [{ ...row, purpose: { x: 1 } }],
+      [{ ...row, purpose: 'x'.repeat(2001) }], [{ ...row, rowNo: 0 }], [{ ...row, ratePercent: Infinity }]]) {
+      assert.throws(() => validateArgs(channel, args(rows)), /Bad request:/);
+    }
+  }
+  assert.throws(() => validateArgs('loans:importApply', { rows: [{ loanNo: 'x' }] }), /operationId/);
+});
+
 module.exports = { fixtures };
+
+test('statutory overrides require explicit boolean decisions and a reason; null inherits', () => {
+  for (const channel of ['payroll:create', 'payroll:updateLine']) {
+    const args = value => channel === 'payroll:create'
+      ? { ...fixtures[channel], statutoryOverride: value }
+      : { ...fixtures[channel], patch: { statutoryOverride: value } };
+    for (const value of [null, undefined, { applyTax: false, reason: 'Reviewed exemption' },
+      { applyNssf: true, reason: 'Reviewed enrollment' }, { applyTax: true, applyNssf: false, reason: 'Reviewed both' }]) {
+      assert.equal(getValidator(channel)(args(value)), true, channel);
+    }
+    for (const value of [{}, { reason: 'No decision' }, { applyTax: true }, { applyTax: true, reason: '  ' },
+      { applyTax: 'false', reason: 'x' }, { applyNssf: null, reason: 'x' }, { applyTax: 0, reason: 'x' },
+      { applyTax: false, reason: 'x', actor: 'forged' }, [], false]) {
+      assert.throws(() => validateArgs(channel, args(value)), /Bad request:/, JSON.stringify(value));
+    }
+  }
+});
+
+test('documents forward separate frozen leave types and date without current top-level fallbacks', () => {
+  const { documentLine } = require('../main/ipc/payroll');
+  const balances = [{ leaveTypeId: 'annual', code: 'AL', nameEn: 'Annual', nameKm: 'KH', days: 10.5 },
+    { leaveTypeId: 'sick', code: 'SL', nameEn: 'Sick', nameKm: '', days: 6.5 }];
+  const line = { leaveBalances: [{ days: 99 }], leaveBalanceAsOf: '2026-10-01',
+    snapshot: { leaveBalances: balances, leaveBalanceAsOf: '2026-09-30' } };
+  const original = JSON.stringify(line);
+  assert.deepEqual(documentLine(line).leaveBalances, balances);
+  assert.equal(documentLine(line).leaveBalanceAsOf, '2026-09-30');
+  assert.equal(documentLine(line).leaveBalanceDays, undefined);
+  assert.equal(documentLine({ ...line, snapshot: {} }).leaveBalances, undefined);
+  assert.equal(documentLine({ ...line, snapshot: {} }).leaveBalanceAsOf, undefined);
+  assert.equal(JSON.stringify(line), original);
+});
 
 test('actual preload forwards HR2 object payloads without actor injection or tenant loss', async () => {
   const Module = require('node:module');

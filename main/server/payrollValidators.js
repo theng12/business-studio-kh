@@ -51,9 +51,16 @@ const tax = shape({
   spouseAllowanceKhr: money, dependentAllowanceKhr: money, maxDependents: v => v === null || integer(0, 100)(v),
   nonResidentPercent: percent, fringeBenefitPercent: percent, pensionDeductible: boolean,
 });
+const overrideShape = shape({ applyTax: optional(boolean), applyNssf: optional(boolean), reason });
+const statutoryOverride = value => {
+  const result = overrideShape(value);
+  if (result !== true) return result;
+  return typeof value.applyTax === 'boolean' || typeof value.applyNssf === 'boolean' || 'at least one statutory flag is required';
+};
 const linePatch = shape({
   dayDecisions: optional(array(shape({ date, payable: boolean, reason }), 0, 31)),
   loanDecisions: optional(array(shape({ loanId: id, amountMinor: money, reason }))), note: optional(text, true),
+  statutoryOverride: optional(statutoryOverride, true),
 });
 const payrollCreate = data({
   periodStart: date, periodEnd: date, payDate: optional(date, true),
@@ -62,7 +69,7 @@ const payrollCreate = data({
   taxRateKhrPerUsd: optional(fx, true), rateSource: optional(text, true),
   nssfRateKhrPerUsd: optional(fx, true), nssfRateSource: optional(text, true),
   loanRateKhrPerUsd: optional(fx, true), loanRateSource: optional(text, true),
-  statutoryRateSetId: optional(id, true), operationId: id,
+  statutoryRateSetId: optional(id, true), statutoryOverride: optional(statutoryOverride, true), operationId: id,
 });
 const idArg = data({ id });
 const read = data({}, true);
@@ -70,6 +77,14 @@ const employeeArg = data({ employeeId: id });
 const revision = data({ id, expectedRevision: integer() });
 const self = shape({ sessionToken: id });
 const selfPdf = shape({ sessionToken: id, id });
+// Spreadsheet values are untrusted cells. Preserve blanks/invalid scalar values
+// for per-row service feedback; never accept caller authority or nested objects.
+const importCell = optional(v => typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) ||
+  (typeof v === 'string' && v.length <= 2000), true);
+const importRow = shape({ ...Object.fromEntries(['loanNo', 'staffCode', 'originalPrincipalMinor', 'currentPrincipalMinor',
+  'unpaidInterestMinor', 'balanceAsOf', 'currency', 'disbursedOn', 'interestMethod', 'interestPolicy', 'ratePercent',
+  'interestFreeMonths', 'installmentMinor', 'maxDeductionPercent', 'deductViaPayroll', 'purpose'].map(k => [k, importCell])),
+  rowNo: optional(integer(1), true) });
 
 const PAYROLL_VALIDATORS = {
   'payroll:list': data({ month: optional(month), status: optional(oneOf('draft', 'reviewed', 'approved', 'paid', 'void')) }, true),
@@ -103,8 +118,12 @@ const PAYROLL_VALIDATORS = {
   'payroll:reversePayment': data(action), 'payroll:voidRun': data({ id, reason }),
   'payroll:fetchSalaryTaxRate': data({ month }),
   'payroll:getPayslipPdf': idArg, 'payroll:savePayslipPdf': idArg, 'payroll:getWorkbook': idArg, 'payroll:saveWorkbook': idArg,
+  'payroll:getRunPdf': idArg, 'payroll:saveRunPdf': idArg,
   'loans:list': data({ employeeId: optional(id), status: optional(oneOf('draft', 'active', 'paid', 'written_off', 'void')) }, true),
   'loans:get': idArg, 'loans:listEmployees': read, 'loans:getPolicy': read,
+  'loans:importColumns': read, 'loans:importPlan': data({ rows: array(importRow, 1, 500) }),
+  'loans:importApply': data({ rows: array(importRow, 1, 500), operationId: id }),
+  'loans:getImportSample': read, 'loans:saveImportSample': read,
   'loans:create': data({ employeeId: id, loanNo: optional(id), principalMinor: integer(1), currency, disbursedOn: date,
     interestMethod: oneOf('declining', 'none'), interestPolicy: oneOf('separate', 'capitalize'), ratePercent: percent,
     interestFreeMonths: integer(0, 120), installmentMinor: integer(1), maxDeductionPercent: optional(percent),
