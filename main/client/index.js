@@ -40,7 +40,7 @@ const { retryWaitMs, shouldRetry } = require('../util/rateLimitRetry');
 // exactly like the server/standalone ones do.
 const { validateArgs } = require('../util/validateArgs');
 const { writeExclusiveFile, writeUniqueFile } = require('../util/exclusiveFile');
-const { isLikelyMutationChannel, isReadAction, isTimeoutError, mutationOutcomeUnknown } = require('../util/rpcOutcome');
+const { isLikelyMutationChannel, isTimeoutError, mutationOutcomeUnknown } = require('../util/rpcOutcome');
 // v0.15.1: WebSocket client (same `ws` lib as the server). Used in
 // client mode to subscribe to live update events. Loaded lazily so
 // standalone / server mode doesn't pay the import cost.
@@ -303,7 +303,7 @@ function broadcastRpcActivity(payload) {
 /** Per-attempt deadline for one RPC (see READ_TIMEOUT_MS). */
 function rpcTimeoutMs(channel) {
   const action = String(channel || '').split(':').slice(1).join(':');
-  if (!isLikelyMutationChannel(channel) && isReadAction(action) && !/preview/i.test(action)) {
+  if (action && !isLikelyMutationChannel(channel) && !/preview/i.test(action)) {
     return READ_TIMEOUT_MS;
   }
   return WRITE_TIMEOUT_MS;
@@ -1121,6 +1121,17 @@ const PROXIED_CHANNELS = [
   'hr:listHolidays','hr:createHoliday','hr:updateHoliday','hr:getProfile','hr:updateProfile','hr:setStatus',
   'hr:setPin','hr:clearPin','hr:unlockPin','hr:listDocuments','hr:addDocument','hr:readDocument','hr:voidDocument',
   'hr:runJobs','hr:getMonthWorkbook',
+  // HR2 data stays on the server; only the Save dialogs run on this Mac.
+  'payroll:list','payroll:get','payroll:listEmployees','payroll:getSettings','payroll:updateSettings',
+  'payroll:getEmployeePolicy','payroll:setEmployeePolicy','payroll:listPayRates','payroll:setPayRate',
+  'payroll:listComponents','payroll:saveComponent','payroll:listEmployeeComponents','payroll:setEmployeeComponent',
+  'payroll:listRateSets','payroll:saveRateSet','payroll:confirmRateSet','payroll:create','payroll:calculate',
+  'payroll:updateLine','payroll:review','payroll:approve','payroll:pay','payroll:reversePayment','payroll:voidRun',
+  'payroll:fetchSalaryTaxRate','payroll:getPayslipPdf','payroll:getRunPdf','payroll:getWorkbook',
+  'loans:list','loans:get','loans:listEmployees','loans:getPolicy','loans:create','loans:approve','loans:voidDraft','loans:changeRate',
+  'loans:accrue','loans:repay','loans:postpone','loans:reverseEntry','loans:writeOff','loans:project',
+  'loans:importColumns','loans:importPlan','loans:importApply','loans:getImportSample',
+  'kiosk:payroll','kiosk:loans','kiosk:getPayslipPdf',
   'attendance:day','attendance:monthSummary','attendance:listEvents','attendance:getPhoto','attendance:getPhotos','attendance:addManual','attendance:void',
   'attendance:listReview','attendance:listAlerts','attendance:ackAlert','attendance:review','attendance:listCorrections','attendance:requestCorrection','attendance:decideCorrection',
   'attendance:listOvertime','attendance:approveOvertime','attendance:revokeOvertime','attendance:listLateness','attendance:confirmLateness',
@@ -1586,16 +1597,40 @@ function registerClientFileHandlers() {
     return multiple ? res.filePaths : res.filePaths[0];
   });
 
+  async function workbookContext(channel, expected) {
+    const url = baseUrl();
+    const auth = authHeader();
+    const connection = JSON.stringify([url, auth]);
+    if (expected && expected.connection !== connection) throw new Error('Connection changed while choosing a workbook');
+    if (!url || !auth) throw new Error('Connect to the server to verify workbook access');
+    // Cached hello/whoami capabilities may outlive role revocation. Read fresh
+    // authority for these local-only calls, using the same shared channel rule.
+    const [response, companyId] = await Promise.all([
+      fetch(`${url}/api/whoami`, { headers: { Authorization: auth }, signal: AbortSignal.timeout(8000) }),
+      rpc('companies:getActiveId'),
+    ]);
+    if (!response.ok) throw new Error('Unable to verify permission to access workbooks');
+    const { user } = await response.json();
+    if (connection !== JSON.stringify([baseUrl(), authHeader()])) throw new Error('Connection changed while choosing a workbook');
+    if (!user?.id || !Array.isArray(user.caps) || require('../util/permissions').allowedByCaps(new Set(user.caps), channel) !== true) {
+      throw new Error('You do not have permission to access workbooks');
+    }
+    if (expected && (expected.companyId !== companyId || expected.userId !== user.id)) throw new Error('Company or account changed while choosing a workbook');
+    return { connection, companyId, userId: user.id };
+  }
   handleLocal('files:pickWorkbook', async () => {
+    const context = await workbookContext('files:pickWorkbook');
     const res = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [{ name: 'Spreadsheet', extensions: ['xlsx', 'xls', 'csv', 'tsv'] }],
     });
     if (res.canceled || res.filePaths.length === 0) return null;
+    await workbookContext('files:pickWorkbook', context);
     return res.filePaths[0];
   });
 
-  handleLocal('files:parseWorkbook', (filePath) => {
+  handleLocal('files:parseWorkbook', async (filePath) => {
+    await workbookContext('files:parseWorkbook');
     // Spreadsheet parsing is pure (just reads the file with xlsx), so
     // it works the same on client or server. The file path is on the
     // client's disk — exactly where we want it for a client-mode flow
@@ -1708,6 +1743,30 @@ function registerClientFileHandlers() {
     require('node:fs').writeFileSync(out.filePath, bytes);
     return out.filePath;
   });
+
+  async function savePayrollDocument(channel, args, extension) {
+    const connection = JSON.stringify([baseUrl(), authHeader()]);
+    const first = await rpc(channel, args);
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
+    const title = channel === 'loans:getImportSample' ? 'Save opening loans sample'
+      : extension === 'pdf' ? (channel === 'payroll:getRunPdf' ? 'Save payroll run' : 'Save payslip') : 'Save payroll workbook';
+    const options = { title, defaultPath: first.filename,
+      filters: [{ name: extension === 'pdf' ? 'PDF' : 'Workbook', extensions: [extension] }] };
+    const out = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+    if (out.canceled || !out.filePath) return null;
+    if (connection !== JSON.stringify([baseUrl(), authHeader()])) throw new Error('Connection changed while saving payroll');
+    // Reauthorize after the dialog, including company/session ownership and revoked permissions.
+    const fresh = await rpc(channel, args);
+    if (fresh.companyId !== first.companyId || connection !== JSON.stringify([baseUrl(), authHeader()])) throw new Error('Company or connection changed while saving payroll');
+    const bytes = Buffer.isBuffer(fresh.bytes) ? fresh.bytes : Buffer.from(fresh.bytes || []);
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return out.filePath;
+  }
+  handleLocal('payroll:saveWorkbook', args => savePayrollDocument('payroll:getWorkbook', args, 'xlsx'));
+  handleLocal('payroll:savePayslipPdf', args => savePayrollDocument('payroll:getPayslipPdf', args, 'pdf'));
+  handleLocal('payroll:saveRunPdf', args => savePayrollDocument('payroll:getRunPdf', args, 'pdf'));
+  handleLocal('loans:saveImportSample', args => savePayrollDocument('loans:getImportSample', args, 'xlsx'));
+  handleLocal('kiosk:savePayslipPdf', args => savePayrollDocument('kiosk:getPayslipPdf', args, 'pdf'));
 
   handleLocal('samples:generateProductSheet', async () => {
     // The sample workbook is a constant the renderer doesn't need

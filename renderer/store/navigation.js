@@ -24,7 +24,7 @@ const MODULES = ['home', 'dashboard', 'company', 'brands', 'library', 'workspace
   // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §5) + the thin staff list.
   'fueloverview', 'fuelassets', 'fuelfills', 'fueltanks', 'fuelprices', 'fuelreports', 'staff',
   // HR1: People (docs/PEOPLE_AND_FUEL_PLAN.md §5.1).
-  'attendance', 'attreview', 'attcorrections', 'overtime', 'lateness', 'leave',
+  'attendance', 'attreview', 'attcorrections', 'overtime', 'lateness', 'leave', 'payroll', 'loans',
   // HR1: the attendance kiosk preview (renderer/modules/Kiosk).
   'kiosk',
   // Fixed Assets A1 + A2 (docs/ASSETS_AND_BRANCHES_PLAN.md §8).

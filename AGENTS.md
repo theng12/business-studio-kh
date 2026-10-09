@@ -16,6 +16,16 @@ drifted badly before this check.
 
 ## Working rules
 
+- **Delegation models (owner, 2026-10-09): GPT-6.1 Sol and GPT-6 Luna only; no Terra.**
+  The orchestrator chooses reasoning effort per task and owns planning, architecture,
+  coordination, review, verification and integration. Prefer Luna for bounded straightforward
+  work and Sol for difficult cross-file, money, security and lifecycle work. Each worker gets
+  a base commit, owned files, deliverable and proving checks; parallelize only non-overlapping
+  edits. Workers do not commit, publish, deploy or recursively delegate unless explicitly
+  assigned that authority. Review material implementation batches independently; self-review
+  must never be described as independent review. If the requested models are unavailable,
+  report that rather than silently restoring Terra or claiming a worker ran.
+
 - **Every removal goes to this project's `_trash/` — never `rm`.** This covers *all*
   of it, not only what the owner asks for: a file he names, and equally a file you
   decide is clutter while cleaning up. Move it into `_trash/` (create the folder if
@@ -507,7 +517,7 @@ again, and twelve 240 MB DMGs had piled up. Use `npm run dmgs:prune` (dry run:
 them, per the working rule at the top of this file. The rule, the numeric version sort and
 the no-delete property are pinned by `test/dmgRetention.test.js`.
 
-**`dist/` means the owner's checkout on the Mac you are on** — `/Users/vengtheng/Developer/media-studio-kh/dist` on the MacBook, `/Users/thengmacmini/Developer/media-studio-kh/dist` on the Mac mini (verified 2026-10-09),
+**`dist/` means the owner's checkout on the Mac you are on** — `/Users/vengtheng/Developer/media-studio-kh/dist` on the current Mac Studio (M2 Max; hardware verified 2026-10-09; earlier handoffs called this path the MacBook), `/Users/thengmacmini/Developer/media-studio-kh/dist` on the Mac mini,
 which is where he looks for a release. `npm run dist` writes into the build worktree
 instead, so copy the release's DMG across as the last step of a release (one file since
 2026-09-27 — AGENTS.md §20).

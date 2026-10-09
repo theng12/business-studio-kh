@@ -26,6 +26,7 @@ const AssetSettingsPanel = lazy(() => import('../Assets/AssetSettingsPanel.jsx')
 const BranchesPanel = lazy(() => import('../Assets/BranchesPanel.jsx').then((m) => ({ default: m.BranchesPanel })));
 // HR1: Settings → People (schedules, holidays, leave types, attendance rules). Lazy, like Fuel.
 const PeopleSettingsPanel = lazy(() => import('../People/PeopleSettingsPanel.jsx').then((m) => ({ default: m.PeopleSettingsPanel })));
+const PayrollSettingsPanel = lazy(() => import('../People/PayrollSettings.jsx').then((m) => ({ default: m.PayrollSettings })));
 
 // v0.22.13: Settings is now tabbed. SETTINGS_TABS is the source of
 // truth for both the left rail (label + key) and the conditional
@@ -56,6 +57,7 @@ const SETTINGS_TABS = [
   { key: 'fuel',        label: 'Fuel' },
   // HR1: offered on a client Mac only to a user with hr.manage (tab filter below).
   { key: 'people',      label: 'People' },
+  { key: 'payroll',     label: 'Payroll' },
   // Fixed Assets: offered on a client Mac only to who can use it (tab filter below).
   { key: 'assets',      label: 'Assets' },
   { key: 'branches',    label: 'Branches' },
@@ -152,6 +154,7 @@ export function Settings() {
   // nav and these tabs cannot disagree about who may do what.
   const clientConnection = useAppStore((s) => s.clientConnection);
   const caps = isClient ? (clientConnection?.user?.caps || ['*']) : ['*'];
+  const canManagePayroll = !isClient || hasCap(clientConnection?.user?.caps, 'payroll.manage');
   const canManageUsers = hasCap(caps, 'users.manage');
   // The same capability the SERVER requires for `backups:*` (see the map in
   // main/util/capabilities.js). Without this the Backups tab was offered to an
@@ -281,6 +284,7 @@ export function Settings() {
             // actually manage users, rather than being offered and then refused
             // by the server.
             .filter((t) => {
+              if (t.key === 'payroll') return canManagePayroll;
               if (!isClient) return true;                       // the host Mac owns everything
               if (t.key === 'roles') return canManageUsers;
               if (t.key === 'fuel') return hasCap(caps, 'fuel.manage');
@@ -701,6 +705,12 @@ export function Settings() {
         {tab === 'people' && (!isClient || hasCap(caps, 'hr.manage')) && (
           <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
             <PeopleSettingsPanel />
+          </Suspense>
+        )}
+
+        {tab === 'payroll' && canManagePayroll && (
+          <Suspense fallback={<div className="settings-page"><p className="muted">Loading…</p></div>}>
+            <PayrollSettingsPanel />
           </Suspense>
         )}
 

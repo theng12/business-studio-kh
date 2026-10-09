@@ -115,7 +115,7 @@ function register({ expose }) {
     const { last, settings, next } = nextFor(companyId, employeeId);
     return {
       sessionToken: token, expiresInSeconds: settings.kioskSessionSeconds,
-      employee: { id: e.id, nameEn: e.nameEn, nameKm: e.nameKm, hasPhoto: e.hasPhoto },
+      employee: { id: e.id, companyId: e.companyId, nameEn: e.nameEn, nameKm: e.nameKm, hasPhoto: e.hasPhoto },
       nextKind: next.kind, nextNeedsCheck: next.flag === 'late_close', lastEvent: last ? { kind: last.kind, at: last.at } : null,
       preview: !!preview,
     };

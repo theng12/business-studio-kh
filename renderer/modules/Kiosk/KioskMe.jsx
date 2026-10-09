@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { KioskPayroll } from './KioskPayroll.jsx';
+import { kioskContext } from './kioskPayrollModel.js';
 import {
   t, displayName, monthRows, lateMinutesText, formatDays, daysText, ppTime, ppDate,
   leaveFormErrors, buildLeaveArgs, correctionFormErrors, buildCorrectionArgs, defaultCorrectionDate,
@@ -10,7 +12,7 @@ import {
  * server decides who that is from the session token): this and last month,
  * leave balances, requests waiting, and the two requests a person may make.
  */
-export function KioskMe({ lang, view, status, error, notice, onDone, onLeave, onCorrection, onRetry }) {
+export function KioskMe({ lang, view, status, error, notice, sessionToken, onSessionEnded, isSessionCurrent, onDone, onLeave, onCorrection, onRetry }) {
   if (status === 'loading' && !view) return <div className="kiosk-panel" role="status">{t(lang, 'loading')}</div>;
   if (!view) {
     return (
@@ -48,6 +50,8 @@ export function KioskMe({ lang, view, status, error, notice, onDone, onLeave, on
       {error ? <p className="kiosk-message kiosk-message--error" role="alert">{error}</p> : null}
 
       <div className="kiosk-me__grid">
+        <KioskPayroll lang={lang} sessionToken={sessionToken} employee={view.employee}
+          onSessionEnded={onSessionEnded} isSessionCurrent={isSessionCurrent} />
         {[['this_month', view.thisMonth], ['last_month', view.lastMonth]].map(([key, month]) => (
           <section key={key} className="kiosk-card">
             <h3 className="kiosk-h3">{t(lang, key)} <span className="kiosk-muted">{month?.month}</span></h3>
@@ -104,30 +108,47 @@ function FormErrors({ lang, keys }) {
   return <p className="kiosk-message kiosk-message--error" role="alert">{keys.map((k) => t(lang, k)).join(' ')}</p>;
 }
 
+// A request belongs to the form instance AND the PIN session that submitted it.
+function useRequestCurrent(sessionToken, employee, isSessionCurrent) {
+  const context = kioskContext(sessionToken, employee);
+  const current = useRef(context);
+  current.current = context;
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  return () => mounted.current && !!context && current.current === context && isSessionCurrent(context);
+}
+
 /** Request leave: type, dates, half day, reason → kiosk:requestLeave. */
-export function KioskLeaveForm({ lang, view, sessionToken, onSent, onCancel, onSessionEnded }) {
+export function KioskLeaveForm({ lang, view, sessionToken, onSent, onCancel, onSessionEnded, isSessionCurrent }) {
   const today = ppDate(Date.now());
   const [form, setForm] = useState({ leaveTypeId: '', fromDate: today, toDate: '', halfDay: '', reason: '' });
   const [shown, setShown] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const isCurrent = useRequestCurrent(sessionToken, view?.employee, isSessionCurrent);
   const set = (patch) => { setShown([]); setError(null); setForm((f) => ({ ...f, ...patch })); };
   const types = (view?.leave || []);
 
   async function submit(e) {
     e.preventDefault();
+    if (!isCurrent()) return;
     const errs = leaveFormErrors(form);
     setShown(errs);
     if (errs.length || busy) return;
     setBusy(true); setError(null);
     try {
       await window.api.kiosk.requestLeave(buildLeaveArgs(form, sessionToken));
+      if (!isCurrent()) return;
       onSent();
     } catch (err) {
+      if (!isCurrent()) return;
       if (classifyError(err).kind === 'sessionEnded') { onSessionEnded(); return; }
       setError(err);
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 
@@ -182,27 +203,31 @@ export function KioskLeaveForm({ lang, view, sessionToken, onSent, onCancel, onS
 }
 
 /** "I forgot to clock out" → kiosk:requestCorrection — a REQUEST, never an event. */
-export function KioskCorrectionForm({ lang, view, sessionToken, onSent, onCancel, onSessionEnded }) {
+export function KioskCorrectionForm({ lang, view, sessionToken, onSent, onCancel, onSessionEnded, isSessionCurrent }) {
   const [form, setForm] = useState({ workDate: defaultCorrectionDate(view), outTime: '', inTime: '', reason: '' });
   const [shown, setShown] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const isCurrent = useRequestCurrent(sessionToken, view?.employee, isSessionCurrent);
   const set = (patch) => { setShown([]); setError(null); setForm((f) => ({ ...f, ...patch })); };
 
   async function submit(e) {
     e.preventDefault();
+    if (!isCurrent()) return;
     const errs = correctionFormErrors(form);
     setShown(errs);
     if (errs.length || busy) return;
     setBusy(true); setError(null);
     try {
       await window.api.kiosk.requestCorrection(buildCorrectionArgs(form, sessionToken));
+      if (!isCurrent()) return;
       onSent();
     } catch (err) {
+      if (!isCurrent()) return;
       if (classifyError(err).kind === 'sessionEnded') { onSessionEnded(); return; }
       setError(err);
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
 

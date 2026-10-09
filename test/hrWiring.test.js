@@ -31,9 +31,9 @@ const EXPOSED = FILES.flatMap((f) => f.exposed);
 const LOCAL = FILES.flatMap((f) => f.local);
 const caps = (...k) => new Set(k);
 
-test('five People capabilities exist, all opt-in, none in the Editor preset', () => {
+test('People capabilities include HR2, all opt-in, none in the Editor preset', () => {
   const people = CAPABILITIES.filter((c) => c.group === 'People').map((c) => c.key);
-  assert.deepEqual(people, ['attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage']);
+  assert.deepEqual(people, ['attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage', 'payroll.manage', 'loans.manage']);
   for (const k of people) assert.ok(OPT_IN_CAPABILITIES.has(k), k);
   const { BUILTIN_ROLES } = require('../main/db/roles');
   const editor = BUILTIN_ROLES.find((r) => r.key === 'editor');
@@ -141,7 +141,7 @@ test('History hiding: sensitivity and entity clauses', () => {
   assert.ok(all.some((c) => c.includes("sensitivity <> 'hr'")));
   assert.ok(all.some((c) => c.includes("entity_type <> 'employee'")));
   const src = read('main/db/auditLog.js');
-  assert.ok(/CLEARABLE_SQL = `sensitivity = 'normal' AND \$\{FUEL_ENTITY_SQL\} AND \$\{ASSET_ENTITY_SQL\}`/.test(src), 'clearHistory keeps staff / fuel / HR / payroll / asset rows');
+  assert.ok(/CLEARABLE_SQL = `sensitivity = 'normal' AND \$\{FUEL_ENTITY_SQL\} AND \$\{ASSET_ENTITY_SQL\} AND \$\{PAYROLL_ENTITY_SQL\}`/.test(src), 'clearHistory keeps staff / fuel / HR / payroll / asset rows, including untagged HR2 financial types');
   // Fixed Assets: asset / ledger rows (and 'finance' rows) hidden without assets.view.
   assert.deepEqual(hideClauses({ assets: true }).length, 2);
   assert.ok(hideClauses({ assets: true }).some((c) => c.includes("sensitivity <> 'finance'")));

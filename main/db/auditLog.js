@@ -276,6 +276,28 @@ function isAssetEntityType(t) { return ASSET_ENTITY_TYPES.includes(t); }
  */
 const SENSITIVITIES = ['normal', 'hr', 'hr_private', 'payroll', 'finance'];
 
+// HR2 financial types also protect rows if a writer accidentally omits its tag.
+const PAYROLL_TABLES = {
+  payroll_settings: ['payroll_settings', 'company_id'], employee_payroll_policy: ['employees', 'id'],
+  employee_pay_rate: ['employee_pay_rates', 'id'], pay_component: ['pay_components', 'id'],
+  employee_component: ['employee_components', 'id'], statutory_rate_set: ['statutory_rate_sets', 'id'],
+  payroll_run: ['payroll_runs', 'id'], payroll_line: ['payroll_lines', 'id'], payroll_payment: ['payroll_payments', 'id'],
+  employee_loan: ['employee_loans', 'id'], loan_entry: ['loan_entries', 'id'],
+};
+const PAYROLL_ENTITY_SQL = `entity_type NOT IN (${Object.keys(PAYROLL_TABLES).map(t => `'${t}'`).join(',')})`;
+const LOAN_ENTITY_SQL = "entity_type NOT IN ('employee_loan','loan_entry')";
+function isPayrollEntityType(type) { return Object.hasOwn(PAYROLL_TABLES, type); }
+function isLoanEntityType(type) { return type === 'employee_loan' || type === 'loan_entry'; }
+
+function payrollCompanyClause(companyId) {
+  const db = getDb();
+  const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name));
+  // Missing/unknown ownership fails closed; no lookup against private current HR fields.
+  const owned = Object.entries(PAYROLL_TABLES).filter(([, [table]]) => tables.has(table)).map(([type, [table, key]]) =>
+    `(entity_type = '${type}' AND entity_id IN (SELECT ${key} FROM ${table} WHERE company_id = '${String(companyId).replace(/'/g, "''")}'))`);
+  return `((sensitivity <> 'payroll' AND ${PAYROLL_ENTITY_SQL}) OR ${owned.join(' OR ') || '0'})`;
+}
+
 /**
  * Which rows a caller may not see (main/ipc/audit.js builds it from the
  * caller's capabilities; null = sees everything — the server Mac's own
@@ -297,7 +319,9 @@ function hideClauses(hide) {
   if (hide.employee) out.push("entity_type <> 'employee'");
   if (hide.hr) out.push("sensitivity <> 'hr'");
   if (hide.hrPrivate || hide.hr) out.push("sensitivity <> 'hr_private'");
-  if (hide.payroll) out.push("sensitivity <> 'payroll'");
+  if (hide.payroll) out.push(`((sensitivity <> 'payroll' AND ${PAYROLL_ENTITY_SQL}) OR NOT (${LOAN_ENTITY_SQL}))`);
+  if (hide.loans) out.push(LOAN_ENTITY_SQL);
+  if (hide.payrollCompanyId) out.push(payrollCompanyClause(hide.payrollCompanyId));
   if (hide.assets) { out.push(ASSET_ENTITY_SQL); out.push("sensitivity <> 'finance'"); }
   return out;
 }
@@ -430,11 +454,12 @@ function countRecent({ entityType = null, userId = null, since = null, until = n
  * History page's "X events, oldest N days ago" line + to gate the clear
  * button. Cheap (COUNT + MIN/MAX on the created_at index).
  */
-function stats() {
+function stats({ hide = null } = {}) {
   const db = getDb();
+  const { whereSql, params } = recentWhere({ hide });
   const row = db
-    .prepare('SELECT COUNT(*) AS n, MIN(created_at) AS oldest, MAX(created_at) AS newest FROM audit_log')
-    .get();
+    .prepare(`SELECT COUNT(*) AS n, MIN(created_at) AS oldest, MAX(created_at) AS newest FROM audit_log ${whereSql}`)
+    .get(params);
   return {
     total: Number(row?.n ?? 0),
     oldest: row?.oldest ?? null,
@@ -471,13 +496,15 @@ function clearOlderThan(days) {
  * Only ordinary catalogue rows can be cleared: staff / fuel / HR / payroll
  * rows (HR1) and asset / ledger rows (Fixed Assets, review M6) are kept.
  */
-const CLEARABLE_SQL = `sensitivity = 'normal' AND ${FUEL_ENTITY_SQL} AND ${ASSET_ENTITY_SQL}`;
+const CLEARABLE_SQL = `sensitivity = 'normal' AND ${FUEL_ENTITY_SQL} AND ${ASSET_ENTITY_SQL} AND ${PAYROLL_ENTITY_SQL}`;
 
 module.exports = {
   NO_USER,
   recentWhere,
   isFuelEntityType,
   isAssetEntityType,
+  isPayrollEntityType,
+  isLoanEntityType,
   ASSET_ENTITY_TYPES,
   SENSITIVITIES,
   hideClauses,

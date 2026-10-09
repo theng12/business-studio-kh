@@ -32,7 +32,8 @@ const { callerCaps } = require('./fuelAccess');
  */
 function hideSpec() {
   const caps = callerCaps();
-  if (caps === null || caps.has('*')) return null;
+  const payrollCompanyId = require('../db/companies').getActiveId() || '@none';
+  if (caps === null || caps.has('*')) return { payrollCompanyId };
   const any = (...k) => k.some((x) => caps.has(x));
   const hide = {
     fuel: !any('fuel.manage'),
@@ -40,6 +41,8 @@ function hideSpec() {
     hr: !any('hr.view', 'hr.manage'),
     hrPrivate: !any('hr.manage'),
     payroll: !any('payroll.manage'),
+    loans: !any('loans.manage'),
+    payrollCompanyId,
     assets: !any('assets.view', 'assets.manage'),
   };
   return Object.values(hide).some(Boolean) ? hide : null;
@@ -51,6 +54,8 @@ function entityHidden(entityType, hide) {
   if (hide.fuel && typeof entityType === 'string' && entityType.startsWith('fuel_')) return true;
   if (hide.employee && entityType === 'employee') return true;
   if (hide.assets && auditLog.isAssetEntityType(entityType)) return true;
+  if (auditLog.isLoanEntityType(entityType)) return !!hide.loans;
+  if (hide.payroll && auditLog.isPayrollEntityType(entityType)) return true;
   return false;
 }
 
@@ -89,7 +94,7 @@ function register({ expose }) {
   // when days <= 0). Runs server-side, so a client clearing history clears
   // the shared log for everyone — same as any other write. HR1: staff, fuel,
   // HR and payroll rows are never cleared (returned as `kept`).
-  expose('audit:historyStats', () => auditLog.stats());
+  expose('audit:historyStats', () => auditLog.stats({ hide: hideSpec() }));
   expose('audit:clearHistory', ({ days } = {}) => auditLog.clearOlderThan(days));
 }
 

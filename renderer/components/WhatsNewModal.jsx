@@ -2,6 +2,18 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.99', date: '2026-10-09',
+    items: [
+      'NEW — People → Payroll: dated monthly, daily or hourly pay in USD or riel, approved overtime and confirmed late minutes, optional extra pay, draft calculations, review, approval and recorded payments. Monthly is the trial default; payday and both twice-monthly arrangements are configurable.',
+      'NEW — Settings → Payroll: separate approval policies, dated exchange rates with saved sources, and versioned salary-tax and NSSF tables. Estimates stay drafts until complete tables and company policies are confirmed with professional evidence; changing statutory treatment always needs a reason.',
+      'NEW — People → Loans: interest-free or declining monthly interest, optional interest-free starting months, configurable repayments, reviewed postponements, separate or capitalized unpaid interest, and reversible ledger entries. Opening balances import through pick, map and review without inventing past payments.',
+      'NEW — Bilingual A5 payslips, a whole-run payslip PDF and payroll workbooks. Payslips retain their calculated inputs and separate leave balances. Staff can see only their own approved payslips and loans through their kiosk PIN.',
+      'FIX — Lost payment or import replies retain the original request for a safe retry. Company switches and access changes cannot reveal another company’s payroll or replace unsaved decisions. Client workbook access is checked again after choosing a file.',
+      'FIX — Updated the image-processing dependency to its security-patched version.',
+      'Internal — Additive payroll and loan tables; no schema reset. Separate payroll.manage and loans.manage permissions, neither granted to HR or Editors by default. API and remaining statutory/hardware limits are recorded in docs/tasks/HR2_API.md and the session handoff.',
+    ],
+  },
+  {
     version: '0.1.98', date: '2026-10-09',
     items: [
       'NEW — Assets (new square on Home): a register of everything the business owns — vehicles, buildings, land, shop fit-outs, shelves, computers — with branch, the person who looks after it, photos and documents, warranty and serial number. Fuel vehicles appear automatically, marked "needs a cost".',
