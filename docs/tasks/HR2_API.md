@@ -63,9 +63,9 @@ valid; confirmed sets must be complete. No fabricated zero-rate NSSF table is se
 | Method | Object fields / behavior |
 | --- | --- |
 | `list` / `get` | `{month?, status?, companyId}` / `{id, companyId}`; `id` is run ID. |
-| `create` | `{periodStart, periodEnd, payDate?, employeeIds, kind, statutoryRateSetId?, operationId, companyId, ...explicitFxOverrides}`. Advance also needs `currency` and per-person `advanceMinor`. |
+| `create` | `{periodStart, periodEnd, payDate?, employeeIds, kind, statutoryRateSetId?, statutoryOverride?, operationId, companyId, ...explicitFxOverrides}`. Advance also needs `currency` and per-person `advanceMinor`. |
 | `calculate` | `{id, companyId}`. Preview only; no payment or loan posting. |
-| `updateLine` | `{id, patch, expectedRevision, companyId}`. **Line ID**, **run revision**. Patch supports whole-day decisions, loan shortfall decisions and a note, not arbitrary money overrides. |
+| `updateLine` | `{id, patch, expectedRevision, companyId}`. **Line ID**, **run revision**. Patch supports whole-day decisions, loan shortfall decisions, a reasoned statutory override and a note, not arbitrary money overrides. |
 | `review` / `approve` | `{id, expectedRevision, companyId}`; run ID. Rechecks source fingerprints, HR1 capped approvals and blockers. Approval also requires confirmed policy and effective statutory tables, including when an employee has exemptions. |
 | `pay` | `{id, amountMinor, method, paidAt, reference?, operationId, companyId}`; **line ID**. Cash/bank/other; partial payments supported. |
 | `reversePayment` | `{id, reason, operationId, companyId}`; **payment ID**, admin only. Appends compensating entries. |
@@ -86,6 +86,18 @@ withholding; `remainingLoanDeductionMinor` distinguishes that from remaining cas
 need an explicit whole-day decision. `loanDecisions`: `{loanId, amountMinor, reason}`
 uses **loan currency**; the saved plan also records `salaryAmountMinor` and FX.
 No negative pay, guessed currency conversion or silently duplicated debt.
+
+`statutoryOverride` is null/omitted to inherit, or an object with at least one explicit
+`applyTax`/`applyNssf` boolean and a nonblank `reason`. Per flag, the precedence is employee
+policy → run override → line override. A replacement line override replaces the old object;
+null clears it. Original policy, overrides, reasons and effective flags are snapshotted.
+Neither an exemption nor an override bypasses confirmed statutory/policy approval gates.
+Separate periods cannot silently mix incompatible effective monthly treatment.
+
+Each calculated line freezes `leaveBalances:[{leaveTypeId,code,nameEn,nameKm,days}]` for active
+tracked leave types and `leaveBalanceAsOf` at period end. Types are never summed. Future ledger
+rows are excluded; changed as-of balances invalidate review. Calculation does not post leave
+accrual. Approved snapshots are immutable, including after later leave adjustments or renames.
 
 ## Loans
 
