@@ -607,7 +607,12 @@ function computeLine(r, s, ctx, decisions = {}) {
       }
       // Repayment eligibility follows actual payment, including salary earned
       // before disbursement. There is no interest to accrue before the loan exists.
-      if (l.interestMethod !== 'none' && l.disbursedOn <= r.periodEnd && !l.entries.some(x => x.kind === 'interest' && x.period === r.month && !x.reversedAt)) block('loan_interest', 'Accrue this loan through the payroll month before approval.');
+      // An approved opening already includes all interest through balanceAsOf;
+      // it does not waive interest or cover later payroll months.
+      const interestCoveredByOpening = l.balanceAsOf && r.periodEnd <= l.balanceAsOf;
+      if (!interestCoveredByOpening && l.interestMethod !== 'none' && l.disbursedOn <= r.periodEnd && !l.entries.some(x => x.kind === 'interest' && x.period === r.month && !x.reversedAt)) {
+        block('loan_interest', 'Accrue this loan through the payroll month before approval.');
+      }
       const perLoanCeiling = loanMath().deductionPlan({
         principalMinor: recoveryBase,
         interestMinor: 0,

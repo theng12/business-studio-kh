@@ -53,6 +53,9 @@ function loan(r, details = true) {
     employeeId: r.employee_id,
     loanNo: r.loan_no,
     originalPrincipalMinor: r.original_principal_minor,
+    balanceAsOf: r.balance_as_of,
+    openingPrincipalMinor: r.opening_principal_minor,
+    openingInterestMinor: r.opening_interest_minor,
     principalMinor,
     interestMinor,
     currency: r.currency,
@@ -90,28 +93,32 @@ function list(companyId, {
   if (status) c.choice(status, ['draft', 'active', 'paid', 'written_off', 'void'], 'Loan status');
   return getDb().prepare('SELECT * FROM employee_loans WHERE company_id=? AND (? IS NULL OR employee_id=?) AND (? IS NULL OR status=?) ORDER BY disbursed_on,id').all(companyId, employeeId, employeeId, status, status).map(r => loan(r, false));
 }
+function validateTerms(companyId, p) {
+  c.employee(companyId, p.employeeId);
+  c.money(p.principalMinor, 'Principal', 1);
+  c.date(p.disbursedOn);
+  if (p.disbursedOn > today()) c.fail('Future disbursement is not supported');
+  c.choice(p.currency, ['USD', 'KHR'], 'Currency');
+  c.choice(p.interestMethod, ['declining', 'none'], 'Interest method');
+  c.choice(p.interestPolicy, ['separate', 'capitalize'], 'Interest policy');
+  c.percent(p.ratePercent, 'Monthly rate');
+  if (p.interestMethod === 'none' && p.ratePercent !== 0) c.fail('Interest-free loan must have zero rate');
+  c.money(p.interestFreeMonths, 'Free months');
+  if (p.interestFreeMonths > 120) c.fail('Free months must be at most 120');
+  c.money(p.installmentMinor, 'Installment', 1);
+  const settings = c.getSettings(companyId);
+  const cap = p.maxDeductionPercent ?? settings.maxDeductionPercent;
+  c.percent(cap);
+  if (p.deductViaPayroll != null) c.bool(p.deductViaPayroll, 'Payroll deduction');
+  return cap;
+}
 function create(companyId, p) {
   return c.operation(companyId, p.operationId, 'loan:create', p, () => {
-    c.employee(companyId, p.employeeId);
-    c.money(p.principalMinor, 'Principal', 1);
-    c.date(p.disbursedOn);
-    if (p.disbursedOn > today()) c.fail('Future disbursement is not supported');
-    c.choice(p.currency, ['USD', 'KHR'], 'Currency');
-    c.choice(p.interestMethod, ['declining', 'none'], 'Interest method');
-    c.choice(p.interestPolicy, ['separate', 'capitalize'], 'Interest policy');
-    c.percent(p.ratePercent, 'Monthly rate');
-    if (p.interestMethod === 'none' && p.ratePercent !== 0) c.fail('Interest-free loan must have zero rate');
-    c.money(p.interestFreeMonths, 'Free months');
-    if (p.interestFreeMonths > 120) c.fail('Free months must be at most 120');
-    c.money(p.installmentMinor, 'Installment', 1);
-    const settings = c.getSettings(companyId);
-    const cap = p.maxDeductionPercent ?? settings.maxDeductionPercent;
-    c.percent(cap);
-    if (p.deductViaPayroll != null) c.bool(p.deductViaPayroll, 'Payroll deduction');
+    const cap = validateTerms(companyId, p);
     const id = uuid();
     const loanNo = p.loanNo ? c.text(p.loanNo, 'Loan number') : id;
     const now = Date.now();
-    getDb().prepare('INSERT INTO employee_loans VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, companyId, p.employeeId, loanNo, p.principalMinor, p.currency, p.disbursedOn, p.interestMethod, p.interestPolicy, p.interestFreeMonths, p.installmentMinor, cap, +(p.deductViaPayroll ?? true), 'draft', p.purpose || null, null, null, now);
+    getDb().prepare('INSERT INTO employee_loans (id,company_id,employee_id,loan_no,original_principal_minor,currency,disbursed_on,interest_method,interest_policy,interest_free_months,installment_minor,max_deduction_percent,deduct_via_payroll,status,purpose,approved_at,approved_by_user_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, companyId, p.employeeId, loanNo, p.principalMinor, p.currency, p.disbursedOn, p.interestMethod, p.interestPolicy, p.interestFreeMonths, p.installmentMinor, cap, +(p.deductViaPayroll ?? true), 'draft', p.purpose || null, null, null, now);
     getDb().prepare('INSERT INTO loan_rate_changes VALUES (?,?,?,?,?,?,?,?)').run(uuid(), companyId, id, p.disbursedOn, p.ratePercent, 'Starting agreed rate', getCallerUserId(), now);
     c.audit('employee_loan', id, 'create', p);
     return get(companyId, id);
@@ -159,11 +166,16 @@ function approve(companyId, id) {
     if (l.status !== 'draft') return l;
     lendingPolicy(companyId, l);
     post(companyId, id, {
-      entryDate: l.disbursedOn,
-      kind: 'disbursement',
-      principalPart: l.originalPrincipalMinor
+      entryDate: l.balanceAsOf || l.disbursedOn,
+      kind: l.balanceAsOf ? 'opening_balance' : 'disbursement',
+      principalPart: l.balanceAsOf ? l.openingPrincipalMinor : l.originalPrincipalMinor,
+      interestPart: l.balanceAsOf ? l.openingInterestMinor : 0,
+      source: l.balanceAsOf ? 'import' : 'cash',
+      note: l.balanceAsOf ? 'Opening principal and unpaid interest; no new cash disbursement or historical repayments.' : null,
+      snapshot: l.balanceAsOf ? { balanceAsOf: l.balanceAsOf, originalPrincipalMinor: l.originalPrincipalMinor, disbursedOn: l.disbursedOn } : null
     });
     getDb().prepare("UPDATE employee_loans SET status='active',approved_at=?,approved_by_user_id=? WHERE id=?").run(Date.now(), getCallerUserId(), id);
+    if (l.balanceAsOf) sync(companyId, id);
     return get(companyId, id);
   })();
 }
@@ -172,6 +184,7 @@ function boundary(l, date, {
 } = {}) {
   c.date(date);
   if (date < l.disbursedOn) c.fail('Date is before disbursement');
+  if (l.balanceAsOf && date < l.balanceAsOf) c.fail('Date is before the opening balance; historical postings cannot be imported');
   if (!rate && date > today()) c.fail('Future financial postings are not supported');
   const active = effectiveEntries(l.entries);
   const through = active.filter(e => e.kind === 'interest').at(-1)?.entryDate;
@@ -199,7 +212,7 @@ function calculationHorizon(l, through) {
   c.date(through);
   if (through < l.disbursedOn) c.fail('Interest end precedes disbursement');
   const monthNumber = d => Number(d.slice(0, 4)) * 12 + Number(d.slice(5, 7));
-  if (monthNumber(through) - monthNumber(l.disbursedOn) + 1 > MAX_CALCULATION_MONTHS) {
+  if (monthNumber(through) - monthNumber(l.balanceAsOf || l.disbursedOn) + 1 > MAX_CALCULATION_MONTHS) {
     c.fail(`Calculation horizon may cover at most ${MAX_CALCULATION_MONTHS} months from disbursement`);
   }
 }
@@ -208,12 +221,13 @@ function projectedInterest(l, through) {
   c.date(through);
   if (through < l.disbursedOn) c.fail('Interest end precedes disbursement');
   if (through !== require('../util/attendanceCalc').lastDayOfMonth(through.slice(0, 7))) c.fail('Accrue only complete calendar months');
+  if (l.balanceAsOf && through <= l.balanceAsOf) return [];
   const math = calc();
   const free = math.addMonths(l.disbursedOn, l.interestFreeMonths);
   const active = effectiveEntries(l.entries);
   const simulated = [...active];
   const out = [];
-  for (const period of math.monthlyPeriods(l.disbursedOn, through)) {
+  for (const period of math.monthlyPeriods(l.balanceAsOf ? shift(l.balanceAsOf, 1) : l.disbursedOn, through)) {
     const key = period.startDate.slice(0, 7);
     if (active.some(e => e.kind === 'interest' && e.period === key)) continue;
     const last = require('../util/attendanceCalc').lastDayOfMonth(key);
@@ -378,7 +392,7 @@ function reverse(companyId, p, {
     note: p.reason
   });
   getDb().prepare('UPDATE loan_entries SET reversed_at=? WHERE id=?').run(Date.now(), e.id);
-  if (e.kind === 'disbursement') getDb().prepare("UPDATE employee_loans SET status='void' WHERE id=?").run(l.id);else {
+  if (['disbursement', 'opening_balance'].includes(e.kind)) getDb().prepare("UPDATE employee_loans SET status='void' WHERE id=?").run(l.id);else {
     getDb().prepare("UPDATE employee_loans SET status='active' WHERE id=?").run(l.id);
     sync(companyId, l.id);
   }
@@ -415,7 +429,7 @@ function project(companyId, id, {
     ...l,
     entries: effectiveEntries(l.entries)
   };
-  for (const period of calc().monthlyPeriods(l.disbursedOn, through)) {
+  for (const period of l.balanceAsOf && through <= l.balanceAsOf ? [] : calc().monthlyPeriods(l.balanceAsOf ? shift(l.balanceAsOf, 1) : l.disbursedOn, through)) {
     if (period.endDate !== require('../util/attendanceCalc').lastDayOfMonth(period.startDate.slice(0, 7))) c.fail('Projection must end at a calendar month end');
     const interest = projectedInterest(simulated, period.endDate);
     forecast.push(...interest);
@@ -479,5 +493,6 @@ module.exports = {
   project,
   voidDraft,
   postRepayment,
-  reverse
+  reverse,
+  validateTerms
 };

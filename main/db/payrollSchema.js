@@ -138,6 +138,11 @@ function ensurePayrollSchema(db) {
       PRIMARY KEY(company_id,operation_id)
     );
   `);
+  const { addColumnIfMissing } = require('./index');
+  addColumnIfMissing(db, 'employee_loans', 'balance_as_of', 'TEXT');
+  addColumnIfMissing(db, 'employee_loans', 'opening_principal_minor', 'INTEGER CHECK(opening_principal_minor >= 0)');
+  addColumnIfMissing(db, 'employee_loans', 'opening_interest_minor', 'INTEGER CHECK(opening_interest_minor >= 0)');
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_loan_opening ON loan_entries(loan_id) WHERE kind='opening_balance'");
   for (const table of ['employee_payroll_policies','employee_pay_rates','pay_components','employee_components','statutory_rate_sets','payroll_runs','payroll_lines','payroll_payments','payroll_reviews','employee_loans','loan_rate_changes','loan_entries','loan_postponements']) {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_${table}_company ON ${table}(company_id)`);
   }
