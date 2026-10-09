@@ -7,6 +7,7 @@ import {
 } from './kioskLogic.js';
 import { KioskCamera } from './KioskCamera.jsx';
 import { KioskMe, KioskLeaveForm, KioskCorrectionForm } from './KioskMe.jsx';
+import { currentKioskData, kioskContext } from './kioskPayrollModel.js';
 
 /**
  * HR1: the attendance kiosk screen (docs/PEOPLE_AND_FUEL_PLAN.md §5.2).
@@ -43,7 +44,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
   const [pin, setPin] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null); // { err } | { key, vars } — rendered in the current language
-  const [me, setMe] = useState({ status: 'idle', view: null, error: null, notice: null });
+  const [me, setMe] = useState({ context: null, status: 'idle', view: null, error: null, notice: null });
   const [now, setNow] = useState(Date.now());
   const [query, setQuery] = useState('');
   const [letter, setLetter] = useState(null);
@@ -54,6 +55,21 @@ export function Kiosk({ preview = true, onExitPreview }) {
   const idle = useRef(createIdleTimer(SESSION_IDLE_MS));
   const lastServerUse = useRef(0);
   const photoKeys = useRef(new Set());
+  const mounted = useRef(true);
+  const meRequest = useRef(0);
+  const pinAttempt = useRef(0);
+  const isSessionCurrent = useCallback((context) => mounted.current && !!context
+    && kioskContext(stateRef.current.session?.token, stateRef.current.session?.employee) === context, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      const token = stateRef.current.session?.token;
+      stateRef.current = INITIAL_STATE;
+      if (token) window.api.kiosk.signOut(token).catch(() => {});
+    };
+  }, []);
 
   /* ── tiles ── */
   const loadTiles = useCallback(async () => {
@@ -113,9 +129,13 @@ export function Kiosk({ preview = true, onExitPreview }) {
   /* ── session end ── */
   const endSession = useCallback((notice = null) => { // notice: { err } | { key } | null
     const token = stateRef.current.session?.token;
+    // Invalidate requests immediately, before React renders the tile screen.
+    stateRef.current = INITIAL_STATE;
+    pinAttempt.current++;
+    meRequest.current++;
     if (token) window.api.kiosk.signOut(token).catch(() => {});
     setPin(''); setBusy(false); setQuery(''); setLetter(null);
-    setMe({ status: 'idle', view: null, error: null, notice: null });
+    setMe({ context: null, status: 'idle', view: null, error: null, notice: null });
     setMessage(notice);
     dispatch({ type: 'RESET' });
   }, []);
@@ -146,29 +166,32 @@ export function Kiosk({ preview = true, onExitPreview }) {
       if (inSession(s)) {
         if (quietFor >= SESSION_IDLE_MS && s.screen !== 'saving') { endSession(); return; }
         if (s.session?.token && needsKeepAlive({ lastServerUseAt: lastServerUse.current, lastActivityAt: idle.current.lastActivity(), now: at })) {
+          const context = kioskContext(s.session.token, s.session.employee);
           lastServerUse.current = at;
           window.api.kiosk.me(s.session.token).then((view) => {
-            if (stateRef.current.session?.token === s.session.token) setMe((m) => ({ ...m, view }));
-          }).catch((err) => { if (classifyError(err).kind === 'sessionEnded') endSession({ key: 'err_session' }); });
+            if (!isSessionCurrent(context)) return;
+            if (kioskContext(s.session.token, view?.employee) !== context) { sessionEnded(); return; }
+            setMe((m) => ({ ...m, context, view }));
+          }).catch((err) => {
+            if (isSessionCurrent(context) && classifyError(err).kind === 'sessionEnded') sessionEnded();
+          });
         }
       } else if (['pin', 'managerMenu', 'managerPick', 'managerPin', 'recovery'].includes(s.screen) && quietFor >= PIN_IDLE_MS) {
         endSession();
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [endSession]);
+  }, [endSession, sessionEnded, isSessionCurrent]);
 
   // A quit was refused by main (Dock, AppleScript…): ask for a manager PIN.
   useEffect(() => {
     if (preview || !window.api.kioskMode?.onQuitRequested) return undefined;
     return window.api.kioskMode.onQuitRequested(() => {
-      const token = stateRef.current.session?.token;
-      if (token) window.api.kiosk.signOut(token).catch(() => {});
-      setPin(''); setBusy(false); setMessage(null);
+      endSession();
       idle.current.touch(Date.now());
       dispatch({ type: 'QUIT_REQUESTED' });
     });
-  }, [preview]);
+  }, [preview, endSession]);
 
   // A fresh tile grid every time it is shown (the manager's pick included).
   useEffect(() => {
@@ -209,15 +232,27 @@ export function Kiosk({ preview = true, onExitPreview }) {
   }, [lang, sessionEnded]);
 
   /* ── PIN ── */
+  const cancelPin = useCallback(() => {
+    pinAttempt.current++;
+    setPin(''); setBusy(false); setMessage(null);
+    dispatch(stateRef.current.screen === 'managerPin' ? { type: 'MANAGER_BACK' } : { type: 'RESET' });
+  }, []);
+
   const submitPin = useCallback(async () => {
     const s = stateRef.current;
     if (busy || !canSubmitPin(pin)) return;
+    const attempt = ++pinAttempt.current;
+    const isCurrent = () => mounted.current && pinAttempt.current === attempt;
     setBusy(true); setMessage(null);
     const typed = pin;
     setPin('');
     try {
       if (s.screen === 'pin') {
         const res = await window.api.kiosk.signIn(s.person.id, typed, preview || undefined);
+        if (!isCurrent()) {
+          if (res?.sessionToken) window.api.kiosk.signOut(res.sessionToken).catch(() => {});
+          return;
+        }
         lastServerUse.current = Date.now();
         idle.current.touch(Date.now());
         dispatch({ type: 'SIGNED_IN', ...res });
@@ -225,21 +260,26 @@ export function Kiosk({ preview = true, onExitPreview }) {
         if (s.managerAction === 'no-photo') {
           // The server marks THIS session (never the manager's own) and the clock then needs no photo.
           await window.api.kiosk.verifyManagerPin(s.manager.id, typed, 'no-photo', s.session.token, preview || undefined);
+          if (!isCurrent()) return;
           dispatch({ type: 'MANAGER_OK' });
           await clockWith(null, s.manager);
         } else if (preview) {
           // Preview inside the normal app: nothing is locked, so nothing to unlock.
           await window.api.kiosk.verifyManagerPin(s.manager.id, typed, s.managerAction, undefined, true);
+          if (!isCurrent()) return;
           if (onExitPreview) onExitPreview();
         } else if (s.managerAction === 'leave') {
           await window.api.kioskMode.leave(s.manager.id, typed);
+          if (!isCurrent()) return;
           dispatch({ type: 'MANAGER_OK' }); // the app restarts as a normal window
         } else if (s.managerAction === 'quit') {
           await window.api.kioskMode.quit(s.manager.id, typed);
+          if (!isCurrent()) return;
           dispatch({ type: 'MANAGER_OK' });
         }
       }
     } catch (err) {
+      if (!isCurrent()) return;
       const kind = classifyError(err).kind;
       if (kind === 'offline') setUnreachable(true);
       if (kind === 'sessionEnded') { sessionEnded(); return; }
@@ -252,7 +292,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
       }
       setMessage({ err });
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }, [busy, pin, preview, onExitPreview, endSession, sessionEnded, clockWith]);
 
@@ -264,27 +304,33 @@ export function Kiosk({ preview = true, onExitPreview }) {
       if (!action) return;
       e.preventDefault();
       if (action.type === 'submit') submitPin();
-      else if (action.type === 'cancel') { setPin(''); setMessage(null); dispatch(state.screen === 'managerPin' ? { type: 'MANAGER_BACK' } : { type: 'RESET' }); }
+      else if (action.type === 'cancel') cancelPin();
       else if (!busy) setPin((p) => keypadReduce(p, action));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state.screen, submitPin, busy]);
+  }, [state.screen, submitPin, busy, cancelPin]);
 
   /* ── own records ── */
   const loadMe = useCallback(async (notice = null) => {
-    const token = stateRef.current.session?.token;
-    if (!token) return;
-    setMe((m) => ({ ...m, status: 'loading', error: null, notice }));
+    const session = stateRef.current.session;
+    const token = session?.token;
+    const context = kioskContext(token, session?.employee);
+    if (!context) return;
+    const request = ++meRequest.current;
+    setMe((m) => ({ context, status: 'loading', view: currentKioskData(m, context)?.view || null, error: null, notice }));
     try {
       const view = await window.api.kiosk.me(token);
+      if (!isSessionCurrent(context) || request !== meRequest.current) return;
+      if (kioskContext(token, view?.employee) !== context) { sessionEnded(); return; }
       lastServerUse.current = Date.now();
-      setMe({ status: 'ready', view, error: null, notice });
+      setMe({ context, status: 'ready', view, error: null, notice });
     } catch (err) {
+      if (!isSessionCurrent(context) || request !== meRequest.current) return;
       if (classifyError(err).kind === 'sessionEnded') { sessionEnded(); return; }
       setMe((m) => ({ ...m, status: 'error', error: { err } }));
     }
-  }, [sessionEnded]);
+  }, [sessionEnded, isSessionCurrent]);
 
   const openMe = useCallback((notice = null) => {
     setMessage(null);
@@ -294,6 +340,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
 
   /* ── tile taps ── */
   function tapTile(person) {
+    pinAttempt.current++;
     setMessage(null);
     if (state.screen === 'managerPick') { setPin(''); dispatch({ type: 'PICK_MANAGER', person }); return; }
     if (!person.hasPin) { setMessage({ key: 'err_no_pin' }); return; }
@@ -304,6 +351,8 @@ export function Kiosk({ preview = true, onExitPreview }) {
 
   /* ── render ── */
   const screen = state.screen;
+  const context = kioskContext(state.session?.token, state.session?.employee);
+  const own = currentKioskData(me, context);
   const canRecover = offerRecovery({ preview, status: kioskStatus, unreachable });
   const openRecovery = canRecover ? () => { setMessage(null); dispatch({ type: 'OPEN_RECOVERY' }); } : null;
   // Standalone / server kiosk: no office Mac in the wording.
@@ -356,7 +405,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
               if (action.type === 'submit') submitPin();
               else setPin((p) => keypadReduce(p, action));
             }}
-            onBack={() => { setPin(''); setMessage(null); dispatch(screen === 'managerPin' ? { type: 'MANAGER_BACK' } : { type: 'RESET' }); }}
+            onBack={cancelPin}
           />
         )}
 
@@ -399,9 +448,10 @@ export function Kiosk({ preview = true, onExitPreview }) {
           </div>
         )}
 
-        {screen === 'me' && (
+        {screen === 'me' && state.session && (
           <KioskMe
-            lang={lang} view={me.view} status={me.status} error={messageText(me.error, lang)} notice={messageText(me.notice, lang)}
+            key={context} lang={lang} view={own?.view} status={own?.status || 'loading'} error={messageText(own?.error, lang)} notice={messageText(own?.notice, lang)}
+            sessionToken={state.session.token} onSessionEnded={sessionEnded} isSessionCurrent={isSessionCurrent}
             onDone={() => endSession()}
             onLeave={() => dispatch({ type: 'OPEN_LEAVE' })}
             onCorrection={() => dispatch({ type: 'OPEN_CORRECTION' })}
@@ -411,7 +461,8 @@ export function Kiosk({ preview = true, onExitPreview }) {
 
         {screen === 'leave' && state.session && (
           <KioskLeaveForm
-            lang={lang} view={me.view} sessionToken={state.session.token}
+            key={context} lang={lang} view={own?.view} sessionToken={state.session.token}
+            isSessionCurrent={isSessionCurrent}
             onSent={() => { lastServerUse.current = Date.now(); openMe({ key: preview ? 'preview_not_saved' : 'sent_leave' }); }}
             onCancel={() => dispatch({ type: 'VIEW_ME' })}
             onSessionEnded={sessionEnded}
@@ -420,7 +471,8 @@ export function Kiosk({ preview = true, onExitPreview }) {
 
         {screen === 'correction' && state.session && (
           <KioskCorrectionForm
-            lang={lang} view={me.view} sessionToken={state.session.token}
+            key={context} lang={lang} view={own?.view} sessionToken={state.session.token}
+            isSessionCurrent={isSessionCurrent}
             onSent={() => { lastServerUse.current = Date.now(); openMe({ key: preview ? 'preview_not_saved' : 'sent_correction' }); }}
             onCancel={() => dispatch({ type: 'VIEW_ME' })}
             onSessionEnded={sessionEnded}
