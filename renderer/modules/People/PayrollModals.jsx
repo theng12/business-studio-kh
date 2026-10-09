@@ -6,7 +6,7 @@ import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { Button, Field, Input, Modal, Pagination, Select, Textarea, paginate } from '../../components/ui.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { useHrTick } from './hrHooks.js';
-import { commandBook, createRunPayload, dateLabel, defaultPayDate, decisionPayload, errorText, guardRun, lastEndedPeriod, minorToInput, moneyLabel, paymentPayload, periodChoices, requestScope, runActions, todayKey } from './payrollUiModel.js';
+import { commandBook, createRunPayload, dateLabel, defaultPayDate, decisionPayload, errorText, guardRun, isDefiniteRejection, lastEndedPeriod, minorToInput, moneyLabel, paymentPayload, periodChoices, requestScope, runActions, statutoryOverrideForm, todayKey } from './payrollUiModel.js';
 
 // Session storage is limited to unresolved command payloads, never full payslips
 // or loaded salary records. UI reads are gated by company and payroll.manage.
@@ -112,11 +112,19 @@ export function PayrollPending({ companyId, requests, onResolved }) {
   </section>;
 }
 
+export function PayrollStatutoryFields({ form, onChange, disabled }) {
+  const explicit = form.applyTax !== 'inherit' || form.applyNssf !== 'inherit';
+  return <fieldset className="form-grid payroll-fields" disabled={disabled}>
+    {[['applyTax', 'Salary tax'], ['applyNssf', 'NSSF']].map(([key, label]) => <Field key={key} label={label}>{({ id }) => <Select id={id} value={form[key]} onChange={e => onChange(key, e.target.value)}><option value="inherit">Inherit</option><option value="yes">Apply</option><option value="no">Do not apply</option></Select>}</Field>)}
+    <Field label="Override reason" required={explicit} span="full" hint="A reason is required for either Apply or Do not apply.">{({ id }) => <Textarea id={id} value={form.reason} disabled={!explicit} onChange={e => onChange('reason', e.target.value)} />}</Field>
+  </fieldset>;
+}
+
 export function NewPayrollRunModal({ companyId, settings, employees, rateSets, onClose, onCreated }) {
   const requests = usePayrollRequests(companyId, 'new-run');
   const month = lastEndedPeriod();
   const [form, setForm] = useState(() => ({ month, period: periodChoices(month, settings.payCycle)[0].value,
-    payDate: defaultPayDate(month, settings), employeeIds: [], statutoryRateSetId: '', currency: 'USD', advance: '',
+    payDate: defaultPayDate(month, settings), employeeIds: [], statutoryRateSetId: '', statutoryOverride: statutoryOverrideForm(null), currency: 'USD', advance: '',
     ...Object.fromEntries(['taxRateKhrPerUsd', 'rateSource', 'nssfRateKhrPerUsd', 'nssfRateSource', 'loanRateKhrPerUsd', 'loanRateSource'].map(k => [k, settings[k] ?? ''])) }));
   const [search, setSearch] = useState('');
   const [error, setError] = useState(null);
@@ -163,6 +171,10 @@ export function NewPayrollRunModal({ companyId, settings, employees, rateSets, o
         </fieldset>)}
       </div>
       <p className="muted">Blank fields may inherit saved company values. Inspect the draft input snapshot before approval; each conversion needs its own source.</p>
+    </details>
+    <details className="hr-subhead"><summary>Advanced · run statutory treatment</summary>
+      <PayrollStatutoryFields form={form.statutoryOverride} disabled={busy || unresolved} onChange={(key, value) => setForm(f => ({ ...f, statutoryOverride: { ...f.statutoryOverride, [key]: value } }))} />
+      <p className="muted">Inherit uses each employee’s policy. Run treatment is fixed at creation; line decisions may override it. These choices do not establish a legal exemption. Confirmed statutory coverage and professional policy evidence are still required.</p>
     </details>
     <section className="hr-subhead">
       <div className="section-head"><h2 className="section-title">Staff · {form.employeeIds.length} selected</h2></div>
@@ -233,33 +245,64 @@ export function PayrollActionModal({ companyId, run, action, settings, onClose, 
 }
 
 export function PayrollDecisionModal({ companyId, run, line, kind, date, plan, onClose, onChanged }) {
-  const requests = usePayrollRequests(companyId, `${run.id}:${line.id}:decision`);
-  const [form, setForm] = useState(() => {
+  const caps = usePayrollCaps();
+  const requests = usePayrollRequests(companyId, `${run.id}:${line.id}:${run.revision}:${run.status}:decision`);
+  const activeCompanyId = useAppStore(s => s.activeCompanyId);
+  const context = `${companyId}:${run.id}:${line.employeeId}`;
+  const completionContext = useRef(context); completionContext.current = context;
+  useEffect(() => () => { completionContext.current = null; }, []);
+  const [opened, setOpened] = useState(() => ({ context, revision: run.revision, lineId: line.id }));
+  const sameContext = opened.context === context && activeCompanyId === companyId && run.companyId === companyId && line.companyId === companyId && line.runId === run.id && hasCap(caps, 'payroll.manage');
+  const editable = sameContext && run.lines.some(x => x.id === line.id) && runActions(run, {}, caps).editable;
+  const permitted = editable && opened.lineId === line.id && opened.revision === run.revision;
+  const initialForm = () => {
+    if (kind === 'statutory') return { kind, ...statutoryOverrideForm(line.decisions?.statutoryOverride) };
     const previous = kind === 'day' ? line.decisions?.dayDecisions?.find(x => x.date === date) : line.decisions?.loanDecisions?.find(x => x.loanId === plan.loanId);
     return { kind, date, payable: previous ? (previous.payable ? 'yes' : 'no') : '', loanId: plan?.loanId, currency: plan?.currency,
       amount: minorToInput(previous?.amountMinor ?? plan?.amountMinor, plan?.currency), reason: previous?.reason || '' };
-  });
+  };
+  const [form, setForm] = useState(initialForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const running = useRef(false);
+  const pending = useRef(null);
   async function save() {
-    if (running.current) return;
+    if (running.current || !permitted) return;
     const ticket = requests.begin('decision');
     try {
-      const payload = decisionPayload(run, line, form);
-      running.current = true; setBusy(true);
+      const payload = pending.current || decisionPayload(run, line, form);
+      running.current = true; pending.current = payload; setBusy(true);
       const result = await requests.invoke('updateLine', payload, { guard: value => guardRun(value, companyId, run.id) });
+      pending.current = null;
       if (requests.current(ticket)) onChanged(result);
-    } catch (err) { requests.failure(ticket, err); if (requests.current(ticket)) setError(errorText(err)); }
-    finally { running.current = false; if (requests.current(ticket)) setBusy(false); }
+    } catch (err) { if (isDefiniteRejection(err, 'updateLine')) pending.current = null; requests.failure(ticket, err); if (requests.current(ticket)) setError(errorText(err)); }
+    finally {
+      running.current = false;
+      if (completionContext.current === context && useAppStore.getState().activeCompanyId === companyId && hasCap(storeCaps(useAppStore.getState()), 'payroll.manage')) setBusy(false);
+    }
   }
-  return <Modal open title={kind === 'day' ? `Whole-day decision · ${dateLabel(date)}` : 'Loan repayment decision'} onClose={onClose}
-    footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save decision and recalculate'}</Button></>}>
+  function discardDraft() {
+    if (!editable || running.current) return;
+    setForm(initialForm()); setOpened({ context, revision: run.revision, lineId: line.id });
+    pending.current = null; setError(null);
+  }
+  return <Modal open title={kind === 'statutory' ? 'Line statutory treatment' : kind === 'day' ? `Whole-day decision · ${dateLabel(date)}` : 'Loan repayment decision'} onClose={onClose}
+    footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" disabled={busy || !permitted} onClick={save}>{busy ? 'Saving…' : pending.current ? 'Retry original decision' : 'Save decision and recalculate'}</Button></>}>
+    {!permitted ? <p role="alert">Payroll line, revision or access changed. Saving this draft is blocked. Review the current decision before saving.</p> : null}
+    {sameContext ? <>
+    {!permitted ? <Button disabled={busy || !editable} onClick={discardDraft}>Discard draft and load current decision</Button> : null}
     <PayrollError message={error} />
     <p className="hr-note">Revision {run.revision}. Reasons are required. Company limits and backend validation still apply.</p>
+    {pending.current && !busy ? <p className="hr-note">The outcome is unconfirmed. Retry uses the original line, revision and decision; a superseded line will be rejected. Close and refresh the run to inspect the result.</p> : null}
+    {kind === 'statutory' ? <details open><summary>Advanced · line statutory treatment</summary>
+      <PayrollStatutoryFields form={form} disabled={busy || !!pending.current || !permitted} onChange={(key, value) => setForm(f => ({ ...f, [key]: value }))} />
+      <p className="muted">Inherit uses the run override, then the employee policy. Both Inherit clears this line’s override. Confirmed statutory coverage and professional policy evidence are still required; these choices do not establish a legal exemption.</p>
+    </details> : <fieldset className="form-grid payroll-fields" disabled={busy || !!pending.current || !permitted}>
     {kind === 'day' ? <Field label="Whole day" required>{({ id }) => <Select id={id} disabled={busy} value={form.payable} onChange={e => setForm(f => ({ ...f, payable: e.target.value }))}><option value="">Choose a decision</option><option value="yes">Payable whole day</option><option value="no">Unpaid whole day</option></Select>}</Field>
       : <Field label={`Repayment in loan currency (${plan.currency})`} required>{({ id }) => <Input id={id} disabled={busy} inputMode="decimal" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />}</Field>}
     <Field label="Reason" required>{({ id }) => <Textarea id={id} disabled={busy} value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} />}</Field>
+    </fieldset>}
+    </> : null}
   </Modal>;
 }
 

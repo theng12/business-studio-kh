@@ -41,6 +41,19 @@ export function periodChoices(month, cycle) {
 export function defaultPayDate(month, settings) {
   return `${addMonths(month, 1)}-${String(settings.payday || 10).padStart(2, '0')}`;
 }
+export function statutoryOverrideForm(value) {
+  return { applyTax: value?.applyTax === undefined ? 'inherit' : value.applyTax ? 'yes' : 'no',
+    applyNssf: value?.applyNssf === undefined ? 'inherit' : value.applyNssf ? 'yes' : 'no', reason: value?.reason || '' };
+}
+export function statutoryOverridePayload(form) {
+  const flags = {};
+  for (const key of ['applyTax', 'applyNssf']) {
+    const value = form?.[key] ?? 'inherit';
+    if (!['inherit', 'yes', 'no'].includes(value)) throw new Error('Choose Inherit, Apply or Do not apply');
+    if (value !== 'inherit') flags[key] = value === 'yes';
+  }
+  return Object.keys(flags).length ? { ...flags, reason: required(form?.reason, 'Statutory override reason') } : null;
+}
 export function createRunPayload(companyId, form, settings, today = todayKey()) {
   required(companyId, 'Company');
   const period = periodChoices(form.month, settings.payCycle).find(x => x.value === form.period);
@@ -50,6 +63,7 @@ export function createRunPayload(companyId, form, settings, today = todayKey()) 
   form.employeeIds.forEach(id => required(id, 'Staff member'));
   if (!calendarDate(form.payDate)) throw new Error('Choose a valid pay date');
   const payload = { companyId, kind: period.kind, periodStart: period.periodStart, periodEnd: period.periodEnd, payDate: form.payDate, employeeIds: [...form.employeeIds], statutoryRateSetId: form.statutoryRateSetId || null };
+  if (form.statutoryOverride !== undefined) payload.statutoryOverride = statutoryOverridePayload(form.statutoryOverride);
   if (period.kind === 'advance') {
     payload.currency = form.currency;
     payload.advanceMinor = amountMinor(form.advance, form.currency);
@@ -86,7 +100,8 @@ export function guardRun(run, companyId, id) {
     if (line.runId !== run.id || !line.employeeId || !['USD', 'KHR'].includes(line.currency) || !Array.isArray(line.blockers) || !line.snapshot) throw new Error('Invalid payroll line response');
     for (const key of ['baseMinor', 'grossMinor', 'netMinor', 'paidMinor', 'remainingMinor']) if (!Number.isSafeInteger(line[key])) throw new Error('Invalid payroll amount response');
     if (line.remainingLoanDeductionMinor !== undefined && (!Number.isSafeInteger(line.remainingLoanDeductionMinor) || line.remainingLoanDeductionMinor < 0)) throw new Error('Invalid loan withholding balance');
-    if (line.snapshot.employee?.id && line.snapshot.employee.id !== line.employeeId || line.snapshot.policy?.companyId && line.snapshot.policy.companyId !== companyId || line.snapshot.policy?.employeeId && line.snapshot.policy.employeeId !== line.employeeId) throw new Error('Payroll input snapshot does not match this employee');
+    if (line.snapshot.employee?.id && line.snapshot.employee.id !== line.employeeId || [line.snapshot.policy, line.snapshot.employeePolicy, line.snapshot.effectivePolicy].some(p => p?.companyId && p.companyId !== companyId || p?.employeeId && p.employeeId !== line.employeeId)) throw new Error('Payroll input snapshot does not match this employee');
+    if (line.snapshot.leaveBalances !== undefined && (!Array.isArray(line.snapshot.leaveBalances) || !calendarDate(line.snapshot.leaveBalanceAsOf) || line.snapshot.leaveBalances.some(b => !b || typeof b.leaveTypeId !== 'string' || !b.leaveTypeId || !Number.isFinite(b.days)))) throw new Error('Invalid payroll leave balance snapshot');
   }
   guardRows(run.payments, companyId);
   if (run.payments.some(payment => !Number.isSafeInteger(payment.amountMinor) || !run.lines.some(line => line.id === payment.lineId))) throw new Error('Payment response does not match this run');
@@ -101,7 +116,8 @@ export function isDefiniteRejection(error, method) {
   if (error?.code === 'RPC_OUTCOME_UNKNOWN' || /RPC_OUTCOME_UNKNOWN|may still have completed|stopped answering before it confirmed/i.test(message)) return false;
   if (error?.code === 'BAD_REQUEST' || /^Bad request:/.test(message)) return true;
   const prefixes = {
-    create: ['Payroll period must have ended', 'Payroll must be within one calendar month', 'Monthly policy requires', 'Separate periods must', 'Advance policy requires', 'Choose 1 to 500 distinct staff members', 'Explicit positive', 'Advance must'],
+    create: ['Payroll period must have ended', 'Payroll must be within one calendar month', 'Monthly policy requires', 'Separate periods must', 'Advance policy requires', 'Choose 1 to 500 distinct staff members', 'Explicit positive', 'Advance must', 'Statutory override', 'Unsupported statutory override'],
+    updateLine: ['Payroll revision changed', 'Payroll line was superseded', 'Approved payroll is frozen', 'Statutory override', 'Unsupported statutory override'],
     pay: ['Only approved payroll can be paid', 'Payment date must', 'Payment exceeds remaining take-home pay', 'Advance is frozen after settlement approval', 'Loan balance changed after approval', 'A zero cash payment must'],
     reversePayment: ['Cannot reverse a reversal', 'Voided payroll is frozen', 'Void the dependent settlement before reversing its advance', 'Payment reversal reason is required'],
     setPayRate: ['A pay rate already exists for this date', 'Pay-rate reason is required'],
@@ -190,6 +206,7 @@ export function employeePolicyPayload(companyId, employeeId, form) {
   return result;
 }
 export function decisionPayload(run, line, form) {
+  if (form.kind === 'statutory') return { companyId: run.companyId, id: line.id, expectedRevision: run.revision, patch: { statutoryOverride: statutoryOverridePayload(form) } };
   const reason = required(form.reason, 'Decision reason');
   let patch;
   if (form.kind === 'day') {
