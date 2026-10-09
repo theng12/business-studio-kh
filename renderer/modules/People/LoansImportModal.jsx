@@ -3,7 +3,7 @@ import { useAppStore } from '../../store/index.js';
 import { useUserCaps } from '../../components/Sidebar.jsx';
 import { hasCap } from '../../lib/capabilities.js';
 import { Badge, Button, Modal, Pagination, Select, paginate } from '../../components/ui.jsx';
-import { formatMinor } from './loansModel.js';
+import { formatMinor, pendingAfterFailure } from './loansModel.js';
 import { buildImportRows, formatImportCell, guessMapping, hasUniqueTargets, importApplyOutcome, isImportCompanyCurrent, makeImportOperation, retryImportOperation, sampleValues } from './loanImportModel.js';
 
 const errorText = (error) => error?.message || String(error);
@@ -164,8 +164,8 @@ export function LoansImportModal({ open, companyId, pendingOperation, onClose, o
     setUncertain(true);
     const attempt = { context, command };
     applying.current = attempt;
-    onPendingOperation(command);
     try {
+      onPendingOperation(command);
       const value = await window.api.loans.importApply(retryImportOperation(command));
       const outcome = importApplyOutcome(value);
       if (outcome === 'unknown') {
@@ -192,10 +192,21 @@ export function LoansImportModal({ open, companyId, pendingOperation, onClose, o
       }
     } catch (err) {
       // Already retained before IPC. An older failed attempt must not resurrect a resolved batch.
+      let failure = err;
+      if (pendingAfterFailure(command, err) === null) {
+        try {
+          onPendingOperation(null, requestedCompany, command);
+          if (!current(context)) return;
+          setOperation(null);
+          setUncertain(false);
+          setError(errorText(err));
+          return;
+        } catch (storageError) { failure = storageError; }
+      }
       if (!current(context)) return;
       setOperation(command);
       setUncertain(true);
-      setError(`The import result could not be confirmed: ${errorText(err)}. Retry this exact batch with the same operation key.`);
+      setError(`The import result could not be confirmed: ${errorText(failure)}. Retry this exact batch with the same operation key.`);
     } finally {
       if (applying.current === attempt) applying.current = null;
       if (current(context)) setBusy(false);
@@ -215,7 +226,7 @@ export function LoansImportModal({ open, companyId, pendingOperation, onClose, o
 
   return <Modal open={open} onClose={onClose} title="Import opening loan balances" size="xl" busy={busy} footer={footer}>
     <ol aria-label="Import steps">
-      {['Pick a file', 'Match columns', 'Review'].map((label, index) => <li key={label}>{['pick', 'map', 'review'].indexOf(step === 'done' ? 'review' : step) === index ? <strong>{index + 1}. {label}</strong> : `${index + 1}. ${label}`}</li>)}
+      {['Pick a file', 'Match columns', 'Review'].map((label, index) => <li key={label}>{['pick', 'map', 'review'].indexOf(step === 'done' ? 'review' : step) === index ? <strong>{label}</strong> : label}</li>)}
     </ol>
     {error ? <p className="field__error" role="alert">{error}</p> : null}
 

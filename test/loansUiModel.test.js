@@ -37,10 +37,11 @@ async function loansHarness() {
   const store = (select) => select({ activeCompanyId: context.company, addToast() {} });
   store.getState = () => ({ activeCompanyId: context.company });
   const result = await build({ entryPoints: [new URL('../renderer/modules/People/Loans.jsx', testUrl).pathname], bundle: true, write: false, format: 'cjs', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment', banner: { js: 'const React = require("react");' }, plugins: [{ name: 'boundaries', setup(builder) {
-    builder.onResolve({ filter: /.*/ }, ({ path, importer }) => importer && !path.endsWith('loansModel.js') ? { path, external: true } : undefined);
+    builder.onResolve({ filter: /.*/ }, ({ path, importer }) => importer && !/\/(?:loansModel|loanPending)\.js$/.test(path) ? { path, external: true } : undefined);
   } }] });
   const module = { exports: {} };
-  runInNewContext(result.outputFiles[0].text, { module, exports: module.exports, Date, Intl, crypto: { randomUUID: () => 'operation-1' }, window: { api: { loans: { voidDraft: async (args) => { calls.push(args); return loan; } } } }, require(path) {
+  const saved = new Map();
+  runInNewContext(result.outputFiles[0].text, { module, exports: module.exports, Date, Intl, structuredClone, crypto: { randomUUID: () => 'operation-1' }, window: { localStorage: { getItem: (key) => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: (key) => saved.delete(key) }, api: { loans: { voidDraft: async (args) => { calls.push(args); return loan; } } } }, require(path) {
     if (path === 'react') return react;
     if (path.endsWith('/ui.jsx')) return ui;
     if (path.endsWith('/store/index.js')) return { useAppStore: store };
@@ -148,7 +149,8 @@ test('uncertain mutation retry retains its exact company, operation id and paylo
   const payload = { id: 'loan-1', amountMinor: 2500, entryDate: '2026-10-09', source: 'cash' };
   const command = makeOperation('repay', 'company-a', 'operation-1', payload);
   assert.deepEqual(makeOperation('repay', 'company-a', 'operation-1', payload), command);
-  assert.equal(command.payload, payload);
+  assert.deepEqual(command.payload, payload);
+  assert.notEqual(command.payload, payload);
   assert.equal(command.operationId, 'operation-1');
   assert.equal(command.companyId, 'company-a');
   assert.equal(pendingAfterFailure(command, new Error('Connection closed')), command);
@@ -160,6 +162,19 @@ test('definite IPC rejections release the pending key so a corrected payload can
   assert.equal(pendingAfterFailure(command, new Error("Error invoking remote method 'loans:repay': Error: Bad request: Future financial postings are not supported")), null);
   assert.equal(pendingAfterFailure(command, new Error('You do not have permission to access payroll or loans')), null);
   assert.equal(pendingAfterFailure(command, new Error('Timed out waiting for the server')), command);
+});
+
+test('the actual repayment allocator overpayment is a definite rejection unless the RPC outcome is unknown', () => {
+  const command = makeOperation('repay', 'company-a', 'operation-1', { id: 'loan-1', amountMinor: 50001 });
+  let failure;
+  try { require('../main/util/loanCalc').allocateRepayment({ principalMinor: 50000, interestMinor: 0, amountMinor: 50001 }); }
+  catch (error) { failure = error; }
+  assert.equal(failure.message, 'Repayment exceeds outstanding debt (overpayment)');
+  assert.equal(pendingAfterFailure(command, failure), null);
+  assert.equal(pendingAfterFailure(command, new Error(`Error invoking remote method 'loans:repay': Error: ${failure.message}`)), null);
+  assert.equal(pendingAfterFailure(command, Object.assign(new Error(failure.message), { code: 'RPC_OUTCOME_UNKNOWN' })), command);
+  assert.equal(pendingAfterFailure(command, new Error(`${failure.message}; operation may still have completed`)), command);
+  assert.equal(pendingAfterFailure(command, new Error(`Unconfirmed: ${failure.message}`)), command);
 });
 
 test('late results are accepted only for the current request and company', () => {

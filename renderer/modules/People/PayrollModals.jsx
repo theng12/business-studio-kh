@@ -8,9 +8,9 @@ import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { useHrTick } from './hrHooks.js';
 import { commandBook, createRunPayload, dateLabel, defaultPayDate, decisionPayload, errorText, guardRun, isDefiniteRejection, lastEndedPeriod, minorToInput, moneyLabel, paymentPayload, periodChoices, requestScope, runActions, statutoryOverrideForm, todayKey } from './payrollUiModel.js';
 
-// Session storage is limited to unresolved command payloads, never full payslips
-// or loaded salary records. UI reads are gated by company and payroll.manage.
-export const pendingPayrollCommands = commandBook(undefined, typeof window === 'undefined' ? null : window.sessionStorage);
+// Durable storage retains only unresolved command payloads across app restarts,
+// never full payslips. Acquisition is guarded inside commandBook; salary UI stays gated.
+export const pendingPayrollCommands = commandBook(undefined, () => window.localStorage);
 const storeCaps = s => s.appMode === 'client' ? (s.clientConnection?.user?.caps || []) : ['*'];
 const storeKey = s => `${s.activeCompanyId || ''}|${JSON.stringify(storeCaps(s))}`;
 

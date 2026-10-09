@@ -10,6 +10,7 @@ import { useHrTick, usePager } from './hrHooks.js';
 import { LoansModals } from './LoansModals.jsx';
 import { LoansImportModal } from './LoansImportModal.jsx';
 import { endOfMonth, filterLoans, formatMinor, loanDialogIsCurrent, makeOperation, pendingAfterFailure, previousMonth, requestIsCurrent, totalsByCurrency } from './loansModel.js';
+import { clearLoanPending, readLoanPending, retainLoanPending } from './loanPending.js';
 
 const STATUSES = [
   { value: 'all', label: 'All loans' }, { value: 'draft', label: 'Draft' }, { value: 'active', label: 'Active' },
@@ -45,13 +46,9 @@ export function Loans() {
   const [projection, setProjection] = useState(null);
   const [projectionState, setProjectionState] = useState({ key: null, loading: false, error: null });
   const [dialog, setDialog] = useState(null);
-  const [pendingByCompany, setPendingByCompany] = useState({});
-  const pendingRef = useRef({});
+  const [, setPendingVersion] = useState(0);
   const [loanImportOpen, setLoanImportOpen] = useState(false);
   const [loanImportCompanyId, setLoanImportCompanyId] = useState(null);
-  const [pendingImportByCompany, setPendingImportByCompany] = useState({});
-  const pendingImportRef = useRef({});
-  pendingImportRef.current = pendingImportByCompany;
   const pager = usePager([activeCompanyId, status, search]);
   const listKey = activeCompanyId;
   const currentList = list.companyId === listKey ? list : emptyList;
@@ -66,10 +63,24 @@ export function Loans() {
   const selectedKey = selectedCompanyId === activeCompanyId ? loanKey(selectedCompanyId, selectedLoanId) : null;
   const currentDetail = detail?.key === selectedKey ? detail.loan : null;
   const detailLoading = !!selectedKey && detail?.key !== selectedKey;
-  const pending = activeCompanyId ? pendingByCompany[activeCompanyId] : null;
-  const pendingImport = activeCompanyId ? pendingImportByCompany[activeCompanyId] : null;
-  const writesBlocked = Boolean(pending || pendingImport);
+  let retained = null, pendingError = null;
+  if (activeCompanyId && canManage) {
+    try { retained = readLoanPending(activeCompanyId); }
+    catch (error) { pendingError = error.message; }
+  }
+  const pending = retained?.kind === 'command' ? retained.operation : null;
+  const pendingImport = retained?.kind === 'import' ? retained.operation : null;
+  const writesBlocked = Boolean(pending || pendingImport || pendingError);
   const retryLoad = () => setReload((value) => value + 1);
+  const pendingChanged = () => setPendingVersion((value) => value + 1);
+
+  useEffect(() => {
+    canManageRef.current = canManage;
+    return () => {
+      contextGeneration.current += 1;
+      canManageRef.current = false;
+    };
+  }, [canManage]);
 
   useEffect(() => {
     const requestId = ++listRequest.current;
@@ -127,19 +138,21 @@ export function Loans() {
 
   async function retryPending(companyId) {
     if (useAppStore.getState().activeCompanyId !== companyId || !canManageRef.current) return false;
-    const command = pendingRef.current[companyId];
-    if (!command) return false;
-    return execute(command);
+    try {
+      const record = readLoanPending(companyId);
+      return record?.kind === 'command' ? execute(record.operation) : false;
+    } catch (error) { addToast(error.message, 'error'); return false; }
   }
 
   async function execute(command) {
     const generation = contextGeneration.current;
     try {
-      const result = await window.api.loans[command.method](command.args);
-      const next = { ...pendingRef.current };
-      delete next[command.companyId];
-      pendingRef.current = next;
-      setPendingByCompany(next);
+      retainLoanPending('command', command); // Must succeed before any money call, including retries.
+      pendingChanged();
+      const result = await window.api.loans[command.method](structuredClone(command.args));
+      if (!result?.id || result.companyId !== command.companyId) throw new Error('The loan result could not be confirmed. Retry the same request.');
+      clearLoanPending('command', command);
+      pendingChanged();
       const stillCurrent = generation === contextGeneration.current
         && useAppStore.getState().activeCompanyId === command.companyId && canManageRef.current;
       if (stillCurrent) {
@@ -149,20 +162,23 @@ export function Loans() {
       }
       return stillCurrent;
     } catch (error) {
-      if (pendingAfterFailure(command, error) === null && pendingRef.current[command.companyId] === command) {
-        const next = { ...pendingRef.current };
-        delete next[command.companyId];
-        pendingRef.current = next;
-        setPendingByCompany(next);
+      let failure = error;
+      if (pendingAfterFailure(command, error) === null) {
+        try { clearLoanPending('command', command); pendingChanged(); }
+        catch (storageError) { failure = storageError; }
       }
-      if (generation === contextGeneration.current && useAppStore.getState().activeCompanyId === command.companyId && canManageRef.current) addToast(error?.message || String(error), 'error');
+      if (generation === contextGeneration.current && useAppStore.getState().activeCompanyId === command.companyId && canManageRef.current) addToast(failure?.message || String(failure), 'error');
       return false;
     }
   }
 
   async function submitAction(type, payload, companyId = activeCompanyId) {
-    if (!companyId || useAppStore.getState().activeCompanyId !== companyId || !canManageRef.current || pendingImportRef.current[companyId]) return false;
-    const existing = pendingRef.current[companyId];
+    if (!companyId || useAppStore.getState().activeCompanyId !== companyId || !canManageRef.current) return false;
+    let record;
+    try { record = readLoanPending(companyId); }
+    catch (error) { addToast(error.message, 'error'); return false; }
+    if (record?.kind === 'import') return false;
+    const existing = record?.operation;
     if (existing) {
       if (existing.method !== type || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
         addToast('Retry or resolve the pending financial action before starting another one for this company.', 'error');
@@ -170,15 +186,12 @@ export function Loans() {
       }
       return execute(existing);
     }
-    const operationId = type === 'approve' ? null : globalThis.crypto?.randomUUID?.();
-    if (type !== 'approve' && !operationId) {
+    const operationId = globalThis.crypto?.randomUUID?.();
+    if (!operationId) {
       addToast('This device could not create a safe operation ID. Please reload and try again.', 'error');
       return false;
     }
     const command = makeOperation(type, companyId, operationId, payload);
-    const next = { ...pendingRef.current, [companyId]: command };
-    pendingRef.current = next;
-    setPendingByCompany(next);
     return execute(command);
   }
 
@@ -219,17 +232,17 @@ export function Loans() {
   };
   const retainLoanImport = (operation, companyId = operation?.companyId, completed) => {
     if (!companyId) return;
-    if (completed && pendingImportRef.current[companyId]?.operationId !== completed.operationId) return;
-    const next = { ...pendingImportRef.current };
-    if (operation) next[companyId] = operation;
-    else delete next[companyId];
-    pendingImportRef.current = next;
-    setPendingImportByCompany(next);
+    if (operation) {
+      if (operation.companyId !== companyId || useAppStore.getState().activeCompanyId !== companyId || !canManageRef.current) throw new Error('The loan import context is no longer current.');
+      retainLoanPending('import', operation);
+    } else if (completed) clearLoanPending('import', completed);
+    pendingChanged();
   };
 
   return (
     <div className="page page--hr-loans">
       <PageHeader title="Loans" subtitle="Company-scoped staff loans, balances and financial history." actions={<><Button onClick={openLoanImport} disabled={writesBlocked || !currentList.companyId}>Import opening balances…</Button><Button variant="primary" onClick={() => openDialog({ type: 'create' })} disabled={writesBlocked || !currentList.companyId}>+ New loan</Button></>} />
+      {pendingError ? <LoadError message={pendingError} onRetry={retryLoad} /> : null}
       {pending ? <div className="card">
         <p><strong>A financial action is waiting for a confirmed result.</strong> Keep the same request key and payload when retrying; do not submit it as a new action.</p>
         <Button size="sm" variant="primary" onClick={async () => { if (await retryPending(activeCompanyId)) setDialog(null); }}>Retry the same request</Button>
@@ -323,7 +336,7 @@ export function Loans() {
         key={activeCompanyId}
         open={loanImportOpen && loanImportCompanyId === activeCompanyId}
         companyId={loanImportCompanyId}
-        pendingOperation={pendingImport}
+        pendingOperation={loanImportCompanyId === activeCompanyId ? pendingImport : null}
         onClose={() => setLoanImportOpen(false)}
         onPendingOperation={retainLoanImport}
         onDone={(companyId) => { if (useAppStore.getState().activeCompanyId === companyId) setReload((value) => value + 1); }}

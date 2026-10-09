@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const esbuild = require('esbuild');
+const { runInNewContext } = require('node:vm');
 // Store initialization reads preferences; this isolated process has no saved UI state.
 Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { getItem: () => null, setItem() {} } });
 
@@ -17,6 +18,10 @@ function load(file, extraExports = '') {
 }
 const modelPath = 'renderer/modules/People/payrollUiModel.js';
 const M = fs.existsSync(path.join(ROOT, modelPath)) ? load(modelPath) : {};
+function memoryStorage() {
+  const values = new Map();
+  return { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+}
 
 test('typed wages preserve cents and whole riel, rejecting rounding, overflow and unknown currencies', () => {
   assert.equal(typeof M.amountMinor, 'function');
@@ -82,7 +87,7 @@ test('response guards reject wrong-company nested salary data and malformed mone
 
 test('unknown-outcome retries retain exact operation and payload, reject changes and prevent concurrent duplicates', async () => {
   assert.equal(typeof M.commandBook, 'function');
-  const book = M.commandBook(() => 'op-fixed');
+  const book = M.commandBook(() => 'op-fixed', memoryStorage());
   const input = { companyId: 'A', id: 'l1', amountMinor: 1234, method: 'bank', paidAt: '2026-10-09' };
   let calls = 0;
   await assert.rejects(book.send('pay', input, async payload => {
@@ -120,7 +125,7 @@ test('reload restores original unknown operation; journal failure prevents a mon
 
 test('server Bad request rejection clears retry lock while transport failures retain it', async () => {
   assert.equal(typeof M.commandBook, 'function');
-  const book = M.commandBook(() => 'op-1');
+  const book = M.commandBook(() => 'op-1', memoryStorage());
   await assert.rejects(book.send('create', { companyId: 'A' }, async () => { throw new Error("Error invoking remote method 'payroll:create': Error: Bad request: Payroll period must have ended"); }));
   assert.deepEqual(book.pending('A'), []);
   await assert.rejects(book.send('pay', { companyId: 'A', id: 'l1', amountMinor: 1300 }, async () => { throw new Error("Error invoking remote method 'payroll:pay': Error: Payment exceeds remaining take-home pay"); }));
@@ -247,7 +252,7 @@ function requestHookFixture(api = {}, hook = hookHarness()) {
   const code = esbuild.transformSync(fs.readFileSync(path.join(ROOT, 'renderer/modules/People/PayrollModals.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs', jsx: 'automatic' }).code;
   const mod = { exports: {} };
   const stubs = { react: hook.React, 'react/jsx-runtime': hook.runtime, '../../store/index.js': { useAppStore }, '../../components/Sidebar.jsx': { useUserCaps: () => state.clientConnection.user?.caps || ['*'] }, '../../lib/capabilities.js': load('renderer/lib/capabilities.js'), '../../lib/companySwitch.js': { registerCompanySwitchFlusher: fn => { flushers.add(fn); return () => flushers.delete(fn); } }, '../../components/ui.jsx': load('renderer/components/ui.jsx'), '../../components/SaveStatus.jsx': {}, './hrHooks.js': { useHrTick: () => 0 }, './payrollUiModel.js': M };
-  global.window = { api: { payroll: api } };
+  global.window = { api: { payroll: api }, localStorage: memoryStorage() };
   new Function('require', 'module', 'exports', code)(id => { assert.ok(id in stubs, id); return stubs[id]; }, mod, mod.exports);
   return { hook, stubs, toasts, modals: mod.exports, render: () => hook.render(() => mod.exports.usePayrollRequests('A', 'run1')),
     flush: async () => { for (const fn of flushers) await fn(); },
@@ -774,5 +779,82 @@ test('preserved decision draft is hidden immediately when company, run, employee
       assert.equal(nodes(tree, n => n.type === fixture.modals.PayrollStatutoryFields).length, 0, change);
       assert.equal(nodes(tree, n => n.props.children === 'Save decision and recalculate')[0].props.disabled, true, change);
     } finally { fixture.cleanup(); }
+  }
+});
+
+function loadActualPayrollJournal(window) {
+  const code = esbuild.transformSync(fs.readFileSync(path.join(ROOT, 'renderer/modules/People/PayrollModals.jsx'), 'utf8'), { loader: 'jsx', format: 'cjs', jsx: 'automatic' }).code;
+  const mod = { exports: {} };
+  runInNewContext(code, { module: mod, exports: mod.exports, window,
+    require: name => name === './payrollUiModel.js' ? M : {} });
+  return mod.exports.pendingPayrollCommands;
+}
+
+test('actual payroll journal survives app restart with fresh session storage and retries the exact original payment', async () => {
+  const localStorage = memoryStorage(), input = { companyId: 'A', id: 'line1', amountMinor: 10000, method: 'bank', paidAt: '2026-10-09', reference: 'Lost reply' };
+  const first = loadActualPayrollJournal({ localStorage, sessionStorage: memoryStorage() });
+  let original;
+  await assert.rejects(first.send('pay', input, async payload => { original = payload; throw new Error('RPC_OUTCOME_UNKNOWN'); }), /RPC_OUTCOME_UNKNOWN/);
+  const restarted = loadActualPayrollJournal({ localStorage, sessionStorage: memoryStorage() });
+  assert.deepEqual(restarted.pending('A')[0]?.payload, original, 'fresh renderer and session must retain the durable original key and all fields');
+  let calls = 0;
+  await assert.rejects(restarted.send('pay', { ...input, amountMinor: 20000 }, async () => { calls++; }), /original payload/);
+  await restarted.send('pay', input, async payload => {
+    calls++; assert.deepEqual(payload, original);
+    assert.deepEqual(JSON.parse(localStorage.getItem('Payroll.pendingOperations.v1'))[0].payload, original, 'journal must exist before dispatch');
+    return { id: 'existing-payment-receipt' };
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(loadActualPayrollJournal({ localStorage, sessionStorage: memoryStorage() }).pending('A'), []);
+});
+
+test('actual payroll module imports safely but blocks financial dispatch without readable writable durable storage', async () => {
+  const cases = [
+    ['no renderer window', undefined],
+    ['missing', {}],
+    ['denied getter', { get localStorage() { throw new Error('Storage access denied'); } }],
+    ['read failure', { localStorage: { getItem() { throw new Error('Storage read denied'); }, setItem() {} } }],
+    ['write failure', { localStorage: { getItem: () => null, setItem() { throw new Error('Quota exceeded'); } } }],
+    ['unretained write', { localStorage: { getItem: () => null, setItem() {} } }],
+    ['readback failure', { localStorage: { reads: 0, getItem() { if (this.reads++) throw new Error('Storage read denied'); return null; }, setItem() {} } }],
+    ['corrupt', { localStorage: { getItem: () => '{broken', setItem() { assert.fail('must not overwrite unreadable journal'); } } }],
+  ];
+  for (const [label, window] of cases) {
+    let book, calls = 0;
+    assert.doesNotThrow(() => { book = loadActualPayrollJournal(window); }, label);
+    await assert.rejects(book.send('pay', { companyId: 'A', id: 'line1', amountMinor: 10000 }, async () => { calls++; }), /payroll retry/i, label);
+    assert.equal(calls, 0, label);
+  }
+  let calls = 0;
+  await assert.rejects(M.commandBook(() => 'no-storage').send('pay', { companyId: 'A', id: 'line1' }, async () => { calls++; }), /payroll retry/i);
+  assert.equal(calls, 0, 'model callers also require an explicit working journal');
+});
+
+test('durable known-outcome clearing removes only the matching command and retains other company retries', async () => {
+  const localStorage = memoryStorage();
+  const book = loadActualPayrollJournal({ localStorage });
+  for (const companyId of ['A', 'B']) await assert.rejects(book.send('pay', { companyId, id: 'line1', amountMinor: 10000 }, async () => { throw new Error('RPC_OUTCOME_UNKNOWN'); }));
+  const other = book.pending('B')[0].payload;
+  await assert.rejects(book.send('pay', book.pending('A')[0].payload, async () => { throw new Error('Bad request: Payment exceeds remaining take-home pay'); }), /Bad request/);
+  let restarted = loadActualPayrollJournal({ localStorage });
+  assert.deepEqual(restarted.pending('A'), []); assert.deepEqual(restarted.pending('B')[0]?.payload, other);
+  await restarted.send('pay', other, async payload => { assert.deepEqual(payload, other); return { id: 'receipt-B' }; });
+  restarted = loadActualPayrollJournal({ localStorage });
+  assert.deepEqual(restarted.pending('A'), []); assert.deepEqual(restarted.pending('B'), []);
+});
+
+test('failed durable cleanup retains retry identity in memory and across restart for success or rejection', async () => {
+  for (const rejected of [false, true]) {
+    const storage = memoryStorage(); let failClear = true, calls = 0;
+    const localStorage = { getItem: storage.getItem, setItem(key, value) { if (value === '[]' && failClear) throw new Error('Cleanup denied'); storage.setItem(key, value); } };
+    const book = loadActualPayrollJournal({ localStorage });
+    const input = { companyId: 'A', id: 'line1', amountMinor: 10000 };
+    await assert.rejects(book.send('pay', input, async () => { calls++; if (rejected) throw new Error('Bad request: rejected'); return { id: 'receipt' }; }), /Cleanup denied/);
+    const original = book.pending('A')[0].payload;
+    const restarted = loadActualPayrollJournal({ localStorage });
+    assert.deepEqual(restarted.pending('A')[0].payload, original);
+    failClear = false;
+    await restarted.send('pay', original, async payload => { calls++; assert.deepEqual(payload, original); return { id: 'receipt' }; });
+    assert.equal(calls, 2); assert.deepEqual(restarted.pending('A'), []);
   }
 });

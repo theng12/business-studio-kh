@@ -127,22 +127,25 @@ export function isDefiniteRejection(error, method) {
   return ['You do not have permission to access payroll or loans', 'Only an admin may perform this financial action', 'That belongs to a different company', 'Pick a company first', 'Company not found', 'Payroll line not found in this company', 'Payment not found in this company', 'Rate set not found in this company', 'Staff member not found in this company', ...(prefixes[method] || [])].some(prefix => message.startsWith(prefix));
 }
 
-/** Pending payloads survive dialogs/company changes and same-tab reloads. */
+/** A working durable journal is mandatory before any financial dispatch. */
 export function commandBook(newId = () => globalThis.crypto.randomUUID(), storage = null) {
   const records = new Map();
   const keyOf = (method, payload) => `${payload.companyId}|${method}|${payload.id || 'new'}`;
   const journalKey = 'Payroll.pendingOperations.v1';
   let journalError = null;
-  if (storage) {
-    try {
-      const saved = JSON.parse(storage.getItem(journalKey) || '[]');
-      if (!Array.isArray(saved) || saved.some(r => !['create', 'pay', 'reversePayment'].includes(r.method) || !r.payload?.companyId || !r.payload?.operationId)) throw new Error('Invalid payroll retry journal');
-      for (const record of saved) records.set(keyOf(record.method, record.payload), { ...record, running: false });
-    } catch (error) { journalError = error; }
-  }
+  try {
+    storage = typeof storage === 'function' ? storage() : storage;
+    if (!storage || typeof storage.getItem !== 'function' || typeof storage.setItem !== 'function') throw new Error('Durable storage is unavailable');
+    const saved = JSON.parse(storage.getItem(journalKey) ?? '[]');
+    if (!Array.isArray(saved) || saved.some(r => !['create', 'pay', 'reversePayment'].includes(r.method) || !r.payload?.companyId || !r.payload?.operationId)) throw new Error('Invalid payroll retry journal');
+    for (const record of saved) records.set(keyOf(record.method, record.payload), { ...record, running: false });
+  } catch (error) { journalError = error; }
   const persist = () => {
-    if (!storage) return;
-    try { storage.setItem(journalKey, JSON.stringify([...records.values()].map(({ running: _running, ...r }) => r))); }
+    try {
+      const saved = JSON.stringify([...records.values()].map(({ running: _running, ...r }) => r));
+      storage.setItem(journalKey, saved);
+      if (storage.getItem(journalKey) !== saved) throw new Error('Durable storage did not retain the request');
+    }
     catch (error) { throw new Error(`Cannot retain the payroll retry request: ${errorText(error)}`, { cause: error }); }
   };
   return {
@@ -162,7 +165,7 @@ export function commandBook(newId = () => globalThis.crypto.randomUUID(), storag
       }
       record.running = true;
       try {
-        persist(); // Persist before dispatch: a reload cannot create a new payment key.
+        persist(); // Verify durable storage before dispatch, including after a restart.
         const result = await invoke(structuredClone(record.payload));
         records.delete(key);
         try { persist(); } catch (error) { records.set(key, record); throw error; }
@@ -171,7 +174,10 @@ export function commandBook(newId = () => globalThis.crypto.randomUUID(), storag
         record.error = errorText(error);
         // The transactional backend explicitly rejects before any committed event.
         // Transport failures, timeouts and malformed responses remain unresolved.
-        if (isDefiniteRejection(error, method)) { records.delete(key); persist(); }
+        if (isDefiniteRejection(error, method)) {
+          records.delete(key);
+          try { persist(); } catch (storageError) { records.set(key, record); throw storageError; }
+        }
         throw error;
       } finally { record.running = false; }
     },
