@@ -41,6 +41,18 @@ test('timed-out mutations are marked unknown while reads retain normal timeout h
   assert.match(err.message, /refresh the current data before retrying/);
 });
 
+test('HR2 projection, official FX and own kiosk reads cannot claim an unknown financial outcome', () => {
+  for (const channel of ['loans:project', 'payroll:fetchSalaryTaxRate', 'kiosk:payroll', 'kiosk:loans']) {
+    assert.equal(isLikelyMutationChannel(channel), false, channel);
+  }
+  // Exact channels only: a similarly named action in another domain earns no read exemption.
+  for (const channel of ['loans:repay', 'loans:accrue', 'loans:approve', 'loans:voidDraft', 'loans:changeRate',
+    'loans:postpone', 'loans:writeOff', 'loans:reverseEntry', 'payroll:pay', 'payroll:approve',
+    'payroll:reversePayment', 'kiosk:clock', 'other:project', 'other:fetchSalaryTaxRate', 'other:payroll', 'other:loans']) {
+    assert.equal(isLikelyMutationChannel(channel), true, channel);
+  }
+});
+
 test('overlay operation IDs are validated and outcome reads keep overlay capability gating', () => {
   const { getValidator } = require('../main/server/validators');
   const { channelCapability } = require('../main/util/capabilities');
@@ -150,6 +162,16 @@ test('the production RPC client reports unknown while a delayed HTTP mutation co
     await server.stopServer();
     if (previousUsers) require.cache[usersPath] = previousUsers;
     else delete require.cache[usersPath];
+  }
+});
+
+test('HR2 read channels use the ordinary read deadline while financial mutations keep the write deadline', () => {
+  const { rpcTimeoutMs } = require('../main/client');
+  for (const channel of ['loans:project', 'payroll:fetchSalaryTaxRate', 'kiosk:payroll', 'kiosk:loans']) {
+    assert.equal(rpcTimeoutMs(channel), 20_000, channel);
+  }
+  for (const channel of ['loans:repay', 'payroll:pay', 'loans:approve', 'loans:voidDraft', 'other:project']) {
+    assert.equal(rpcTimeoutMs(channel), 120_000, channel);
   }
 });
 
