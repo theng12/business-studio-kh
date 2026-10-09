@@ -1,8 +1,7 @@
 # HR2 payroll and loans — API reference
 
-**Implementation reference, 2026-10-09. Not a release acceptance record.** The
-current release remains 0.1.98 until the implementation plan's review, verification,
-installer and merge gates finish. Owner decisions: `docs/PEOPLE_AND_FUEL_PLAN.md`
+**Implementation reference for 0.1.99, 2026-10-09.** Release acceptance evidence lives in
+`docs/tasks/HANDOFF.md` and the implementation plan. Owner decisions: `docs/PEOPLE_AND_FUEL_PLAN.md`
 §7c. Statutory evidence and unresolved applicability: `docs/HR2_STATUTORY_RESEARCH.md`.
 
 ## Boundaries
@@ -182,7 +181,12 @@ Financial mutations with `operationId` store a company-scoped payload receipt in
 the same transaction as the money/audit entries. Identical retries return the
 same result; reusing the key for different content is refused. A timeout is an
 unknown outcome, not proof of failure. Keep the original payload/key and reconcile
-before issuing a different write. Read-only projection/rate retrieval/kiosk reads
+before issuing a different write. The renderer retains unresolved payroll commands and one
+loan command/import batch per company in durable local storage, not just component state or
+session storage. Navigation and app restarts retain the same payload/key. Unavailable or corrupt
+storage blocks financial dispatch; confirmed outcomes clear only matching recovery records.
+Loaded payslips, credentials and employee directories are not stored in these recovery journals.
+Read-only projection/rate retrieval/kiosk reads
 must not be reported as unknown mutations.
 
 Financial history is capability- and company-filtered and cannot be erased by

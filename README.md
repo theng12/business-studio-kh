@@ -7,8 +7,8 @@ One shared Product Library sits at the centre. Product details are entered once 
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release: **0.1.98** (2026-10-09). The **0.1.99 HR2 payroll and loans candidate** is under
-final verification; see the handoff for acceptance and installer evidence. It is built for home
+Current release: **0.1.99** (2026-10-09), adding HR2 payroll, loans and bilingual payslips.
+See the handoff for review, verification and installer evidence. It is built for home
 use — the owner's Macs and his brother's — and is not publicly distributed.
 
 ## Where to read next
@@ -76,7 +76,7 @@ are shown only to accounts whose role has the matching permission. Feature areas
 - **Fuel** — tanks, vehicles, fills, deliveries, transfers, anomaly reviews and a phone entry page.
 - **Assets** — branch-scoped fixed assets, evidence files, depreciation, actions and reports.
 - **People** — staff, attendance, leave, review of overtime and lateness, and kiosk access.
-  The HR2 candidate adds payroll, configurable staff loans and bilingual payslips. Financial
+  HR2 adds payroll, configurable staff loans and bilingual payslips. Financial
   permissions are separate from HR access; statutory estimates need professional confirmation.
 - **System** — History (an audit log of who changed what) and Settings (data folder, categories,
   price groups, AI keys, backups, Recently deleted, multi-Mac, roles and permissions, About).

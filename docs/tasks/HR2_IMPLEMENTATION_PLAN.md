@@ -1,5 +1,12 @@
 # HR2 payroll and loans implementation plan
 
+**Software acceptance: 0.1.99, 2026-10-09.** Tasks below are implemented, separately reviewed,
+locally verified and packaged/installed. PR #119 is the integration record. Final checks: 2,427
+standard / 463 native tests, clean audits, focused HR2 UI, A5 exports and installed server/client
+smoke. Restart recovery and kiosk identity failures found at integration were fixed and re-reviewed.
+The handoff contains commands, artifact hash and evidence. Professional confirmation, manual
+comparison and physical-device checks remain explicitly outside software acceptance.
+
 > For agentic workers: use subagent-driven-development task by task. Read the assigned
 > brief and the global constraints; workers do not commit, push or spawn agents.
 
@@ -157,7 +164,7 @@ Write a concrete `docs/tasks/HR2_API.md` contract after service completion (cont
 - [x] `ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron --test test/hr2Native.test.js` — 36/36.
 - [x] Independent data-integrity review; controller integrated in `3cef269` after all three Newton
   findings passed re-review and 36 independent assertions. Scope-completion additions below
-  require their own review; this checkpoint is not a release claim.
+  received their own review; these dated checkpoint counts are not the final release counts.
 
 ### Task 4: Validated IPC, rate fetch, privacy and desktop-client wiring (Sol, high)
 
@@ -199,39 +206,39 @@ plain copy and realistic readable tables at 1280×800. No new branding, screensh
 cosmetic redesign. First viewport shows period/status, blockers and one primary next action.
 SaveStatus + explicit Save for editors; stale company responses cannot overwrite current context.
 
-- [ ] Test behavior before implementation: request race helpers, amounts, draft labels, output
+- [x] Test behavior before implementation: request race helpers, amounts, draft labels, output
   escaping/Khmer fonts, sensitive data bounds. UI tests drive the actual built app with synthetic data.
-- [ ] Build screens with native disclosures for advanced policies, not a giant setup form.
-- [ ] Export draft watermark, run/employee PDFs, payroll register/bank/NSSF/tax worksheets, imports
+- [x] Build screens with native disclosures for advanced policies, not a giant setup form.
+- [x] Export draft watermark, run/employee PDFs, payroll register/bank/NSSF/tax worksheets, imports
   via existing map/review patterns. File dialogs run on the Mac invoking them in both modes.
-- [ ] Independent UI/code review, then one batched changed-screen probe at 1280×800 and 1440×900;
+- [x] Independent UI/code review, then one batched changed-screen probe at 1280×800 and 1440×900;
   fix identified issues together and confirm. Do not crawl unchanged screens.
 
 ### Task 6: Integrity fixtures, dependency fix and release (controller coordinates)
 
-**Coverage check, 2026-10-09:** static comparison against the original HR2 spec found four
-remaining items, not accepted as complete: loan opening-balance import by `loan_no`, a frozen
+**Coverage check, 2026-10-09:** static comparison against the original HR2 spec initially found four
+missing items, all now closed in independently reviewed follow-ups: loan opening-balance import by `loan_no`, a frozen
 leave balance on payslips, a combined per-run payslip PDF, and per-run/per-line NSSF/tax overrides
-with reasons. Complete these as bounded follow-up packets after their owning base services/UI
-are reviewed; do not hide these omissions behind the existing per-employee PDF or policy fields.
+with reasons. These were completed as bounded follow-up packets after their base services/UI
+were reviewed; the existing per-employee PDF and policy fields were not counted as substitutes.
 Overrides must preserve the statutory confirmation gate. Historical imports are explicit
 synthetic-fixture tests only, never an instruction to migrate the owner's data.
 
-- [ ] Close the four spec-coverage items above with focused tests and independent review.
+- [x] Close the four spec-coverage items above with focused tests and independent review.
 
 - [x] Fix newly confirmed sharp advisory GHSA-wq5f-xc86-pv6w with compatible patch and matching
   `install:sharp` package pins; retain x64 packaging path but build arm64 only. Test image paths.
 - [x] Add synthetic HR2 fixture covering monthly/daily, USD/KHR, two companies, partial pay,
   three-month grace, both interest policies, stale approvals and advances, with independent truth.
-- [ ] Register native tests, then `npm run check`, `npm run test:native`, `npm run check:client-server`,
+- [x] Register native tests, then `npm run check`, `npm run test:native`, `npm run check:client-server`,
   `env -u ELECTRON_RUN_AS_NODE npm run check:render`, `env -u ELECTRON_RUN_AS_NODE npm run check:images`,
   `npm audit`, `npm audit --omit=dev`. Preserve command/exit/count logs locally, not in Git.
-- [ ] Whole-branch independent review, fix and scoped re-review. No failed money/security checks parked.
-- [ ] Patch bump (next available; expected 0.1.99), update changelog, HANDOFF, status and API docs.
-- [ ] `env -u ELECTRON_RUN_AS_NODE npm run dist`; verify DMG, packaged client/server, disposable
+- [x] Whole-branch independent review, fix and scoped re-review. No failed money/security checks parked.
+- [x] Patch bump (next available; expected 0.1.99), update changelog, HANDOFF, status and API docs.
+- [x] `env -u ELECTRON_RUN_AS_NODE npm run dist`; verify DMG, packaged client/server, disposable
   installed profile and postdist native ABI. Copy DMG to owner checkout dist and install, preserving
   prior app recoverably. No live profile launch. Hardware limitations reported explicitly.
-- [ ] Verify Actions disabled before push, update PR #119 to real implementation scope, merge once
+- [x] Verify Actions disabled before push, update PR #119 to real implementation scope, merge once
   reviewed/green, synchronize owner main. No `gh pr merge --delete-branch` or destructive cleanup.
 
 ## Interface ownership check
@@ -253,4 +260,4 @@ synthetic-fixture tests only, never an instruction to migrate the owner's data.
 - [x] Code-only Graphify map and source-checked extension points.
 - [x] Statutory research recorded in docs/HR2_STATUTORY_RESEARCH.md; professional confirmation
   gaps remain explicit. Free official GDT XLSX endpoint verified; not a guaranteed stable JSON API.
-- [ ] Tasks 1–6 with independent review and release evidence.
+- [x] Tasks 1–6 with independent review and release evidence.
