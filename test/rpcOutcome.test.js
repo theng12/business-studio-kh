@@ -42,13 +42,15 @@ test('timed-out mutations are marked unknown while reads retain normal timeout h
 });
 
 test('HR2 projection, official FX and own kiosk reads cannot claim an unknown financial outcome', () => {
-  for (const channel of ['loans:project', 'payroll:fetchSalaryTaxRate', 'kiosk:payroll', 'kiosk:loans']) {
+  for (const channel of ['loans:project', 'payroll:fetchSalaryTaxRate', 'kiosk:payroll', 'kiosk:loans',
+    'payroll:getRunPdf', 'loans:importColumns', 'loans:importPlan', 'loans:getImportSample']) {
     assert.equal(isLikelyMutationChannel(channel), false, channel);
   }
   // Exact channels only: a similarly named action in another domain earns no read exemption.
   for (const channel of ['loans:repay', 'loans:accrue', 'loans:approve', 'loans:voidDraft', 'loans:changeRate',
     'loans:postpone', 'loans:writeOff', 'loans:reverseEntry', 'payroll:pay', 'payroll:approve',
-    'payroll:reversePayment', 'kiosk:clock', 'other:project', 'other:fetchSalaryTaxRate', 'other:payroll', 'other:loans']) {
+    'payroll:reversePayment', 'kiosk:clock', 'other:project', 'other:fetchSalaryTaxRate', 'other:payroll', 'other:loans',
+    'loans:importApply', 'other:importColumns', 'other:importPlan']) {
     assert.equal(isLikelyMutationChannel(channel), true, channel);
   }
 });

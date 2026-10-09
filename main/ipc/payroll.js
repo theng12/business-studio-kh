@@ -32,7 +32,8 @@ function documentLine(line) {
   const policy = line.snapshot?.policy || {};
   return { ...line, ...Object.fromEntries(['staffCode', 'nameEn', 'nameKm', 'bankName', 'bankAccountName', 'bankAccountNo', 'nssfNo'].map(key => [key, employee[key]])),
     applyTax: policy.applyTax, applyNssf: policy.applyNssf, estimate: line.snapshot?.estimate ?? line.estimate,
-    loanBalanceAfterMinor: plannedLoanBalance(line) };
+    loanBalanceAfterMinor: plannedLoanBalance(line),
+    leaveBalances: line.snapshot?.leaveBalances, leaveBalanceAsOf: line.snapshot?.leaveBalanceAsOf };
 }
 function selfSession(args, expectedCompanyId) {
   access.assertCap('attendance.kiosk', 'hr.manage');
@@ -58,6 +59,17 @@ async function payslip(args, self = false) {
   if (fresh.run.status !== run.status || fresh.run.revision !== run.revision) throw userError('Payroll changed while rendering the payslip; export it again');
   return { companyId, filename: `payslip-${run.month}-${line.id}.pdf`, bytes };
 }
+async function runPdf(args) {
+  const companyId = access.company(args, CAP);
+  const run = service().get(companyId, args.id);
+  const companyName = run.input?.companyName ?? require('../db/companies').get(companyId)?.name;
+  const html = require('../util/payrollDocuments').buildPayrollRunHtml({ companyName, run, lines: run.lines.map(documentLine) });
+  const bytes = await require('../renderWindow').toPdfBuffer(html, { pageSize: 'A5', landscape: false, printBackground: true });
+  access.recheck(companyId, CAP);
+  const fresh = service().get(companyId, args.id);
+  if (fresh.status !== run.status || fresh.revision !== run.revision) throw userError('Payroll changed while rendering the run; export it again');
+  return { companyId, filename: `payroll-${run.month}-${run.id}.pdf`, bytes };
+}
 function workbook(args) {
   return read(args, (companyId, input) => {
     const run = service().get(companyId, input.id);
@@ -69,7 +81,7 @@ async function saveDocument(args, build, extension, self = false) {
   const first = await build(args);
   const { dialog, BrowserWindow } = require('electron');
   const win = BrowserWindow.getFocusedWindow?.() || BrowserWindow.getAllWindows?.()[0] || null;
-  const options = { title: extension === 'pdf' ? 'Save payslip' : 'Save payroll workbook', defaultPath: first.filename,
+  const options = { title: extension === 'pdf' ? (build === runPdf ? 'Save payroll run' : 'Save payslip') : 'Save payroll workbook', defaultPath: first.filename,
     filters: [{ name: extension === 'pdf' ? 'PDF' : 'Workbook', extensions: [extension] }] };
   const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
   if (result.canceled || !result.filePath) return null;
@@ -119,8 +131,10 @@ function register({ expose, exposeLocal }) {
     return proposed;
   });
   expose('payroll:getPayslipPdf', args => payslip(args));
+  expose('payroll:getRunPdf', runPdf);
   expose('payroll:getWorkbook', workbook);
   exposeLocal('payroll:savePayslipPdf', args => saveDocument(args, payslip, 'pdf'));
+  exposeLocal('payroll:saveRunPdf', args => saveDocument(args, runPdf, 'pdf'));
   exposeLocal('payroll:saveWorkbook', args => saveDocument(args, workbook, 'xlsx'));
 
   expose('kiosk:payroll', args => {

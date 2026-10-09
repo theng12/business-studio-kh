@@ -19,7 +19,8 @@ const READ_ACTIONS = new Set([
 // none of `get*` / `list*` / `count*` / `recent*` writes anything).
 const READ_PREFIX = /^(get|list|count|recent)[A-Z]/;
 // Whole-channel exceptions: these actions have no general read meaning.
-const READ_CHANNELS = new Set(['loans:project', 'payroll:fetchSalaryTaxRate', 'kiosk:payroll', 'kiosk:loans']);
+const READ_CHANNELS = new Set(['loans:project', 'loans:importColumns', 'loans:importPlan',
+  'payroll:fetchSalaryTaxRate', 'kiosk:payroll', 'kiosk:loans']);
 
 function isReadAction(action) {
   return READ_ACTIONS.has(action) || READ_PREFIX.test(action);
