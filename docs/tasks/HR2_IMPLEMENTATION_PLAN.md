@@ -95,12 +95,15 @@ Helpers do not write, choose authority, or invent rates. Persisted idempotency i
 **Produces:** `calculatePayrollLine(input)`, `convertMinor(amountMinor, from, to, khrPerUsd)`.
 Input: `{currency, baseMinor, overtime:[{minutes,ratePercent,hourlyMinor}], lateDeductionMinor,
 components:[{code,label,kind,amountMinor,taxable,nssfContributory,isFringeBenefit}],
-applyNssf,applyTax,taxResident,spouseCount,dependentCount,taxRateKhrPerUsd,rateSet,
+applyNssf,applyTax,taxResident,spouseCount,dependentCount,taxRateKhrPerUsd,nssfRateKhrPerUsd,rateSet,
 loanDeductionMinor,advanceMinor}`. Defaults must not invent salary/rates; explicitly validate input.
-Rate set: `{status,nssf:{bands:[{upperKhr,baseKhr}],components:[{key,employeePercent,employerPercent}]},
+Rate set: `{status,nssf:{bands:[{upperKhr,baseKhr}],components:[{key,employeePercent,employerPercent,bands?}]},
 tax:{brackets:[{upperKhr,ratePercent}],spouseAllowanceKhr,dependentAllowanceKhr,maxDependents,
 nonResidentPercent,fringeBenefitPercent,pensionDeductible}}`. Last bracket upperKhr may be null.
 Use researched configuration, not magic legal constants. Bands/brackets must be ordered/valid.
+Scheme-specific NSSF bands override an explicitly supplied common table; historical OR/health
+and pension bases cannot silently be equated. USD NSSF needs its own explicit conversion rate,
+not a guessed reuse of salary-tax FX. `maxDependents: null` means no numeric cap established.
 Output: `{currency,baseMinor,overtimeMinor,grossMinor,nssfEmployeeMinor,nssfEmployerMinor,
 taxBaseKhr,salaryTaxKhr,fringeTaxKhr,salaryTaxMinor,otherDeductionsMinor,loanDeductionMinor,
 advanceMinor,netMinor,items,estimate}`. Fringe tax/employer costs are not employee deductions.
@@ -231,5 +234,7 @@ SaveStatus + explicit Save for editors; stale company responses cannot overwrite
 - [x] Fresh npm ci on this Mac (Node 26.8.2 / macOS 27.0.1 arm64 / CLT present).
 - [x] Baseline: check 2,067 pass; native 375 pass. Four inherited lint warnings.
 - [x] Baseline audit: one high sharp advisory; fix tracked in Task 6, not hidden.
-- [ ] Research and interface map.
+- [x] Code-only Graphify map and source-checked extension points.
+- [x] Statutory research recorded in docs/HR2_STATUTORY_RESEARCH.md; professional confirmation
+  gaps remain explicit. Free official GDT XLSX endpoint verified; not a guaranteed stable JSON API.
 - [ ] Tasks 1–6 with independent review and release evidence.
