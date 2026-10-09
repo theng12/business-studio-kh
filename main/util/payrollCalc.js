@@ -118,10 +118,8 @@ function validateNssfBands(value) {
   });
 }
 
-function validateRateSet(value) {
-  const r = object(value, 'rateSet');
-  if (!['draft', 'confirmed'].includes(r.status)) throw new Error('Rate set status must be draft or confirmed');
-  const nssf = object(r.nssf, 'NSSF');
+function validateNssf(value) {
+  const nssf = object(value, 'NSSF');
   if (nssf.bands !== undefined) validateNssfBands(nssf.bands);
   const keys = new Set();
   array(nssf.components, 'NSSF components', true).forEach((c) => {
@@ -134,7 +132,10 @@ function validateRateSet(value) {
     if (c.bands !== undefined) validateNssfBands(c.bands);
     else if (nssf.bands === undefined) throw new Error(`NSSF ${c.key} requires supplied bands`);
   });
-  const tax = object(r.tax, 'Tax');
+}
+
+function validateTax(value) {
+  const tax = object(value, 'Tax');
   const brackets = array(tax.brackets, 'Tax brackets', true);
   let previousUpper = 0;
   let previousRate = 0;
@@ -154,6 +155,19 @@ function validateRateSet(value) {
   ratio(tax.nonResidentPercent, 'nonResidentPercent', 100);
   ratio(tax.fringeBenefitPercent, 'fringeBenefitPercent', 100);
   boolean(tax.pensionDeductible, 'pensionDeductible');
+}
+
+function validateRateSet(value, applyNssf, applyTax) {
+  const r = object(value, 'rateSet');
+  if (!['draft', 'confirmed'].includes(r.status)) throw new Error('Rate set status must be draft or confirmed');
+  // A draft may have no researched table for a disabled domain. Never invent a
+  // zero-rate table to preview the other domain; confirmed sets remain complete.
+  const emptyNssf = r.nssf == null || (
+    Array.isArray(r.nssf.components) && r.nssf.components.length === 0 &&
+    Object.keys(r.nssf).every((key) => key === 'components')
+  );
+  if (r.status === 'confirmed' || applyNssf || !emptyNssf) validateNssf(r.nssf);
+  if (r.status === 'confirmed' || applyTax || r.tax != null) validateTax(r.tax);
   return r;
 }
 
@@ -185,7 +199,7 @@ function calculatePayrollLine(input) {
   const late = integer(input.lateDeductionMinor === undefined ? 0 : input.lateDeductionMinor, 'lateDeductionMinor');
   const loan = integer(input.loanDeductionMinor === undefined ? 0 : input.loanDeductionMinor, 'loanDeductionMinor');
   const advance = integer(input.advanceMinor === undefined ? 0 : input.advanceMinor, 'advanceMinor');
-  const rateSet = input.rateSet === undefined ? null : validateRateSet(input.rateSet);
+  const rateSet = input.rateSet === undefined ? null : validateRateSet(input.rateSet, applyNssf, applyTax);
   if ((applyNssf || applyTax) && !rateSet) throw new Error('A supplied statutory rate set is required');
   if (input.taxRateKhrPerUsd !== undefined || (curr === 'USD' && applyTax)) exchangeRatio(input.taxRateKhrPerUsd, 'Tax KHR per USD');
   if (input.nssfRateKhrPerUsd !== undefined || (curr === 'USD' && applyNssf)) exchangeRatio(input.nssfRateKhrPerUsd, 'NSSF KHR per USD');
