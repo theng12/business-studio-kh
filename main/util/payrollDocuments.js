@@ -5,6 +5,8 @@ const NOT_PROVIDED = 'not provided';
 const NOT_APPLIED = 'not applied';
 const RUN_STATUSES = new Set(['draft', 'reviewed', 'approved', 'paid', 'void']);
 const KHR_MONEY_FIELDS = new Set(['taxBaseKhr', 'salaryTaxKhr', 'fringeTaxKhr']);
+// Mirrors payrollCalc's generated and reserved item codes; other codes are user components.
+const BUILTIN_PAY_ITEM_CODE = /^(?:base|late|loan|advance|salary_tax|fringe_tax|overtime_\d+|nssf_(?:employee|employer)_.+)$/;
 
 function has(value) {
   return value !== undefined && value !== null && value !== '';
@@ -86,7 +88,10 @@ function buildPayslipHtml({ companyName, run, line }) {
   const watermark = draft || estimate || voided;
   const stamp = [voided ? 'VOID' : draft || estimate ? 'DRAFT' : '', estimate ? 'ESTIMATE' : ''].filter(Boolean).join(' · ');
   const stampKm = [draft || estimate ? 'សេចក្តីព្រាង' : '', estimate ? 'ប៉ាន់ស្មាន' : ''].filter(Boolean).join(' · ');
-  const items = (Array.isArray(line.items) ? line.items : []).map((item) => (
+  const items = (Array.isArray(line.items) ? line.items : []).filter((item) => (
+    !BUILTIN_PAY_ITEM_CODE.test(String(item.code || '')) ||
+    ((item.code === 'late' || item.code === 'fringe_tax') && item.amountMinor !== 0)
+  )).map((item) => (
     '<tr><td>' + esc(item.label || NOT_PROVIDED) + '<small>' + esc(item.code || NOT_PROVIDED) + '</small></td>' +
     '<td>' + esc(item.kind || NOT_PROVIDED) + '</td><td class="num">' +
     esc(money(item.amountMinor, line.currency)) + '</td></tr>'
@@ -97,19 +102,23 @@ function buildPayslipHtml({ companyName, run, line }) {
     ['Gross pay', 'ប្រាក់សរុប', lineMoney(line, 'grossMinor')],
     ['Employee NSSF', 'ប.ស.ស. និយោជិត', appliedLineMoney(line, 'nssfEmployeeMinor', line.applyNssf)],
     ['Employer NSSF', 'ប.ស.ស. និយោជក', appliedLineMoney(line, 'nssfEmployerMinor', line.applyNssf)],
-    ['Salary tax (KHR)', 'ពន្ធលើប្រាក់បៀវត្ស (រៀល)', appliedValue(line.applyTax, line.salaryTaxKhr, riel)],
-    ['Fringe benefit tax (KHR)', 'ពន្ធអត្ថប្រយោជន៍បន្ថែម (រៀល)', appliedValue(line.applyTax, line.fringeTaxKhr, riel)],
     ['Salary tax in pay currency', 'ពន្ធតាមរូបិយប័ណ្ណប្រាក់ខែ', appliedLineMoney(line, 'salaryTaxMinor', line.applyTax)],
     ['Other deductions', 'ការកាត់កងផ្សេងៗ', lineMoney(line, 'otherDeductionsMinor')],
     ['Loan deduction', 'ការកាត់សងប្រាក់កម្ចី', lineMoney(line, 'loanDeductionMinor')],
     ['Advance', 'ប្រាក់បើកមុន', lineMoney(line, 'advanceMinor')],
     ['Net pay', 'ប្រាក់សុទ្ធ', lineMoney(line, 'netMinor')],
   ];
-  const totals = amountRows.map(([en, km, value], index) => (
-    '<tr class="' + (index === amountRows.length - 1 ? 'net' : '') + '">' +
-    '<th>' + esc(en) + '<small>' + esc(km) + '</small></th><td class="num">' +
-    esc(value) + '</td></tr>'
-  )).join('');
+  const summaryPairs = [];
+  for (let index = 0; index < amountRows.length - 1; index += 2) {
+    summaryPairs.push(amountRows.slice(index, Math.min(index + 2, amountRows.length - 1)));
+  }
+  const totals = summaryPairs.map((pair) => (
+    '<tr>' + pair.map(([en, km, value]) => (
+      '<th>' + esc(en) + '<small>' + esc(km) + '</small></th><td class="num">' + esc(value) + '</td>'
+    )).join('') + (pair.length === 1 ? '<td colspan="2"></td>' : '') + '</tr>'
+  )).join('') +
+    '<tr class="net"><th colspan="3">Net pay<small>ប្រាក់សុទ្ធ</small></th><td class="num">' +
+    esc(amountRows[amountRows.length - 1][2]) + '</td></tr>';
   const nssfRef = appliedValue(line.applyNssf, line.nssfNo);
   const taxRate = run.taxRateKhrPerUsd == null ? NOT_PROVIDED :
     String(run.taxRateKhrPerUsd) + ' KHR/USD · ' + (run.rateSource || NOT_PROVIDED);
@@ -124,7 +133,9 @@ function buildPayslipHtml({ companyName, run, line }) {
     '.meta{border-bottom:1px solid #aaa;padding-bottom:2mm}.label{color:#555}small{display:block;color:#555;font-size:7pt}' +
     'table{border-collapse:collapse;width:100%;margin-top:3mm}th,td{border-bottom:1px solid #ddd;padding:1.2mm 1mm;text-align:left;vertical-align:top}' +
     'thead th{font-size:7pt;color:#555}.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}' +
-    '.totals{margin-top:2mm}.net th,.net td{border-top:1.5px solid #222;border-bottom:0;font-size:10pt;font-weight:700;padding-top:2mm}' +
+    '.items th,.items td{padding:.7mm .8mm}.items small{display:inline;margin-left:1mm}.items thead{display:table-header-group}.items tbody tr{break-inside:avoid;page-break-inside:avoid}' +
+    '.summary{break-inside:avoid;page-break-inside:avoid}.totals{table-layout:fixed;margin-top:2mm}.totals th,.totals td{width:25%;padding:1mm .8mm}' +
+    '.net th,.net td{border-top:1.5px solid #222;border-bottom:0;font-size:10pt;font-weight:700;padding-top:2mm}' +
     '.balance{display:flex;gap:8mm;margin-top:3mm;padding:2mm;border:1px solid #ddd}.muted{color:#666}' +
     '.watermark{position:fixed;inset:43% 0 auto;text-align:center;color:rgba(170,0,0,.13);font-size:25pt;font-weight:700;transform:rotate(-24deg);pointer-events:none}' +
     '.status{font-size:8pt;font-weight:700;color:#8b1d1d}.tax-note{margin-top:2mm;color:#555;font-size:7pt}' +
@@ -140,14 +151,16 @@ function buildPayslipHtml({ companyName, run, line }) {
     esc(line.nameEn || NOT_PROVIDED) + '</div><div><span class="label">Staff code</span><br>' +
     esc(cellValue(line.staffCode)) + '</div><div><span class="label">NSSF</span><br>' +
     esc(nssfRef) + '</div></section>' +
-    '<table><thead><tr><th>Pay item · បញ្ជីប្រាក់</th><th>Kind</th><th class="num">Amount</th></tr></thead><tbody>' +
-    (items || '<tr><td colspan="3" class="muted">' + NOT_PROVIDED + '</td></tr>') + '</tbody></table>' +
-    '<table class="totals"><tbody>' + totals + '</tbody></table>' +
-    '<p class="tax-note">Tax base: ' + esc(riel(line.taxBaseKhr)) + ' · FX: ' + esc(taxRate) + '</p>' +
+    (items ? '<table class="items"><thead><tr><th>Pay item · បញ្ជីប្រាក់</th><th>Kind</th><th class="num">Amount</th></tr></thead><tbody>' +
+      items + '</tbody></table>' : '') +
+    '<section class="summary"><table class="totals"><tbody>' + totals + '</tbody></table>' +
+    '<p class="tax-note">Tax base: ' + esc(riel(line.taxBaseKhr)) + ' · Salary tax (KHR): ' +
+    esc(appliedValue(line.applyTax, line.salaryTaxKhr, riel)) + ' · Fringe tax (KHR): ' +
+    esc(appliedValue(line.applyTax, line.fringeTaxKhr, riel)) + ' · FX: ' + esc(taxRate) + '</p>' +
     '<section class="balance"><div><span class="label">Loan balance after · សមតុល្យកម្ចី</span><br><b>' +
     esc(money(line.loanBalanceAfterMinor, line.currency)) + '</b></div><div><span class="label">Leave balance · សមតុល្យច្បាប់</span><br><b>' +
     esc(has(line.leaveBalanceDays) ? String(line.leaveBalanceDays) + ' days' : NOT_PROVIDED) +
-    '</b></div></section></body></html>';
+    '</b></div></section></section></body></html>';
 }
 
 function safeSlug(value) {
