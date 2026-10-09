@@ -219,9 +219,9 @@ synthetic-fixture tests only, never an instruction to migrate the owner's data.
 
 - [ ] Close the four spec-coverage items above with focused tests and independent review.
 
-- [ ] Fix newly confirmed sharp advisory GHSA-wq5f-xc86-pv6w with compatible patch and matching
+- [x] Fix newly confirmed sharp advisory GHSA-wq5f-xc86-pv6w with compatible patch and matching
   `install:sharp` package pins; retain x64 packaging path but build arm64 only. Test image paths.
-- [ ] Add synthetic HR2 fixture covering monthly/daily, USD/KHR, two companies, partial pay,
+- [x] Add synthetic HR2 fixture covering monthly/daily, USD/KHR, two companies, partial pay,
   three-month grace, both interest policies, stale approvals and advances, with independent truth.
 - [ ] Register native tests, then `npm run check`, `npm run test:native`, `npm run check:client-server`,
   `env -u ELECTRON_RUN_AS_NODE npm run check:render`, `env -u ELECTRON_RUN_AS_NODE npm run check:images`,

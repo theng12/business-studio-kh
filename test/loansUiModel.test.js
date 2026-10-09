@@ -49,6 +49,7 @@ async function loansHarness() {
     if (path.endsWith('/hrHooks.js')) return { useHrTick: () => 0, usePager: () => ({ page: 0, pageSize: 50 }) };
     if (path.endsWith('/PageHeader.jsx')) return { PageHeader: (props) => element('header', {}, props.actions) };
     if (path.endsWith('/LoansModals.jsx')) return { LoansModals: (props) => element('loans-modals', props) };
+    if (path.endsWith('/LoansImportModal.jsx')) return { LoansImportModal: () => null };
     if (path.endsWith('/NoCompanyState.jsx')) return { NoCompanyState: () => null };
     if (path.endsWith('/FuelShared.jsx')) return { LoadError: () => null };
     throw new Error(path);

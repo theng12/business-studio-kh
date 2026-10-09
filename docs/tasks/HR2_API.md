@@ -192,6 +192,8 @@ The additive schema does not bump `SCHEMA_VERSION`.
 Verification lives in `test/loanCalc.test.js`, `test/payrollCalc.test.js`,
 `test/payrollDocuments.test.js`, `test/payrollExchangeRate.test.js`,
 `test/payrollValidators.test.js`, `test/hr2Native.test.js`,
-`test/hr2Transport.test.js` and the HR2 UI regression tests. Native tests require
+`test/hr2Transport.test.js`, `test/hr2PayrollOptionsNative.test.js`,
+`test/hr2LoanImportNative.test.js`, `test/hr2LoanImportPayrollNative.test.js`,
+`test/hr2Truth.test.js` and the HR2 UI regression tests. Native tests require
 Electron's Node ABI. Full release gates and current acceptance state remain in
 `docs/tasks/HR2_IMPLEMENTATION_PLAN.md`, not this API reference.
