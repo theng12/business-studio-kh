@@ -16,6 +16,16 @@ drifted badly before this check.
 
 ## Working rules
 
+- **Delegation models (owner, 2026-10-09): GPT-6.1 Sol and GPT-6 Luna only; no Terra.**
+  The orchestrator chooses reasoning effort per task and owns planning, architecture,
+  coordination, review, verification and integration. Prefer Luna for bounded straightforward
+  work and Sol for difficult cross-file, money, security and lifecycle work. Each worker gets
+  a base commit, owned files, deliverable and proving checks; parallelize only non-overlapping
+  edits. Workers do not commit, publish, deploy or recursively delegate unless explicitly
+  assigned that authority. Review material implementation batches independently; self-review
+  must never be described as independent review. If the requested models are unavailable,
+  report that rather than silently restoring Terra or claiming a worker ran.
+
 - **Every removal goes to this project's `_trash/` — never `rm`.** This covers *all*
   of it, not only what the owner asks for: a file he names, and equally a file you
   decide is clutter while cleaning up. Move it into `_trash/` (create the folder if

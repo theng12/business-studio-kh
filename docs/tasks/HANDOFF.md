@@ -42,6 +42,16 @@ Test counts at 0.1.98: `npm run check` **2,067** pass (4 pre-existing lint warni
 
 Each stage: write/confirm the plan section, ask the owner the open questions, build backend → review → screens → review → hands-on run on `scripts/seed-realistic.js` data → release (patch bump).
 
+**HR2 planning update (2026-10-09, after PR #118):** the owner has answered the initial payroll/loan
+questions. Read `docs/PEOPLE_AND_FUEL_PLAN.md` **§7c** before repeating them. Monthly pay on a chosen
+day (10th for the preceding month initially), no half-day wages, both twice-monthly modes, saved
+manual + fetched exchange rates, optional extra pay, configurable approval authority with self-approval,
+loan exceptions/postponement review, introductory zero interest with immediate principal repayments,
+and selectable unpaid-interest capitalization are recorded there. The detailed design is still for
+review; statutory research, exact calculation conventions and implementation remain open. No HR2
+application code or new release exists yet. Worker models are now **GPT-6.1 Sol / GPT-6 Luna only**,
+effort chosen by the orchestrator; no Terra (AGENTS.md Working rules).
+
 1. **HR2 — Payroll, NSSF / salary tax, loans, payslips** (next). Spec: `docs/PEOPLE_AND_FUEL_PLAN.md` §3.3 (payroll tables), §3.4 (loans: rate per loan, per month, declining balance, rate changes with history), §5.1 Payroll/Loans screens, §5.4 payslip PDF (Khmer + English, A5, `printToPDF`), §6 (`payroll.manage`, `loans.manage`; ADMIN_ONLY for loan write-off, voiding an approved run, editing a confirmed rate set), §7a (mixed monthly + daily-wage; USD or KHR per employee; salary tax in riel at a per-run rate; NSSF/tax switchable per employee and per run; overtime approved before payroll). **Must consume HR1's capped figures**: approved overtime = min(approved, computed) at the stored approval rate; deductible late minutes = confirmed after review (`attendance:monthSummary`, `overtimeApprovedByRate`). Open questions to ask first: pay day(s) and daily-wage pay frequency; exchange-rate source for tax; seniority indemnity / 13th month / bonus in scope?; loan maximum deduction per payslip and who approves loans; there is **no accountant yet**, so NSSF rates/ceilings and tax brackets must be entered as clearly labelled estimates (research current Cambodian figures, cite sources, mark "confirm with accountant").
 2. **Assets A3 — QR tags + phone stock-take.** Spec: `docs/ASSETS_AND_BRANCHES_PLAN.md` §6 (Damm-check tag codes already built in `main/util/assetTagCode.js`; Label Studio "Assets" data source; `/a` phone page sharing `/f` code; Bluetooth scanner / photo-decode / typed code; stock-take tables + discrepancy screens; `stocktake:*` capability rules already exist). Ask first: one tag per shelf or per set; label printer and sticker size; buy a Bluetooth 2D scanner (~$25–60)?
 3. **Assets A4 — branches everywhere in the UI**: branch on staff and tanks (columns exist: `employees.branch_id`, `fuel_stock_locations.branch_id`, `fuel_assets.branch_id`), branch filters in Fuel reports and People. Small.

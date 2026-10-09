@@ -1,6 +1,6 @@
 # People & Fuel — design plan (2026-10-08)
 
-**Status: approved by the owner on 2026-10-08 with the decisions in §7a/§7b; being built stage by stage (F1 shipped in 0.1.95; HR1 backend built — §10).** Written for the owner (Theng) after he asked for employee
+**Status: F1 shipped in 0.1.95; HR1 shipped in 0.1.97 (API §10). The original plan was approved on 2026-10-08 with §7a/§7b. HR2 owner decisions are recorded in §7c (2026-10-09); its design additions below await review before implementation.** Written for the owner (Theng) after he asked for employee
 management (20+ staff on paper today) and reported fuel theft. §0 is the short version; the rest is
 the spec an implementation would follow.
 
@@ -371,7 +371,112 @@ client proxy, preload, `CHANNEL_RULES`).
 | Leave types | Prefilled with **Cambodian law defaults** (annual 1.5 days per month worked, sick, special 7 days, maternity 90 days) for the owner to edit and confirm with the accountant. |
 | Public holidays | **Prefilled with Cambodia's official list** for 2026 (and 2027 where announced), editable each year. *Built:* 2026 from Sub-Decree No. 167 (18 Sep 2025); for 2027 only the fixed-date holidays (no 2027 sub-decree yet on 2026-10-08) — see §10. |
 
-## 7. Open questions for the owner (remaining)
+## 7c. HR2 owner decisions and design for review (2026-10-09)
+
+This section supersedes older HR2 questions and conflicting defaults in §§3.3–3.4 and §7.
+The business answers below are confirmed; the detailed implementation has NOT been built.
+Keep this in the existing plan rather than creating another handoff or parallel policy document.
+
+### Confirmed decisions
+
+| Topic | Owner's answer |
+|---|---|
+| Policy scope | Company-configurable policies with explicit individual exceptions, not rules hard-coded for Theng's company. This does not authorize public distribution or deployment. |
+| Pay cycle | Monthly for monthly-salary and daily-wage staff. The 10th pays the previous calendar month; the payday is configurable and actual payment may occur a few days earlier/later. |
+| Twice monthly | Offer both an advance settled at month-end and two separately calculated pay periods. Monthly remains the initial choice. |
+| Daily wages | Daily rate × approved days worked, plus applicable paid leave/holidays and approved overtime. No half-day wage payments for the initial policy. This does not remove HR1's half-day leave records. |
+| Currency / exchange rate | USD or KHR per employee. Fetch rates from an API where a suitable source is verified; also allow manual entry and save it. Preserve the chosen rate and source with each run. |
+| Extra pay | Seniority indemnity, 13th-month pay, bonuses and allowances are optional, initially inactive; none is currently paid. Availability of an option is not a claim that it is legally discretionary. |
+| Loan repayments | User-configured policy and per-loan exceptions. Theng's starting preference is a $100 minimum monthly repayment, not a universal default or a statutory limit. Never demand more than the debt left. |
+| Interest | Support interest-free loans and monthly declining-balance interest with dated rate changes. An introductory interest-free period is configurable (e.g. three months): NO interest accrues during it, but principal repayments start immediately. |
+| Missed repayment | Keep it for review and allow an authorized person to approve postponement. The unpaid principal stays owed and remains subject to the loan's applicable interest policy. No duplicate principal, automatic penalty or negative take-home pay. |
+| Unpaid interest | Explicit per-loan choice: keep unpaid interest separately owed without further interest, OR capitalize it so it earns interest. Neither choice is selected silently. Applicable legal limits still need verification. |
+| Authority | Separately configurable for payroll approval, new loans, interest-rate changes and repayment postponements: admin only or designated managers. An authorized manager may approve work they created. Existing admin-only destructive/reversal safeguards remain. |
+| Statutory estimates | No accountant yet. Estimated NSSF/tax tables remain draft; they do not satisfy the existing confirmation gate for final payroll approval. |
+| Rollout | Start with synthetic numbers and compare with the owner's manual workflow for several months. No migration, automatic switch-over or live-data testing is authorized. |
+
+### Proposed design boundaries
+
+Use ordinary company settings, dated policy/rate records and the existing permissions and audit
+helpers, not a generic policy engine, plugin framework or new dependency. The initial screens are
+Settings → People (payroll policies/rate sets), Staff → Pay, Payroll and Loans, within the existing
+Home/module registry. Reuse the shared import wizard, forms, save indicators, PDF renderer and
+Excel exporter. Kiosk self-service is restricted to the signed-in employee's own payslips/loan
+balance; no broad payroll or loan list is exposed through a kiosk identity.
+
+1. **Pay calculations and periods.** Store money as integer cents/riel; round explicitly at the
+   currency boundary. Use HR1's `attendance:monthSummary`, `overtimeApprovedByRate` and capped
+   confirmed lateness, never raw approvals. A stale `needsReapproval` blocks final approval until
+   reviewed. Do not multiply a full monthly summary into both twice-monthly periods: select the
+   period's days and settle monthly-only adjustments exactly once. An advance is a payment against
+   that month's wages, not a second earning or automatically an interest-bearing staff loan.
+2. **Rate retrieval.** Save manual rates first without requiring network access. Store the rate,
+   effective date, source and actor; retrieval never silently overwrites a manual rate or an
+   approved run. API failure/stale data is visible, with manual fallback. Verify tax-period
+   applicability as well as provider availability: a market-rate feed is not automatically a
+   Cambodian salary-tax source. Official publications were located at
+   `https://www.tax.gov.kh/kh/exchange-rate` and
+   `https://www.nbc.gov.kh/english/economic_research/exchange_rate.php`; a documented suitable
+   API has NOT yet been verified. No paid subscription, credentials or employee-data upload.
+3. **Loans and interest.** Keep principal, unpaid interest, repayments and any capitalization
+   separately auditable. Select the interest policy at loan creation, show its consequences and
+   date future changes; no retrospective rewrite. A capitalization moves unpaid interest into
+   principal once, never leaves it in both balances. Introductory free months cannot accrue hidden
+   deferred interest. Partial/early/manual repayments and final pay-off use the actual remaining
+   debt; currency conversion must be explicit and snapshotted if salary and loan currencies differ.
+4. **Insufficient pay.** Compare scheduled repayment with remaining debt, available pay and the
+   configured/validated deduction limit. Present any shortfall for an authorized decision with a
+   reason. A deferred instalment stays visible for review; it does not automatically double the
+   next month's deduction or erase debt. Repayment postings must not happen while merely previewing
+   or recalculating payroll.
+5. **Approvals and history.** Enforce authority in the backend/RPC as well as the UI; changing who
+   may approve is admin-controlled. Approved runs snapshot every input and rate and stay immutable.
+   Payments, loan postings and their reversals must be atomic/idempotent: retries and an uncertain
+   client timeout cannot repay a loan twice. Voiding payroll must reconcile linked payments/loan
+   entries rather than hiding a real payment. No deletion of money history; company scoping and
+   sensitive audit filters apply everywhere, including exports and self-service.
+6. **Statutory calculations.** Keep versioned, effective-dated sources and visible estimate labels.
+   Research current Cambodian NSSF, salary tax, pay-frequency aggregation, deduction/interest
+   restrictions and optional compensation treatment before implementing those formulas. No legal
+   correctness claim is established by this design. Switching a tax/NSSF option off must not become
+   a back door around the confirmation gate; preserve reasons and the existing approval safeguard.
+7. **Trial and output.** Use a disposable profile and synthetic data for full lifecycle tests.
+   Comparison PDFs/workbooks must visibly say draft/estimate when applicable. Provide Khmer/English
+   A5 payslips plus payroll, bank-payment, NSSF and tax worksheets. The owner continues the manual
+   process until satisfied; no bank transfers, filings or automatic cut-over are part of HR2.
+
+### Calculation examples and acceptance evidence
+
+These are synthetic arithmetic examples, NOT legal rates or recommended loan terms:
+
+- Daily pay: 20 approved whole days × $10 = $200 before other earnings/deductions. No automatic
+  half-day rounding or half-day wage line may be invented from HR1 leave data.
+- Overtime: 90 minutes approved but only 60 computed pays at most 60 minutes, at the stored
+  approval rate; changed attendance must be reviewed before final payroll approval.
+- Missed instalment: $500 principal, $100 scheduled, $0 repaid → still $500 principal, not $600.
+- Interest-free introduction: $500 principal with three $100 repayments → $200 after those three
+  periods and zero interest. A hypothetical subsequent full month at 2% adds $4 interest if the
+  opening principal remains $200.
+- Unpaid-interest choices: $500 principal + $10 unpaid interest. Separate mode leaves the next
+  interest base $500; capitalization transfers that $10 once, leaving $510 principal and $0 of that
+  interest separately owed. Retrying the operation must not produce $520.
+- An $80 remaining debt is paid off with at most $80, even if the configured instalment is $100.
+- A monthly advance must reduce the final amount still payable without reducing the month's
+  earned gross or taxing the same earning twice. Test both supported twice-monthly modes.
+
+Prove pure calculations with independently hand-computed results, then native database tests for
+permissions, tenant boundaries, snapshots, duplicate requests, partial payments and reversals.
+Exercise only changed screens with realistic synthetic data; rerun `npm run check` and
+`npm run test:native` before merging implementation. Follow the handoff's release process and
+packaged client/server checks when HR2 ships, with no schema-version bump.
+
+**Design review still needed before code:** resolve mid-month hire/leave/rate-change proration,
+partial-day attendance versus the whole-day wage policy, exact interest-start and capitalization
+dates, and twice-monthly statutory settlement through a short set of worked examples. Research
+the statutory constraints and the rate provider first; propose explicit configurable rules rather
+than inventing a legal default. These are remaining design tasks, not claims of owner approval.
+
+## 7. Original open questions (historical — answers in §7a/§7b/§7c take precedence)
 
 1. **Which Mac is the shop Mac?** If it is the server or a single standalone Mac, staff logins there are
    only as strong as the kiosk lock. Can it run as a client of an office Mac?
