@@ -82,12 +82,12 @@ interestPaidMinor, principalMinor, interestMinor }` (interest first);
 Validate finite safe integer money, real dates, bounded nonnegative rates; throw on overpayment.
 Helpers do not write, choose authority, or invent rates. Persisted idempotency is Task 3.
 
-- [ ] RED: hand-derived cases, including zero rate, free interval, leap-February, month-end anniversary,
+- [x] RED: hand-derived cases, including zero rate, free interval, leap-February, month-end anniversary,
   partial period, insufficient pay, rounding, unsafe integers and negative/overpayment rejection.
   Example: `assert.deepEqual(allocateRepayment({principalMinor:50000,interestMinor:1000,amountMinor:11000}),
   {principalPaidMinor:10000,interestPaidMinor:1000,principalMinor:40000,interestMinor:0})`.
-- [ ] GREEN: implement minimal pure CommonJS helpers; `node --test test/loanCalc.test.js`.
-- [ ] Report RED/GREEN evidence and boundaries; controller commits and independent reviewer checks.
+- [x] GREEN: implement minimal pure CommonJS helpers; `node --test test/loanCalc.test.js` (16 pass).
+- [x] Report RED/GREEN evidence and boundaries; independently reviewed, integrated in `e4fb3d4`.
 
 ### Task 2: Pure payroll arithmetic (Sol, high)
 
@@ -109,13 +109,14 @@ taxBaseKhr,salaryTaxKhr,fringeTaxKhr,salaryTaxMinor,otherDeductionsMinor,loanDed
 advanceMinor,netMinor,items,estimate}`. Fringe tax/employer costs are not employee deductions.
 All totals checked for safe integer bounds; negative net refused rather than clamped silently.
 
-- [ ] RED: USD/KHR conversions with literal totals; progressive boundaries; resident/nonresident;
+- [x] RED: USD/KHR conversions with literal totals; progressive boundaries; resident/nonresident;
   NSSF wage bands; taxable/noncontributory earnings; fringe benefits; overtime; deductions;
   invalid configurations, negative net, fractional/unsafe money. Example zero-tax fixture:
   `calculatePayrollLine({currency:'USD',baseMinor:20000,applyNssf:false,applyTax:false,
   loanDeductionMinor:10000,advanceMinor:2500}).netMinor === 7500`.
-- [ ] GREEN: `node --test test/payrollCalc.test.js`; preserve draft `estimate` output.
-- [ ] Independent review then controller integration; no database work in this packet.
+- [x] GREEN: `node --test test/payrollCalc.test.js` (28 pass at integration); preserve draft `estimate` output.
+- [x] Independent review then controller integration in `af005a5`; no database work in this packet.
+  A follow-up draft-only missing-domain regression now passes (29 tests); its separate review is pending.
 
 ### Task 3: Additive schema, policies and transactional services (Sol, high)
 
