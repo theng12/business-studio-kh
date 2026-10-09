@@ -8,6 +8,7 @@ const {
   getCallerUserId
 } = require('./_fuelUtil');
 const attendance = require('./attendance');
+const leave = require('./leave');
 const ac = require('../util/attendanceCalc');
 const hr = require('./hr');
 const math = () => require('../util/payrollCalc');
@@ -139,6 +140,19 @@ function mutable(r) {
 function revision(r, v) {
   if (!Number.isSafeInteger(v) || r.revision !== v) c.fail('Payroll revision changed; reload the run');
 }
+function statutoryOverride(value) {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) c.fail('Statutory override must be an object or null');
+  for (const key of Object.keys(value)) {
+    if (!['applyTax', 'applyNssf', 'reason'].includes(key)) c.fail(`Unsupported statutory override ${key}`);
+  }
+  const flags = ['applyTax', 'applyNssf'].filter(key => Object.hasOwn(value, key));
+  if (!flags.length) c.fail('Statutory override requires at least one boolean flag');
+  return {
+    ...Object.fromEntries(flags.map(key => [key, c.bool(value[key], key)])),
+    reason: c.text(value.reason, 'Statutory override reason')
+  };
+}
 function create(companyId, p) {
   return c.operation(companyId, p.operationId, 'payroll:create', p, () => {
     c.date(p.periodStart);
@@ -169,6 +183,7 @@ function create(companyId, p) {
     c.date(payDate);
     const input = {
       ...p,
+      statutoryOverride: statutoryOverride(p.statutoryOverride ?? null),
       payCycle: settings.payCycle
     };
     delete input.operationId;
@@ -199,9 +214,19 @@ function context(r) {
     month: r.month
   });
   const settings = c.getSettings(r.companyId);
+  const leaveTypes = leave.listTypes(r.companyId).filter(t => t.tracksBalance);
   const staff = r.input.employeeIds.map(id => ({
     employee: c.employee(r.companyId, id),
     policy: c.getEmployeePolicy(r.companyId, id),
+    leaveBalances: leaveTypes.map(t => ({
+      leaveTypeId: t.id,
+      code: t.code,
+      nameEn: t.nameEn,
+      nameKm: t.nameKm,
+      days: leave.balanceOf(id, t.id, {
+        asOf: r.periodEnd
+      })
+    })),
     rates: c.listPayRates(r.companyId, id),
     components: c.listEmployeeComponents(r.companyId, id),
     summary: summary.rows.find(x => x.employeeId === id),
@@ -255,6 +280,17 @@ function aggregate(inputs) {
 }
 function computeLine(r, s, ctx, decisions = {}) {
   const employee = s.employee;
+  const runOverride = r.input.statutoryOverride || null;
+  const lineOverride = decisions.statutoryOverride || null;
+  const policy = s.policy ? {
+    ...s.policy
+  } : null;
+  // Override only these two flags; residency/dependents remain employee policy.
+  for (const override of [runOverride, lineOverride]) {
+    for (const key of ['applyTax', 'applyNssf']) {
+      if (policy && override && Object.hasOwn(override, key)) policy[key] = override[key];
+    }
+  }
   const blockers = [];
   const block = (code, message, date = null) => blockers.push({
     code,
@@ -274,7 +310,13 @@ function computeLine(r, s, ctx, decisions = {}) {
       bankAccountNo: employee.bankAccountNo,
       nssfNo: employee.nssfNo
     },
-    policy: s.policy,
+    employeePolicy: s.policy,
+    runStatutoryOverride: runOverride,
+    lineStatutoryOverride: lineOverride,
+    effectivePolicy: policy,
+    policy,
+    leaveBalances: s.leaveBalances,
+    leaveBalanceAsOf: r.periodEnd,
     settings: ctx.settings,
     rateSet: ctx.rateSet,
     loanPlans: [],
@@ -498,8 +540,8 @@ function computeLine(r, s, ctx, decisions = {}) {
     overtime,
     lateDeductionMinor: late,
     components,
-    applyNssf: s.policy?.applyNssf ?? false,
-    applyTax: s.policy?.applyTax ?? false,
+    applyNssf: policy?.applyNssf ?? false,
+    applyTax: policy?.applyTax ?? false,
     taxResident: s.policy?.taxResident ?? true,
     spouseCount: s.policy?.spouseCount || 0,
     dependentCount: s.policy?.dependentCount || 0,
@@ -677,8 +719,11 @@ function updateLine(companyId, p) {
     mutable(r);
     revision(r, p.expectedRevision);
     if (!row.active) c.fail('Payroll line was superseded');
-    const patch = p.patch || {};
-    for (const k of Object.keys(patch)) if (!['dayDecisions', 'loanDecisions', 'note'].includes(k)) c.fail(`Unsupported payroll override ${k}`);
+    const patch = {
+      ...p.patch
+    };
+    for (const k of Object.keys(patch)) if (!['dayDecisions', 'loanDecisions', 'note', 'statutoryOverride'].includes(k)) c.fail(`Unsupported payroll override ${k}`);
+    if (Object.hasOwn(patch, 'statutoryOverride')) patch.statutoryOverride = statutoryOverride(patch.statutoryOverride);
     for (const d of patch.dayDecisions || []) {
       c.date(d.date);
       c.bool(d.payable, 'Payable day');
