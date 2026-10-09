@@ -91,9 +91,11 @@ const applied = { applied: true, created: 1, updated: 0, skipped: 0, failed: 0, 
 
 // Run the actual modal (and optionally its actual parent) with controlled hooks and IPC.
 // Instances retain their own hooks, and disappearing/keyed children run effect cleanup.
-async function importHarness({ loans = {}, files = {}, parent = false } = {}) {
+async function importHarness({ loans = {}, files = {}, parent = false, storage } = {}) {
+  const saved = new Map();
+  storage ||= { getItem: (key) => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem: (key) => saved.delete(key) };
   const context = { company: 'a', caps: ['loans.manage'], open: true };
-  const pending = new Map(), toasts = [], done = [], calls = { apply: [], plan: [], list: [] };
+  const pending = new Map(), toasts = [], done = [], calls = { apply: [], plan: [], list: [], command: [] };
   const instances = new Map();
   let active, tree = [], mounted = true, nextId = 0;
   const element = (type, props, ...children) => ({ type, props: { ...props, children: children.length === 1 ? children[0] : children } });
@@ -103,7 +105,7 @@ async function importHarness({ loans = {}, files = {}, parent = false } = {}) {
       return [owner.slots[i], (next) => { owner.slots[i] = typeof next === 'function' ? next(owner.slots[i]) : next; }]; },
     useRef(initial) { const i = active.cursor++; return active.slots[i] ||= { current: initial }; },
     useEffect(fn, deps) { const owner = active, i = owner.cursor++, old = owner.slots[i];
-      if (!old || deps.some((value, j) => value !== old.deps[j])) { const slot = { deps, cleanup: old?.cleanup }; owner.slots[i] = slot;
+      if (!old || deps.some((value, j) => value !== old.deps[j])) { const slot = { deps, fn, cleanup: old?.cleanup }; owner.slots[i] = slot;
         owner.effects.push(() => { slot.cleanup?.(); slot.cleanup = fn(); }); } },
   };
   const ui = Object.fromEntries(['Badge', 'Button', 'Input', 'Select', 'EmptyState', 'Pagination'].map((name) => [name, (props) => ({ type: name.toLowerCase(), props })]));
@@ -114,18 +116,20 @@ async function importHarness({ loans = {}, files = {}, parent = false } = {}) {
   const loanApi = {
     importColumns: async () => [...columns, { key: 'currency', label: 'Currency' }],
     importPlan: async ({ rows }) => preview(rows), importApply: async () => applied,
-    list: async () => [], listEmployees: async () => [], getPolicy: async () => ({}), ...loans,
+    list: async () => [], listEmployees: async () => [], getPolicy: async () => ({}), repay: async () => ({ id: 'entry-a', companyId: 'a' }), ...loans,
   };
-  for (const [method, key] of [['importPlan', 'plan'], ['importApply', 'apply'], ['list', 'list']]) {
+  for (const [method, key] of [['importPlan', 'plan'], ['importApply', 'apply'], ['list', 'list'], ['repay', 'command']]) {
     const fn = loanApi[method]; loanApi[method] = (args) => { calls[key].push(args); return fn(args); };
   }
   const output = await esbuild.build({ entryPoints: [path.join(ROOT, `renderer/modules/People/${parent ? 'Loans' : 'LoansImportModal'}.jsx`)], bundle: true, write: false,
     format: 'cjs', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment', banner: { js: 'const React = require("react");' },
-    plugins: [{ name: 'boundaries', setup(builder) { builder.onResolve({ filter: /.*/ }, ({ path: name, importer }) => importer && !/\/(?:LoansImportModal\.jsx|loanImportModel\.js|loansModel\.js|capabilities\.js)$/.test(name) ? { path: name, external: true } : undefined); } }],
+    plugins: [{ name: 'boundaries', setup(builder) { builder.onResolve({ filter: /.*/ }, ({ path: name, importer }) => importer && !/\/(?:LoansImportModal\.jsx|loanImportModel\.js|loansModel\.js|loanPending\.js|capabilities\.js)$/.test(name) ? { path: name, external: true } : undefined); } }],
   });
-  const module = { exports: {} };
-  runInNewContext(output.outputFiles[0].text, { module, exports: module.exports, Date, Intl, crypto: { randomUUID: () => `operation-${++nextId}` },
-    window: { api: { loans: loanApi, files: { pickWorkbook: async () => 'fresh.xlsx', parseWorkbook: async () => workbook(), ...files } } },
+  let module;
+  const loadModule = () => {
+  module = { exports: {} };
+  runInNewContext(output.outputFiles[0].text, { module, exports: module.exports, Date, Intl, structuredClone, crypto: { randomUUID: () => `operation-${++nextId}` },
+    window: { localStorage: storage, api: { loans: loanApi, files: { pickWorkbook: async () => 'fresh.xlsx', parseWorkbook: async () => workbook(), ...files } } },
     require(name) {
       if (name === 'react') return react;
       if (name.endsWith('/ui.jsx')) return ui;
@@ -133,12 +137,14 @@ async function importHarness({ loans = {}, files = {}, parent = false } = {}) {
       if (name.endsWith('/Sidebar.jsx')) return { useUserCaps: () => context.caps };
       if (name.endsWith('/hrHooks.js')) return { useHrTick: () => 0, usePager: () => ({ page: 0, pageSize: 50 }) };
       if (name.endsWith('/PageHeader.jsx')) return { PageHeader: (props) => element('header', {}, props.actions) };
-      if (name.endsWith('/LoansModals.jsx')) return { LoansModals: () => null };
+      if (name.endsWith('/LoansModals.jsx')) return { LoansModals: (props) => element('loan-command', props) };
       if (name.endsWith('/NoCompanyState.jsx')) return { NoCompanyState: () => null };
       if (name.endsWith('/FuelShared.jsx')) return { LoadError: () => null };
       throw new Error(name);
     },
   });
+  };
+  loadModule();
   const retain = (operation, companyId = operation?.companyId, completed) => {
     if (operation) pending.set(companyId, operation);
     else if (!completed || pending.get(companyId)?.operationId === completed.operationId) pending.delete(companyId);
@@ -172,8 +178,11 @@ async function importHarness({ loans = {}, files = {}, parent = false } = {}) {
   const close = () => { nodes().find((n) => n.type === 'modal').props.onClose(); render(); };
   const open = async () => { if (parent) (button('Review and retry the same import') || button('Import opening balances…')).props.onClick(); else context.open = true; render(); await settle(); };
   render(); await settle(); if (parent) await open();
-  return { context, calls, toasts, done, pending, nodes, text, button, select, render, settle, close, open,
+  return { context, calls, toasts, done, pending, nodes, text, button, select, render, settle, close, open, storage,
+    command: () => nodes().find((n) => n.type === 'loan-command').props,
     unmount: () => { mounted = false; render(); },
+    replayMountEffects: () => { for (const owner of instances.values()) for (const slot of owner.slots) if (slot?.fn) { slot.cleanup?.(); slot.cleanup = slot.fn(); } },
+    remount: async (reload = false) => { mounted = false; render(); if (reload) loadModule(); mounted = true; render(); await settle(); },
     review: async () => { await button('Choose a file…').props.onClick(); render(); await button('Check 1 row').props.onClick(); render(); },
   };
 }
@@ -338,4 +347,209 @@ test('late retained preview cannot replace rejection errors from an exact retry'
   latePreview.resolve(preview(h.calls.plan[1].rows)); await h.settle();
   assert.ok(h.nodes().some((n) => h.text(n).includes('Loan changed since preview')));
   assert.equal(h.button('Import 0 rows').props.disabled, true);
+});
+
+const repayment = () => ({ id: 'loan-a', amountMinor: 10000, entryDate: '2026-09-30', source: 'cash', note: 'Original request' });
+
+for (const reload of [false, true]) {
+  test(`actual Loans ${reload ? 'renderer reload/window restart' : 'route remount'} restores the repayment barrier and exact request`, async () => {
+    let balance = 50000, loseReply = true;
+    const posted = new Set();
+    const h = await importHarness({ parent: true, loans: { repay: async (args) => {
+      if (!posted.has(args.operationId)) { posted.add(args.operationId); balance -= args.amountMinor; }
+      if (loseReply) throw new Error('Connection lost after posting');
+      return { id: 'entry-a', companyId: 'a' };
+    } } });
+    h.close();
+    const payload = repayment();
+    assert.equal(await h.command().onSubmit('repay', payload, 'a'), false); h.render();
+    assert.equal(balance, 40000);
+    payload.amountMinor = 20000;
+    await h.remount(reload);
+    assert.ok(h.button('Retry the same request'), 'restores unresolved command before allowing new writes');
+    assert.equal(h.button('+ New loan').props.disabled, true);
+    assert.equal(h.button('Import opening balances…').props.disabled, true);
+    assert.equal(await h.command().onSubmit('repay', repayment(), 'b'), false);
+    assert.equal(await h.command().onSubmit('repay', { ...repayment(), amountMinor: 20000 }, 'a'), false);
+    assert.equal(h.calls.command.length, 1);
+    loseReply = false;
+    await h.button('Retry the same request').props.onClick(); h.render();
+    assert.equal(JSON.stringify(h.calls.command[1]), JSON.stringify(h.calls.command[0]));
+    assert.equal(balance, 40000, 'retry posts no second repayment');
+    assert.equal(posted.size, 1);
+    await h.remount(true);
+    assert.equal(h.button('Retry the same request'), undefined, 'known success clears durable record');
+  });
+
+  test(`actual Loans ${reload ? 'renderer reload/window restart' : 'route remount'} restores exact opening-import rows and cross-command barrier`, async () => {
+    let attempts = 0;
+    const h = await importHarness({ parent: true, loans: { importApply: async () => ++attempts === 1 ? null : applied } });
+    await h.review(); await h.button('Import 1 row').props.onClick(); h.render();
+    h.close(); await h.remount(reload);
+    assert.ok(h.button('Review and retry the same import'));
+    assert.equal(h.button('+ New loan').props.disabled, true);
+    assert.equal(await h.command().onSubmit('repay', repayment(), 'a'), false);
+    assert.equal(h.calls.command.length, 0);
+    await h.open();
+    assert.equal(h.button('Choose a file…'), undefined);
+    assert.equal(h.button('Choose a corrected file').props.disabled, true);
+    await h.button('Retry the same import').props.onClick(); h.render();
+    assert.equal(JSON.stringify(h.calls.apply[1]), JSON.stringify(h.calls.apply[0]));
+    await h.remount(true);
+    assert.equal(h.button('Review and retry the same import'), undefined);
+  });
+}
+
+test('actual parent persists both financial lanes before dispatch and fails closed on storage write failure', async () => {
+  for (const lane of ['command', 'import']) {
+    let writes = 0;
+    const storage = { getItem: () => null, setItem: () => { writes++; throw new Error('Storage quota exhausted'); }, removeItem() {} };
+    const h = await importHarness({ parent: true, storage });
+    if (lane === 'command') assert.equal(await h.command().onSubmit('repay', repayment(), 'a'), false);
+    else { await h.review(); await h.button('Import 1 row').props.onClick(); }
+    h.render();
+    assert.ok(writes > 0, 'attempts to retain request before IPC');
+    assert.equal(h.calls.command.length + h.calls.apply.length, 0, 'no money call when retention fails');
+    assert.ok(h.toasts.some(([text]) => /retain.*loan|Storage quota/i.test(text)) || h.nodes().some((n) => /retain.*loan|Storage quota/i.test(h.text(n))));
+    if (lane === 'import') assert.ok(h.button('Retry the same import'), 'storage failure leaves a usable exact retry');
+  }
+});
+
+test('actual parent fails closed on unreadable or corrupt retry storage without leaking other-company data', async () => {
+  for (const getItem of [() => { throw new Error('Storage unavailable'); }, () => '{corrupt', () => JSON.stringify({ kind: 'import', operation: { companyId: 'b', operationId: 'wrong', rows: [{ purpose: 'Private company B debt' }] } })]) {
+    const h = await importHarness({ parent: true, storage: { getItem, setItem() {}, removeItem() {} } });
+    assert.equal(h.button('+ New loan').props.disabled, true);
+    assert.equal(h.button('Import opening balances…').props.disabled, true);
+    assert.equal(await h.command().onSubmit('repay', repayment(), 'a'), false);
+    assert.equal(h.calls.command.length, 0);
+    assert.ok(!h.nodes().some((n) => /Private company B debt/.test(h.text(n))));
+  }
+});
+
+test('late repayment success or definite rejection cannot clear a newer record after remount', async () => {
+  for (const outcome of ['success', 'rejection']) {
+    const old = deferred(); let count = 0;
+    const h = await importHarness({ parent: true, loans: { repay: async () => ++count === 1 ? old.promise : count === 2 ? { id: 'entry-a', companyId: 'a' } : Promise.reject(new Error('Connection lost')) } });
+    const first = h.command().onSubmit('repay', repayment(), 'a'); h.render();
+    await h.remount();
+    await h.button('Retry the same request').props.onClick(); h.render();
+    await h.command().onSubmit('repay', { ...repayment(), amountMinor: 5000 }, 'a'); h.render();
+    const nextKey = h.calls.command[2].operationId;
+    if (outcome === 'success') old.resolve({ id: 'entry-a', companyId: 'a' });
+    else old.reject(new Error('Bad request: rejected before posting'));
+    await first;
+    await h.remount(true);
+    assert.ok(h.button('Retry the same request'));
+    await h.button('Retry the same request').props.onClick();
+    assert.equal(h.calls.command[3].operationId, nextKey);
+  }
+});
+
+test('persisted requests remain company scoped and inaccessible after permission loss, including stale callbacks', async () => {
+  const h = await importHarness({ parent: true, loans: { repay: async () => { throw new Error('Lost reply'); } } });
+  const captured = h.command();
+  await captured.onSubmit('repay', repayment(), 'a'); h.render();
+  h.context.company = 'b'; h.render(); await h.settle();
+  assert.equal(h.button('Retry the same request'), undefined);
+  assert.equal(h.command().pending, null);
+  h.context.company = 'a'; h.context.caps = []; await h.remount(true);
+  assert.equal(h.button('Retry the same request'), undefined);
+  assert.equal(await captured.onRetry(), false);
+  assert.equal(h.calls.command.length, 1);
+  h.context.caps = ['loans.manage']; h.render(); await h.settle();
+  assert.ok(h.button('Retry the same request'));
+});
+
+test('definite command rejection and import validation rejection release their durable barriers', async () => {
+  const h = await importHarness({ parent: true, loans: {
+    repay: async () => { throw new Error('Bad request: repayment rejected'); },
+    importApply: async () => ({ applied: false, failed: 1, rows: [{ rowNo: 2, action: 'error', errors: ['Invalid opening date'] }] }),
+  } });
+  assert.equal(await h.command().onSubmit('repay', repayment(), 'a'), false);
+  await h.remount(true);
+  assert.equal(h.button('Retry the same request'), undefined);
+  await h.open(); await h.review(); await h.button('Import 1 row').props.onClick(); h.render();
+  await h.remount(true);
+  assert.equal(h.button('Review and retry the same import'), undefined);
+});
+
+test('a thrown definite import rejection clears only its own durable batch', async () => {
+  const h = await importHarness({ parent: true, loans: { importApply: async () => { throw new Error('Bad request: invalid opening import'); } } });
+  await h.review(); await h.button('Import 1 row').props.onClick(); h.render();
+  await h.remount(true);
+  assert.equal(h.button('Review and retry the same import'), undefined);
+});
+
+test('unknown-outcome code overrides rejection wording and retains the original import batch', async () => {
+  const h = await importHarness({ parent: true, loans: { importApply: async () => { throw Object.assign(new Error('Bad request: server stopped answering'), { code: 'RPC_OUTCOME_UNKNOWN' }); } } });
+  await h.review(); await h.button('Import 1 row').props.onClick(); h.render();
+  await h.remount(true);
+  assert.ok(h.button('Review and retry the same import'));
+});
+
+test('both lanes are already durable when IPC is entered and clear failure retains the exact retry', async () => {
+  for (const lane of ['command', 'import']) {
+    const saved = new Map(); let refuseClear = true, checked = 0;
+    const storage = { getItem: (key) => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value), removeItem(key) { if (refuseClear) throw new Error('Storage blocked'); saved.delete(key); } };
+    const invoke = async (args) => {
+      const record = JSON.parse([...saved.values()][0]);
+      assert.equal(record.kind, lane);
+      assert.equal(record.operation.operationId, args.operationId);
+      assert.equal(JSON.stringify(lane === 'import' ? record.operation : record.operation.args), JSON.stringify(args));
+      checked++;
+      return lane === 'import' ? applied : { id: 'entry-a', companyId: 'a' };
+    };
+    const h = await importHarness({ parent: true, storage, loans: { [lane === 'import' ? 'importApply' : 'repay']: invoke } });
+    if (lane === 'command') await h.command().onSubmit('repay', repayment(), 'a');
+    else { await h.review(); await h.button('Import 1 row').props.onClick(); }
+    await h.remount(true);
+    assert.ok(h.button(lane === 'import' ? 'Review and retry the same import' : 'Retry the same request'));
+    refuseClear = false;
+    if (lane === 'import') { await h.open(); await h.button('Retry the same import').props.onClick(); }
+    else await h.button('Retry the same request').props.onClick();
+    assert.equal(checked, 2);
+    assert.equal(saved.size, 0);
+  }
+});
+
+test('an unconfirmed command response never releases its durable operation key', async () => {
+  for (const result of [null, {}, { id: 'entry-b', companyId: 'b' }]) {
+    const h = await importHarness({ parent: true, loans: { repay: async () => result } });
+    assert.equal(await h.command().onSubmit('repay', repayment(), 'a'), false);
+    await h.remount(true);
+    assert.ok(h.button('Retry the same request'));
+    assert.equal(h.button('Import opening balances…').props.disabled, true);
+  }
+});
+
+test('unknown command outcome takes precedence over definite rejection text', async () => {
+  const h = await importHarness({ parent: true, loans: { repay: async () => { throw Object.assign(new Error('Bad request: reply lost'), { code: 'RPC_OUTCOME_UNKNOWN' }); } } });
+  await h.command().onSubmit('repay', repayment(), 'a');
+  await h.remount(true);
+  assert.ok(h.button('Retry the same request'));
+});
+
+test('React StrictMode effect replay does not revoke the current loan command callbacks', async () => {
+  const h = await importHarness({ parent: true });
+  const submit = h.command().onSubmit;
+  h.replayMountEffects();
+  assert.equal(await submit('repay', repayment(), 'a'), true);
+  assert.equal(h.calls.command.length, 1);
+});
+
+test('plain overpayment rejection releases the durable command so a corrected repayment can proceed', async () => {
+  let balance = 50000;
+  const h = await importHarness({ parent: true, loans: { repay: async ({ amountMinor }) => {
+    const allocation = require('../main/util/loanCalc').allocateRepayment({ principalMinor: balance, interestMinor: 0, amountMinor });
+    balance = allocation.principalMinor;
+    return { id: 'entry-a', companyId: 'a' };
+  } } });
+  assert.equal(await h.command().onSubmit('repay', { ...repayment(), amountMinor: 50001 }, 'a'), false);
+  assert.equal(balance, 50000);
+  await h.remount(true);
+  assert.equal(h.button('Retry the same request'), undefined);
+  assert.equal(h.button('+ New loan').props.disabled, false);
+  assert.equal(await h.command().onSubmit('repay', repayment(), 'a'), true);
+  assert.equal(balance, 40000);
+  assert.notEqual(h.calls.command[0].operationId, h.calls.command[1].operationId);
 });

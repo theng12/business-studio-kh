@@ -65,13 +65,17 @@ export function endOfMonth(month) {
 }
 
 export function makeOperation(method, companyId, operationId, payload) {
-  return { method, companyId, operationId: operationId || null, payload, args: { ...payload, ...(operationId ? { operationId } : {}), companyId } };
+  const snapshot = structuredClone(payload);
+  // Approval is idempotent by loan id; its retry id is local bookkeeping only.
+  return { method, companyId, operationId: operationId || null, payload: snapshot, args: { ...snapshot, ...(operationId && method !== 'approve' ? { operationId } : {}), companyId } };
 }
 
 export function pendingAfterFailure(command, error) {
   const raw = error && typeof error.message === 'string' ? error.message : String(error || '');
   const message = raw.replace(/^Error invoking remote method '[^']+': (?:[A-Za-z]*Error: )?/, '');
+  if (error?.code === 'RPC_OUTCOME_UNKNOWN' || /RPC_OUTCOME_UNKNOWN|may still have completed|stopped answering before it confirmed/i.test(message)) return command;
   if (message.startsWith('Bad request: ')
+    || message === 'Repayment exceeds outstanding debt (overpayment)'
     || message === 'You do not have permission to access payroll or loans'
     || message === 'Only an admin may perform this financial action'
     || message === 'Company policy requires admin approval') return null;
