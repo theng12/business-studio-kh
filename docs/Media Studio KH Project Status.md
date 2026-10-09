@@ -1,6 +1,6 @@
 # Media Studio KH — Development Status
 
-Updated: **2026-10-08, at 0.1.94.** This is the short "where is the project" page. The operating
+Updated: **2026-10-09, at 0.1.98.** This is the short "where is the project" page. The operating
 loop, paths, traps and the full list of open gaps live in [the session handoff](tasks/HANDOFF.md),
 which is updated on every release — read that first in a new session. If either document disagrees
 with the code, the code wins.
@@ -18,20 +18,25 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
   a spec/quality review from another agent in the same model family. No human or third-party model
   has reviewed the tree.
 
-## Current release — 0.1.94
+## Current release — 0.1.98
 
 | | |
 |---|---|
-| Version | `0.1.94` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
-| Integration | [PR #111](https://github.com/theng12/media-studio-kh/pull/111) merged as `0d8c15b`; owner main synchronized, build worktree archived with files preserved. Final receipt is local `graphify-out/ux-workflows/release-receipt.md`. |
-| Installed | **0.1.94** on the MacBook (`/Users/vengtheng`), 2026-10-08, after a packaged smoke test on a throwaway profile; the previous app is kept under the owner `_trash/installed-apps/`. The Mac mini was on 0.1.93 at that time. |
-| DMG | Owner `dist/Media Studio KH-0.1.94-arm64.dmg` on the MacBook (the newest two releases are kept; older ones go to `_trash/old-dmgs/`). |
+| Version | `0.1.98` in `package.json`, matching the top entry of `CHANGELOG` in `renderer/components/WhatsNewModal.jsx` |
+| Integration | [PR #117](https://github.com/theng12/media-studio-kh/pull/117) merged as `794f05f`. |
+| Installed | **0.1.98** on the MacBook (`/Users/vengtheng`), 2026-10-09. The Mac mini is still on 0.1.93. |
+| DMG | Owner `dist/Media Studio KH-0.1.98-arm64.dmg` (and 0.1.97) on the MacBook; older ones in `_trash/old-dmgs/`. |
+| Next | HR2 payroll — see the ROADMAP in [the handoff](tasks/HANDOFF.md). |
 
 **What changed since the last version of this page (0.1.72).** One line per release; the full
 wording is in the "What's new" changelog.
 
 | Version | Main change |
 |---|---|
+| 0.1.98 | Fixed Assets & Branches: branches, accounting core, asset register (Fuel vehicles linked), book depreciation from 1 Jan 2026, disposals/revaluation, tax year in riel (estimates), reports |
+| 0.1.97 | HR1: staff profiles, attendance (shop-Mac kiosk, phone selfie, supervisor), approvals for overtime and lateness, leave, Settings → People |
+| 0.1.96 | Home grid of module squares; per-module sidebar |
+| 0.1.95 | Fuel F1: tanks, vehicles, fill-ups, dips, theft checks, reports, `/f` phone page; 0.1.94 leftovers |
 | 0.1.94 | Usability / smoothness / connectivity audit on a realistic 2,500-product dataset: Library, search, auto-match preview, weekly auto backups, multi-Mac liveness + offline banner, phone viewer, studios on the full catalogue, labels, exports, POs; 41 review findings fixed |
 | 0.1.93 | Seven everyday UX areas: Catalog disclosure/history, Library panels, processing recipe/keyboard crop/comparison, attention queues, catalog-aware search |
 | 0.1.92 | Eight audit batches: file/company safety, reliable editors/AI, source crop geometry, truthful labels/exports/Social previews, PO/cost/Settings recovery |
@@ -49,21 +54,7 @@ wording is in the "What's new" changelog.
 
 ## Checks
 
-Verified for0.1.93 in local `graphify-out/ux-workflows/`:
-
-| Check | Result |
-|---|---|
-| Full check/lint (`release-check.log`) |1405pass,0fail/skip; four existing lint warnings |
-| Native (`integrated-native.log`, `postdist-native.log`) |242pass,0fail/skip, including post-packaging |
-| Clean-profile UI crawl (`final-ui-crawl.log`) |147/147; no console errors; hidden draft and1100px Library layout included |
-| Production build and arm64 DMG | Passed; owner copy checksum valid |
-| Production/full dependency audits |0 vulnerabilities |
-| Image/render/client-server probes | Passed |
-| Packaged client/server (`packaged.log`) | Passed: real preloads, conflict/recovery, save-before-image-switch, assets and reconnect |
-| Installed app (`installed.log`, owner `installed-ax.txt`) | Version0.1.93, scoped attention queue and exact searched product editor observed; normal quit |
-| Independent review | PASS with regression-tested migration, hidden-Esc and stale-navigation fixes |
-
-Native Cmd+Z/Shift+Z, crop creation/1px movement/10px resize and comparison arrow adjustment were observed in the development app. All app data used by these checks was synthetic. Physical Macs/printer/phones and paid provider behavior remain outside this batch's evidence.
+At 0.1.98: `npm run check` 2,067 pass (0 lint errors, 4 old warnings), `npm run test:native` 375 pass, check:client-server pass; Fuel, HR and Assets each verified on `scripts/seed-realistic.js` data (planted fuel thefts all caught; HR manager flows driven by hand; assets checked at every month-end against an independent model). Per release evidence is in the handoff's release sections. Real hardware (kiosk webcam, phones, two Macs over Tailscale, printer) is still untested.
 
 ## Release and install
 
@@ -72,7 +63,7 @@ The full step list is the handoff's "working loop". In short:
 1. Work on a `codex/<topic>` branch; `npm run check` and, for database work, `npm run test:native`.
 2. Patch version bump in `package.json` plus a new top changelog entry (AGENTS.md §23, §24).
 3. `npm run dist` builds **one** arm64 DMG (AGENTS.md §20; Intel only on request with
-   `npm run dist:x64`). Copy it into the owner's `dist/` (`/Users/thengmacmini/Developer/media-studio-kh/dist`),
+   `npm run dist:x64`). Copy it into the owner's `dist/` (his checkout on the Mac you are on),
    then `npm run dmgs:prune`, which keeps the newest two releases and moves older DMGs to `_trash/old-dmgs/`.
 4. Install: copy the app to `/Applications` and clear the quarantine flag
    (`xattr -cr "/Applications/Media Studio KH.app"`) — builds are unsigned (see `SIGNING.md`).
@@ -101,17 +92,9 @@ The full step list is the handoff's "working loop". In short:
 
 ## Open
 
-The eight approved software batches are complete. The handoff's OPEN table records separate
-hardware checks and deliberately deferred work. The headline items:
+The roadmap (HR2 payroll next, then Assets QR tags + stock-take, branches in the UI, fuel analysis, tasks, Finance, one shared exchange rate, Pick & Pack) and every known gap are in [the handoff](tasks/HANDOFF.md) — ROADMAP near the top, OPEN table at the end. Headlines:
 
-- **Hardware validation has not been performed** — two physical Macs, a real printer, macOS 12,
-  real phones, the background-removal model download. See
-  [the runbook](HARDWARE_VALIDATION_RUNBOOK.md); its results table is empty.
-- **No phone save has been watched on a real device**, including the brother's Android phone,
-  the press-and-hold route and the batch zip download.
-- **0.1.87 audit leftovers** that were found, checked and deliberately left (listed in the handoff).
-- **No independent review** of the code.
-- **Signing / notarization** is not configured; unsigned DMGs with `xattr -cr` are the intended
-  workflow for this audience.
-- **Pick & Pack** — [`PICK_AND_PACK_PLAN.md`](PICK_AND_PACK_PLAN.md) is a design plan waiting for
-  the owner's review. Nothing in it is built.
+- **Hardware validation has not been performed** — see [the runbook](HARDWARE_VALIDATION_RUNBOOK.md).
+- **No accountant yet** — tax depreciation and (soon) payroll tax figures are labelled estimates.
+- **Signing / notarization** is not configured; unsigned DMGs with `xattr -cr` are the intended workflow.
+- **Pick & Pack** — [`PICK_AND_PACK_PLAN.md`](PICK_AND_PACK_PLAN.md) waits for the owner's review.
