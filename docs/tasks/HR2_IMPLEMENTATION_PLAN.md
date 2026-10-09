@@ -146,16 +146,18 @@ editing creates a new draft version. Backend validates all fields even behind ar
   `reversePayment(companyId,{id,reason,operationId})`, `voidRun(companyId,{id,reason})`.
 Write a concrete `docs/tasks/HR2_API.md` contract after service completion (controller owned).
 
-- [ ] RED native tests: company/profile setup, dated rates, policies, principal and interest history,
+- [x] RED native tests: company/profile setup, dated rates, policies, principal and interest history,
   exact synthetic sums, double-request protection, stale source approvals, frozen snapshots,
   permissions and company deletion refusal. Tests skip only under non-Electron ABI with a reason.
-- [ ] GREEN: minimal services with actual transactions, revision and fingerprint checks, payment
+- [x] GREEN: minimal services with actual transactions, revision and fingerprint checks, payment
   balance reconciliation. No silent missing staff/rates; exceptions become actionable review items.
-- [ ] Twice-monthly modes track calendar-month cumulative statutory bases and earlier payment
+- [x] Twice-monthly modes track calendar-month cumulative statutory bases and earlier payment
   settlement; overlaps/duplicate employee earnings refused. A previously approved first period is
   not recalculated by changes to second-period inputs.
-- [ ] `ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron --test test/hr2Native.test.js`.
-- [ ] Independent data-integrity review; controller integrates only after important findings fixed.
+- [x] `ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron --test test/hr2Native.test.js` — 36/36.
+- [x] Independent data-integrity review; controller integrated in `3cef269` after all three Newton
+  findings passed re-review and 36 independent assertions. Scope-completion additions below
+  require their own review; this checkpoint is not a release claim.
 
 ### Task 4: Validated IPC, rate fetch, privacy and desktop-client wiring (Sol, high)
 
@@ -165,16 +167,18 @@ Write a concrete `docs/tasks/HR2_API.md` contract after service completion (cont
 `main/db/roles.js`, `main/db/auditLog.js` only as needed; new `test/hr2Transport.test.js`.
 Consume Task 3's exact contract, expose `window.api.payroll` and `window.api.loans`.
 
-- [ ] RED validators and real handler tests: bad shapes, wrong company, unauthorized manager,
+- [x] RED validators and real handler tests: bad shapes, wrong company, unauthorized manager,
   privileged policy edits, export leakage, retries and wrong content for an operation ID.
-- [ ] Register all data channels with `expose`; local saves through `exposeLocal` and client
+- [x] Register all data channels with `expose`; local saves through `exposeLocal` and client
   `handleLocal`, same validators. Exclude new caps from Editor; honor settings at the backend.
-- [ ] Add bounded fixed-origin public rate fetch only if research verifies suitable endpoint;
+- [x] Add bounded fixed-origin public rate fetch only if research verifies suitable endpoint;
   otherwise show explicit unavailable result + saved manual rate, never a fake or guessed rate.
   Fixtures prove timeout, malformed response, bad date/rate, and no automatic overwrite.
-- [ ] Protect payroll/loan History from clear and unrelated HR viewers; kiosk reads derive employee
+- [x] Protect payroll/loan History from clear and unrelated HR viewers; kiosk reads derive employee
   identity from validated session token. No broad grants merely to enable self-service.
-- [ ] Run transport + validator coverage + client-server checks; independent security review.
+- [x] Run transport + validator coverage + client-server checks; independent security review
+  passed. Controller reran backend/transport with the final dependency: 45/45. Integrated in
+  `c51efb8`; subsequent import/override/run-export routes need separate checks.
 
 ### Task 5: Operable People UI and exports (split disjoint workers)
 
@@ -204,6 +208,16 @@ SaveStatus + explicit Save for editors; stale company responses cannot overwrite
   fix identified issues together and confirm. Do not crawl unchanged screens.
 
 ### Task 6: Integrity fixtures, dependency fix and release (controller coordinates)
+
+**Coverage check, 2026-10-09:** static comparison against the original HR2 spec found four
+remaining items, not accepted as complete: loan opening-balance import by `loan_no`, a frozen
+leave balance on payslips, a combined per-run payslip PDF, and per-run/per-line NSSF/tax overrides
+with reasons. Complete these as bounded follow-up packets after their owning base services/UI
+are reviewed; do not hide these omissions behind the existing per-employee PDF or policy fields.
+Overrides must preserve the statutory confirmation gate. Historical imports are explicit
+synthetic-fixture tests only, never an instruction to migrate the owner's data.
+
+- [ ] Close the four spec-coverage items above with focused tests and independent review.
 
 - [ ] Fix newly confirmed sharp advisory GHSA-wq5f-xc86-pv6w with compatible patch and matching
   `install:sharp` package pins; retain x64 packaging path but build arm64 only. Test image paths.

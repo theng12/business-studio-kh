@@ -12881,6 +12881,7 @@ a:hover { text-decoration-thickness: 2px; }
 .hr-subhead { margin: var(--s-5) 0 var(--s-2); }
 .hr-actions-row { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-3); }
 .hr-date-input { width: auto; flex: 0 0 auto; }
+.payroll-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
 .hr-note { margin: 0 0 var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--radius-md); background: var(--c-brand-soft); font-size: var(--fs-md); }
 
 /* A day's detail and the photo comparison */
