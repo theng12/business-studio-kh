@@ -78,10 +78,9 @@ function cellValue(value) {
   return has(value) ? value : NOT_PROVIDED;
 }
 
-function buildPayslipHtml({ companyName, run, line }) {
+function buildPayslipPage({ companyName, run, line }) {
   validateRun(run);
   validateLine(line);
-  const fonts = embeddedFontCss(JSON.stringify({ companyName, run, line }) + ' ប្រាក់បៀវត្ស');
   const draft = run.status === 'draft' || run.status === 'reviewed';
   const estimate = Boolean(run.estimate || line.estimate);
   const voided = run.status === 'void';
@@ -123,24 +122,7 @@ function buildPayslipHtml({ companyName, run, line }) {
   const taxRate = run.taxRateKhrPerUsd == null ? NOT_PROVIDED :
     String(run.taxRateKhrPerUsd) + ' KHR/USD · ' + (run.rateSource || NOT_PROVIDED);
 
-  return '<!doctype html><html lang="km"><head><meta charset="utf-8"><title>' +
-    esc(companyName || NOT_PROVIDED) + ' · Payslip</title><style>' + fonts +
-    '@page{size:A5 portrait;margin:8mm}*{box-sizing:border-box}' +
-    'html,body{margin:0;color:#171717;font-family:"MS Noto Khmer","MS Noto",sans-serif;font-size:8.5pt;line-height:1.35}' +
-    'body{position:relative}h1,h2,p{margin:0}.head{border-bottom:1px solid #555;padding-bottom:4mm;margin-bottom:3mm}' +
-    '.company{font-size:13pt;font-weight:700}.title{display:flex;justify-content:space-between;align-items:start;margin-top:1.5mm}' +
-    '.title h1{font-size:11pt}.dates,.meta{display:flex;justify-content:space-between;gap:4mm;margin-top:2mm}' +
-    '.meta{border-bottom:1px solid #aaa;padding-bottom:2mm}.label{color:#555}small{display:block;color:#555;font-size:7pt}' +
-    'table{border-collapse:collapse;width:100%;margin-top:3mm}th,td{border-bottom:1px solid #ddd;padding:1.2mm 1mm;text-align:left;vertical-align:top}' +
-    'thead th{font-size:7pt;color:#555}.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}' +
-    '.items th,.items td{padding:.7mm .8mm}.items small{display:inline;margin-left:1mm}.items thead{display:table-header-group}.items tbody tr{break-inside:avoid;page-break-inside:avoid}' +
-    '.summary{break-inside:avoid;page-break-inside:avoid}.totals{table-layout:fixed;margin-top:2mm}.totals th,.totals td{width:25%;padding:1mm .8mm}' +
-    '.net th,.net td{border-top:1.5px solid #222;border-bottom:0;font-size:10pt;font-weight:700;padding-top:2mm}' +
-    '.balance{display:flex;gap:8mm;margin-top:3mm;padding:2mm;border:1px solid #ddd}.muted{color:#666}' +
-    '.watermark{position:fixed;inset:43% 0 auto;text-align:center;color:rgba(170,0,0,.13);font-size:25pt;font-weight:700;transform:rotate(-24deg);pointer-events:none}' +
-    '.status{font-size:8pt;font-weight:700;color:#8b1d1d}.tax-note{margin-top:2mm;color:#555;font-size:7pt}' +
-    '</style></head><body>' +
-    (watermark ? '<div class="watermark" aria-hidden="true">' + esc(stamp || stampKm) + '</div>' : '') +
+  return (watermark ? '<div class="watermark" aria-hidden="true">' + esc(stamp || stampKm) + '</div>' : '') +
     '<header class="head"><p class="company">' + esc(companyName || NOT_PROVIDED) + '</p>' +
     '<div class="title"><h1>ប្រាក់បៀវត្ស · Payslip</h1><span class="status">' +
     esc(stamp || stampKm || String(run.status || NOT_PROVIDED).toUpperCase()) + '</span></div>' +
@@ -160,7 +142,51 @@ function buildPayslipHtml({ companyName, run, line }) {
     '<section class="balance"><div><span class="label">Loan balance after · សមតុល្យកម្ចី</span><br><b>' +
     esc(money(line.loanBalanceAfterMinor, line.currency)) + '</b></div><div><span class="label">Leave balance · សមតុល្យច្បាប់</span><br><b>' +
     esc(has(line.leaveBalanceDays) ? String(line.leaveBalanceDays) + ' days' : NOT_PROVIDED) +
-    '</b></div></section></section></body></html>';
+    '</b></div></section></section>';
+}
+
+function payslipStyles(fonts, pageBreaks = false) {
+  return '<style>' + fonts +
+    '@page{size:A5 portrait;margin:8mm}*{box-sizing:border-box}' +
+    'html,body{margin:0;color:#171717;font-family:"MS Noto Khmer","MS Noto",sans-serif;font-size:8.5pt;line-height:1.35}' +
+    'body{position:relative}h1,h2,p{margin:0}.head{border-bottom:1px solid #555;padding-bottom:4mm;margin-bottom:3mm}' +
+    '.company{font-size:13pt;font-weight:700}.title{display:flex;justify-content:space-between;align-items:start;margin-top:1.5mm}' +
+    '.title h1{font-size:11pt}.dates,.meta{display:flex;justify-content:space-between;gap:4mm;margin-top:2mm}' +
+    '.meta{border-bottom:1px solid #aaa;padding-bottom:2mm}.label{color:#555}small{display:block;color:#555;font-size:7pt}' +
+    'table{border-collapse:collapse;width:100%;margin-top:3mm}th,td{border-bottom:1px solid #ddd;padding:1.2mm 1mm;text-align:left;vertical-align:top}' +
+    'thead th{font-size:7pt;color:#555}.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}' +
+    '.items th,.items td{padding:.7mm .8mm}.items small{display:inline;margin-left:1mm}.items thead{display:table-header-group}.items tbody tr{break-inside:avoid;page-break-inside:avoid}' +
+    '.summary{break-inside:avoid;page-break-inside:avoid}.totals{table-layout:fixed;margin-top:2mm}.totals th,.totals td{width:25%;padding:1mm .8mm}' +
+    '.net th,.net td{border-top:1.5px solid #222;border-bottom:0;font-size:10pt;font-weight:700;padding-top:2mm}' +
+    '.balance{display:flex;gap:8mm;margin-top:3mm;padding:2mm;border:1px solid #ddd}.muted{color:#666}' +
+    '.watermark{position:fixed;inset:43% 0 auto;text-align:center;color:rgba(170,0,0,.13);font-size:25pt;font-weight:700;transform:rotate(-24deg);pointer-events:none}' +
+    '.status{font-size:8pt;font-weight:700;color:#8b1d1d}.tax-note{margin-top:2mm;color:#555;font-size:7pt}' +
+    (pageBreaks ? 'section.payslip-page{position:relative}section.payslip-page>.watermark{position:absolute}' +
+      'section.payslip-page+section.payslip-page{break-before:page;page-break-before:always}' : '') +
+    '</style>';
+}
+
+function wrapPayslipHtml({ companyName, fonts, pages, pageBreaks = false }) {
+  return '<!doctype html><html lang="km"><head><meta charset="utf-8"><title>' +
+    esc(companyName || NOT_PROVIDED) + ' · Payslip</title>' + payslipStyles(fonts, pageBreaks) +
+    '</head><body>' + pages + '</body></html>';
+}
+
+function buildPayslipHtml({ companyName, run, line }) {
+  const page = buildPayslipPage({ companyName, run, line });
+  const fonts = embeddedFontCss(JSON.stringify({ companyName, run, line }) + ' ប្រាក់បៀវត្ស');
+  return wrapPayslipHtml({ companyName, fonts, pages: page });
+}
+
+function buildPayrollRunHtml({ companyName, run, lines }) {
+  if (!Array.isArray(lines) || lines.length === 0) throw new Error('Payroll run payslip requires at least one payroll line');
+  if (lines.length === 1) return buildPayslipHtml({ companyName, run, line: lines[0] });
+  validateRun(run);
+  for (const line of lines) validateLine(line);
+  const fonts = embeddedFontCss(JSON.stringify({ companyName, run, lines }) + ' ប្រាក់បៀវត្ស');
+  const pages = lines.map((line) => '<section class="payslip-page">' +
+    buildPayslipPage({ companyName, run, line }) + '</section>').join('');
+  return wrapPayslipHtml({ companyName, fonts, pages, pageBreaks: true });
 }
 
 function safeSlug(value) {
@@ -273,4 +299,4 @@ function buildPayrollWorkbook({ companyName, run, lines = [] }) {
   };
 }
 
-module.exports = { buildPayslipHtml, buildPayrollWorkbook };
+module.exports = { buildPayslipHtml, buildPayrollRunHtml, buildPayrollWorkbook };
