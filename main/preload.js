@@ -202,6 +202,7 @@ contextBridge.exposeInMainWorld('api', {
   },
   samples: {
     generateProductSheet: () => invoke('samples:generateProductSheet'),
+    getProductSheet: () => invoke('samples:getProductSheet'),
   },
   companies: {
     list:        ()              => invoke('companies:list'),
@@ -744,6 +745,9 @@ contextBridge.exposeInMainWorld('api', {
     cancel: (runId) => invoke('exports:cancel', runId),
     // v0.36.0: catalog CSV/feed export. Returns { csv, count, filename }.
     catalogCsv: (companyId, format) => invoke('exports:catalogCsv', { companyId, format }),
+    // 2026-10-11: product list → .xlsx with the import sample's columns.
+    saveProductsWorkbook: (args) => invoke('exports:saveProductsWorkbook', args),
+    getProductsWorkbook: (args) => invoke('exports:getProductsWorkbook', args),
   },
   /** v0.18.2: global search across products / brands / categories
    *  for the active company. Used by the Cmd+K palette. */

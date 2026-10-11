@@ -1037,6 +1037,8 @@ const PROXIED_CHANNELS = [
   'exports:listRuns',
   // v0.36.0: catalog CSV/feed (pure data; renderer downloads it).
   'exports:catalogCsv',
+  'exports:getProductsWorkbook',
+  'samples:getProductSheet',
   'ai:listModels',
   'ai:estimateCost',
   'ai:listPrompts',
@@ -1768,18 +1770,28 @@ function registerClientFileHandlers() {
   handleLocal('loans:saveImportSample', args => savePayrollDocument('loans:getImportSample', args, 'xlsx'));
   handleLocal('kiosk:savePayslipPdf', args => savePayrollDocument('kiosk:getPayslipPdf', args, 'pdf'));
 
+  /* The server builds the workbook from its data (it has the company's price
+   * groups, custom fields and products); this Mac shows the save dialog and
+   * writes the file. Same columns as standalone mode (main/util/productWorkbook.js). */
+  async function saveServerWorkbook(channel, args, title) {
+    const connection = JSON.stringify([baseUrl(), authHeader()]);
+    const first = await rpc(channel, args);
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
+    const options = { title, defaultPath: first.filename, filters: [{ name: 'Workbook', extensions: ['xlsx'] }] };
+    const out = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+    if (out.canceled || !out.filePath) return null;
+    if (connection !== JSON.stringify([baseUrl(), authHeader()])) throw new Error('Connection changed while saving. Try again.');
+    // Built again after the dialog, so edits made while it was open are included.
+    const fresh = await rpc(channel, args);
+    if (fresh.companyId !== first.companyId) throw new Error('The company changed while the save dialog was open. Try again.');
+    const bytes = Buffer.isBuffer(fresh.bytes) ? fresh.bytes : Buffer.from(fresh.bytes || []);
+    require('node:fs').writeFileSync(out.filePath, bytes);
+    return { filePath: out.filePath, count: fresh.count };
+  }
+  handleLocal('exports:saveProductsWorkbook', args => saveServerWorkbook('exports:getProductsWorkbook', args, 'Export products to Excel'));
   handleLocal('samples:generateProductSheet', async () => {
-    // The sample workbook is a constant the renderer doesn't need
-    // server data for. Local handler is fine.
-    const res = await dialog.showSaveDialog({
-      title: 'Save sample workbook',
-      defaultPath: 'media-studio-kh-products-sample.xlsx',
-      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
-    });
-    if (res.canceled || !res.filePath) return null;
-    const fileHandler = require('../fileHandler');
-    fileHandler.writeProductSampleWorkbook(res.filePath);
-    return res.filePath;
+    const saved = await saveServerWorkbook('samples:getProductSheet', undefined, 'Save sample workbook');
+    return saved ? saved.filePath : null;
   });
 
   /* ─── v0.1.21: labels, generated and printed on THIS Mac ──────────────

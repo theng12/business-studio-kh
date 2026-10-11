@@ -41,151 +41,19 @@ function readWorkbook(filePath) {
 }
 
 /**
- * Build the sample/import workbook for a company.
+ * Write the sample/import workbook for a company.
  *
- * v0.1.65: this used to be a hard-coded header list, which made the workbook
- * useless the moment a company had a price group of its own: Settings → General
- * → Price groups would happily create "Export", no column existed to import it,
- * and the user had nothing to type the number into. AGENTS.md section 11 asks
- * for the sample to be pre-configured with "this org's price groups, custom
- * fields, and the full canonical column set" — this is that.
- *
- * Every currency column sits next to its price column, because the app stores a
- * currency per price field (products.price_retail_currency and friends), and a
- * sheet that can only carry the number forces everyone into one currency.
+ * The columns come from main/util/productWorkbook.js, which the Excel export
+ * uses too, so a sample and an export always carry the same columns
+ * (AGENTS.md §11: "pre-configured with this org's price groups, custom fields,
+ * and the full canonical column set").
  */
 function writeProductSampleWorkbook(outputPath, options = {}) {
-  const priceGroups = Array.isArray(options.priceGroups) ? options.priceGroups : [];
-  const customFields = Array.isArray(options.customFields) ? options.customFields : [];
-
-  /* One price column per group. Retail and wholesale keep their long-standing
-   * headers so files exported from an older sample still map onto them; a
-   * custom group is labelled with the name the user gave it. */
-  const priceColumns = [
-    { header: 'Retail price', field: 'priceRetail', value: 12.5, currency: 'Retail currency', currencyValue: 'USD' },
-    { header: 'Wholesale price', field: 'priceWholesale', value: 9.2, currency: 'Wholesale currency', currencyValue: 'USD' },
-    ...priceGroups.map((g) => ({
-      header: `${g.label} price`,
-      field: `price.${g.key}`,
-      value: 4.75,
-      currency: `${g.label} currency`,
-      currencyValue: 'USD',
-      group: g,
-    })),
-  ];
-
-  const headers = [
-    'SKU', 'Brand', 'Barcode', 'Secondary code',
-    'Name', 'Category', 'Subcategory', 'Color/Finish',
-    'Description', 'Unit', 'Variant',
-  ].concat(
-    // price + its currency, group by group
-    priceColumns.flatMap((p) => [p.header, p.currency]),
-  ).concat([
-    'Tags', 'Status',
-    // v0.49.49: logistics & sourcing — the carton + weight data off a
-    // supplier's packing list. These prefill Purchase Order lines and
-    // feed the landed-cost volume / weight allocation.
-    'Supplier SKU', 'HS code', 'Units per carton',
-    'Carton width (cm)', 'Carton height (cm)', 'Carton length (cm)',
-    'Weight per unit (kg)',
-    // v0.1.25: units on hand, so a stock column is importable too.
-    'Stock on hand',
-    // Custom fields the company already uses, as their stored keys.
-    ...customFields,
-  ]);
-
-  const sampleRows = [{
-    SKU: 'SAMPLE-001 — delete this row',
-    Brand: 'Demo brand',
-    Barcode: '',
-    'Secondary code': '',
-    Name: 'Sample tile',
-    Category: 'Tiles',
-    Subcategory: 'Wall',
-    'Color/Finish': 'Matte white',
-    Description: 'A short product description.',
-    Unit: 'sqm',
-    Variant: '60 × 60 cm',
-    Tags: 'matte, ceramic, indoor',
-    Status: 'active',
-    'Supplier SKU': 'FAC-TILE-6060',
-    'HS code': '6907.21',
-    'Units per carton': 4,
-    'Carton width (cm)': 62,
-    'Carton height (cm)': 12,
-    'Carton length (cm)': 62,
-    'Weight per unit (kg)': 8.5,
-    'Stock on hand': 24,
-  }];
-  for (const column of priceColumns) {
-    sampleRows[0][column.header] = column.value;
-    sampleRows[0][column.currency] = column.currencyValue;
-  }
-  for (const key of customFields) sampleRows[0][key] = '';
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.json_to_sheet(sampleRows, { header: headers }),
-    'Products',
-  );
-
-  const instructions = [
-    ['Column', 'Notes'],
-    ['SKU', 'Required. Unique per company.'],
-    ['Brand', 'Optional. Matches an existing brand by name (case-insensitive). Unknown brand names are ignored.'],
-    ['Barcode', 'Optional. EAN, UPC, or other.'],
-    ['Secondary code', 'Optional. Supplier code or alt SKU.'],
-    ['Name', 'Product name.'],
-    ['Category', 'Top-level grouping. Created automatically if it doesn\'t exist.'],
-    ['Subcategory', 'Optional second level. Free text.'],
-    ['Color/Finish', 'e.g. Matte White.'],
-    ['Description', 'Short product description.'],
-    ['Unit', 'e.g. sqm, piece, box.'],
-    ['Variant', 'e.g. size, material.'],
-    ['Tags', 'Comma-separated tags.'],
-    ['Status', 'active / inactive / draft. Defaults to active.'],
-    ['Stock on hand', 'Optional, numeric. Merge leaves the existing count alone when the cell is blank.'],
-    ['Supplier SKU', 'Optional. The supplier / factory item code. Prefills onto Purchase Order lines.'],
-    ['HS code', 'Optional. Customs tariff code (e.g. 6907.21).'],
-    ['Units per carton', 'Optional, numeric. How many pieces ship in one carton. Used for container fill % + volume-based cost allocation.'],
-    ['Carton width (cm)', 'Optional, numeric. Outer carton width. Width × height × length = carton volume (CBM).'],
-    ['Carton height (cm)', 'Optional, numeric. Outer carton height.'],
-    ['Carton length (cm)', 'Optional, numeric. Outer carton length / depth. (Order of W/H/L does not change the volume.)'],
-    ['Weight per unit (kg)', 'Optional, numeric. Gross weight of ONE piece (not the carton). Used only for weight-based cost allocation.'],
-  ];
-
-  for (const column of priceColumns) {
-    instructions.push([
-      column.header,
-      column.group
-        ? `Numeric. Your “${column.group.label}” price group (Settings → General → Price groups). Blank leaves it alone.`
-        : 'Numeric. Optional.',
-    ]);
-    instructions.push([
-      column.currency,
-      'Currency code for the price beside it: USD, CNY, KHR, THB, VND, EUR, JPY, KRW, INR, IDR, MYR or SGD. Defaults to USD.',
-    ]);
-  }
-  for (const key of customFields) {
-    instructions.push([key, `Custom field “${key.replace(/^custom\./, '')}”. Free text, stored per product.`]);
-  }
-
-  instructions.push(
-    ['', ''],
-    ['How updates work', 'Rows are matched by SKU. New SKUs are inserted; existing SKUs are updated. Blank cells leave the current data alone (choose Overwrite on the preview screen to make blanks clear the field instead).'],
-    ['Logistics & cost', 'The Supplier SKU / HS / carton / weight columns prefill Purchase Order line items and drive the landed-cost calculator. Default supplier is set per-product in the app (not importable here).'],
-    ['Images', 'Not imported via this sheet. Use Auto-match images… in the Library or attach images per product.'],
-  );
-
-  XLSX.utils.book_append_sheet(
-    wb,
-    XLSX.utils.aoa_to_sheet(instructions),
-    'Instructions',
-  );
-
-  XLSX.writeFile(wb, outputPath);
+  const { buildProductSampleWorkbook } = require('./util/productWorkbook');
+  fs.writeFileSync(outputPath, buildProductSampleWorkbook({
+    priceGroups: Array.isArray(options.priceGroups) ? options.priceGroups : [],
+    customFields: Array.isArray(options.customFields) ? options.customFields : [],
+  }));
   return outputPath;
 }
 
