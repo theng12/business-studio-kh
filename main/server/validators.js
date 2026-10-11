@@ -209,6 +209,18 @@ function validateOptionalPositions(positions) {
 // of the files:* handlers — a handler-level check does not exist there, but the
 // validator runs in both modes.
 const { isImagePath, isWorkbookPath, isAbsolutePath } = require('../util/fileKinds');
+/** { companyId?, scope: 'all' | 'filtered' | 'selection', ids?: string[] } */
+function productsWorkbookArgs(a) {
+  if (!isObject(a)) return 'expected an object';
+  if (a.companyId != null && !isString(a.companyId)) return 'companyId must be a string';
+  if (!['all', 'filtered', 'selection'].includes(a.scope)) return "scope must be 'all', 'filtered' or 'selection'";
+  if (a.scope === 'all') return a.ids == null ? true : 'ids are only sent for a filtered or selected export';
+  if (!isArray(a.ids) || a.ids.length === 0) return 'ids must be a non-empty array';
+  if (a.ids.length > 50000) return 'at most 50,000 products per export';
+  if (!a.ids.every((id) => isString(id) && id.length > 0 && id.length <= 64)) return 'every id must be a non-empty string';
+  return true;
+}
+
 function pathExists(p) {
   try { return require('node:fs').existsSync(p); } catch { return false; }
 }
@@ -846,6 +858,9 @@ const VALIDATORS = {
     if (a.format != null && !isString(a.format)) return 'format must be a string';
     return true;
   },
+  // 2026-10-11: product list → Excel, same columns as the import sample.
+  'exports:getProductsWorkbook':  productsWorkbookArgs,
+  'exports:saveProductsWorkbook': productsWorkbookArgs,
   'exports:filenamePreview': (a) => {
     if (!isObject(a)) return 'expected an object';
     if (!isString(a.profileId)) return 'profileId is required';
@@ -1007,6 +1022,7 @@ const VALIDATORS = {
   'files:pickImageFile':         (a) => a == null || (isObject(a) && (a.multiple === undefined || isBool(a.multiple)))
     ? true : 'expected { multiple?: boolean }',
   'samples:generateProductSheet': () => true,
+  'samples:getProductSheet':      () => true,
 
   /* app — this Mac's own folders, cache and lifecycle */
   'app:clearCache':              () => true,

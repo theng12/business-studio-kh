@@ -50,6 +50,7 @@ import { PROCESS_STATUS_OPTIONS, STATUS_OPTIONS } from './libraryConstants.js';
 import { pointsTowardRect } from './menuIntent.mjs';
 import { orderedSelectionIds } from './useInHandoff.js';
 import { UseInCatalogModal } from './UseInCatalogModal.jsx';
+import { ExportWorkbookModal } from './ExportWorkbookModal.jsx';
 import { useUserCaps } from '../../components/Sidebar.jsx';
 import { hasAnyCap } from '../../lib/capabilities.js';
 
@@ -63,6 +64,8 @@ import { hasAnyCap } from '../../lib/capabilities.js';
  * Falls back to 'table' for fresh installs.
  */
 const VIEW_STORAGE_KEY = 'ProductLibrary.view';
+// Stable empty list for the export dialog's ids while it is closed.
+const EMPTY_IDS = Object.freeze([]);
 function loadView() {
   try {
     const v = localStorage.getItem(VIEW_STORAGE_KEY);
@@ -268,6 +271,7 @@ export function ProductLibrary() {
   const [autoMatchOpen, setAutoMatchOpen] = useState(false);
   const [dedupOpen, setDedupOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [exportWorkbookOpen, setExportWorkbookOpen] = useState(false);
   const [lightbox, setLightbox] = useState(null); // { product, images, startIndex } | null
   // The product the user just clicked "Process →" for. The destination
   // router modal owns the actual route choice (Workspace or AI Studio).
@@ -839,6 +843,7 @@ export function ProductLibrary() {
               label="Export"
               title="Export the whole catalog as a CSV / marketplace feed"
               items={[
+                { label: 'Excel workbook (.xlsx)…', hint: 'All, filtered or selected products — same columns as Download sample.', onClick: () => setExportWorkbookOpen(true) },
                 { label: 'Catalog CSV', hint: 'Every product with its fields.', onClick: () => handleExportCsv('generic') },
                 { label: 'Shopify CSV', hint: 'Shopify product import format.', onClick: () => handleExportCsv('shopify') },
                 { label: 'Google Shopping feed', hint: 'Google Merchant Center format.', onClick: () => handleExportCsv('google') },
@@ -1257,6 +1262,13 @@ export function ProductLibrary() {
       <AutoMatchModal open={autoMatchOpen} onClose={() => setAutoMatchOpen(false)} />
       <DuplicateMergeModal open={dedupOpen} onClose={() => setDedupOpen(false)} />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} />
+      <ExportWorkbookModal
+        open={exportWorkbookOpen}
+        onClose={() => setExportWorkbookOpen(false)}
+        loadedCount={products.length}
+        filteredIds={exportWorkbookOpen ? filteredAndSorted.map((p) => p.id) : EMPTY_IDS}
+        selectedIds={exportWorkbookOpen ? selectionInListOrder() : EMPTY_IDS}
+      />
 
       <UseInCatalogModal
         open={useInCatalogOpen}

@@ -216,6 +216,14 @@ For desktop apps:
 - Show 1 sample value per column in the mapping table so users can verify.
 - Imports are **upserts by natural key** (e.g. SKU). For existing rows, **only update fields that have a value in the imported row** — never blank out fields just because the column wasn't supplied. Merge JSON object fields (prices, custom fields) into existing rather than replacing.
 - Provide a **"Download sample"** button that emits a workbook pre-configured with this org's price groups, custom fields, and the full canonical column set. Include an "Instructions" sheet with one row per column explaining what it accepts.
+- **Export uses the sample's columns** (owner, 2026-10-11: "it must use the same columns as the import
+  sample"). Library → Export → Excel workbook (.xlsx) and Download sample are both built from
+  `productColumns()` in `main/util/productWorkbook.js` (verified 2026-10-11) — add or rename a column
+  there, never in one workbook only. The export offers all / filtered / selected rows (the Library's ids in
+  on-screen order), freezes the header row and sets column widths. SheetJS Community Edition cannot
+  write frozen panes, so `freezeHeaderRow()` edits the sheet XML inside the zip.
+  `test/productWorkbook.test.js` proves every header maps back through the importer's `autoGuess`;
+  `test/productWorkbookNative.test.js` round-trips a product through export → import.
 
 ## 12. Multi-image handling
 
@@ -385,7 +393,7 @@ main/                    # main process — CommonJS (require/module.exports)
   ipc/                   # 37 files, one per domain (products.js, images.js, …)
   db/                    # 58 files: index.js owns the schema + migrations,
                          # then one file per table (products.js, brands.js, …)
-  util/                  # 53 helpers (slug, capabilities, landedCost,
+  util/                  # 58 helpers (slug, capabilities, landedCost,
                          # socialGridModel.js — pure selection/sort/pagination)
   ai/                    # provider adapters + queue runner
   server/                # HTTP + WebSocket server for multi-Mac mode
@@ -415,7 +423,7 @@ renderer/                # React + Vite — ESM (import/export)
     PageHeader.jsx PageErrorBoundary.jsx SearchPalette.jsx Lightbox.jsx …
   modules/<Name>/        # 24 feature modules, one folder each (Home is the §1 grid)
     index.jsx            #   named export, e.g. `export function Brands()`
-test/                    # 238 files — `node --test test/**/*.test.js`
+test/                    # 257 files — `node --test test/**/*.test.js`
 scripts/                 # 16 files: build-icon.js, build-webclient.js (/m + /f),
                          # seed-realistic.js (--fuel adds staff + 6 months of fuel,
                          #   --hr adds 3 months of attendance + leave on top,
