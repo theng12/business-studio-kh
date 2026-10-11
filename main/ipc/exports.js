@@ -55,6 +55,42 @@ function cancelRun(opId) {
   return { ok: true };
 }
 
+/** Build the product workbook for the active company (see exports:getProductsWorkbook). */
+function buildProductsWorkbook({ companyId, scope = 'all', ids } = {}, { countOnly = false } = {}) {
+  const activeId = companies.getActiveId();
+  if (!activeId) throw new Error('Choose a company first.');
+  if (companyId && companyId !== activeId) throw new Error('Cross-company export blocked');
+  const productsDb = require('../db/products');
+  const all = productsDb.list(activeId, {});
+  let products = all;
+  if (scope === 'filtered' || scope === 'selection') {
+    const byId = new Map(all.map((p) => [p.id, p]));
+    const seen = new Set();
+    products = [];
+    for (const id of ids || []) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const p = byId.get(id);
+      if (p) products.push(p);
+    }
+  }
+  const company = companies.get(activeId);
+  const { slugify } = require('../util/slug');
+  const date = new Date().toISOString().slice(0, 10);
+  const suffix = scope === 'selection' ? '-selected' : scope === 'filtered' ? '-filtered' : '';
+  const filename = `products-${slugify(company?.name, 'company')}${suffix}-${date}.xlsx`;
+  if (countOnly) return { filename, count: products.length, companyId: activeId };
+  const { buildProductExportWorkbook } = require('../util/productWorkbook');
+  const bytes = buildProductExportWorkbook({
+    products,
+    brandsById: new Map(brands.list(activeId).map((b) => [b.id, b])),
+    categoriesById: new Map(require('../db/categories').list(activeId).map((c) => [c.id, c])),
+    priceGroups: company?.priceGroups ?? [],
+    customFields: productsDb.customFieldKeys(activeId),
+  });
+  return { bytes, filename, count: products.length, companyId: activeId };
+}
+
 function register({ expose, assertEntityInActiveCompany, assertProductInActiveCompany, exposeLocal }) {
   /**
    * v0.1.89: stop a running export after the image in progress. Exposed (not
@@ -91,6 +127,33 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     const priceGroups = require('../db/companies').get(companyId)?.priceGroups ?? [];
     const csv = buildCatalogCsv({ products, brandsById, categoriesById, priceGroups, format: fmt });
     return { csv, count: products.length, filename: `catalog-${fmt}.csv` };
+  });
+
+  /* 2026-10-11: the product list as an Excel workbook, with exactly the
+   * columns of the import sample (main/util/productWorkbook.js), so a file can
+   * be exported, edited in Excel and imported back. `scope` is 'all' (every
+   * product in the company) or 'filtered' / 'selection', which send the
+   * Library's own ids in its on-screen order. Exposed: in client mode the data
+   * lives on the server, and the client writes the bytes on its own Mac. */
+  expose('exports:getProductsWorkbook', (args = {}) => buildProductsWorkbook(args));
+
+  exposeLocal('exports:saveProductsWorkbook', async (args = {}) => {
+    const companyId = companies.getActiveId();
+    const first = buildProductsWorkbook(args, { countOnly: true });
+    const { dialog, BrowserWindow } = require('electron');
+    const win = BrowserWindow.getFocusedWindow?.() || BrowserWindow.getAllWindows?.()[0] || null;
+    const options = {
+      title: 'Export products to Excel',
+      defaultPath: first.filename,
+      filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
+    };
+    const res = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+    if (res.canceled || !res.filePath) return null;
+    if (companies.getActiveId() !== companyId) throw new Error('The company changed while the save dialog was open. Export again.');
+    // Built after the dialog, so edits made while it was open are included.
+    const out = buildProductsWorkbook(args);
+    fs.writeFileSync(res.filePath, out.bytes);
+    return { filePath: res.filePath, count: out.count };
   });
 
   // v0.15.0: export profile mutations exposed. The actual export
@@ -351,4 +414,4 @@ function runNotes(result) {
   return lines.length ? lines.join('\n') : null;
 }
 
-module.exports = { register, cancelRun, startRun, pickRunId };
+module.exports = { register, cancelRun, startRun, pickRunId, buildProductsWorkbook };

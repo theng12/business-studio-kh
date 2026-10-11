@@ -2,6 +2,15 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.100', date: '2026-10-11',
+    items: [
+      'NEW — Product Library → Export → Excel workbook (.xlsx): export all products, only the ones matching your current search and filters, or only the ticked ones, in the order the list shows them.',
+      'NEW — The workbook has exactly the same columns as Download sample (including your price groups and custom fields), so you can edit it in Excel and import it back. The header row stays frozen when you scroll and the columns are wide enough to read.',
+      'FIX — Download sample on a second Mac now includes the company\'s own price groups and custom fields, like it does on the main Mac.',
+      'Internal — One column list for the sample and the export (main/util/productWorkbook.js productColumns); channels exports:getProductsWorkbook (data, works from a client Mac) and exports:saveProductsWorkbook (save dialog on this Mac), samples:getProductSheet for client mode. Header row frozen by editing the sheet XML (SheetJS CE cannot write panes). An attendance test that failed on Sundays and public holidays now picks a work day.',
+    ],
+  },
+  {
     version: '0.1.99', date: '2026-10-09',
     items: [
       'NEW — People → Payroll: dated monthly, daily or hourly pay in USD or riel, approved overtime and confirmed late minutes, optional extra pay, draft calculations, review, approval and recorded payments. Monthly is the trial default; payday and both twice-monthly arrangements are configurable.',

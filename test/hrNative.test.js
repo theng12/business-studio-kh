@@ -254,7 +254,12 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   await assert.rejects(async () => employees.create({ companyId: company.id, staffCode: 'X9', nameEn: 'Twin', userId: phoneUser.id }), /already linked/);
   const mine = await ok(phoneUser.token, 'attendance:mine');
   assert.equal(mine.employee.id, P.id);
-  const sickReq = await ok(phoneUser.token, 'leave:requestSelf', { leaveTypeId: types.find((x) => x.code === 'sick').id, fromDate: calc.addDays(calc.ppDate(Date.now()), 14) });
+  /* A work day about two weeks out. "Today + 14" alone failed whenever it
+   * landed on a Sunday or a public holiday (e.g. run on Sunday 2026-10-11). */
+  let sickDay = calc.addDays(calc.ppDate(Date.now()), 14);
+  const sickYearHolidays = new Set((await ok(manager.token, 'hr:listHolidays', { year: sickDay.slice(0, 4) })).map((h) => h.date));
+  while (calc.weekdayMon0(sickDay) >= 6 || holidays.some((h) => h.date === sickDay) || sickYearHolidays.has(sickDay)) sickDay = calc.addDays(sickDay, 1);
+  const sickReq = await ok(phoneUser.token, 'leave:requestSelf', { leaveTypeId: types.find((x) => x.code === 'sick').id, fromDate: sickDay });
   assert.equal((await ok(phoneUser.token, 'leave:cancelSelf', { id: sickReq.id })).status, 'cancelled');
   await fails(phoneUser.token, 'leave:cancelSelf', { id: leaveReq.id }, 422, /your own/);
 

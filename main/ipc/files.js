@@ -24,7 +24,7 @@ const productsDb = require('../db/products');
 // its own copy of these handlers). See main/util/fileKinds.js.
 const { IMAGE_EXTS, isAbsolutePath, isImagePath, isWorkbookPath, scanImageFilesIn } = require('../util/fileKinds');
 
-function register({ exposeLocal }) {
+function register({ expose, exposeLocal }) {
   exposeLocal('files:pickFolder', async () => {
     const res = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
@@ -123,6 +123,23 @@ function register({ exposeLocal }) {
       throw new Error('Only .xlsx, .xls, .csv and .tsv files can be imported');
     }
     return fileHandler.readWorkbook(filePath);
+  });
+
+  /* The sample built on the server for a client Mac, which has no database:
+   * same company columns (price groups, custom fields) as the standalone sample
+   * and the Excel export. */
+  expose('samples:getProductSheet', () => {
+    const activeCompanyId = companies.getActiveId();
+    const company = activeCompanyId ? companies.get(activeCompanyId) : null;
+    const { buildProductSampleWorkbook } = require('../util/productWorkbook');
+    return {
+      companyId: activeCompanyId || null,
+      filename: 'media-studio-kh-products-sample.xlsx',
+      bytes: buildProductSampleWorkbook({
+        priceGroups: company?.priceGroups ?? [],
+        customFields: activeCompanyId ? productsDb.customFieldKeys(activeCompanyId) : [],
+      }),
+    };
   });
 
   exposeLocal('samples:generateProductSheet', async () => {
