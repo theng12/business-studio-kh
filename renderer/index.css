@@ -12968,3 +12968,10 @@ button.hr-cell:focus-visible { outline: 2px solid var(--c-brand); outline-offset
 /* Dates in dense tables stay on one line. */
 .hr-nowrap, .hr-nowrap .link-button { white-space: nowrap; }
 /* ═══ end HR1 ═══ */
+
+/* Library → Export → Excel workbook (2026-10-11) */
+.export-workbook__choices { border: 0; margin: 0 0 var(--s-3); padding: 0; }
+.export-workbook__choice { display: flex; gap: var(--s-2); align-items: flex-start; margin: var(--s-3) 0; font-size: var(--fs-md); cursor: pointer; }
+.export-workbook__choice.is-disabled { cursor: default; opacity: 0.55; }
+.export-workbook__choice .field__hint { display: block; margin-top: 2px; }
+.export-workbook__label { display: block; }
