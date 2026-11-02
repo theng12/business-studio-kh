@@ -4,7 +4,8 @@ const { build } = require('esbuild');
 const { runInNewContext } = require('node:vm');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
-const testUrl = require('node:url').pathToFileURL(__filename);
+const { pathToFileURL, fileURLToPath } = require('node:url');
+const testUrl = pathToFileURL(__filename);
 let model, endOfMonth, filterLoans, formatMinor, makeOperation,
   pendingAfterFailure, parseMinorInput, requestIsCurrent, totalsByCurrency;
 test.before(async () => {
@@ -36,7 +37,7 @@ async function loansHarness() {
   ui.paginate = (length) => ({ pageStart: 0, pageEnd: length, currentPage: 1, maxPage: 1 });
   const store = (select) => select({ activeCompanyId: context.company, addToast() {} });
   store.getState = () => ({ activeCompanyId: context.company });
-  const result = await build({ entryPoints: [new URL('../renderer/modules/People/Loans.jsx', testUrl).pathname], bundle: true, write: false, format: 'cjs', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment', banner: { js: 'const React = require("react");' }, plugins: [{ name: 'boundaries', setup(builder) {
+  const result = await build({ entryPoints: [fileURLToPath(new URL('../renderer/modules/People/Loans.jsx', testUrl))], bundle: true, write: false, format: 'cjs', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment', banner: { js: 'const React = require("react");' }, plugins: [{ name: 'boundaries', setup(builder) {
     builder.onResolve({ filter: /.*/ }, ({ path, importer }) => importer && !/\/(?:loansModel|loanPending)\.js$/.test(path) ? { path, external: true } : undefined);
   } }] });
   const module = { exports: {} };
@@ -103,7 +104,7 @@ test('formats amounts without mixing currencies and returns only whole major uni
 });
 
 test('actual loan approval modal keeps the formatter fix and hides a different company before effects', async () => {
-  const result = await build({ entryPoints: [new URL('../renderer/modules/People/LoansModals.jsx', testUrl).pathname], bundle: true, write: false, format: 'cjs', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment', banner: { js: 'const React = require("react");' }, plugins: [{ name: 'boundaries', setup(builder) {
+  const result = await build({ entryPoints: [fileURLToPath(new URL('../renderer/modules/People/LoansModals.jsx', testUrl))], bundle: true, write: false, format: 'cjs', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment', banner: { js: 'const React = require("react");' }, plugins: [{ name: 'boundaries', setup(builder) {
     builder.onResolve({ filter: /.*/ }, ({ path, importer }) => importer && !path.endsWith('loansModel.js') ? { path, external: true } : undefined);
   } }] });
   const ui = Object.fromEntries(['Badge', 'Button', 'Input', 'Select', 'Textarea'].map((name) => [name, ({ children }) => React.createElement('span', null, children)]));

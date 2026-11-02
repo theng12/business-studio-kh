@@ -255,7 +255,8 @@ test('the tax year: pools in riel with an estimated opening, per-asset Class 1, 
   assert.equal(taxv.getTaxYear(C, 2026).pools['3'].openingWdvKhr, taxv.getTaxYear(C, 2025).pools['3'].closingWdvKhr);
 });
 
-test('reports agree with the ledger; the workbook has its seven sheets; the background pass posts what is due', { skip: skipReason }, async () => {
+test('reports agree with the ledger; the workbook has its seven sheets; the background pass posts what is due', { skip: skipReason }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-09T00:00:00Z') });
   const { C, cat, assets, dep, disp, reports, oldTruck } = fixture();
   oldTruck();
   const pc = assets.activate(assets.create({ companyId: C, categoryId: cat('computer'), name: 'PC', purchaseDate: '2026-02-01', inServiceDate: '2026-02-01', costMinor: 120_000, usefulLifeMonths: 12 }).id).asset;
