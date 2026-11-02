@@ -9,7 +9,7 @@
  * suite cannot see, so this file scans the real sources.
  *
  * It also pins the two release edits together: the version in package.json /
- * package-lock.json and the top entry in the "What's new" array have to agree,
+ * package-lock.json and the top entry in CHANGELOG.md have to agree,
  * because a bump without a changelog leaves the modal pointing at the previous
  * release.
  */
@@ -32,14 +32,10 @@ const PLANNER = read('renderer/modules/ProductLibrary/bulkGridPaste.js');
 const CSS = read('renderer/index.css');
 const PRELOAD = read('main/preload.js');
 const WHATS_NEW = read('renderer/components/WhatsNewModal.jsx');
+const RELEASE_NOTES = read('CHANGELOG.md');
 const CRAWL = read('scripts/probe-ui-crawl.js');
 const PKG = JSON.parse(read('package.json'));
 const LOCK = JSON.parse(read('package-lock.json'));
-
-// v0.1.67: the bulk table shipped in 0.1.66. Its changelog entry is no longer
-// the TOP one, so this test checks the entry by its own version rather than
-// pinning a literal that every later release would have to edit.
-const BULK_TABLE_VERSION = '0.1.66';
 
 test('the Library offers Edit in table from the bulk Image operations menu', () => {
   assert.match(LIBRARY, /import \{ BulkTableModal \} from '\.\/BulkTableModal\.jsx'/,
@@ -305,13 +301,10 @@ test('the crawl types key by key instead of setting the value in one event', () 
 test('the version and the top What’s new entry agree', () => {
   assert.equal(LOCK.version, PKG.version, `package-lock.json is ${LOCK.version}, expected ${PKG.version}`);
   assert.equal(LOCK.packages?.['']?.version, PKG.version, 'package-lock.json packages[""] disagrees');
-  const topVersion = WHATS_NEW.match(/const CHANGELOG = \[\s*\{\s*version: '([^']+)'/)?.[1];
+  const topVersion = RELEASE_NOTES.match(/^## (\d+\.\d+\.\d+) — /m)?.[1];
   assert.equal(topVersion, PKG.version, `the top What's new entry is ${topVersion}, expected ${PKG.version}`);
-
-  // The 0.1.66 entry's bullets are plain text, and it describes the table.
-  const start = WHATS_NEW.indexOf(`version: '${BULK_TABLE_VERSION}'`);
-  const rest = WHATS_NEW.slice(start + 1);
-  const entry = WHATS_NEW.slice(start, start + 1 + rest.indexOf("version: '"));
-  assert.match(entry, /bulk (edit )?table|Edit in table/i, 'the 0.1.66 changelog entry does not mention the feature');
-  assert.doesNotMatch(entry, /\*\*|\[[^\]]+\]\(/, 'changelog bullets render as plain text — no markdown');
+  assert.match(WHATS_NEW, /import notes from ['"]\.\.\/\.\.\/CHANGELOG\.md\?raw['"]/);
+  assert.match(WHATS_NEW, /parseChangelog\(notes\)/);
+  assert.doesNotMatch(RELEASE_NOTES.split('\n').filter((line) => line.startsWith('- ')).join('\n'),
+    /\*\*|\[[^\]]+\]\(/, 'release bullets render as plain text');
 });

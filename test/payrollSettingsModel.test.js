@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const { readFile } = require('node:fs/promises');
 const { build } = require('esbuild');
 const { runInNewContext } = require('node:vm');
-const testUrl = require('node:url').pathToFileURL(__filename);
+const { pathToFileURL, fileURLToPath } = require('node:url');
+const testUrl = pathToFileURL(__filename);
 let buildSettingsPatch, createCompanySaveQueue, amountToMinor, minorToAmount,
   isUnknownMutationOutcome, rateSetMatchesPayload, policyConfirmationPatch,
   salaryTaxDraft, serializeRateSetDraft, rateSetToDraft;
@@ -91,7 +92,7 @@ async function settingsHarness(api = {}) {
   store.getState = () => ({ activeCompanyId: context.company });
   const defaults = { payday: 10, maxDeductionPercent: 100, payCycle: 'monthly', monthlyDivisor: 'scheduled_working_days', installmentCurrency: 'USD' };
   const payroll = { getSettings: async () => ({ ...defaults }), listRateSets: async () => [], updateSettings: async ({ patch }) => ({ ...defaults, ...patch }), ...api };
-  const result = await build({ entryPoints: [new URL('../renderer/modules/People/PayrollSettings.jsx', testUrl).pathname], bundle: true, write: false, format: 'cjs', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment', banner: { js: 'const React = require("react");' }, plugins: [{ name: 'boundaries', setup(builder) {
+  const result = await build({ entryPoints: [fileURLToPath(new URL('../renderer/modules/People/PayrollSettings.jsx', testUrl))], bundle: true, write: false, format: 'cjs', jsxFactory: 'React.createElement', jsxFragment: 'React.Fragment', banner: { js: 'const React = require("react");' }, plugins: [{ name: 'boundaries', setup(builder) {
     builder.onResolve({ filter: /.*/ }, ({ path, importer }) => importer && !path.endsWith('payrollSettingsModel.js') ? { path, external: true } : undefined);
   } }] });
   const module = { exports: {} };
