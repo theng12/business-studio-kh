@@ -1,5 +1,5 @@
 import { Modal } from './ui.jsx';
-import notes from '../../CHANGELOG.md?raw';
+import notes from '../../CHANGELOG.md?raw' with { type: 'text' };
 import { parseChangelog } from '../lib/changelog.js';
 
 const CHANGELOG = parseChangelog(notes);

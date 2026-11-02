@@ -165,7 +165,8 @@ test('HIGH 1: a run cannot be reversed while it would leave a balance on a gone 
   assert.equal(bad.schedule[0].tagCode, x.tagCode);
 });
 
-test('LOW: the background pass leaves a month reversed by hand alone; previewing a write-off; moves after a disposal; lines carry the branch of their date; movements', { skip: skipReason }, async () => {
+test('LOW: the background pass leaves a month reversed by hand alone; previewing a write-off; moves after a disposal; lines carry the branch of their date; movements', { skip: skipReason }, async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-09T00:00:00Z') });
   const { C, cat, assets, dep, disp, reports, runThrough } = fixture();
   const branches = require('../main/db/branches');
   const b1 = branches.create({ companyId: C, code: 'B1', nameEn: 'One' });
