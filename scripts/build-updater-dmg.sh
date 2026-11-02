@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 unset ELECTRON_RUN_AS_NODE
 VERSION="$(node -p "require('./package.json').version")"
 APP="dist/mac-arm64/Business Studio KH.app"
-DMG="dist/Business Studio KH-$VERSION-arm64.dmg"
+DMG="dist/Business Studio KH-$VERSION.dmg"
 STAGE="$(mktemp -d -t media-updater)"
 trap 'npm run native:host' EXIT
 npm run webclient:bundle

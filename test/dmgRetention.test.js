@@ -39,6 +39,19 @@ test('versions compare numerically, not as text', () => {
   assert.deepEqual(prune, names(['0.1.8']));
 });
 
+test('legacy arch-suffixed history and new unsuffixed builds mix in one folder', () => {
+  // The naming standard changed mid-history: old files end in -arm64, new ones
+  // do not. Both count, grouped by version, so the newest two versions survive.
+  const { keep, prune } = selectDmgsToPrune([
+    'Business Studio KH-0.1.9-arm64.dmg',
+    'Business Studio KH-0.1.10.dmg',
+    'Business Studio KH-0.1.101-arm64.dmg',
+    'Business Studio KH-0.1.102.dmg',
+  ]);
+  assert.deepEqual(keep, ['0.1.101', '0.1.102']);
+  assert.deepEqual(prune, ['Business Studio KH-0.1.9-arm64.dmg', 'Business Studio KH-0.1.10.dmg']);
+});
+
 test('a folder with nothing old enough is left alone', () => {
   assert.deepEqual(selectDmgsToPrune(names(['0.1.73', '0.1.74'])).prune, []);
   assert.deepEqual(selectDmgsToPrune(names(['0.1.74'])).prune, []);

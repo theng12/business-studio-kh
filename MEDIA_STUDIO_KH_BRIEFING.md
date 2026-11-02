@@ -39,8 +39,8 @@ studio, an overlay/watermark studio, and a purchasing area.
   exception is AI Studio, which calls a provider you configure and pay for
   yourself; everything else — including background removal — runs on the Mac.
 - **One Mac or several.** See **Modes** below.
-- **The Apple silicon build ships.** Every release builds one unsigned DMG —
-  `Business Studio KH-<v>-arm64.dmg` (`build.mac.target[].arch: ["arm64"]` in
+- **The Apple silicon build ships.** KH Updater builds one locally ad-hoc signed DMG —
+  `Business Studio KH-<v>.dmg` (filename standard verified 2026-11-03; `build.mac.target[].arch: ["arm64"]` in
   `package.json`; arm64-only since 2026-09-27 at Theng's instruction, before
   that both arches were built and the Intel one was never launched). An Intel
   DMG is still one command — `npm run dist:x64` — but only on request

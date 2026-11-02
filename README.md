@@ -34,10 +34,10 @@ DMGs, live data and credentials are not in the repository.
 
 ## Install
 
-Builds are not code-signed, so macOS refuses to open a downloaded copy until the quarantine flag
-is cleared.
+KH Updater builds are locally ad-hoc signed, without Apple notarization. A downloaded copy
+may need its quarantine flag cleared (verified 2026-11-03).
 
-1. Open the DMG (`Business Studio KH-<version>-arm64.dmg`) and drag **Business Studio KH** into
+1. Open the DMG (`Business Studio KH-<version>.dmg`) and drag **Business Studio KH** into
    Applications.
 2. In Terminal:
 
@@ -47,8 +47,8 @@ is cleared.
 
 3. Open the app.
 
-Without step 2 macOS says the app "is damaged and can't be opened". That is Gatekeeper refusing an
-unsigned app, not a fault in the file. Requires macOS 12 or newer on Apple Silicon.
+A quarantined copy may show "is damaged and can't be opened" because Gatekeeper does not trust
+local ad-hoc signing. Requires macOS 12 or newer on Apple Silicon.
 
 ## What it does
 
