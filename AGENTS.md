@@ -525,7 +525,9 @@ again, and twelve 240 MB DMGs had piled up. Use `npm run dmgs:prune` (dry run:
 them, per the working rule at the top of this file. The rule, the numeric version sort and
 the no-delete property are pinned by `test/dmgRetention.test.js`.
 
-**`dist/` means the owner's checkout on the Mac you are on** — `$HOME/Developer/media-studio-kh/dist` on the current Mac Studio (M2 Max; hardware verified 2026-10-09; earlier handoffs called this path the MacBook), `$HOME/Developer/media-studio-kh/dist` on the Mac mini,
+**KH Updater packaging (owner, verified 2026-11-02):** `npm run dist:updater` builds one arm64 app and DMG, ad-hoc signs and verifies both, and never publishes. The stable bundle ID is `com.terranash.mediastudiokh`. Feed publication belongs to the KH Updater lead; no in-app updater is needed.
+
+**`dist/` means the owner's checkout on the Mac you are on** — `$HOME/Developer/My Own Apps/media-studio-kh/dist` on the current Mac Studio (M2 Max; path and hardware verified 2026-11-02; earlier handoffs used the old Developer path), `$HOME/Developer/media-studio-kh/dist` on the Mac mini,
 which is where he looks for a release. `npm run dist` writes into the build worktree
 instead, so copy the release's DMG across as the last step of a release (one file since
 2026-09-27 — AGENTS.md §20).

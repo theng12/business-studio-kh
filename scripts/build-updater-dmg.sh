@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Local KH Updater installer; publishing remains a separate step.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+unset ELECTRON_RUN_AS_NODE
+VERSION="$(node -p "require('./package.json').version")"
+APP="dist/mac-arm64/Business Studio KH.app"
+DMG="dist/Business Studio KH-$VERSION-arm64.dmg"
+STAGE="$(mktemp -d -t media-updater)"
+trap 'npm run native:host' EXIT
+npm run predist
+npm run build
+./node_modules/.bin/electron-builder --dir --arm64 --publish never
+codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict "$APP"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = 'com.terranash.mediastudiokh'
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$VERSION"
+ditto "$APP" "$STAGE/Business Studio KH.app"
+ln -s /Applications "$STAGE/Applications"
+if [ -e "$DMG" ]; then
+  mkdir -p _trash/updater-dmgs
+  mv "$DMG" "_trash/updater-dmgs/$(basename "$DMG").$(date +%s)"
+fi
+hdiutil create -volname "Business Studio KH $VERSION" -srcfolder "$STAGE" -format UDZO "$DMG"
+codesign --sign - "$DMG"
+codesign --verify --strict "$DMG"
+hdiutil verify "$DMG"
+mkdir -p _trash/updater-staging
+mv "$STAGE" "_trash/updater-staging/$(basename "$STAGE")"
+npm run dmgs:prune
+printf 'Built %s (com.terranash.mediastudiokh, %s)\n' "$DMG" "$VERSION"
