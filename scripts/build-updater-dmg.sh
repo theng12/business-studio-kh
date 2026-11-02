@@ -8,7 +8,7 @@ APP="dist/mac-arm64/Media Studio KH.app"
 DMG="dist/Media Studio KH-$VERSION-arm64.dmg"
 STAGE="$(mktemp -d -t media-updater)"
 trap 'npm run native:host' EXIT
-npm run predist
+npm run webclient:bundle
 npm run build
 ./node_modules/.bin/electron-builder --dir --arm64 --publish never
 codesign --force --deep --sign - "$APP"
