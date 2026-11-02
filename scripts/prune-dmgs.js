@@ -29,8 +29,9 @@ const { execFileSync } = require('node:child_process');
 const KEEP_VERSIONS = 2;
 
 // Only files this project built are ever considered. Anything else in the
-// folder — a renamed build, a downloaded installer — is left alone.
-const DMG_RE = /^Media Studio KH-(\d+\.\d+\.\d+)-(arm64|x64)\.dmg$/;
+// folder — a renamed build, a downloaded installer — is left alone. The arch
+// suffix is optional: new builds are unsuffixed, legacy files still carry it.
+const DMG_RE = /^Media Studio KH-(\d+\.\d+\.\d+)(-(?:arm64|x64))?\.dmg$/;
 
 function versionParts(version) {
   return version.split('.').map((n) => Number.parseInt(n, 10) || 0);

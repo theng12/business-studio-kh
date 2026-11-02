@@ -21,6 +21,13 @@ test('packaging builds ONE DMG — Apple silicon — unless Intel is asked for',
   assert.equal(pkg.scripts['release:minor'], undefined);
   assert.equal(pkg.scripts['release:major'], undefined);
   assert.deepEqual(pkg.build.mac.target, [{ target: 'dmg', arch: ['arm64'] }]);
+  // Developer standard (2026-11-03): unsuffixed output filename, so the
+  // existing 0.1.102 build is exactly `Media Studio KH-0.1.102.dmg`.
+  assert.equal(pkg.build.productName, 'Media Studio KH');
+  assert.match(pkg.build.dmg.artifactName, /^\$\{productName\}-\$\{version\}\.\$\{ext\}$/);
+  const updaterSh = fs.readFileSync(path.join(root, 'scripts', 'build-updater-dmg.sh'), 'utf8');
+  assert.ok(updaterSh.includes('DMG="dist/Media Studio KH-$VERSION.dmg"'),
+    'the updater script builds the same unsuffixed filename');
   // Both arches' sharp binaries stay installed. arm64 is what ships; x64 is
   // kept ready so "build me an Intel one" is one command rather than a
   // surprise re-install in the middle of a release.

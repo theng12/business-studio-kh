@@ -106,7 +106,7 @@
     "dmg": {
       "title": "Media Studio KH ${version} (${arch})",
       "writeUpdateInfo": false,
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName}-${version}.${ext}"
     },
     "win": {
       "target": "nsis"

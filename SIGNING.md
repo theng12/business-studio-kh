@@ -4,7 +4,7 @@
 
 Run `npm ci` once, then `npm run dist:updater`. This builds one arm64 app,
 ad-hoc signs and strictly verifies the app, and creates and signs
-`dist/Media Studio KH-<package-version>-arm64.dmg`. Bundle ID stays
+`dist/Media Studio KH-<package-version>.dmg` (arm64; filename standard verified 2026-11-03). Bundle ID stays
 `com.terranash.mediastudiokh`. The script checks the packaged ID and version,
 verifies DMG integrity, restores host native bindings, and moves older installers
 to `_trash/` through the existing retention script.

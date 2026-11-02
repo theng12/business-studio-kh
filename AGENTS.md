@@ -493,8 +493,9 @@ Every Electron app must:
 
 **Standing rule (2026-09-27, Theng):** *"from now on, you only need to build 1
 dmg. the arm64 until i tell you otherwise."* So every stable release produces
-**one** DMG — `Media Studio KH-X.Y.Z-arm64.dmg` — and `npm run dist` emits
-exactly that.
+**one** arm64 DMG — `Media Studio KH-X.Y.Z.dmg` — and `npm run dist` emits
+exactly that (owner's shared app naming standard, verified 2026-11-03). The
+architecture stays arm64; the filename has no architecture suffix.
 
 Configured in `package.json` under `build.mac.target[].arch: ["arm64"]`, and
 pinned by `test/releaseScripts.test.js` — if someone changes the array without
