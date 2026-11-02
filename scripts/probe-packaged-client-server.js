@@ -956,6 +956,19 @@ async function main() {
     };
     if (options.artifacts) {
       await fsp.mkdir(options.artifacts, { recursive: true });
+      await evaluate(clientTarget, `(() => {
+        const button = Array.from(document.querySelectorAll('button')).find((node) => node.textContent.includes("What's new"));
+        if (!button) throw new Error("What's new button is missing");
+        button.click();
+      })()`);
+      await waitFor(async () => evaluate(clientTarget, `(() => {
+        const entry = document.querySelector('.whats-new-entry');
+        return entry?.querySelector('.whats-new-entry__version')?.textContent === ${JSON.stringify(`v${clientUi.version}`)}
+          && entry.querySelectorAll('li').length > 0;
+      })()`), 'installed current-version release notes');
+      const screenshot = await cdp(clientTarget, 'Page.captureScreenshot', { format: 'png' });
+      await fsp.writeFile(path.join(options.artifacts, 'installed-app.png'), Buffer.from(screenshot.data, 'base64'));
+      result.checks.push('installed app opened What\'s new with current version and release notes, captured in installed-app.png');
       await fsp.writeFile(path.join(options.artifacts, 'packaged-client-server-result.json'), `${JSON.stringify(result, null, 2)}\n`);
     }
     process.stdout.write(`${JSON.stringify(result)}\n`);

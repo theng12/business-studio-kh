@@ -98,7 +98,8 @@ test('M1: a fully used-up old asset with no salvage opens with no zero line', { 
   assert.equal(r.asset.nbvMinor, 0);
 });
 
-test('M2: an improvement to an asset with no life left must add months', { skip: skipReason }, () => {
+test('M2: an improvement to an asset with no life left must add months', { skip: skipReason }, (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-09T00:00:00Z') });
   const { C, cat, assets, dep } = fixture();
   const a = assets.activate(assets.create({ companyId: C, categoryId: cat('computer'), name: 'Old PC', acquisitionKind: 'opening', purchaseDate: '2022-01-01', costMinor: 100_000, usefulLifeMonths: 36 }).id).asset;
   assert.equal(a.scheduleLifeMonths, 0);

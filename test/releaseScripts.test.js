@@ -13,6 +13,7 @@ test('packaging builds ONE DMG — Apple silicon — unless Intel is asked for',
   // current one, so a future session cannot quietly re-add x64 (or drop it
   // again) without the config and the rule moving together — AGENTS.md §20.
   assert.equal(pkg.scripts['dist:arm64'], 'vite build && electron-builder --arm64');
+  assert.equal(pkg.scripts['dist:updater'], 'bash scripts/build-updater-dmg.sh');
   // The per-arch script stays: it is how an Intel DMG gets built if he asks for
   // one, without editing this config first.
   assert.equal(pkg.scripts['dist:x64'], 'vite build && electron-builder --x64');
@@ -26,4 +27,33 @@ test('packaging builds ONE DMG — Apple silicon — unless Intel is asked for',
   assert.ok(pkg.scripts['install:sharp'].includes('@img/sharp-darwin-arm64'));
   assert.ok(pkg.scripts['install:sharp'].includes('@img/sharp-darwin-x64'));
   assert.equal(fs.existsSync(path.join(root, '.github/workflows/release.yml')), false);
+});
+
+test('updater packaging refuses a failed app signature before creating an installer', () => {
+  const { spawnSync } = require('node:child_process');
+  const scratch = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'media-signature-test-'));
+  const bin = path.join(scratch, 'bin');
+  fs.mkdirSync(bin);
+  fs.mkdirSync(path.join(scratch, 'scripts'));
+  fs.mkdirSync(path.join(scratch, 'node_modules', '.bin'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'scripts', 'build-updater-dmg.sh'), path.join(scratch, 'scripts', 'build.sh'));
+  for (const [name, body] of Object.entries({
+    node: 'echo 0.1.101',
+    npm: 'exit 0',
+    codesign: '[ "$1" != --verify ] || exit 19',
+    hdiutil: 'touch "$PROBE_DMG_MARKER"',
+  })) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(scratch, 'node_modules', '.bin', 'electron-builder'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const marker = path.join(scratch, 'created-dmg');
+  try {
+    const result = spawnSync('/bin/bash', [path.join(scratch, 'scripts', 'build.sh')], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: scratch, PROBE_DMG_MARKER: marker }, encoding: 'utf8',
+    });
+    assert.equal(result.status, 19, result.stderr);
+    assert.equal(fs.existsSync(marker), false, 'a refused signature must not produce a DMG');
+  } finally {
+    const trash = path.join(root, '_trash', 'updater-signature-tests');
+    fs.mkdirSync(trash, { recursive: true });
+    fs.renameSync(scratch, path.join(trash, path.basename(scratch)));
+  }
 });

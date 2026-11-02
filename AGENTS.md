@@ -108,9 +108,9 @@ Top-tab navigation across feature areas is forbidden. Sub-tabs *inside* a single
 
 - The app version (sourced from `package.json` via `app.getVersion()` over IPC) must be visible somewhere persistent — usually the sidebar footer.
 - Provide a **"What's new"** entry in the sidebar footer (sparkles icon is fine) that opens a modal.
-- The modal renders a hand-curated, versioned changelog as an in-code array. Top entry is the current release.
-- Each entry: version + date + bullet list of changes. No links to external changelogs; keep it inline.
-- Update this array every time we ship a meaningful change.
+- The modal renders the repo's single `CHANGELOG.md`, imported by `renderer/components/WhatsNewModal.jsx`; the first release is the current version (owner, verified 2026-11-02).
+- Each entry: `## version — YYYY-MM-DD` followed by plain `- ` bullets. Notes stay inside the app.
+- Every release updates the package version and adds its plain-words notes to `CHANGELOG.md`.
 
 ## 4. Support / donate — always present
 
@@ -525,7 +525,9 @@ again, and twelve 240 MB DMGs had piled up. Use `npm run dmgs:prune` (dry run:
 them, per the working rule at the top of this file. The rule, the numeric version sort and
 the no-delete property are pinned by `test/dmgRetention.test.js`.
 
-**`dist/` means the owner's checkout on the Mac you are on** — `/Users/vengtheng/Developer/media-studio-kh/dist` on the current Mac Studio (M2 Max; hardware verified 2026-10-09; earlier handoffs called this path the MacBook), `/Users/thengmacmini/Developer/media-studio-kh/dist` on the Mac mini,
+**KH Updater packaging (owner, verified 2026-11-02):** `npm run dist:updater` builds one arm64 app and DMG, ad-hoc signs and verifies both, and never publishes. The stable bundle ID is `com.terranash.mediastudiokh`. Feed publication belongs to the KH Updater lead; no in-app updater is needed.
+
+**`dist/` means the owner's checkout on the Mac you are on** — `/Users/vengtheng/Developer/My Own Apps/media-studio-kh/dist` on the current Mac Studio (M2 Max; path and hardware verified 2026-11-02; earlier handoffs used the old Developer path), `/Users/thengmacmini/Developer/media-studio-kh/dist` on the Mac mini,
 which is where he looks for a release. `npm run dist` writes into the build worktree
 instead, so copy the release's DMG across as the last step of a release (one file since
 2026-09-27 — AGENTS.md §20).
@@ -589,7 +591,7 @@ carried over unchanged; only the numbers moved. Don't retro-renumber.
 ## 24. Changelog entries are plain text, and a bump updates both places
 
 - A version bump means **two** edits: `package.json` `version`, and a new top entry in
-  `CHANGELOG` in `renderer/components/WhatsNewModal.jsx`. One without the other is a bug —
+  `CHANGELOG.md` (rendered in `renderer/components/WhatsNewModal.jsx`, verified 2026-11-02). One without the other is a bug —
   a bumped package with a stale changelog leaves the "What's new" modal pointing at the
   previous release.
 - Changelog bullets render as **plain text** (`{item}` in a `<li>`), not markdown. No `**bold**`,
