@@ -957,6 +957,8 @@ async function main() {
     if (options.artifacts) {
       await fsp.mkdir(options.artifacts, { recursive: true });
       await fsp.writeFile(path.join(options.artifacts, 'packaged-client-server-result.json'), `${JSON.stringify(result, null, 2)}\n`);
+      const screenshot = await cdp(clientTarget, 'Page.captureScreenshot', { format: 'png' });
+      await fsp.writeFile(path.join(options.artifacts, 'installed-app.png'), Buffer.from(screenshot.data, 'base64'));
     }
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } finally {

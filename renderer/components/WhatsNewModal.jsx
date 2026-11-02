@@ -2,6 +2,13 @@ import { Modal } from './ui.jsx';
 
 const CHANGELOG = [
   {
+    version: '0.1.101', date: '2026-11-02',
+    items: [
+      'NEW — A locally signed Mac installer is ready for distribution through KH Updater.',
+      'Internal — npm run dist:updater builds and verifies the arm64 app and DMG without publishing to the update feed. The app keeps its existing bundle ID.',
+    ],
+  },
+  {
     version: '0.1.100', date: '2026-10-11',
     items: [
       'NEW — Product Library → Export → Excel workbook (.xlsx): export all products, only the ones matching your current search and filters, or only the ticked ones, in the order the list shows them.',

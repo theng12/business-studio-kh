@@ -1,6 +1,20 @@
 # Code signing + notarization
 
-## Current state (checked 2026-10-02, at 0.1.90)
+## KH Updater builds (verified 2026-11-02)
+
+Run `npm ci` once, then `npm run dist:updater`. This builds one arm64 app,
+ad-hoc signs and strictly verifies the app, and creates and signs
+`dist/Media Studio KH-<package-version>-arm64.dmg`. Bundle ID stays
+`com.terranash.mediastudiokh`. The script checks the packaged ID and version,
+verifies DMG integrity, restores host native bindings, and moves older installers
+to `_trash/` through the existing retention script.
+
+This is local ad-hoc signing for the owner's KH Updater, as requested on
+2026-11-02. It is not Apple Developer ID signing or notarization. Feed publishing
+belongs to the KH Updater lead; this script never publishes. Do not add an
+in-app updater or GitHub release host.
+
+## Historical unsigned build setup (checked 2026-10-02, at 0.1.90)
 
 - **Builds are unsigned.** `package.json` has `build.mac.identity: null`; there is no
   `hardenedRuntime`, entitlements file, `notarize` block or `publish` block, and no Developer ID
