@@ -29,13 +29,20 @@ const { addMonths, assertPeriod } = require('../util/bookDepreciation');
 
 const ACCOUNT_TYPES = ['asset', 'contra_asset', 'liability', 'equity', 'income', 'expense'];
 const SOURCE_KINDS = ['asset_acquire', 'asset_open', 'asset_depreciation', 'asset_dispose', 'asset_lost', 'asset_found',
-  'asset_revalue', 'asset_impair', 'asset_capex', 'reversal'];
+  'asset_revalue', 'asset_impair', 'asset_capex', 'reversal',
+  // Finance expenses (docs/FINANCE_PLAN.md): an expense journal and its
+  // reversal both carry 'finance_expense' with sourceId = the expense id;
+  // an account's dated opening balance carries 'finance_opening'.
+  'finance_expense', 'finance_opening'];
 // accum_disposal / accum_reval (A2): accumulated depreciation taken off on a
 // disposal or eliminated on a revaluation — kept apart from accum_dep so
 // "depreciation charged to date" stays a plain SUM of accum_dep.
 // reval_pl: the profit-and-loss side of a revaluation (IAS 16.39 / 16.40), kept
 // apart so a later increase knows how much earlier loss it reverses first.
-const LINE_ROLES = ['cost', 'accum_dep', 'accum_disposal', 'accum_reval', 'dep_expense', 'dep_catch_up', 'gain', 'loss', 'clearing', 'equity', 'impairment', 'revaluation', 'reval_pl'];
+const LINE_ROLES = ['cost', 'accum_dep', 'accum_disposal', 'accum_reval', 'dep_expense', 'dep_catch_up', 'gain', 'loss', 'clearing', 'equity', 'impairment', 'revaluation', 'reval_pl',
+  // Finance: the category's expense line, the money-account line, and the
+  // opening-equity side of a dated account opening balance.
+  'expense', 'money', 'opening_equity'];
 
 /** §5.3 — the seeded chart. The accountant may renumber or rename; the app posts by system_key. */
 const SEED_ACCOUNTS = [
@@ -87,19 +94,27 @@ function ensureChart(companyId) {
     INSERT OR IGNORE INTO gl_accounts (id, company_id, code, name_en, type, normal_balance, system_key, is_postable, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
   `);
-  const have = db.prepare('SELECT COUNT(*) AS n FROM gl_accounts WHERE company_id = ? AND system_key IS NOT NULL').get(companyId).n;
+  // Count only the seed keys: Finance seeds its own fin.* system accounts, and
+  // counting every system_key would let those permanently mask a missing chart.
+  const seedKeys = SEED_ACCOUNTS.map((a) => a.key);
+  const have = db.prepare(
+    `SELECT COUNT(*) AS n FROM gl_accounts WHERE company_id = ? AND system_key IN (${seedKeys.map(() => '?').join(',')})`,
+  ).get(companyId, ...seedKeys).n;
   if (have >= SEED_ACCOUNTS.length) return;
   db.transaction(() => {
     for (const a of SEED_ACCOUNTS) ins.run(uuid(), companyId, a.code, a.name, a.type, normalBalance(a.type), a.key, now, now);
   })();
 }
 
-function listAccounts(companyId, { includeArchived = true } = {}) {
+function listAccounts(companyId, { includeArchived = true, excludeFinance = false } = {}) {
   if (!companyId) return [];
   ensureChart(companyId);
   return getDb().prepare(`
-    SELECT a.*, (SELECT COALESCE(SUM(l.debit_minor - l.credit_minor), 0) FROM journal_lines l WHERE l.account_id = a.id) AS balance_minor
+    SELECT a.*, (SELECT COALESCE(SUM(l.debit_minor - l.credit_minor), 0)
+      FROM journal_lines l JOIN journal_entries e ON e.id = l.entry_id WHERE l.account_id = a.id
+      ${excludeFinance ? "AND substr(e.source_kind, 1, 8) <> 'finance_'" : ''}) AS balance_minor
       FROM gl_accounts a WHERE a.company_id = ? ${includeArchived ? '' : 'AND a.archived_at IS NULL'}
+      ${excludeFinance ? "AND (a.system_key IS NULL OR substr(a.system_key, 1, 4) <> 'fin.')" : ''}
      ORDER BY a.code COLLATE NOCASE
   `).all(companyId).map(rowToAccount);
 }
@@ -214,11 +229,11 @@ function unlockPeriod(companyId, period, note) {
 }
 
 /** Months with entries or a lock, newest first: { period, status, entryCount, totalMinor, lockedAt, lockNote }. */
-function listPeriods(companyId) {
+function listPeriods(companyId, { excludeFinance = false } = {}) {
   if (!companyId) return [];
   const db = getDb();
   const byPeriod = new Map();
-  for (const r of db.prepare('SELECT period, COUNT(*) AS n, SUM(total_minor) AS t FROM journal_entries WHERE company_id = ? GROUP BY period').all(companyId)) {
+  for (const r of db.prepare(`SELECT period, COUNT(*) AS n, SUM(total_minor) AS t FROM journal_entries WHERE company_id = ? ${excludeFinance ? "AND substr(source_kind, 1, 8) <> 'finance_'" : ''} GROUP BY period`).all(companyId)) {
     byPeriod.set(r.period, { period: r.period, status: 'open', entryCount: r.n, totalMinor: r.t, lockedAt: null, lockNote: null });
   }
   for (const r of db.prepare("SELECT * FROM accounting_periods WHERE company_id = ? AND status = 'locked'").all(companyId)) {
@@ -440,10 +455,10 @@ function assetLedgerTotals(assetId, { throughDate = null } = {}) {
 }
 
 /** §7 integrity pass: entries whose lines do not balance in USD or riel, or are missing lines. */
-function checkIntegrity(companyId) {
+function checkIntegrity(companyId, { excludeFinance = false } = {}) {
   const db = getDb();
   const bad = [];
-  const entries = db.prepare('SELECT id, entry_no, line_count FROM journal_entries WHERE company_id = ?').all(companyId);
+  const entries = db.prepare(`SELECT id, entry_no, line_count FROM journal_entries WHERE company_id = ? ${excludeFinance ? "AND substr(source_kind, 1, 8) <> 'finance_'" : ''}`).all(companyId);
   for (const e of entries) {
     const lines = db.prepare('SELECT debit_minor AS debitMinor, credit_minor AS creditMinor, khr_minor AS khrMinor FROM journal_lines WHERE entry_id = ?').all(e.id);
     const b = linesBalance(lines);

@@ -3,7 +3,9 @@
 // (attributionUsers, presence, clientConnection, progressOps).
 
 import { applyTheme } from '../lib/theme.js';
-import { DEFAULT_KHR_PER_USD, houseRateFrom, validRate } from '../lib/exchangeRate.js';
+import { validRate } from '../lib/exchangeRate.js';
+
+let _houseRateSeq = 0;
 
 export function createAppSlice(set, _get) {
   return {
@@ -54,18 +56,62 @@ export function createAppSlice(set, _get) {
     // The appConfig object stays so other config mirrors can be added
     // here later without re-introducing the field.
     appConfig: {},
-    // 0.1.95: the house exchange rate, riel per US dollar (config.json
-    // `exchangeRateKhrPerUsd`; renderer/lib/exchangeRate.js).
-    houseKhrPerUsd: DEFAULT_KHR_PER_USD,
+    // 0.1.95: the house exchange rate, riel per US dollar. Since Finance it is
+    // the ACTIVE COMPANY's shared rate (fx:getShared), not this Mac's config.
+    // null while loading or after a failed load — never a made-up default.
+    houseKhrPerUsd: null,
+    houseRateLoading: false,
+    houseRateError: '',
 
-    /** Validate, persist to config.json, then mirror. Throws on a bad value
-     *  or a refused write so the caller can toast the real message. */
+    /** Re-read the active company's shared rate. Call on boot, company switch,
+     *  reconnect and an `assets:changed` kind `fx` event. A failed load clears
+     *  the rate rather than leaving the previous company's value on screen. */
+    async refreshHouseRate() {
+      const seq = ++_houseRateSeq;
+      if (!window.api?.fx?.getShared) return;
+      const companyId = _get().activeCompanyId ?? null;
+      set({ houseKhrPerUsd: null, houseRateLoading: true, houseRateError: '' });
+      try {
+        const r = await window.api.fx.getShared();
+        // A newer call (or a company switch) has overtaken this one.
+        if (seq !== _houseRateSeq) return;
+        if ((_get().activeCompanyId ?? null) !== companyId) return;
+        const n = r && Number.isFinite(r.khrPerUsd) ? r.khrPerUsd : null;
+        set(n == null
+          ? { houseKhrPerUsd: null, houseRateLoading: false, houseRateError: 'No exchange rate for this company yet.' }
+          : { houseKhrPerUsd: n, houseRateLoading: false, houseRateError: '' });
+      } catch (e) {
+        if (seq !== _houseRateSeq) return;
+        if ((_get().activeCompanyId ?? null) !== companyId) return;
+        set({ houseKhrPerUsd: null, houseRateLoading: false, houseRateError: e?.message || 'Could not load the exchange rate.' });
+      }
+    },
+
+    /** Validate, save the active company's shared rate, then mirror it.
+     *  Throws on a bad value or a refused write so the caller can toast it. */
     async setHouseExchangeRate(value) {
       const rate = validRate(value);
       if (rate == null) throw new Error('Exchange rate must be a number above 0 (riel per US dollar, e.g. 4100)');
-      const next = await window.api.settings.setOne('exchangeRateKhrPerUsd', rate);
-      set({ houseKhrPerUsd: houseRateFrom(next ?? { exchangeRateKhrPerUsd: rate }) });
-      return rate;
+      if (rate < 100 || rate > 100000) throw new Error('Riel per dollar must be between 100 and 100000');
+      const seq = ++_houseRateSeq;
+      const companyId = _get().activeCompanyId ?? null;
+      let r;
+      try { r = await window.api.fx.setShared(rate); }
+      catch (error) {
+        if (seq === _houseRateSeq && (_get().activeCompanyId ?? null) === companyId) {
+          set({ houseRateLoading: false, houseRateError: error.message });
+        }
+        throw error;
+      }
+      // The company changed while the write was in flight: its answer belongs
+      // to another company, so refetch instead of mirroring it.
+      if (seq !== _houseRateSeq || (_get().activeCompanyId ?? null) !== companyId) {
+        void _get().refreshHouseRate();
+        return rate;
+      }
+      const n = r && Number.isFinite(r.khrPerUsd) ? r.khrPerUsd : rate;
+      set({ houseKhrPerUsd: n, houseRateLoading: false, houseRateError: '' });
+      return n;
     },
 
     /* ─── Theme ─── */
@@ -95,7 +141,6 @@ export function createAppSlice(set, _get) {
         // at a server" apart from "client mode, server unreachable". The first
         // is a setup step, the second is a fault, and they need different words.
         clientServerUrl: cfg?.clientServerUrl ?? '',
-        houseKhrPerUsd: houseRateFrom(cfg),
       });
     },
   };

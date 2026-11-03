@@ -370,7 +370,7 @@ function normalizeFill(companyId, input, { settings, existing = null, recordAt =
     // A payment in the other currency is converted at the server's exchange
     // rate, the same way the cash rules compare it (comparableAmount).
     const price = fuel.priceOn(companyId, asset.fuelType, recordAt ?? input.at ?? Date.now());
-    const amount = price ? comparableAmount({ amountPaidMinor, currency: cur }, price.currency, fuel.fxKhrPerUsd()) : null;
+    const amount = price ? comparableAmount({ amountPaidMinor, currency: cur }, price.currency, fuel.fxKhrPerUsd(companyId)) : null;
     if (!price || !Number.isFinite(amount)) throw badRequest('Enter the litres shown on the pump (there is no published price for that day to work it out)');
     litres = Math.round((amount / price.priceMinorPerL) * 1000) / 1000;
     litresSource = 'derived_from_price';

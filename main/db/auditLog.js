@@ -274,7 +274,8 @@ function isAssetEntityType(t) { return ASSET_ENTITY_TYPES.includes(t); }
  * HR1 (docs/PEOPLE_AND_FUEL_PLAN.md §6): how sensitive a row is. 'finance' is
  * Fixed Assets' tag (docs/ASSETS_AND_BRANCHES_PLAN.md).
  */
-const SENSITIVITIES = ['normal', 'hr', 'hr_private', 'payroll', 'finance'];
+const SENSITIVITIES = ['normal', 'hr', 'hr_private', 'payroll', 'finance', 'accounting'];
+function isFinanceEntityType(type) { return typeof type === 'string' && type.startsWith('finance_'); }
 
 // HR2 financial types also protect rows if a writer accidentally omits its tag.
 const PAYROLL_TABLES = {
@@ -323,6 +324,11 @@ function hideClauses(hide) {
   if (hide.loans) out.push(LOAN_ENTITY_SQL);
   if (hide.payrollCompanyId) out.push(payrollCompanyClause(hide.payrollCompanyId));
   if (hide.assets) { out.push(ASSET_ENTITY_SQL); out.push("sensitivity <> 'finance'"); }
+  if (hide.accounting) out.push("sensitivity <> 'accounting' AND substr(entity_type, 1, 8) <> 'finance_'");
+  if (hide.accountingCompanyId) {
+    const company = String(hide.accountingCompanyId).replace(/'/g, "''");
+    out.push(`((sensitivity <> 'accounting' AND substr(entity_type, 1, 8) <> 'finance_') OR json_extract(after_json, '$.companyId') = '${company}' OR json_extract(before_json, '$.companyId') = '${company}')`);
+  }
   return out;
 }
 function normalizeHide(hide, hideFuel, hideAssets) {
@@ -496,13 +502,14 @@ function clearOlderThan(days) {
  * Only ordinary catalogue rows can be cleared: staff / fuel / HR / payroll
  * rows (HR1) and asset / ledger rows (Fixed Assets, review M6) are kept.
  */
-const CLEARABLE_SQL = `sensitivity = 'normal' AND ${FUEL_ENTITY_SQL} AND ${ASSET_ENTITY_SQL} AND ${PAYROLL_ENTITY_SQL}`;
+const CLEARABLE_SQL = `sensitivity = 'normal' AND substr(entity_type, 1, 8) <> 'finance_' AND ${FUEL_ENTITY_SQL} AND ${ASSET_ENTITY_SQL} AND ${PAYROLL_ENTITY_SQL}`;
 
 module.exports = {
   NO_USER,
   recentWhere,
   isFuelEntityType,
   isAssetEntityType,
+  isFinanceEntityType,
   isPayrollEntityType,
   isLoanEntityType,
   ASSET_ENTITY_TYPES,

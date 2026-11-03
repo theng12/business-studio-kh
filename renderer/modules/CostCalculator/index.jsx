@@ -62,23 +62,21 @@ export function CostCalculator() {
   const [productId, setProductId] = useState('');
   const [localRates, setLocalRates] = useState(() => { const { KHR: _khr, ...rest } = loadRates(); return rest; });
   const houseKhrPerUsd = useAppStore((s) => s.houseKhrPerUsd);
-  const setHouseExchangeRate = useAppStore((s) => s.setHouseExchangeRate);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
   const ratesPerUsd = useMemo(() => ({ ...localRates, KHR: houseKhrPerUsd }), [localRates, houseKhrPerUsd]);
-  // Once: move an old per-Mac KHR rate into the house rate.
+  // Once: the old per-Mac KHR scratch rate is dropped. Since Finance §5 the
+  // riel rate is the COMPANY's rate (Settings → General), so this Mac's value
+  // is not written anywhere — a client Mac must never overwrite the company's.
   useEffect(() => {
+    if (houseKhrPerUsd == null) return;
     const stored = loadRates();
     if (!Object.prototype.hasOwnProperty.call(stored, 'KHR')) return;
-    const { write, rest } = migrateLocalKhrRate(stored, useAppStore.getState().houseKhrPerUsd);
+    const { dropped, rest } = migrateLocalKhrRate(stored, houseKhrPerUsd);
     saveRates(rest);
-    if (write != null && typeof setHouseExchangeRate === 'function') {
-      setHouseExchangeRate(write)
-        .then(() => addToast(`Your riel rate moved to Settings → General: 1 USD = ${formatRate(write)} KHR`, 'info'))
-        .catch((err) => addToast(err.message, 'error'));
-    }
-  // Mount only — a migration, not a sync.
+    if (dropped != null) addToast(`The old riel rate ${formatRate(dropped)} is no longer used — the company rate applies.`, 'info');
+  // Mount + once the company rate is known — a migration, not a sync.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [houseKhrPerUsd]);
   const [savingRetail, setSavingRetail] = useState(false);
   const [costState, setCostState] = useState('idle');
   const [costError, setCostError] = useState('');

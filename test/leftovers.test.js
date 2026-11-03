@@ -132,11 +132,12 @@ test('exchange rate: validation, default and the one-time migration', () => {
   assert.equal(houseRateFrom({ exchangeRateKhrPerUsd: -3 }), 4100);
   assert.equal(houseRateFrom(null), 4100);
   assert.equal(formatRate(4100), '4,100');
-  // An old per-Mac KHR rate becomes the house rate only while the house rate is the default.
-  assert.deepEqual(migrateLocalKhrRate({ KHR: '4000', THB: '36' }, 4100), { write: 4000, rest: { THB: '36' } });
-  assert.deepEqual(migrateLocalKhrRate({ KHR: '4000' }, 4080), { write: null, rest: {} });
-  assert.deepEqual(migrateLocalKhrRate({ KHR: 'junk' }, 4100), { write: null, rest: {} });
-  assert.deepEqual(migrateLocalKhrRate({ THB: '36' }, 4100), { write: null, rest: { THB: '36' } });
+  // An old per-Mac KHR rate is dropped, never written: the riel rate is the
+  // COMPANY's rate now, and a client Mac must not overwrite it.
+  assert.deepEqual(migrateLocalKhrRate({ KHR: '4000', THB: '36' }, 4100), { dropped: 4000, rest: { THB: '36' } });
+  assert.deepEqual(migrateLocalKhrRate({ KHR: '4000' }, 4000), { dropped: null, rest: {} });
+  assert.deepEqual(migrateLocalKhrRate({ KHR: 'junk' }, 4100), { dropped: null, rest: {} });
+  assert.deepEqual(migrateLocalKhrRate({ THB: '36' }, 4100), { dropped: null, rest: { THB: '36' } });
 });
 
 test('exchange rate: the Library price sort compares USD and KHR in one currency', () => {
@@ -188,7 +189,10 @@ test('exchange rate: Settings shows it, Cost Calculator uses the house rate', ()
   const calc = read('renderer/modules/CostCalculator/index.jsx');
   assert.match(calc, /KHR: houseKhrPerUsd/);
   assert.match(calc, /migrateLocalKhrRate\(stored/);
-  assert.match(read('renderer/store/bootstrap.js'), /houseKhrPerUsd: houseRateFrom\(settings\)/);
+  // Finance §5: the rate is the active company's, read from the DB — the boot
+  // no longer mirrors this Mac's config value.
+  assert.match(read('renderer/store/app.js'), /fx\.getShared\(\)/);
+  assert.doesNotMatch(read('renderer/store/bootstrap.js'), /houseKhrPerUsd: houseRateFrom\(settings\)/);
 });
 
 /* ── 4. ⌘S ────────────────────────────────────────────────────────── */

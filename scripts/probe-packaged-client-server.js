@@ -32,16 +32,17 @@ const DEFAULT_TIMEOUT_MS = 45_000;
 function usage() {
   return [
     'Usage: node scripts/probe-packaged-client-server.js --app /absolute/path.app',
-    '       [--expected-version X.Y.Z] [--artifacts /absolute/output-dir] [--smoke-only]',
+    '       [--expected-version X.Y.Z] [--artifacts /absolute/output-dir] [--smoke-only] [--finance]',
   ].join('\n');
 }
 
 function parseArgs(argv) {
-  const out = { app: null, expectedVersion: null, artifacts: null, smokeOnly: false };
+  const out = { app: null, expectedVersion: null, artifacts: null, smokeOnly: false, finance: false };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     if (flag === '--help' || flag === '-h') return { help: true };
     if (flag === '--smoke-only') { out.smokeOnly = true; continue; }
+    if (flag === '--finance') { out.finance = true; continue; }
     const value = argv[++i];
     if (!value) throw new Error(`Missing value for ${flag}`);
     if (flag === '--app') out.app = value;
@@ -169,7 +170,7 @@ async function openProductsModuleFromHome(target, role) {
   );
 }
 
-function cdp(target, method, params = {}) {
+function cdp(target, method, params = {}, holdSession = false) {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(target.webSocketDebuggerUrl);
     let settled = false;
@@ -189,7 +190,8 @@ function cdp(target, method, params = {}) {
       try {
         const message = JSON.parse(raw);
         if (message.id !== 1) return;
-        socket.close();
+        // Viewport emulation lasts only while its DevTools session is attached.
+        if (!holdSession) socket.close();
         if (message.error) finish(reject, new Error(message.error.message));
         else finish(resolve, message.result);
       } catch (err) { socket.close(); finish(reject, err); }
@@ -201,7 +203,7 @@ async function evaluate(target, script) {
   const wrapped = await waitFor(async () => {
     try {
       const response = await cdp(target, 'Runtime.evaluate', { expression: script, awaitPromise: true, returnByValue: true });
-      if (response.exceptionDetails) throw new Error(response.exceptionDetails.text || 'renderer evaluation failed');
+      if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text || 'renderer evaluation failed');
       return { value: response.result?.value };
     } catch (err) {
       if (err.message === 'Execution context was destroyed.') return null;
@@ -850,7 +852,7 @@ async function main() {
     await Promise.all([serverUserData, clientUserData, serverData, clientData, serverCache, clientCache].map((dir) => fsp.mkdir(dir, { recursive: true })));
     seed = await seedWithPackagedElectron({ executable, archive, dataDir: serverData, mode: 'seed', name: '' });
     await fsp.writeFile(path.join(serverUserData, 'config.json'), JSON.stringify({
-      dataDir: serverData, firstLaunchHandled: true, mode: 'server', serverPort, webViewerEnabled: false,
+      dataDir: serverData, firstLaunchHandled: true, mode: 'server', serverPort, webViewerEnabled: options.finance,
     }, null, 2));
     await fsp.writeFile(path.join(clientUserData, 'config.json'), JSON.stringify({
       dataDir: clientData, firstLaunchHandled: true, mode: 'client', clientServerUrl: `http://127.0.0.1:${serverPort}`, clientToken: seed.adminToken,
@@ -920,6 +922,27 @@ async function main() {
     })`);
     assert.ok(image.loaded && image.width > 0 && image.height > 0, 'client image protocol did not render the synthetic image');
 
+    let phoneTarget = null;
+    if (options.finance) {
+      const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+      assert.ok(fs.existsSync(chrome), 'Finance phone probe requires the installed Google Chrome');
+      const phoneDebugPort = await reserveLoopbackPort();
+      const child = spawn(chrome, [
+        `--user-data-dir=${path.join(root, 'phone-user-data')}`, '--headless=new', '--no-first-run',
+        '--disable-sync', '--window-size=390,844', '--force-device-scale-factor=1',
+        `--remote-debugging-port=${phoneDebugPort}`, 'about:blank',
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const phone = { child, getOutput: captureChild(child, secretList()) };
+      processes.push(phone);
+      phoneTarget = await debugTarget(phoneDebugPort, phone, 'Finance phone browser');
+    }
+    const financeChecks = options.finance
+      ? await require('./probe-finance-flow').runFinanceFlow({
+        serverTarget, clientTarget, phoneTarget, serverUrl: `http://127.0.0.1:${serverPort}`,
+        phoneToken: seed.adminToken, evaluate, waitFor, cdp, artifacts: options.artifacts,
+      })
+      : [];
+
     await quitApp(serverTarget);
     if (!(await waitForChildExit(server.child))) throw new Error('server did not exit after Browser.close');
     await seedWithPackagedElectron({ executable, archive, dataDir: serverData, mode: 'update', name: 'Updated while server was offline' });
@@ -951,6 +974,7 @@ async function main() {
         'client renderer read and updated synthetic product; server renderer observed it',
         'client app-image protocol fetched synthetic product image',
         'client WebSocket reconnected after server restart and read refreshed state',
+        ...financeChecks,
       ],
       limitations: ['Server production code binds 0.0.0.0; this disposable probe uses a random port and only connects its client through 127.0.0.1. It is not physical two-Mac evidence.'],
     };
@@ -965,10 +989,10 @@ async function main() {
         const entry = document.querySelector('.whats-new-entry');
         return entry?.querySelector('.whats-new-entry__version')?.textContent === ${JSON.stringify(`v${clientUi.version}`)}
           && entry.querySelectorAll('li').length > 0;
-      })()`), 'installed current-version release notes');
+      })()`), 'packaged current-version release notes');
       const screenshot = await cdp(clientTarget, 'Page.captureScreenshot', { format: 'png' });
       await fsp.writeFile(path.join(options.artifacts, 'installed-app.png'), Buffer.from(screenshot.data, 'base64'));
-      result.checks.push('installed app opened What\'s new with current version and release notes, captured in installed-app.png');
+      result.checks.push('packaged app opened What\'s new with current version and release notes, captured in installed-app.png');
       await fsp.writeFile(path.join(options.artifacts, 'packaged-client-server-result.json'), `${JSON.stringify(result, null, 2)}\n`);
     }
     process.stdout.write(`${JSON.stringify(result)}\n`);

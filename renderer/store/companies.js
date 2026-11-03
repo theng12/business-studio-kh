@@ -77,7 +77,12 @@ export function createCompaniesSlice(set, get) {
     },
 
     applyActiveCompanyContext(id) {
-      if ((id ?? null) !== get().activeCompanyId) set(companyContextPatch(id));
+      if ((id ?? null) !== get().activeCompanyId) {
+        set(companyContextPatch(id));
+        // The exchange rate is per company; a boot or switch must never keep
+        // showing the previous company's figure.
+        void get().refreshHouseRate();
+      }
     },
 
     async setActiveCompany(id) {

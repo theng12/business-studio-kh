@@ -3187,6 +3187,9 @@ const PAGE_LABELS = [
   ['leave', 'Leave', 'people'],
   ['payroll', 'Payroll', 'people'],
   ['loans', 'Loans', 'people'],
+  ['financeexpenses', 'Expenses', 'finance'],
+  ['financeaccounts', 'Money accounts', 'finance'],
+  ['financereports', 'Reports', 'finance'],
   ['history', 'History', 'system'],
 ];
 /* Labels are unique except across modules; the deep flows name pages by

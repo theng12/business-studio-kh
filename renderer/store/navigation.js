@@ -28,7 +28,8 @@ const MODULES = ['home', 'dashboard', 'company', 'brands', 'library', 'workspace
   // HR1: the attendance kiosk preview (renderer/modules/Kiosk).
   'kiosk',
   // Fixed Assets A1 + A2 (docs/ASSETS_AND_BRANCHES_PLAN.md §8).
-  'assetregister', 'assetdepreciation', 'assettax', 'assetreports'];
+  'assetregister', 'assetdepreciation', 'assettax', 'assetreports',
+  'financeexpenses', 'financeaccounts', 'financereports'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the
 // header copy inside the module itself.

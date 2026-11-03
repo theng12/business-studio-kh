@@ -1,10 +1,12 @@
 /**
  * 0.1.95: the house exchange rate — riel per US dollar, "1 USD = 4,100 KHR".
  *
- * Stored in config.json as `exchangeRateKhrPerUsd` (Settings → General; the
- * main process validates it positive) and mirrored in the store as
- * `houseKhrPerUsd`. Used by the Cost Calculator (KHR prices against the USD
- * landed cost) and by the Library's price-column sort. Pure, for the tests.
+ * The ACTIVE rate is the company's DB rate (fx:getShared / fx:setShared,
+ * mirrored in the store as `houseKhrPerUsd`). This module keeps the pure
+ * helpers around it: `validRate` guards input, `comparableUsd` sorts prices,
+ * and `houseRateFrom` reads a legacy config object — a seed/migration source
+ * now, never a live screen value. Used by the Cost Calculator (KHR prices
+ * against the USD landed cost) and by the Library's price-column sort.
  */
 
 export const DEFAULT_KHR_PER_USD = 4100;
@@ -27,6 +29,10 @@ export function houseRateFrom(cfg) {
  * currency, which predate v0.1.55 and are USD) pass through; KHR divides by
  * the house rate. Another currency has no house rate, so its raw amount is
  * used, as before.
+ *
+ * With no house rate (still loading, or the load failed) a KHR price cannot be
+ * compared at all: it returns null and sorts last. Falling back to 4,100 here
+ * would order prices by a rate the app does not have.
  */
 export function comparableUsd(entry, khrPerUsd) {
   if (!entry || entry.amount == null || entry.amount === '') return null;
@@ -34,27 +40,26 @@ export function comparableUsd(entry, khrPerUsd) {
   if (!Number.isFinite(amount)) return null;
   const cur = String(entry.currency || 'USD').toUpperCase();
   if (cur === 'KHR') {
-    const rate = validRate(khrPerUsd) ?? DEFAULT_KHR_PER_USD;
-    return amount / rate;
+    const rate = validRate(khrPerUsd);
+    return rate == null ? null : amount / rate;
   }
   return amount;
 }
 
 /**
  * One-time move of the Cost Calculator's old per-Mac KHR rate (localStorage
- * `costcalc.ratesPerUsd`) into the house rate. Adopted only when the house
- * rate is still the untouched default, so a rate already set in Settings is
- * never overwritten by an older scratch figure. Returns the rate to write (or
- * null) and the local map without KHR, which is no longer kept there.
+ * `costcalc.ratesPerUsd`) out of use. Since Finance §5 the riel rate is the
+ * COMPANY's rate (Settings → General), so the scratch figure is dropped, not
+ * written anywhere: a client Mac must never overwrite the company's rate.
+ * Returns the local map without KHR and the dropped value, so the caller can
+ * say what changed.
  */
 export function migrateLocalKhrRate(localRates, houseRate) {
   const rest = { ...(localRates && typeof localRates === 'object' ? localRates : {}) };
   const local = validRate(rest.KHR);
   delete rest.KHR;
-  const write = local != null && (validRate(houseRate) ?? DEFAULT_KHR_PER_USD) === DEFAULT_KHR_PER_USD && local !== DEFAULT_KHR_PER_USD
-    ? local
-    : null;
-  return { write, rest };
+  const current = validRate(houseRate);
+  return { dropped: local != null && local !== current ? local : null, rest };
 }
 
 /** "4,100" — the rate as the Settings field and hints show it. */
