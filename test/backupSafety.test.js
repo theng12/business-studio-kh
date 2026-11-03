@@ -24,6 +24,9 @@ const {
   isBackupFilename,
   entriesLookLikeDataDir,
   validateManifest,
+  BACKUP_DATA_ENTRIES,
+  ARCHIVE_TOP_LEVEL_DIRS,
+  validateTarListing,
 } = require('../main/util/backupSafety');
 
 /* ── isPathInside ──────────────────────────────────────────────── */
@@ -127,6 +130,46 @@ test('entriesLookLikeDataDir — false for empty / unrelated folders', () => {
   assert.equal(entriesLookLikeDataDir([]), false);
   assert.equal(entriesLookLikeDataDir(['Documents', 'notes.txt']), false);
   assert.equal(entriesLookLikeDataDir('not-an-array'), false);
+});
+
+/* ── finance receipts: backup + restore allowlists ─────────────── */
+
+const verbose = (type, name) => `${type}rw-r--r--  0 user  staff  1 Jan  1 00:00 ${name}`;
+
+test('finance is in BOTH backup and restore allowlists', () => {
+  assert.ok(BACKUP_DATA_ENTRIES.includes('finance'), 'a finance receipt must be captured by a backup');
+  assert.ok(ARCHIVE_TOP_LEVEL_DIRS.has('finance'), 'a backup holding a finance receipt must be restorable');
+  // The fuel/hr regression: every captured tree must also be accepted on restore.
+  for (const entry of BACKUP_DATA_ENTRIES) {
+    if (entry !== 'database.sqlite') {
+      assert.ok(ARCHIVE_TOP_LEVEL_DIRS.has(entry), `${entry} is backed up but would be refused on restore`);
+    }
+  }
+});
+
+test('archive validation accepts a finance/receipts entry and refuses it without the allowlist', () => {
+  const names = [
+    'bundle/',
+    'bundle/database.sqlite',
+    'bundle/manifest.json',
+    'bundle/finance/',
+    'bundle/finance/receipts/',
+    'bundle/finance/receipts/2026-11/company_expense_id.jpg',
+  ];
+  const details = names.map((name, i) => verbose(i === 0 || name.endsWith('/') ? 'd' : '-', name));
+  const accept = () => validateTarListing(`${names.join('\n')}\n`, `${details.join('\n')}\n`);
+
+  const listing = accept();
+  assert.ok(listing.entries.some((e) => e.relPath === 'finance/receipts/2026-11/company_expense_id.jpg'));
+  assert.equal(entriesLookLikeDataDir(['finance']), true);
+
+  // Prove the acceptance is the allowlist at work, not an accident.
+  ARCHIVE_TOP_LEVEL_DIRS.delete('finance');
+  try {
+    assert.throws(accept, /unsupported path/);
+  } finally {
+    ARCHIVE_TOP_LEVEL_DIRS.add('finance');
+  }
 });
 
 /* ── validateManifest ──────────────────────────────────────────── */

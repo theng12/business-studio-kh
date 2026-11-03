@@ -1,8 +1,10 @@
 # Pick & Pack — design plan (2026-09-28)
 
-**Status: plan for review. Nothing here is built.** Written for the owner (Theng) and his
-brother, whose shop packs **more than 50 parcels on a busy day**. Plain-English summary at the
-top; the technical sections below it are the spec an implementation would follow.
+**Status: phase 0 approved, queued after the Expenses release (2026-11-03). Nothing here is built.** Developer relayed the owner's words: “Yes, approve it.” Build this after Expenses, never alongside it. Written for the owner and their brother, whose shop packs more than 50 parcels on a busy day.
+
+The approved phase 0 is orders and order lines; daily CSV/Excel import using the existing wizard with saved mappings per source; quick add for chat and paper orders; and `/pack` with no prices, keyboard-style barcode scan-to-confirm, tap fallback, a photo on every parcel by default (a configurable value threshold may change that), and immutable sealed records. A scanner types keyboard input; no special scanner integration is required. Deliver a separate tested patch release and PR.
+
+Platform API sync and HTTPS are excluded. Weight checks and returns belong to phase 1. The approved scope here overrides broader proposals below; printable QR slips, two compulsory photos, batch picking and other extras are not added to phase 0 by implication.
 
 ---
 
@@ -106,8 +108,7 @@ item into the right order at the bench — noticeably more work than 3.3.
 - Product additions: `location` (shelf/bin, for batch picking), `serial_tracked` (flag).
 - A **packer** role with only the pack capabilities (no prices, no product editing) — the roles
   screen already supports creating it.
-- Servable root: the pack photo folder must be added to the asset route (the rule that bit us
-  before: anything the phone shows has to live under a served root).
+- Packing evidence is private: the phone reads photos through authenticated, parcel-permission-checked APIs, outside public catalogue assets. Include its data folder in both backup and restore allowlists.
 
 **No `SCHEMA_VERSION` bump** — every piece above is `CREATE TABLE IF NOT EXISTS` or
 `addColumnIfMissing`, which is the safe path (a bump wipes the catalogue).
@@ -123,7 +124,7 @@ item into the right order at the bench — noticeably more work than 3.3.
 | Serial stickers (expensive SKUs only) | The strongest answer to "I'm returning what you sent" — a unit without your serial was never yours | Only worth it per-unit for high-value goods; adds a step at pack time |
 | Import (CSV) vs API sync | Cheap, works with all four sources at once, no credentials | A daily manual export/import step |
 | Batch picking | Big time saving at 50+/day | Needs locations, sorting, and per-item verification at the bench |
-| **HTTPS** | Unlocks offline queueing (service workers), live in-browser scanning, and encrypts customer names/addresses on the network | Needs the Tailscale swap + admin-console step you declined. Note the pack screen makes this a bigger question than the share-sheet did: it shows customer addresses |
+| HTTPS | Excluded by the owner's decision | Phase 0 uses the existing authenticated HTTP-over-Tailscale setup and keyboard scanner input; HTTPS is not a prerequisite or open task |
 | Build here vs buy a packing app | One system, no per-seat fee, catalogue/photos/labels/serials already here, evidence shaped exactly to your need | Bespoke, single developer, no carrier/label integrations (keep using the platform's labels) |
 
 ## 6. Cost, honestly
@@ -141,9 +142,7 @@ parcels that is ~25 minutes a day, in exchange for a dispute file that currently
 
 ## 7. Phasing
 
-- **Phase 0 — the core (one release).** Orders + lines + import wizard + quick add + the `/pack`
-  queue + the pack screen (scan/tap confirm, 2 photos, seal) + a printable packing slip with a QR
-  + the packer role.
+- **Phase 0 — approved, after Expenses (one release).** Orders + lines + existing import wizard with per-source saved mappings + quick add + `/pack` queue and packing screen. No prices; keyboard scan-to-confirm with tap fallback; one parcel photo required by default, with any value threshold an explicit setting; sealed records cannot be edited. Enforce packer permissions on the server.
 - **Phase 1.** Returns/dispute screen; weight check; a daily "packed / without photos" report; the
   retention setting for evidence.
 - **Phase 2.** Batch picking with shelf locations; serial stickers for chosen SKUs; a
@@ -160,8 +159,7 @@ parcels that is ~25 minutes a day, in exchange for a dispute file that currently
 3. **The Mac becomes critical.** The bench stops if the server Mac sleeps or the Wi-Fi drops —
    and without HTTPS there is no offline mode (service workers need a secure context). Keep the Mac
    awake; consider a small UPS.
-4. **Customer data on the pack screen.** Names and addresses on a phone page are a stronger reason
-   for HTTPS than the share sheet ever was. It is worth revisiting once the flow exists.
+4. **Customer data on the pack screen.** Names, addresses and parcel evidence stay behind authenticated, scope-checked APIs. HTTPS remains excluded; do not re-propose it as a release gap.
 5. **Storage** grows with every parcel; plan the retention setting before the folder is large.
 6. **Two packers at once** is fine (SQLite serialises writes at this scale), but a third and fourth
    device would want a dedicated server Mac rather than someone's desktop.

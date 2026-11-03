@@ -384,8 +384,34 @@ contextBridge.exposeInMainWorld('api', {
     close:           (id, reason)             => invoke('branches:close', { id, reason }),
     suggestFromFuel: ()                       => invoke('branches:suggestFromFuel'),
   },
+  finance: {
+    context:         ()             => invoke('finance:context'),
+    list:            (filters)      => invoke('finance:list', filters),
+    get:             (id)           => invoke('finance:get', id),
+    saveDraft:       (input)        => invoke('finance:saveDraft', input),
+    submit:          (id)           => invoke('finance:submit', { id }),
+    approve:         (id)           => invoke('finance:approve', { id }),
+    reject:          (id, reason)   => invoke('finance:reject', { id, reason }),
+    cancel:          (id, reason)   => invoke('finance:cancel', { id, reason }),
+    reverse:         (id, reason)   => invoke('finance:reverse', { id, reason }),
+    accounts:        (opts)         => invoke('finance:accounts', opts),
+    saveAccount:     (input)        => invoke('finance:saveAccount', input),
+    saveCategory:    (input)        => invoke('finance:saveCategory', input),
+    updateSettings:  (patch)        => invoke('finance:updateSettings', patch),
+    reports:         (filters)      => invoke('finance:reports', filters),
+    setReceipt:      (input)        => invoke('finance:setReceipt', input),
+    getReceipt:      (expenseId)    => invoke('finance:getReceipt', { expenseId }),
+    removeReceipt:   (expenseId)    => invoke('finance:removeReceipt', { expenseId }),
+    onChanged: (cb) => {
+      const fn = (_e, data) => cb(data);
+      ipcRenderer.on('finance:changed', fn);
+      return () => ipcRenderer.removeListener('finance:changed', fn);
+    },
+  },
   /** Fixed Assets A0: riel-per-dollar rates (house + official). */
   fx: {
+    getShared: ()                            => invoke('fx:getShared'),
+    setShared: (khrPerUsd)                    => invoke('fx:setShared', { khrPerUsd }),
     list:     (opts)                          => invoke('fx:list', opts),
     rateOn:   (date, source)                  => invoke('fx:rateOn', { date, source }),
     setRate:  (input)                         => invoke('fx:setRate', input),

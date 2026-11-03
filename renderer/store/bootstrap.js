@@ -3,7 +3,6 @@
 // startup event cannot fall into a blind spot.
 
 import { applyTheme } from '../lib/theme.js';
-import { houseRateFrom } from '../lib/exchangeRate.js';
 import { applyCatalogEvent } from './catalogEvents.js';
 
 let _aiUnsubs = [];
@@ -124,6 +123,18 @@ function installSubscriptions(set, get) {
     });
   }
 
+  // The company's shared exchange rate can change on another Mac (fx:setShared,
+  // fx:setRate, fx:voidRate all emit kind `fx`). Refetch it for the active
+  // company so no consumer keeps a stale figure.
+  if (window.api?.assets?.onChanged) {
+    const off = window.api.assets.onChanged((evt) => {
+      if (evt?.kind !== 'fx') return;
+      if (evt.companyId && get().activeCompanyId && evt.companyId !== get().activeCompanyId) return;
+      void get().refreshHouseRate();
+    });
+    if (typeof off === 'function') _catalogUnsubs.push(off);
+  }
+
   if (window.api?.events?.onCatalogChanged) {
     const off = window.api.events.onCatalogChanged((event) => {
       if (event?.kind) applyCatalogEvent(get, event);
@@ -133,6 +144,8 @@ function installSubscriptions(set, get) {
   if (window.api?.events?.onServerHello) {
     const off = window.api.events.onServerHello(() => {
       _hellosThisBoot += 1;
+      // A reconnect may land on a different rate than the one we held.
+      void get().refreshHouseRate();
       if (shouldSkipHelloResync({
         wsOpenCount: get().clientConnection?.wsOpenCount,
         helloIndex: _hellosThisBoot,
@@ -227,7 +240,6 @@ export function createBootstrapSlice(set, get) {
         dataDirIsCloud: !!settings?.dataDirIsCloud,
         appMode: settings?.mode ?? 'standalone',
         clientServerUrl: settings?.clientServerUrl ?? '',
-        houseKhrPerUsd: houseRateFrom(settings),
         ...(settings?.aiDefaultModel ? { aiSelectedModelKey: settings.aiDefaultModel } : {}),
       });
       get().applyActiveCompanyContext(activeId);

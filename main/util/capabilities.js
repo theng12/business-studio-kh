@@ -60,10 +60,12 @@ const CAPABILITIES = [
   { key: 'hr.manage',        group: 'People',      label: 'Manage staff & attendance',     description: 'Edit staff records and documents, set kiosk PINs, schedules and holidays, review clock-ins, approve corrections, overtime, lateness and leave.' },
   { key: 'payroll.manage', group: 'People', label: 'Manage payroll', description: 'Staff pay rates, payroll calculation, review, payments and payslips. Approval follows company policy.' },
   { key: 'loans.manage', group: 'People', label: 'Manage staff loans', description: 'Staff loans, repayments and projections. Approval, rate changes and postponements follow separate company policies.' },
+  { key: 'finance.record', group: 'Finance', label: 'Record branch expenses', description: 'Record expenses and receipt photos for branches you supervise. Amounts above the approval setting wait for the owner.' },
+  { key: 'finance.view', group: 'Finance', label: 'View company expenses and balances', description: 'Read expenses, recorded account balances and monthly reports across this company. Approval and setup remain owner-only.' },
 ];
 
 /** Capabilities that are never part of a preset by default (granted per role on purpose). */
-const OPT_IN_CAPABILITIES = new Set(['fuel.record', 'fuel.manage', 'attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage', 'payroll.manage', 'loans.manage']);
+const OPT_IN_CAPABILITIES = new Set(['finance.record', 'finance.view', 'fuel.record', 'fuel.manage', 'attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage', 'payroll.manage', 'loans.manage']);
 
 const CAPABILITY_KEYS = new Set(CAPABILITIES.map((c) => c.key));
 
@@ -191,6 +193,11 @@ const CHANNEL_RULES = [
   [/^assets:(list|get|getSchedule|getReport|getWorkbook|saveWorkbook|listCategories|getSettings|previewDepreciation|listRuns|listEvents|getTaxYear|checkIntegrity)$/, ['assets.view', 'assets.manage']],
   [/^(assets|stocktake):/,                              'assets.manage'],
   [/^branches:(create|update|close|suggestFromFuel)$/,  'system.manage'],
+  [/^finance:(approve|reject|reverse|saveAccount|saveCategory|updateSettings)$/, ADMIN_ONLY],
+  [/^finance:(saveDraft|submit|cancel|setReceipt|removeReceipt)$/, 'finance.record'],
+  [/^finance:(accounts|reports)$/,                       'finance.view'],
+  [/^finance:/,                                         ['finance.record', 'finance.view']],
+  [/^fx:setShared$/,                                    ADMIN_ONLY],
   [/^ledger:(lockPeriod|unlockPeriod)$/,                ADMIN_ONLY],
   [/^ledger:updateAccount$/,                            'assets.manage'],
   [/^ledger:/,                                          ['assets.view', 'assets.manage']],
@@ -240,7 +247,7 @@ const CHANNEL_RULES = [
 // capabilities and baseline reads, kept in their own block.
 const ASSET_CAPABILITY_KEYS = ['assets.view', 'assets.manage', 'assets.count'];
 for (const k of ASSET_CAPABILITY_KEYS) OPT_IN_CAPABILITIES.add(k);
-const ASSET_BASELINE_READS = ['branches:list', 'branches:get', 'fx:list', 'fx:rateOn'];
+const ASSET_BASELINE_READS = ['branches:list', 'branches:get', 'fx:list', 'fx:rateOn', 'fx:getShared'];
 for (const ch of ASSET_BASELINE_READS) BASELINE_READS.add(ch);
 
 /**

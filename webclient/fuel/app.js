@@ -22,6 +22,7 @@
   var LS = {
     tok: 'mskh.fuel.token', lang: 'mskh.fuel.lang', device: 'mskh.fuel.device',
     tank: 'mskh.fuel.lastTank', vehicle: 'mskh.fuel.lastVehicle', currency: 'mskh.fuel.currency',
+    expense: 'mskh.fuel.expenseDraft',
   };
   function lsGet(k) { try { return window.localStorage.getItem(k); } catch (_) { return null; } }
   function lsSet(k, v) {
@@ -44,6 +45,7 @@
   var S = {
     user: null, companies: [], companyId: null, settings: {}, assets: [], locations: [], staff: [], stations: [], me: null,
     items: [], online: true, storageOk: true, chartCache: {}, access: L.pageAccess([]), mine: null,
+    finance: null, // finance:context — branches, accounts, categories, permissions
   };
   var screen = { name: 'loading' };
   var view = document.getElementById('view');
@@ -224,7 +226,10 @@
   function clockKind() {
     return L.nextClockKind(S.mine && S.mine.lastEvent, clockItems().map(function (it) { return { kind: it.summary && it.summary.expect, at: it.takenAt }; }), Date.now());
   }
-  function appTitle() { return tr(S.access.fuel || !S.access.any ? 'app_title' : 'app_title_hr'); }
+  function appTitle() {
+    if (S.access.financeView && !S.access.fuel && !S.access.self && !S.access.supervise) return tr('app_title_finance');
+    return tr(S.access.fuel || !S.access.any ? 'app_title' : 'app_title_hr');
+  }
 
   /* ── tiny DOM helper ───────────────────────────────────────────── */
   function h(tag, attrs, kids) {
@@ -906,6 +911,8 @@
       return;
     }
     if (screen.name === 'flow' && screen.key === 'mark') { showCrew(); return; }
+    if (screen.name === 'expenseForm') { goHome(); return; }
+    if (screen.name === 'expenseResult') { goHome(); return; }
     goHome();
   }
 
@@ -973,6 +980,7 @@
     var fn = {
       connect: renderConnect, loading: showLoading, error: renderError, home: renderHome, flow: renderStep,
       saving: renderSaving, result: renderResult, outbox: renderOutbox, recent: renderRecent, mine: renderMine, crew: renderCrew,
+      expenseForm: renderExpenseForm, expenseResult: renderExpenseResult,
     }[screen.name];
     (fn || renderHome)();
   }
@@ -1046,6 +1054,9 @@
     }
     if (A.supervise && linked) more.push(homeTile('crew', 'crew', tr('home_crew'), tr('home_crew_sub'), showCrew));
     if (A.fuel) more.push(homeTile('recent', 'list', tr('home_recent'), '', showRecent));
+    if (A.finance) {
+      more.push(homeTile('expenses', 'cash', tr('home_expenses'), tr('home_expenses_sub'), showExpenseForm));
+    }
     if (more.length) nodes.push(h('div', { class: 'home' }, more));
     var who = [S.user && S.user.name, S.companies.length > 1 && co ? co.name : null].filter(Boolean).join(' · ');
     nodes.push(h('p', { class: 'muted small', style: 'text-align:center;margin-top:18px', text: who }));
@@ -1619,6 +1630,346 @@
     }))]);
   }
 
+  /* Expenses reuse one draft id across save, receipt upload and explicit recording; no offline queue. */
+  function finCtx() { return S.finance || {}; }
+  function finBranches() { return L.scopeBranches(finCtx()); }
+  function finCategories() {
+    return (finCtx().categories || []).filter(function (c) { return !c.archivedAt; })
+      .sort(function (a, b) { return (a.sort || 0) - (b.sort || 0) || String(a.name).localeCompare(String(b.name)); });
+  }
+  /** Accounts a branch may pay from: its own, plus the company-wide banks. */
+  function finAccounts(branchId) {
+    var all = (finCtx().accounts || []).filter(function (a) { return !a.archivedAt; });
+    if (!branchId) return all;
+    return all.filter(function (a) { return a.branchId == null || a.branchId === branchId; });
+  }
+
+  /** The draft on the phone: one per company and account, so it cannot cross one. */
+  var expenseDraft = null;
+  function readDraft() {
+    try {
+      var d = expenseDraft || JSON.parse(lsGet(LS.expense) || 'null');
+      if (!d || d.companyId !== S.companyId) return null;
+      if (d.userId !== (S.user && S.user.id)) return null;
+      return d;
+    } catch (_) { return null; }
+  }
+  function writeDraft(d) {
+    expenseDraft = d;
+    try {
+      if (d) window.localStorage.setItem(LS.expense, JSON.stringify(d));
+      else window.localStorage.removeItem(LS.expense);
+    } catch (_) { toast(tr('storage_warning')); }
+  }
+  function clearDraft() {
+    writeDraft(null);
+    if (screen && String(screen.name).indexOf('expense') === 0) screen = { name: 'home' };
+  }
+  function theDraft() {
+    var d = readDraft();
+    if (d) return d;
+    d = {
+      id: L.uuid(), // made once: the server keys the row on it
+      companyId: S.companyId,
+      userId: S.user && S.user.id,
+      branchId: L.defaultBranchId(finBranches()),
+      accountId: '', categoryId: '', expenseDate: L.ppDate(Date.now()),
+      amountText: '', currency: 'USD', memo: '',
+      revision: null, serverId: null,
+      photo: null, // JSON-safe base64 survives a reload until recording succeeds
+      photoError: null,
+    };
+    writeDraft(d);
+    return d;
+  }
+
+  /** The draft's fields, ready for finance:saveDraft. */
+  function draftArgs(d) {
+    var p = L.parseAmount(d.amountText, d.currency);
+    var args = { id: d.serverId || d.id, currency: d.currency,
+      branchId: d.branchId || null, accountId: d.accountId || null, categoryId: d.categoryId || null,
+      expenseDate: d.expenseDate || null, memo: d.memo || '', amountMinor: p.ok ? p.minor : null };
+    if (d.revision != null) args.revision = d.revision;
+    return args;
+  }
+
+  /** What is still missing before the expense can be recorded (empty = ready). */
+  function draftMissing(d) {
+    var miss = [];
+    if (!d.branchId) miss.push(tr('exp_need', { what: tr('exp_branch') }));
+    if (!d.accountId) miss.push(tr('exp_need', { what: tr('exp_account') }));
+    if (!d.categoryId) miss.push(tr('exp_need', { what: tr('exp_category') }));
+    var p = L.parseAmount(d.amountText, d.currency);
+    if (!p.ok) {
+      miss.push(tr('exp_need', { what: tr('exp_amount') }));
+    } else if (d.currency === 'KHR') {
+      // The server refuses a riel amount worth less than one US cent; say so
+      // before Record, the same way the desktop editor does.
+      var min = L.minKhrMinorForCent((finCtx().rate || {}).khrPerUsd);
+      if (min && p.minor < min) miss.push(tr('exp_amount_min', { min: String(min) }));
+    }
+    var acc = byId(finAccounts(d.branchId), d.accountId);
+    if (acc && acc.currency && acc.currency !== d.currency) miss.push(tr('exp_currency_mismatch'));
+    return miss;
+  }
+
+  function showExpenseForm() {
+    screen = { name: 'expenseForm', draft: theDraft(), error: null, busy: false };
+    render();
+  }
+
+  function renderExpenseForm() {
+    var d = screen.draft;
+    setTitle(tr('exp_new'), true);
+    var branches = finBranches();
+    var nodes = [];
+
+    if (!branches.length) {
+      mount([h('div', { class: 'notice notice--warn', 'data-expense-error': 'branch', text: tr('exp_need_branch') })]);
+      return;
+    }
+    if (screen.error) nodes.push(h('div', { class: 'notice notice--bad', 'data-expense-error': '1', text: screen.error }));
+
+    function pick(label, name, options, value, onchange) {
+      var sel = h('select', { class: 'textin', 'data-expense-field': name, 'aria-label': tr(label) },
+        [{ id: '', label: tr('exp_need', { what: tr(label) }) }].concat(options).map(function (o) {
+          var el = h('option', { value: o.id, text: o.label });
+          if (o.id === value) el.selected = true;
+          return el;
+        }));
+      sel.value = value || '';
+      sel.addEventListener('change', function () { onchange(sel.value); });
+      return sel;
+    }
+    function text(label, name, key, extra) {
+      var el = h('input', Object.assign({ class: 'textin', type: 'text', value: d[key], 'data-expense-field': name, 'aria-label': tr(label) }, extra || {}));
+      el.addEventListener('input', function () { d[key] = el.value; writeDraft(d); });
+      return el;
+    }
+    function branchChanged(v) {
+      d.branchId = v;
+      // An account of another branch is no longer valid here.
+      if (d.accountId && !finAccounts(d.branchId).some(function (a) { return a.id === d.accountId; })) d.accountId = '';
+      writeDraft(d);
+      render();
+    }
+    function accountChanged(v) {
+      d.accountId = v;
+      // The money account decides the currency.
+      var acc = byId(finAccounts(d.branchId), v);
+      if (acc && acc.currency) d.currency = acc.currency;
+      writeDraft(d);
+      render();
+    }
+    function dateChanged(el) {
+      d.expenseDate = el.value;
+      writeDraft(d);
+    }
+
+    var controls = [
+      ['exp_branch', pick('exp_branch', 'branchId', branches.map(function (b) {
+        return { id: b.id, label: b.nameEn || b.code || b.id };
+      }), d.branchId, branchChanged)],
+      ['exp_date', h('input', { class: 'textin', type: 'date', value: d.expenseDate, 'data-expense-field': 'expenseDate', 'aria-label': tr('exp_date') })],
+      ['exp_account', pick('exp_account', 'accountId', finAccounts(d.branchId).map(function (a) {
+        return { id: a.id, label: a.name + ' · ' + a.currency };
+      }), d.accountId, accountChanged)],
+      ['exp_category', pick('exp_category', 'categoryId', finCategories().map(function (c) {
+        return { id: c.id, label: c.name };
+      }), d.categoryId, function (v) { d.categoryId = v; writeDraft(d); })],
+      ['exp_amount', text('exp_amount', 'amount', 'amountText', { inputmode: 'decimal' })],
+      ['exp_memo', text('exp_memo', 'memo', 'memo')],
+    ];
+    controls[1][1].addEventListener('change', function () { dateChanged(controls[1][1]); });
+    var rows = controls.map(function (r) { return [h('label', { class: 'small muted', text: tr(r[0]) }), r[1]]; });
+    rows.splice(4, 0, h('div', { class: 'seg' }, ['USD', 'KHR'].map(function (c) {
+      return h('button', {
+        type: 'button', class: d.currency === c ? 'is-on' : '', 'data-expense-currency': c, text: c,
+        onclick: function () {
+          d.currency = c;
+          // The picked account and typed amount belong to the old currency —
+          // clear both, the same as the desktop's setCurrency does.
+          var acc = byId(finAccounts(d.branchId), d.accountId);
+          if (acc && acc.currency && acc.currency !== c) { d.accountId = ''; d.amountText = ''; }
+          writeDraft(d); render();
+        },
+      });
+    })));
+    nodes.push(h('div', { class: 'stack' }, rows.flat()));
+
+    var photoInput = h('input', { type: 'file', accept: 'image/*', capture: 'environment', 'aria-label': tr('exp_take_photo') });
+    photoInput.addEventListener('change', function () {
+      var file = photoInput.files && photoInput.files[0];
+      if (!file) return;
+      shrinkPhoto(file).then(function (p) {
+        d.photo = { name: file.name || 'receipt.jpg', b64: bufToB64(p.buf) };
+        d.photoError = null;
+        writeDraft(d);
+        render();
+      }, function () {
+        d.photoError = true;
+        writeDraft(d);
+        render();
+      });
+    });
+    var photoBox = h('div', { class: 'stack' }, [
+      h('button', { type: 'button', class: 'big', 'data-expense-photo': '1', text: tr('exp_take_photo'), onclick: function () { photoInput.click(); } }),
+      photoInput,
+    ]);
+    if (d.photo) {
+      photoBox.insertBefore(h('button', {
+        type: 'button', class: 'big big--soft', 'data-expense-remove-photo': '1', text: tr('exp_remove_photo'),
+        onclick: function () { d.photo = null; d.photoError = null; writeDraft(d); render(); },
+      }), photoBox.firstChild);
+    }
+    nodes.push(h('div', { class: 'card' }, [
+      h('strong', { text: tr('exp_receipt') }),
+      photoBox,
+    ]));
+    if (d.photoError) {
+      nodes.push(h('div', { class: 'notice notice--warn', 'data-expense-photo-error': '1' }, [
+        h('b', { text: tr('exp_photo_failed') }), h('span', { text: tr('exp_photo_failed_body') }),
+      ]));
+    }
+
+    var p = L.parseAmount(d.amountText, d.currency);
+    var limit = (finCtx().settings || {}).approvalThresholdMinor;
+    var rate = (finCtx().rate || {}).khrPerUsd;
+    // Strictly above the threshold, in the currency typed: a riel amount is
+    // compared at the company rate. With no rate known, only a filled-in
+    // amount warns — the server still decides.
+    var over = limit != null && p.ok && (d.currency === 'KHR'
+      ? (rate ? p.minor > limit * rate / 100 : true)
+      : p.minor > limit);
+    if (over) {
+      nodes.push(h('div', { class: 'notice notice--warn', 'data-expense-above-limit': '1', text: tr('exp_limit_hint', { amount: L.formatMoney(limit, 'USD') }) }));
+    }
+    if (screen.missing) {
+      nodes.push(h('div', { class: 'notice notice--bad', 'data-expense-missing': screen.missing.join(' '), text: screen.missing.join(' ') }));
+    }
+
+    nodes.push(h('button', {
+      type: 'button', class: 'big big--soft', 'data-expense-save-draft': '1', text: tr('exp_save_draft'),
+      disabled: screen.busy, onclick: function () { saveDraft(d, false); },
+    }));
+    nodes.push(h('button', {
+      type: 'button', class: 'big', style: 'margin-top:12px', 'data-expense-submit': '1', text: tr('exp_record'),
+      disabled: screen.busy, onclick: function () { saveDraft(d, true); },
+    }));
+    if (screen.busy) nodes.push(h('div', { class: 'spinner', role: 'progressbar', 'aria-label': tr('saving') }));
+    mount(nodes);
+  }
+
+  /** Save the draft, upload the receipt if one is picked, then submit. */
+  function saveDraft(d, submit) {
+    var miss = draftMissing(d);
+    if (submit && miss.length) {
+      screen.error = miss.map(tr).join(' ');
+      screen.missing = miss;
+      render();
+      return;
+    }
+    screen.busy = true;
+    screen.error = null;
+    screen.missing = null;
+    render();
+    var saved = d.serverId ? rpc('finance:get', d.serverId).then(function (expense) {
+      return expense.status === 'draft' ? rpc('finance:saveDraft', draftArgs(d)) : expense;
+    }) : rpc('finance:saveDraft', draftArgs(d));
+    saved.then(function (expense) {
+      if (expense.status !== 'draft') {
+        if (expense.status !== 'posted' && expense.status !== 'pending') throw new Error('This expense is ' + expense.status);
+        writeDraft(null);
+        screen = { name: 'expenseResult', status: expense.status, expense: expense };
+        render();
+        return;
+      }
+      // The server owns the row: it may hand back its own id and revision.
+      if (expense && expense.id) d.serverId = expense.id;
+      if (expense && expense.revision != null) d.revision = expense.revision;
+      writeDraft(d);
+      if (!d.photo) return submit ? submitDraft(d) : null;
+      return rpc('finance:setReceipt', {
+        expenseId: d.serverId || d.id,
+        bytes: { __bin: true, b64: d.photo.b64 },
+        originalName: d.photo.name,
+      }).then(function (expense2) {
+        if (expense2 && expense2.revision != null) d.revision = expense2.revision;
+        writeDraft(d);
+        return submit ? submitDraft(d) : null;
+      }, function (err) {
+        // The photo did not upload: keep the form and the photo, say so.
+        d.photoError = true;
+        writeDraft(d);
+        screen.error = err.message;
+        return null;
+      });
+    }).then(function () {
+      screen.busy = false;
+      if (screen.name !== 'expenseForm') return;
+      if (screen.error) { render(); return; }
+      if (submit) return; // submitDraft already moved the screen on
+      // A draft is saved but NOT recorded: say exactly that.
+      screen = { name: 'expenseResult', status: 'draft', expense: null };
+      render();
+    }, function (err) {
+      screen.busy = false;
+      screen.error = err.message;
+      if (screen.name === 'expenseForm') render();
+    });
+  }
+
+  /** Submit the saved draft. The server decides recorded vs awaiting approval. */
+  function submitDraft(d) {
+    return rpc('finance:submit', { id: d.serverId || d.id }).then(function (expense) {
+      writeDraft(null); // recorded: nothing left to keep on the phone
+      screen = { name: 'expenseResult', status: expense && expense.status, expense: expense || null };
+      render();
+      return expense;
+    }, function (err) {
+      screen.error = err.message;
+      return null;
+    });
+  }
+
+  function renderExpenseResult() {
+    var e = screen.expense || {};
+    var status = screen.status;
+    setTitle(tr('home_expenses'), true);
+    var nodes = [];
+    // The rate the server froze when the amount was submitted (plan §5: show
+    // the rate actually used, so the USD figure can always be explained).
+    var fxLine = e.fxKhrPerUsd != null ? h('span', {
+      class: 'muted',
+      text: tr('exp_rate_used', {
+        rate: Number(e.fxKhrPerUsd).toLocaleString(),
+        date: e.fxRateDate ? ' (' + e.fxRateDate + ')' : '',
+      }),
+    }) : null;
+    if (status === 'posted') {
+      nodes.push(h('div', { class: 'notice notice--ok', 'data-expense-result': 'posted' }, [
+        h('b', { text: tr('exp_recorded') }),
+        h('span', { text: e.amountMinor != null ? L.formatMoney(e.amountMinor, e.currency) : '' }),
+        e.currency === 'KHR' && e.usdMinor != null ? h('span', { text: '≈ ' + L.formatMoney(e.usdMinor, 'USD') }) : null,
+        fxLine,
+      ].filter(Boolean)));
+    } else if (status === 'pending') {
+      nodes.push(h('div', { class: 'notice notice--warn', 'data-expense-result': 'pending' }, [
+        h('b', { text: tr('exp_pending') }),
+        h('span', { text: e.amountMinor != null ? L.formatMoney(e.amountMinor, e.currency) : '' }),
+        e.currency === 'KHR' && e.usdMinor != null ? h('span', { text: '≈ ' + L.formatMoney(e.usdMinor, 'USD') }) : null,
+        fxLine,
+        h('span', { text: tr('exp_pending_body') }),
+      ]));
+    } else {
+      nodes.push(h('div', { class: 'notice notice--warn', 'data-expense-result': status || 'draft' }, [
+        h('b', { text: tr('exp_draft_result') }),
+      ]));
+    }
+    nodes.push(h('button', { type: 'button', class: 'big', text: tr('done'), onclick: goHome }));
+    mount(nodes);
+  }
+
   /* ── session ───────────────────────────────────────────────────── */
   function onTokenRejected() {
     if (screen.name === 'connect') return;
@@ -1631,12 +1982,16 @@
     token = '';
     lsSet(LS.tok, null);
     S.user = null;
+    // The phone's draft belongs to this account: it must not follow a new one.
+    clearDraft();
     screen = { name: 'connect' };
     render();
   }
 
   function switchCompany(id) {
     showLoading();
+    // A draft is bound to one company: never carry it across.
+    clearDraft();
     rpc('companies:setActive', id).then(function () { S.companyId = id; return loadData(); }).then(function () {
       goHome();
       kick();
@@ -1655,12 +2010,18 @@
     var reads = L.bootReads(S.access);
     return Promise.all(reads.map(function (r) {
       var p = rpc(r[0], r[1]);
-      return r[0] === 'staff:me' ? p.catch(function () { return null; }) : p;
+      // staff:me is "who am I"; finance:context is the expense setup. Both may
+      // be missing (no staff record, Finance not set up) without breaking the page.
+      if (r[0] === 'staff:me' || r[0] === 'finance:context') {
+        return p.catch(function () { return null; });
+      }
+      return p;
     })).then(function (list) {
       var r = {};
       reads.forEach(function (x, i) { r[x[0]] = list[i]; });
       S.me = r['staff:me'] || null;
       S.mine = null;
+      S.finance = r['finance:context'] || null;
       // My attendance feeds the Clock tile's label; without it the tile still works.
       var mine = refreshMine().catch(function () { return null; });
       if (!S.access.fuel) return mine;

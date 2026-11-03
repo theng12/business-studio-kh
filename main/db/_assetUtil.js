@@ -12,7 +12,20 @@ const { uuid, str, num, int, badRequest, isCalendarDate, getCallerUserId } = req
 function audit(entityType, entityId, action, { before = null, after = null } = {}) {
   try {
     const auditLog = require('./auditLog');
-    const sensitivity = auditLog.isAssetEntityType(entityType) ? 'finance' : 'normal';
+    let expenseHistory = auditLog.isFinanceEntityType(entityType) || after?.sourceKind?.startsWith('finance_');
+    let companyId;
+    if (entityType === 'gl_account') {
+      const account = require('./index').getDb().prepare('SELECT company_id, system_key FROM gl_accounts WHERE id = ?').get(entityId);
+      if (account?.system_key?.startsWith('fin.')) {
+        expenseHistory = true;
+        companyId = account.company_id;
+      }
+    }
+    const sensitivity = expenseHistory ? 'accounting' : auditLog.isAssetEntityType(entityType) ? 'finance' : 'normal';
+    if (expenseHistory && entityType === 'journal_entry') {
+      companyId = require('./index').getDb().prepare('SELECT company_id FROM journal_entries WHERE id = ?').get(entityId)?.company_id;
+    }
+    if (companyId) after = { ...after, companyId };
     auditLog.log({ entityType, entityId, action, before, after, sensitivity });
   } catch (_) { /* audit must never break the write it records */ }
 }

@@ -54,7 +54,9 @@ const BACKUP_DIR_NAME = 'backups';
 // are not under assets/ on purpose (read only through permission-checked calls).
 // Fixed Assets: `fixed-assets` (asset photos and documents — evidence, read only
 // through assets:getFile) travels too, and is in ARCHIVE_TOP_LEVEL_DIRS below.
-const BACKUP_DATA_ENTRIES = ['database.sqlite', 'assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr', 'fixed-assets'];
+// Finance §6: `finance` (receipt photos — evidence, read only through the
+// permission-checked finance:getReceipt channel) must travel in both lists too.
+const BACKUP_DATA_ENTRIES = ['database.sqlite', 'assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr', 'fixed-assets', 'finance'];
 
 /** Resolve existing symlinks while preserving any not-yet-created suffix. */
 function canonicalizeExistingPath(inputPath) {
@@ -119,7 +121,8 @@ const ARCHIVE_TOP_LEVEL_FILES = new Set([
 // Fuel F1: fuel/ (evidence photos) and hr/ (staff photos) must be restorable too —
 // they are in BACKUP_DATA_ENTRIES, and an archive entry outside this set is refused.
 // Fixed Assets: fixed-assets/ likewise (in both lists, or every backup holding an asset photo is unrestorable).
-const ARCHIVE_TOP_LEVEL_DIRS = new Set(['assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr', 'fixed-assets']);
+// Finance §6: finance/ likewise (receipt photos are evidence; a backup holding one must restore).
+const ARCHIVE_TOP_LEVEL_DIRS = new Set(['assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr', 'fixed-assets', 'finance']);
 
 function archivePathSupported(relPath) {
   const cleaned = relPath.replace(/\/$/, '');

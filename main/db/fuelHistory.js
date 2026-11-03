@@ -83,6 +83,7 @@ HISTORY_TABLES.push(
   ['fixed_assets', 'fixed asset'],
   ['asset_events', 'asset event'],
   ['journal_entries', 'journal posting'],
+  ['finance_expenses', 'expense'],
   ['branches', 'branch record'],
 );
 

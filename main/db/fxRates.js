@@ -1,9 +1,13 @@
 /**
  * Fixed Assets A0: exchange rates, riel per US dollar (docs/ASSETS_AND_BRANCHES_PLAN.md §3.2).
  *
- *   house     the business's own rate. Book entries use it. The first time an
- *             entry needs one and none exists, it is seeded from this Mac's
- *             Settings rate (`exchangeRateKhrPerUsd`), noted "from Settings".
+ *   house     the business's own rate. Book entries use it. The first time a
+ *             company needs one and none exists, it is seeded ONCE from the
+ *             data-owning Mac's legacy Settings rate (`exchangeRateKhrPerUsd`
+ *             in config.json), noted "from Settings". After that the company's
+ *             DB rate is the only active source; the local key is inert
+ *             (clients reach this through the server's RPC, so a connecting Mac
+ *             can never overwrite the company's rate).
  *   official  a dated official rate (e.g. the GDT daily rate). The tax view
  *             uses it; when one is missing it falls back to the house rate and
  *             says so.
@@ -16,7 +20,7 @@
  */
 
 const { getDb } = require('./index');
-const { uuid, str, num, badRequest, getCallerUserId, audit, dateOrNull, notFound } = require('./_assetUtil');
+const { uuid, str, num, badRequest, getCallerUserId, audit, dateOrNull, todayPhnomPenh, notFound } = require('./_assetUtil');
 
 const SOURCES = ['house', 'official'];
 const MIN_RATE = 100;
@@ -61,9 +65,13 @@ function rateOn(companyId, date, src = 'house') {
   return r ? { ...rowToRate(r), exact: r.rate_date === d } : null;
 }
 
-/** This Mac's Settings rate (config.json), 4,100 outside the app. */
+/** This Mac's legacy Settings rate (config.json), 4,100 outside the app. * Seed source only — never a live fallback once the company has a DB rate. */
 function settingsRate() {
-  try { return require('./fuel').fxKhrPerUsd(); } catch (_) { return 4100; }
+  try {
+    const v = require('../config').loadConfig()?.exchangeRateKhrPerUsd;
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+  } catch (_) { /* no config outside the app (tests) */ }
+  return 4100;
 }
 
 /**
@@ -78,12 +86,13 @@ function houseRateFor(companyId, date, { seed = true } = {}) {
   const exact = rateOn(companyId, date, 'house');
   if (exact) return { khrPerUsd: exact.khrPerUsd, rateDate: exact.rateDate, source: 'house', fallback: null, rateId: exact.id };
   const db = getDb();
-  const earliest = db.prepare(`SELECT * FROM fx_rates WHERE company_id = ? AND source = 'house' AND voided_at IS NULL ORDER BY rate_date, created_at LIMIT 1`).get(companyId);
+  const earliest = db.prepare(`SELECT * FROM fx_rates WHERE company_id = ? AND source = 'house' AND voided_at IS NULL AND rate_date <= ? ORDER BY rate_date, created_at LIMIT 1`).get(companyId, todayPhnomPenh());
   if (earliest) return { khrPerUsd: earliest.khr_per_usd, rateDate: earliest.rate_date, source: 'house', fallback: 'earliest', rateId: earliest.id };
   // A preview must not write: it reads the Settings rate the real post would seed.
   if (!seed) return { khrPerUsd: settingsRate(), rateDate: date, source: 'house', fallback: 'settings', rateId: null };
   let seedDate = date;
   try { seedDate = require('./assetConfig').getSettings(companyId).registerStartDate || date; } catch (_) { /* no settings yet */ }
+  if (seedDate > todayPhnomPenh()) seedDate = todayPhnomPenh();
   const seeded = setRate({ companyId, rateDate: seedDate, khrPerUsd: settingsRate(), source: 'house', sourceNote: 'from Settings' });
   return { khrPerUsd: seeded.khrPerUsd, rateDate: seeded.rateDate, source: 'house', fallback: seedDate <= date ? 'seeded' : 'earliest', rateId: seeded.id };
 }
@@ -94,6 +103,20 @@ function taxRateFor(companyId, date, { seed = true } = {}) {
   if (off) return { khrPerUsd: off.khrPerUsd, rateDate: off.rateDate, source: 'official', fallback: null, rateId: off.id };
   const house = houseRateFor(companyId, date, { seed });
   return { ...house, fallback: 'house' };
+}
+
+/**
+ * The company's active shared rate: the house rate in force today (the row the
+ * Settings control shows and edits). It is the SAME rate the book entries and
+ * expenses use — `houseRateFor(companyId, today)` — so the screens can never
+ * disagree with the figures. The first time only, it is seeded from this Mac's
+ * legacy Settings value; because clients reach this through the server's RPC,
+ * the seed always uses the data-owning Mac's config, never a connecting Mac's.
+ */
+function sharedRate(companyId, { seed = true } = {}) {
+  if (!companyId) return null;
+  const h = houseRateFor(companyId, todayPhnomPenh(), { seed });
+  return h.rateId ? get(h.rateId) : null;
 }
 
 function setRate(input = {}) {
@@ -136,4 +159,4 @@ function voidRate(id, reason) {
   return get(id);
 }
 
-module.exports = { SOURCES, list, get, rateOn, houseRateFor, taxRateFor, setRate, voidRate, settingsRate };
+module.exports = { SOURCES, list, get, rateOn, houseRateFor, taxRateFor, sharedRate, setRate, voidRate, settingsRate };

@@ -152,7 +152,7 @@ function computeAsset(asset, settings, range = null) {
   const resets = fuel.listResets({ assetId: asset.id });
   return rules.assetRules({
     asset: { ...asset, maxPerDay: asset.typeMaxPerDay },
-    fills, resets, priceFor: fuel.priceLookup(asset.companyId), settings: s, fxKhrPerUsd: fxKhrPerUsd(),
+    fills, resets, priceFor: fuel.priceLookup(asset.companyId), settings: s, fxKhrPerUsd: fxKhrPerUsd(asset.companyId),
   });
 }
 
