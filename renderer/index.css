@@ -12975,3 +12975,75 @@ button.hr-cell:focus-visible { outline: 2px solid var(--c-brand); outline-offset
 .export-workbook__choice.is-disabled { cursor: default; opacity: 0.55; }
 .export-workbook__choice .field__hint { display: block; margin-top: 2px; }
 .export-workbook__label { display: block; }
+
+/* ── Finance (expenses, accounts, reports) ─────────────────────────── */
+
+.finance-toolbar { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+.finance-toolbar .search-wrap { flex: 1 1 220px; min-width: 180px; }
+.finance-table__memo { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.finance-table__actions { text-align: right; white-space: nowrap; }
+.finance-table tfoot th { border-top: 1px solid var(--c-border); text-align: left; }
+.data-table .finance-table__row--click { cursor: pointer; }
+.data-table .finance-table__row--click:focus-visible { outline: 2px solid var(--c-brand); outline-offset: -2px; }
+.finance-loading { margin-top: var(--s-3); }
+
+.finance-editor__actions { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.finance-editor__card { padding: var(--s-4); }
+.finance-note {
+  margin: var(--s-3) 0;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--radius-md);
+  background: var(--c-hover-bg);
+  color: var(--c-text-muted);
+  font-size: var(--fs-sm);
+}
+.finance-summary { display: flex; flex-wrap: wrap; gap: var(--s-4); margin-top: var(--s-3); font-size: var(--fs-sm); }
+.finance-amount { display: flex; gap: var(--s-2); align-items: center; }
+.finance-amount input { flex: 1 1 auto; }
+.finance-amount__suffix { color: var(--c-text-muted); font-size: var(--fs-sm); }
+
+.finance-receipt { margin-top: var(--s-4); padding-top: var(--s-4); border-top: 1px solid var(--c-border); }
+.finance-receipt__head { display: flex; justify-content: space-between; gap: var(--s-3); align-items: flex-start; flex-wrap: wrap; }
+.finance-receipt__head .section-title { margin: 0 0 var(--s-1); }
+.finance-receipt__buttons { display: flex; gap: var(--s-2); align-items: center; }
+.finance-receipt__file { display: none; }
+.finance-receipt__preview {
+  display: block;
+  margin-top: var(--s-3);
+  padding: var(--s-3);
+  width: 100%;
+  text-align: left;
+  border: 1px dashed var(--c-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.finance-receipt__preview img { max-width: 100%; max-height: 360px; border-radius: var(--radius-sm); }
+
+.finance-section { margin-top: var(--s-6); }
+.finance-section > .section-title { margin-bottom: var(--s-2); }
+.finance-hint { font-size: var(--fs-sm); margin-top: var(--s-2); }
+.finance-check { display: inline-flex; gap: var(--s-1); align-items: center; font-size: var(--fs-sm); }
+.finance-editor .input:disabled,
+.finance-editor .input--select:disabled { background: var(--c-hover-bg); color: var(--c-text-muted); cursor: not-allowed; }
+.finance-page .section-head { justify-content: space-between; align-items: center; }
+.finance-threshold { max-width: 360px; }
+.finance-threshold p { margin: 0; }
+
+.finance-categories { display: flex; flex-direction: column; gap: var(--s-1); }
+.finance-category {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+}
+.finance-category.is-retired { opacity: 0.6; }
+.finance-category__actions { display: flex; gap: var(--s-1); }
+.finance-pending { display: flex; align-items: baseline; gap: var(--s-2); }
+.finance-pending strong { font-size: var(--fs-lg); }
+.finance-pending__amount { margin-left: auto; font-weight: 600; }
+tr.is-retired { opacity: 0.6; }

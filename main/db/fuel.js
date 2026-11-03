@@ -552,16 +552,18 @@ function voidPrice(id, reason) {
 /* ─── exchange rate ───────────────────────────────────────────── */
 
 /**
- * The server's riel-per-dollar rate (Settings → General, `exchangeRateKhrPerUsd`
- * in config.json), for comparing or converting a USD cash payment with a KHR
- * price. 4,100 when there is no config (tests, first launch).
+ * The company's shared riel-per-dollar rate (the `fx_rates` house rate, seeded
+ * once from the data-owning Mac's legacy Settings value), for comparing or
+ * converting a USD cash payment with a KHR price. `companyId` is required and
+ * supplied by the caller — there is no active-company default, so one
+ * company's rate can never leak into another's figures. Pass `date`
+ * (YYYY-MM-DD) for a dated rate; omit it for the company's current rate.
  */
-function fxKhrPerUsd() {
-  try {
-    const v = require('../config').loadConfig()?.exchangeRateKhrPerUsd;
-    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
-  } catch (_) { /* no config outside the app (tests) */ }
-  return 4100;
+function fxKhrPerUsd(companyId, date = null) {
+  if (!companyId) throw badRequest('Company is required');
+  const fxRates = require('./fxRates');
+  const r = date ? fxRates.houseRateFor(companyId, date) : fxRates.sharedRate(companyId);
+  return r.khrPerUsd;
 }
 
 /* ─── thresholds ──────────────────────────────────────────────── */

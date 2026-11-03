@@ -132,7 +132,9 @@ test('backups and the server bundle carry fixed-assets/ — in BOTH lists', () =
   assert.ok(ARCHIVE_TOP_LEVEL_DIRS.has('fixed-assets'));
   // Every data folder a backup writes must be restorable.
   for (const e of BACKUP_DATA_ENTRIES) if (e !== 'database.sqlite') assert.ok(ARCHIVE_TOP_LEVEL_DIRS.has(e), `${e} is backed up but would be refused on restore`);
-  assert.ok(/trees = \[[^\]]*'fixed-assets'[^\]]*\]/.test(read('main/serverBundle.js')));
+  // The bundle carries every backed-up data tree (fixed-assets, finance, …) by
+  // deriving from the one allow-list instead of a second hardcoded copy.
+  assert.ok(/trees = BACKUP_DATA_ENTRIES\.filter\(\(e\) => e !== 'database\.sqlite'\)/.test(read('main/serverBundle.js')));
 });
 
 test('asset files are never served by /assets/ or app-image:// (they live outside assets/)', () => {

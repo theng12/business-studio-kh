@@ -35,10 +35,11 @@ test('the page is one self-contained document, far smaller than /m', () => {
   assert.ok(bytes < 200 * 1024, `page is ${bytes} bytes`);
   assert.ok(gz < 50 * 1024, `gzipped page is ${gz} bytes`);
   // HR1 added the attendance screens (and ~100 words in two languages — Khmer
-  // is 3 bytes a letter), so the page is no longer under half of /m; it still
-  // travels gzipped at well under 50 KB.
+  // is 3 bytes a letter), and Finance 0.1.103 added the expense flow, so the
+  // page is no longer under 0.6 of /m; it still travels gzipped at well under
+  // 50 KB, which is the number a phone actually pays.
   const viewer = require('../main/webclientHtml.js');
-  assert.ok(bytes < Buffer.byteLength(viewer) * 0.6, `page is ${bytes} bytes, /m ${Buffer.byteLength(viewer)}`);
+  assert.ok(bytes < Buffer.byteLength(viewer) * 0.65, `page is ${bytes} bytes, /m ${Buffer.byteLength(viewer)}`);
 });
 
 test('Khmer first, with a font stack phones already have', () => {

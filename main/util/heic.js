@@ -9,7 +9,7 @@
  * file untouched and let sharp try (it'll throw a clear error the caller
  * surfaces as a failed import).
  *
- * Pure-ish: only touches the temp dir + spawns sips. No DB, no Electron.
+ * Pure-ish: writes a conversion to the selected folder and spawns sips. No DB, no Electron.
  */
 const fs = require('node:fs');
 const os = require('node:os');
@@ -57,15 +57,15 @@ function sipsToJpeg(srcAbs, outAbs) {
 
 /**
  * If `srcAbs` is a HEIC/HEIF image (by extension or magic bytes) and we're on
- * macOS, transcode it to a temp JPEG and return { path, cleanup }. Otherwise
- * return the original path with cleanup=null. Callers MUST call cleanup() (if
- * present) when done with the path.
+ * macOS, transcode it to a JPEG and return { path, cleanup }. Otherwise return
+ * the original path with cleanup=null. Callers may retain both files in their
+ * own trash folder; temporary conversions should call cleanup() when done.
  */
-async function ensureDecodablePath(srcAbs) {
+async function ensureDecodablePath(srcAbs, { outputDir = os.tmpdir() } = {}) {
   if (!srcAbs || process.platform !== 'darwin' || !looksHeic(srcAbs)) {
     return { path: srcAbs, cleanup: null };
   }
-  const out = path.join(os.tmpdir(), `iskh-heic-${crypto.randomUUID()}.jpg`);
+  const out = path.join(outputDir, `iskh-heic-${crypto.randomUUID()}.jpg`);
   await sipsToJpeg(srcAbs, out);
   return {
     path: out,

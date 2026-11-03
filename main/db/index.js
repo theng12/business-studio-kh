@@ -471,6 +471,7 @@ function initDb(dataDir) {
   // branches, fx rates, the accounting core and the register. Additive only —
   // CREATE TABLE IF NOT EXISTS / addColumnIfMissing, no SCHEMA_VERSION bump.
   require('./assetSchema').ensureAssetSchema(db);
+  require('./financeSchema').ensureFinanceSchema(db);
 
   return db;
 }
