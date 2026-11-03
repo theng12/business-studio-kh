@@ -259,6 +259,34 @@
       reason_forgot: 'ខ្ញុំភ្លេច',
       reason_other: 'មូលហេតុផ្សេង…',
       reason_text: 'សរសេរមូលហេតុ',
+      app_title_finance: 'ចំណាយ',
+      home_expenses: 'ចំណាយ',
+      home_expenses_sub: 'កត់ចំណាយរបស់សាខា',
+      exp_branch: 'សាខា',
+      exp_account: 'គណនីប្រាក់',
+      exp_category: 'ប្រភេទ',
+      exp_amount: 'ចំនួន',
+      exp_date: 'កាលបរិច្ឆេទ',
+      exp_memo: 'ចំណាំ',
+      exp_photo_failed: 'ភាពចម្លងមិនបានបញ្ជូន។',
+      exp_photo_failed_body: 'ចំណាយត្រូវបានរក្សាទុក។ ថត់ម្ដងទៀត ឬដកភាពចម្លង។',
+      exp_draft_result: 'ព្រាងត្រូវបានរក្សាទុក។ មិនទាន់កត់ទេ។',
+      exp_recorded: 'បានកត់ចំណាយ។',
+      exp_pending: 'កំពុងរង់ចាំការអនុម័ត។',
+      exp_pending_body: 'លើពីកម្រិតអនុម័ត។ មន្ត្រីគ្រប់គ្រងនឹងពិនិត្យ។',
+      exp_save_draft: 'រក្សាទុកជាព្រាង',
+      exp_record: 'កត់ចំណាយ',
+      exp_new: 'ចំណាយថ្មី',
+      exp_receipt: 'បង្កាន់ដៃ',
+      exp_take_photo: 'ថតបង្កាន់ដៃ',
+      exp_remove_photo: 'ដករូបថតចេញ',
+      exp_amount_bad: 'សូមបញ្ចូលចំនួនជាចំនួន។',
+      exp_currency_mismatch: 'ចំនួនត្រូវជាប្រាកាដូចគណនីទីក្រុង។',
+      exp_need: 'សូម{what}។',
+      exp_need_branch: 'មិនទាន់មានសាខាដែលបានចូលទេ។ សូមស្នើឲ្យមន្ត្រីគ្រប់គ្រងចាត់សាខា។',
+      exp_limit_hint: 'លើពី {amount} ត្រូវរង់ចាំការអនុម័ត។',
+      exp_amount_min: 'សូមបញ្ចូលយ៉ាងតិច {min} ៛ — តិចជាងនេះមិនដល់មួយសេនអាមេរិក។',
+      exp_rate_used: 'អត្រាដែលបានប្រើ៖ {rate} ៛ក្នុងមួយដុល្លារ{date}',
     },
     en: {
       app_title: 'Fuel',
@@ -501,6 +529,34 @@
       reason_forgot: 'I forgot',
       reason_other: 'Another reason…',
       reason_text: 'Write the reason',
+      app_title_finance: 'Expenses',
+      home_expenses: 'Expenses',
+      home_expenses_sub: 'Record a branch cost',
+      exp_branch: 'Branch',
+      exp_account: 'Money account',
+      exp_category: 'Category',
+      exp_amount: 'Amount',
+      exp_date: 'Date',
+      exp_memo: 'Memo',
+      exp_photo_failed: 'The photo did not upload.',
+      exp_photo_failed_body: 'Your expense is kept. Take it again, or remove it.',
+      exp_draft_result: 'Draft saved. Not recorded yet.',
+      exp_recorded: 'Expense recorded.',
+      exp_pending: 'Waiting for approval.',
+      exp_pending_body: 'Above the approval amount. The owner will check it.',
+      exp_save_draft: 'Save draft',
+      exp_record: 'Record expense',
+      exp_new: 'New expense',
+      exp_receipt: 'Receipt',
+      exp_take_photo: 'Take a receipt photo',
+      exp_remove_photo: 'Remove the photo',
+      exp_amount_bad: 'Enter the amount as a number.',
+      exp_currency_mismatch: 'The amount must be in the account\'s currency.',
+      exp_need: 'Please choose {what}.',
+      exp_need_branch: 'No branch is assigned. Ask the owner to assign one.',
+      exp_limit_hint: 'Expenses over {amount} wait for the owner\'s approval.',
+      exp_amount_min: 'Enter at least {min} riel — less is under one US cent.',
+      exp_rate_used: 'Rate used: {rate} riel per dollar{date}',
     },
   };
 
@@ -645,6 +701,53 @@
     if (!isNum(minor)) return '';
     if (currency === 'USD') return '$' + formatNumber(minor / 100, 2);
     return formatNumber(minor, 0) + ' ៛';
+  }
+
+  /* ── expenses (Finance) ─────────────────────────────────────────────
+     Money is exact: the digits are read as text, never as a float, so a
+     dollar amount can never land a cent off (0.1 + 0.2 never happens here).
+     USD keeps cents; riel are whole. Parsed back to the text the person
+     typed, so a draft survives a retry unchanged. */
+  function parseAmount(text, currency) {
+    var s = String(text == null ? '' : text).trim().replace(/[,\s]/g, '');
+    if (!s) return { ok: false, reason: 'empty' };
+    var m = /^(\d+)(?:\.(\d+))?$/.exec(s);
+    if (!m) return { ok: false, reason: 'format' };
+    var whole = m[1];
+    var frac = m[2] || '';
+    if (currency === 'USD') {
+      if (frac.length > 2) return { ok: false, reason: 'cents' };
+      while (frac.length < 2) frac += '0';
+      var usd = parseInt(whole, 10) * 100 + parseInt(frac, 10);
+      return usd > 0 ? { ok: true, minor: usd } : { ok: false, reason: 'zero' };
+    }
+    if (frac) return { ok: false, reason: 'whole' };
+    var riel = parseInt(whole, 10);
+    return riel > 0 ? { ok: true, minor: riel } : { ok: false, reason: 'zero' };
+  }
+
+  /** The branches this account may record on: the context's list, narrowed by
+   *  recordBranchIds (null = the owner: every branch). Closed branches drop out. */
+  function scopeBranches(ctx) {
+    var all = (ctx && ctx.branches) || [];
+    var ids = ctx && ctx.recordBranchIds;
+    return all.filter(function (b) {
+      if (b.status && b.status !== 'active') return false;
+      return ids == null || ids.indexOf(b.id) !== -1;
+    });
+  }
+
+  /** Default the branch only when there is exactly one to record on (never guess). */
+  function defaultBranchId(branches) {
+    return Array.isArray(branches) && branches.length === 1 ? branches[0].id : '';
+  }
+
+  /** Smallest riel amount still worth one US cent at the given rate — the same
+   *  rule the desktop uses (financeModel.js minKhrMinorForCent). */
+  function minKhrMinorForCent(khrPerUsd) {
+    var rate = Number(khrPerUsd);
+    if (!isFinite(rate) || rate <= 0) return null;
+    return Math.ceil(rate / 200);
   }
 
   /** Width/height to draw a photo at so its longer side is at most `max` px. */
@@ -1004,10 +1107,13 @@
       fuel: canRecordFuel(c),
       self: has('attendance.self'),
       supervise: has('attendance.supervise'),
+      // Finance: a recorder gets the expense flow; a viewer only sees the list.
+      finance: has('finance.record'),
+      financeView: has('finance.view'),
       // staff:getPhoto is open to fuel and HR callers, and to a supervisor for their own crew.
       staffPhotos: canRecordFuel(c) || has('hr.view') || has('hr.manage') || has('attendance.supervise'),
     };
-    a.any = a.fuel || a.self || a.supervise;
+    a.any = a.fuel || a.self || a.supervise || a.finance;
     return a;
   }
 
@@ -1019,6 +1125,9 @@
       list.push(['fuel:getSettings', null], ['fuel:listAssets', { status: 'active' }], ['fuel:listLocations', {}],
         ['staff:list', { status: 'active' }], ['fuel:listStations', {}]);
     }
+    // The expense form needs its branches, accounts and categories; only an
+    // account that may record may ask (the channel refuses anyone else).
+    if (access && access.finance) list.push(['finance:context', {}]);
     return list;
   }
 
@@ -1126,6 +1235,10 @@
     formatTyping: formatTyping,
     toMinor: toMinor,
     formatMoney: formatMoney,
+    parseAmount: parseAmount,
+    scopeBranches: scopeBranches,
+    defaultBranchId: defaultBranchId,
+    minKhrMinorForCent: minKhrMinorForCent,
     fitWithin: fitWithin,
     RETRY_DELAYS_MS: RETRY_DELAYS_MS,
     IDEMPOTENT_CHANNELS: IDEMPOTENT_CHANNELS,

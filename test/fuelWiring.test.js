@@ -118,7 +118,9 @@ test('validators: photo size limits and envelopes are checked before decoding', 
 test('backups and the server bundle carry fuel/ and hr/', () => {
   assert.ok(BACKUP_DATA_ENTRIES.includes('fuel'));
   assert.ok(BACKUP_DATA_ENTRIES.includes('hr'));
-  assert.ok(/trees = \[[^\]]*'fuel'[^\]]*'hr'/.test(read('main/serverBundle.js')));
+  // The bundle derives its trees from the backup allow-list, so fuel/, hr/ and
+  // every later entry (finance/) ride along without a second hardcoded copy.
+  assert.ok(/trees = BACKUP_DATA_ENTRIES\.filter\(\(e\) => e !== 'database\.sqlite'\)/.test(read('main/serverBundle.js')));
 });
 
 test('companies:remove refuses while staff or fuel history exists', () => {

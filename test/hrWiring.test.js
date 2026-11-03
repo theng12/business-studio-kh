@@ -141,7 +141,7 @@ test('History hiding: sensitivity and entity clauses', () => {
   assert.ok(all.some((c) => c.includes("sensitivity <> 'hr'")));
   assert.ok(all.some((c) => c.includes("entity_type <> 'employee'")));
   const src = read('main/db/auditLog.js');
-  assert.ok(/CLEARABLE_SQL = `sensitivity = 'normal' AND \$\{FUEL_ENTITY_SQL\} AND \$\{ASSET_ENTITY_SQL\} AND \$\{PAYROLL_ENTITY_SQL\}`/.test(src), 'clearHistory keeps staff / fuel / HR / payroll / asset rows, including untagged HR2 financial types');
+  assert.ok(/CLEARABLE_SQL = `sensitivity = 'normal' AND substr\(entity_type, 1, 8\) <> 'finance_' AND \$\{FUEL_ENTITY_SQL\} AND \$\{ASSET_ENTITY_SQL\} AND \$\{PAYROLL_ENTITY_SQL\}`/.test(src), 'clearHistory keeps staff / fuel / HR / payroll / asset / Finance rows, including untagged financial types');
   // Fixed Assets: asset / ledger rows (and 'finance' rows) hidden without assets.view.
   assert.deepEqual(hideClauses({ assets: true }).length, 2);
   assert.ok(hideClauses({ assets: true }).some((c) => c.includes("sensitivity <> 'finance'")));

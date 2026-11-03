@@ -22,7 +22,7 @@ function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
  */
 function valuer(companyId) {
   const priceFor = fuel.priceLookup(companyId);
-  const fx = fuel.fxKhrPerUsd();
+  const fx = fuel.fxKhrPerUsd(companyId);
   const deliveryPrice = getDb().prepare(`
     SELECT price_minor_per_l FROM fuel_deliveries
      WHERE location_id = ? AND voided_at IS NULL AND currency = 'KHR' AND price_minor_per_l IS NOT NULL AND delivered_at <= ?
@@ -49,7 +49,7 @@ function valuer(companyId) {
  */
 function overpayment(companyId, settings) {
   const priceFor = fuel.priceLookup(companyId);
-  const fx = fuel.fxKhrPerUsd();
+  const fx = fuel.fxKhrPerUsd(companyId);
   return (f) => {
     if (f.kind !== 'cash_station' || !isNum(f.litresShownOnPump)) return 0;
     const price = priceFor(f.fuelType, f.at);

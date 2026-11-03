@@ -49,8 +49,9 @@ test('every attendance word is in both languages (including the ones picked by a
 });
 
 test('which parts of the page an account gets', () => {
-  assert.deepEqual(L.pageAccess(['fuel.record']), { admin: false, fuel: true, self: false, supervise: false, staffPhotos: true, any: true });
-  assert.deepEqual(L.pageAccess(['attendance.self']), { admin: false, fuel: false, self: true, supervise: false, staffPhotos: false, any: true });
+  assert.deepEqual(L.pageAccess(['fuel.record']), { admin: false, fuel: true, self: false, supervise: false, finance: false, financeView: false, staffPhotos: true, any: true });
+  assert.deepEqual(L.pageAccess(['attendance.self']), { admin: false, fuel: false, self: true, supervise: false, finance: false, financeView: false, staffPhotos: false, any: true });
+  assert.equal(L.pageAccess(['finance.view']).financeView, true, 'a Finance viewer gets the finance app title');
   assert.equal(L.pageAccess(['attendance.supervise']).staffPhotos, true, 'a supervisor sees their crew\'s faces (the server checks it is their crew)');
   const driver = L.pageAccess(['fuel.record', 'attendance.self']);
   assert.equal(driver.fuel && driver.self, true, 'a driver has both');

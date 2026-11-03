@@ -28,7 +28,7 @@ test('company switch flushes dirty editor work before the backend active company
     addToast(message) { errors.push(message); },
     applyActiveCompanyContext(id) { state.activeCompanyId = id; },
     refreshBrands: async () => {}, refreshCategories: async () => {}, refreshProducts: async () => {},
-    refreshDashboard: async () => {}, refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {},
+    refreshDashboard: async () => {}, refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {}, refreshHouseRate: async () => {},
   };
   const set = (patch) => Object.assign(state, patch);
   const get = () => state;
@@ -63,7 +63,7 @@ test('failed pre-switch flush leaves the backend and renderer on the old company
     addToast(message) { errors.push(message); },
     applyActiveCompanyContext(id) { state.activeCompanyId = id; },
     refreshBrands: async () => {}, refreshCategories: async () => {}, refreshProducts: async () => {},
-    refreshDashboard: async () => {}, refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {},
+    refreshDashboard: async () => {}, refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {}, refreshHouseRate: async () => {},
   };
   const set = (patch) => Object.assign(state, patch);
   const get = () => state;
@@ -89,7 +89,7 @@ test('company switch locks old-company editors only after their stable flush and
   const state = {
     activeCompanyId: 'company-1', addToast() {}, applyActiveCompanyContext(id) { state.activeCompanyId = id; },
     refreshBrands: async () => {}, refreshCategories: async () => {}, refreshProducts: async () => {}, refreshDashboard: async () => {},
-    refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {},
+    refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {}, refreshHouseRate: async () => {},
   };
   Object.assign(state, createCompaniesSlice((patch) => Object.assign(state, patch), () => state));
   global.window = { api: { companies: { setActive: async () => switchGate, getActiveId: async () => state.activeCompanyId } } };
@@ -111,7 +111,7 @@ test('failed backend company switch unlocks the current editor', async () => {
   const state = {
     activeCompanyId: 'company-1', addToast() {}, applyActiveCompanyContext(id) { state.activeCompanyId = id; },
     refreshBrands: async () => {}, refreshCategories: async () => {}, refreshProducts: async () => {}, refreshDashboard: async () => {},
-    refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {},
+    refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {}, refreshHouseRate: async () => {},
   };
   Object.assign(state, createCompaniesSlice((patch) => Object.assign(state, patch), () => state));
   state.activeCompanyId = 'company-1';
@@ -129,7 +129,7 @@ test('queued company switches stay locked until the latest backend company is ap
   const state = {
     activeCompanyId: 'company-1', addToast() {}, applyActiveCompanyContext(id) { state.activeCompanyId = id; },
     refreshBrands: async () => {}, refreshCategories: async () => {}, refreshProducts: async () => {}, refreshDashboard: async () => {},
-    refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {},
+    refreshExportProfiles: async () => {}, refreshAiPrompts: async () => {}, refreshAiTasks: async () => {}, refreshHouseRate: async () => {},
   };
   Object.assign(state, createCompaniesSlice((patch) => Object.assign(state, patch), () => state));
   state.activeCompanyId = 'company-1';

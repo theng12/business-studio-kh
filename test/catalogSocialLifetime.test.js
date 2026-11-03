@@ -142,7 +142,7 @@ function editName(session, from, to, save = false) {
 }
 
 function storeState() {
-  return { activeCompanyId: 'company-1', products: [], brands: [], categories: [], addToast() {}, refreshBrands: async () => {}, refreshCategories: async () => {} };
+  return { activeCompanyId: 'company-1', products: [], brands: [], categories: [], addToast() {}, refreshBrands: async () => {}, refreshCategories: async () => {}, refreshHouseRate: async () => {} };
 }
 
 for (const [kind, exported] of [['catalog', 'CatalogEditor'], ['social', 'PresetEditor']]) {

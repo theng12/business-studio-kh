@@ -59,6 +59,7 @@ const kioskDomain       = require('./ipc/kiosk');        // HR1: the shop-Mac cl
 const kioskModeDomain   = require('./ipc/kioskMode');    // HR1: this Mac as the kiosk (local)
 const payrollDomain     = require('./ipc/payroll');
 const loansDomain       = require('./ipc/loans');
+const financeDomain     = require('./ipc/finance');
 
 function registerIpc(_ctx) {
   const helpers = {
@@ -106,6 +107,7 @@ function registerIpc(_ctx) {
   kioskModeDomain.register(helpers);        // HR1: kioskMode:* (local)
   payrollDomain.register(helpers);
   loansDomain.register(helpers);
+  financeDomain.register(helpers);
 }
 
 module.exports = { registerIpc };

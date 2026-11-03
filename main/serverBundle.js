@@ -59,6 +59,7 @@ const {
   validateTarListing,
   validateExtractedTree,
   resolveSafeDest,
+  BACKUP_DATA_ENTRIES,
 } = require('./util/backupSafety');
 const {
   snapshotDataTrees,
@@ -164,7 +165,8 @@ async function exportBundle({ outputPath, onProgress } = {}) {
     //    and files must describe the same moment; regular copied trees
     //    plus the post-copy inventory check reject a moving source.
     onProgress?.('snapshot');
-    const trees = ['assets', 'processed', 'ai-gallery', 'overlays', 'fuel', 'hr', 'fixed-assets'];
+    // Every backed-up data tree except the DB file, which is snapshotted below.
+    const trees = BACKUP_DATA_ENTRIES.filter((e) => e !== 'database.sqlite');
     const treeSnapshot = await snapshotDataTrees(dataDir, trees);
     const dbDest = path.join(stagingRoot, 'database.sqlite');
     await snapshotDatabase(dbDest);

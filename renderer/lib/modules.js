@@ -240,6 +240,19 @@ export const APP_MODULES = [
     ],
   },
   {
+    id: 'finance',
+    name: 'Finance',
+    description: 'Branch expenses, money accounts and monthly reports.',
+    icon: 'costcalc',
+    sections: [{
+      pages: [
+        { id: 'financeexpenses', name: 'Expenses', icon: 'costcalc', caps: ['finance.record', 'finance.view'] },
+        { id: 'financeaccounts', name: 'Money accounts', icon: 'costcalc', caps: ['finance.view'] },
+        { id: 'financereports', name: 'Reports', icon: 'assetreport', caps: ['finance.view'] },
+      ],
+    }],
+  },
+  {
     id: 'system',
     name: 'System',
     description: 'Settings, backups and the history of every change.',
