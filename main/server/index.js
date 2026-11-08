@@ -521,11 +521,35 @@ async function handleRequest(req, res, dataDir) {
     return;
   }
 
+  // Pick & Pack Phase 0: the packing bench page (docs/PICK_AND_PACK_PLAN.md
+  // §3.2–3.3). Public like `/m` and `/f` — every call it makes needs a token
+  // with `pack.work` or `orders.manage`. Served from the compiled string in
+  // main/packWebclientHtml.js (scripts/build-webclient.js), never a
+  // source-tree file (AGENTS.md §21).
+  if (req.method === 'GET' && (urlPath === '/pack' || urlPath === '/pack/')) {
+    let html;
+    try { html = require('../packWebclientHtml'); } catch (_) { html = ''; }
+    if (!html) { res.writeHead(500); res.end('pack page unavailable'); return; }
+    let version = '';
+    try { version = require('electron').app.getVersion() || ''; } catch (err) {
+      logSoftFailure('server', 'read app version for /pack', err);
+    }
+    sendBody(req, res, 200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store, max-age=0, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'X-App-Version': version,
+      'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'Referrer-Policy': 'no-referrer',
+    }, html);
+    return;
+  }
+
   if (isMaintenanceActive()) {
     sendJson(res, 503, { error: 'Media Studio KH is performing maintenance and will restart shortly.' });
     return;
   }
-
   // Everything else requires auth.
   const user = authenticate(req);
   if (!user) {

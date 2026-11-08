@@ -24,20 +24,26 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 const INLINE_RE = /\/\*@INLINE ([\w.-]+)\*\//g;
 
-/** Fuel page: the HTML with every INLINE marker replaced by webclient/fuel/<name>. */
-function buildFuelHtml(root = ROOT) {
-  const dir = path.join(root, 'webclient', 'fuel');
+/** A phone page: webclient/<dir>/index.html with every INLINE marker replaced by that file. */
+function buildInlineHtml(dirName, root = ROOT) {
+  const dir = path.join(root, 'webclient', dirName);
   const shell = fs.readFileSync(path.join(dir, 'index.html'), 'utf8');
   const html = shell.replace(INLINE_RE, (_, name) => {
     const code = fs.readFileSync(path.join(dir, name), 'utf8');
     // A literal "</script" inside an inlined script would end the <script> element early.
-    if (/<\/script/i.test(code)) throw new Error(`webclient/fuel/${name} contains "</script" — it cannot be inlined`);
+    if (/<\/script/i.test(code)) throw new Error(`webclient/${dirName}/${name} contains "</script" — it cannot be inlined`);
     // A function replacement: `$&`-style patterns in the code are not expanded.
     return code;
   });
-  if (/\/\*@INLINE /.test(html)) throw new Error('webclient/fuel/index.html: an INLINE marker was not replaced');
+  if (/\/\*@INLINE /.test(html)) throw new Error(`webclient/${dirName}/index.html: an INLINE marker was not replaced`);
   return html;
 }
+
+/** Fuel page: the HTML with every INLINE marker replaced by webclient/fuel/<name>. */
+function buildFuelHtml(root = ROOT) { return buildInlineHtml('fuel', root); }
+
+/** Pick & Pack page: webclient/pack/{index.html,logic.js,app.js} → one document. */
+function buildPackHtml(root = ROOT) { return buildInlineHtml('pack', root); }
 
 function writeModule(outFile, sourceLabel, html) {
   const banner =
@@ -57,8 +63,13 @@ function main() {
   const fuelOut = path.join(ROOT, 'main', 'fuelWebclientHtml.js');
   writeModule(fuelOut, 'webclient/fuel/', fuel);
   console.log(`[build-webclient] wrote ${path.relative(ROOT, fuelOut)} (${Buffer.byteLength(fuel)} bytes of HTML)`);
+
+  const pack = buildPackHtml();
+  const packOut = path.join(ROOT, 'main', 'packWebclientHtml.js');
+  writeModule(packOut, 'webclient/pack/', pack);
+  console.log(`[build-webclient] wrote ${path.relative(ROOT, packOut)} (${Buffer.byteLength(pack)} bytes of HTML)`);
 }
 
 if (require.main === module) main();
 
-module.exports = { buildFuelHtml };
+module.exports = { buildFuelHtml, buildPackHtml };

@@ -62,10 +62,14 @@ const CAPABILITIES = [
   { key: 'loans.manage', group: 'People', label: 'Manage staff loans', description: 'Staff loans, repayments and projections. Approval, rate changes and postponements follow separate company policies.' },
   { key: 'finance.record', group: 'Finance', label: 'Record branch expenses', description: 'Record expenses and receipt photos for branches you supervise. Amounts above the approval setting wait for the owner.' },
   { key: 'finance.view', group: 'Finance', label: 'View company expenses and balances', description: 'Read expenses, recorded account balances and monthly reports across this company. Approval and setup remain owner-only.' },
+  // Pick & Pack Phase 0 (docs/PICK_AND_PACK_PLAN.md §7). Both opt-in: a packer
+  // gets pack.work alone; order management is granted on purpose.
+  { key: 'pack.work', group: 'Orders', label: 'Pack parcels', description: 'The /pack screen: the parcel queue, scan-to-confirm, parcel photos and seal. No prices.' },
+  { key: 'orders.manage', group: 'Orders', label: 'Manage orders', description: 'Import orders, quick add, edit open orders and see every order including its value. Cannot change a sealed parcel.' },
 ];
 
 /** Capabilities that are never part of a preset by default (granted per role on purpose). */
-const OPT_IN_CAPABILITIES = new Set(['finance.record', 'finance.view', 'fuel.record', 'fuel.manage', 'attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage', 'payroll.manage', 'loans.manage']);
+const OPT_IN_CAPABILITIES = new Set(['finance.record', 'finance.view', 'fuel.record', 'fuel.manage', 'attendance.kiosk', 'attendance.self', 'attendance.supervise', 'hr.view', 'hr.manage', 'payroll.manage', 'loans.manage', 'pack.work', 'orders.manage']);
 
 const CAPABILITY_KEYS = new Set(CAPABILITIES.map((c) => c.key));
 
@@ -120,7 +124,7 @@ const CHANNEL_RULES = [
   [/^products:(create|update|bulkUpdate|bulkUpsert|duplicate)$/, 'products.edit'],
   // CSV import + sample sheet feed product create/update.
   // Fixed Assets: the asset import reads its workbook the same way (§2 gap 5).
-  [/^files:(pickWorkbook|parseWorkbook)$/,             ['products.edit', 'assets.manage', 'loans.manage']],
+  [/^files:(pickWorkbook|parseWorkbook)$/,             ['products.edit', 'assets.manage', 'loans.manage', 'orders.manage']],
   [/^samples:/,                                         'products.edit'],
 
   // — Images. Deleting image content is a "delete" capability; importing
@@ -202,6 +206,14 @@ const CHANNEL_RULES = [
   [/^ledger:updateAccount$/,                            'assets.manage'],
   [/^ledger:/,                                          ['assets.view', 'assets.manage']],
   [/^fx:/,                                              ['assets.manage', 'system.manage']],
+
+  // — Pick & Pack Phase 0 (docs/PICK_AND_PACK_PLAN.md §7). The pack screen is
+  //   pack.work OR orders.manage; changing the photo rule and everything under
+  //   orders: is management only. Handlers still narrow to the caller's company
+  //   and the pack-facing reads never include a price or the order value.
+  [/^pack:updateSettings$/,                             'orders.manage'],
+  [/^pack:/,                                            ['pack.work', 'orders.manage']],
+  [/^orders:/,                                          'orders.manage'],
 
   // — Fuel F1. A rule value may be a LIST: any one of those capabilities allows
   //   the channel. The phone-page channels (record + read the tiles + own

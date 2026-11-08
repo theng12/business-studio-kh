@@ -127,6 +127,21 @@ export const APP_MODULES = [
     ],
   },
   {
+    // Pick & Pack Phase 0 (docs/PICK_AND_PACK_PLAN.md §7). The desktop side:
+    // import, quick add and edit open orders. Packing runs on /pack.
+    id: 'packing',
+    name: 'Pick & Pack',
+    description: 'Import orders, quick add, and pack parcels.',
+    icon: 'pack',
+    sections: [
+      {
+        pages: [
+          { id: 'orders', name: 'Orders', icon: 'pack', caps: ['orders.manage'] },
+        ],
+      },
+    ],
+  },
+  {
     // Fuel F1 (docs/PEOPLE_AND_FUEL_PLAN.md §5). The record-keeping screens are
     // open to fuel.record too (they show only what a recorder may do: add
     // slips, dips, deliveries); review, flags and reports are fuel.manage.
