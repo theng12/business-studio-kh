@@ -21,8 +21,8 @@ drifted badly before this check.
   coordination, review, verification and integration. Prefer Luna for bounded straightforward
   work and Sol for difficult cross-file, money, security and lifecycle work. Each worker gets
   a base commit, owned files, deliverable and proving checks; parallelize only non-overlapping
-  edits. Workers do not commit, publish, deploy or recursively delegate unless explicitly
-  assigned that authority. Review material implementation batches independently; self-review
+  edits. Every worker commits its owned files on its branch before reporting (LEAD-RULES
+  step 1); workers do not publish, deploy or recursively delegate unless assigned. Review material implementation batches independently; self-review
   must never be described as independent review. If the requested models are unavailable,
   report that rather than silently restoring Terra or claiming a worker ran.
 
@@ -364,16 +364,7 @@ out not to have them.
 
 Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
 
-**Note on styling (corrected 2026-09-19).** This table used to say Tailwind
-CSS and Puppeteer. Neither is true of this app and hasn't been for a long
-time: there is no `tailwindcss` dependency and no Tailwind or PostCSS config,
-and no `puppeteer`. Styling is one hand-written `renderer/index.css` (~13.0k
-lines; verified 2026-10-08) plus small per-feature CSS blocks in the same file, and PDFs are
-produced by Electron's own `webContents.printToPDF()` in
-`main/renderWindow.js` — no bundled Chromium, no extra download. Both
-replacements are deliberate: the print path costs nothing extra, and the CSS
-has no build step to go wrong. If a future app wants Tailwind, that's a
-per-app choice, not the house default.
+No Tailwind/PostCSS and no Puppeteer: styling is hand-written `renderer/index.css`; PDFs come from `webContents.printToPDF()` in `main/renderWindow.js` (verified 2026-10-08).
 
 ## 17. File layout (Electron apps)
 
@@ -458,12 +449,7 @@ A DB test guards itself with a `try { new Database(':memory:') } catch` probe
 case still runs for real under `test:native`. See
 `test/productImageFilename.test.js` for the pattern.
 
-Deliberately **not** here: `main/db.js` and `main/pdfExporter.js`. The
-database is a directory (§14), and PDFs come from Electron's own
-`printToPDF()` via `renderWindow.js` — there is no Puppeteer wrapper (§16).
-
-There is also no `tailwind.config.js` / `postcss.config.js`: styling is plain
-CSS in `renderer/index.css`, so there is no CSS build step.
+Not here: no `main/db.js` (§14 directory), no `main/pdfExporter.js` or Puppeteer, no Tailwind/PostCSS config (§16).
 
 ## 17b. UI design system
 
@@ -501,11 +487,7 @@ Configured in `package.json` under `build.mac.target[].arch: ["arm64"]`, and
 pinned by `test/releaseScripts.test.js` — if someone changes the array without
 changing the rule, that test fails.
 
-> History, so this is not re-litigated in either direction: v0.1.9 dropped x64
-> when the Intel Macs left the test fleet; on 2026-09-22 he asked for an Intel
-> DMG again and both were built until 0.1.83; on 2026-09-27 he asked for arm64
-> only. The default follows his last instruction — do not "restore" the second
-> DMG on your own initiative, and do not drop the Intel path either.
+History: x64 dropped at 0.1.9, both built 2026-09-22 to 0.1.83, arm64 only since 2026-09-27; follow his last instruction and do not restore or drop the Intel path on your own.
 
 - `npm run dist` emits the arm64 DMG only.
 - An Intel build is still one command — `npm run dist:x64` (it overrides the
@@ -552,10 +534,7 @@ If a rule here is wrong or out of date, propose the correction in chat — don't
 **Rules that name a file, a dependency or a version go stale silently, so mark
 them as verified.** A rule can be perfectly correct the day it is written and
 wrong six months later with nobody touching it — a file gets split, a library
-gets swapped, a version resets. This file drifted exactly that way: it claimed
-Tailwind and Puppeteer (neither installed), described `main/db.js` and
-`main/pdfExporter.js` (neither exists), and cited a `MEMORY` file that was
-never in this repo.
+gets swapped, a version resets (this file drifted that way before the 2026-09-19 audit).
 
 So when a rule makes a **checkable claim** — a path, a package name, a function
 name, a numeric default — append `(verified YYYY-MM-DD)` to it and confirm it
@@ -564,15 +543,7 @@ update the rule in the same change; the marker is the reminder. Prefer naming
 the real symbol (`MAX_IMAGES_PER_PRODUCT` in `main/imageManager.js`) over
 restating a number, so the code stays the source of truth.
 
-**`CLAUDE.md` is a symlink to this file — do not replace it with a copy.** Two byte-identical
-copies used to sit side by side (`AGENTS.md` and `CLAUDE.md`, both 16,801 bytes, same mtime).
-They drifted the moment anyone edited one of them, because nothing forced them to agree. A doc
-audit on 2026-09-19 found the damage: §16 claimed Tailwind and Puppeteer (neither installed),
-§17 described a file layout that didn't exist (`main/db.js`, `main/pdfExporter.js`), §4 described
-support as a modal after it became a page, and §23 cited a `MEMORY` file that isn't in this repo.
-The symlink keeps both entry points working — Claude Code reads `CLAUDE.md`, other agents read
-`AGENTS.md` — while making drift structurally impossible. If a tool ever needs real-file
-semantics, fix that tool rather than un-linking this.
+**`CLAUDE.md` is a symlink to this file — never replace it with a copy** (copies drifted before 2026-09-19); if a tool needs a real file, fix the tool.
 
 ## 23. Version bumps — patch only, by default
 
@@ -604,63 +575,11 @@ carried over unchanged; only the numbers moved. Don't retro-renumber.
 
 ## 25. Closed decisions — do not re-propose
 
-Four things were raised, looked at, and **deliberately dropped by Theng** (the
-first two on 2026-09-20, the third on 2026-09-23, the fourth on 2026-09-27).
-They are settled, not backlog. Do not propose them again, do not "helpfully"
-fix them in passing, and do not list them as remaining work.
-
-**1. The three remaining bulk modals stay as they are.** `renderer/modules/ProductLibrary/`
-has a shared `BulkOpModal.jsx` (the whole modal shell) and `useBulkPreview.js` (the
-before/after preview hook) (verified 2026-10-03):
-- `BulkOpModal` is used by `BulkCompressModal`, `BulkConvertModal` and `BulkResizeModal`;
-- `AutoCropRunModal` and `AutoEnhanceRunModal` use only `useBulkPreview`, inside their
-  own `Modal`.
-
-Three image operations use neither and **will not be migrated**: `BulkBgRemovalModal.jsx`
-(Remove background), `BulkOverlayRunModal.jsx` (Apply overlay) and
-`BulkProductsAIRunModal.jsx` (Bulk AI). They work. Migrating them is churn for
-consistency's own sake, not a fix, and it risks breaking working screens to make the
-code tidier.
-
-Three later bulk modals also have their own design, because they are not "run one image
-operation with a preview" jobs and `BulkOpModal` does not fit them: `BulkSocialRunModal.jsx`
-(apply a Social Grid template), `BulkEditModal.jsx` (Edit fields) and `BulkTableModal.jsx`
-(Edit in table). They are not migration candidates either. Correctness fixes inside any of
-these modals are always fine — the decision is about restructuring them, not about leaving
-bugs in place.
-
-**2. The `watermarks` asset folder is not being renamed.** Watermark artwork is
-imported under the asset kind `watermarks` — `imageManager.importAsset('watermarks', …)`
-in `main/ipc/images.js` — which places it in `<dataDir>/assets/watermarks/`. The
-name is a little narrow for what actually lives there (brand logos and stamps,
-not only watermarks), but renaming the kind means migrating every existing
-user's files on disk, for a cosmetic gain. Leave both the folder and the asset
-kind alone.
-**3. The background-removal AGPL licensing question and the "public distribution"
-prerequisites are dropped.** The app is for the owner's own use and the only other person
-who runs it is his brother ("i'm home use and my customer is my brother", 2026-09-23). So the
-`@imgly/background-removal` AGPL-3.0 terms, a source-offer arrangement, notarization for the
-public, a public release and the rest of the 2026-09-20 distribution audit's "public-distribution
-prerequisites" are **not** work items. Do not raise them again, and do not list them as open.
-This closes the licensing question only: security and data-safety defects keep their normal
-weight, and the unsigned-DMG + `xattr -cr` install step still stands as the intended workflow for
-installing on the owner's Macs and his brother's.
-
-**4. HTTPS for the phone viewer is declined — plain HTTP over Tailscale is the setup.**
-Asked on 2026-09-27 ("can i just not use the https?"), after the HTTPS helper
-(`scripts/setup-web-https.js`, v0.1.81) turned out to need two things only he could do: swap the
-Mac App Store Tailscale build for the standalone one (delete + reboot) and enable HTTPS
-certificates for the tailnet in the admin console. **Answer: yes, and nothing is broken by it.**
-What HTTPS would have bought is one thing — `navigator.share`, i.e. the iOS share sheet, i.e. the
-one-tap "Save to Photos" after an overlay is applied. Everything else works over HTTP, and the
-viewer already detects the missing API: the button says "Open image to save" instead of "Save to
-Photos", and the result opens full-screen with "press and hold the picture, then tap Save Image"
-(iOS) / "Download image" (Android), which lands the picture in Photos / the gallery anyway. Over
-Tailscale the transport is already encrypted by WireGuard, so this is not a plaintext-on-the-wire
-decision; over a shared Wi-Fi LAN the traffic is visible to that network, which is the one real
-trade-off and his to accept. Keep the script and its tests — it is the shortest path back if he
-ever wants the share sheet — but do not raise it as a gap, do not re-run it, and do not list
-"HTTPS not set up" as remaining work.
+Settled by Theng; not backlog, do not raise or "fix" in passing. Reasons: `docs/CLOSED-DECISIONS.md`.
+1. Bulk modals `BulkBgRemovalModal`, `BulkOverlayRunModal`, `BulkProductsAIRunModal` (and Social/Edit/Table bulk modals) are not migrated to `BulkOpModal`; bug fixes inside them are fine.
+2. The `watermarks` asset folder/kind is not renamed.
+3. Background-removal AGPL and public-distribution prerequisites are dropped (home use plus his brother).
+4. HTTPS for the phone viewer is declined; plain HTTP over Tailscale stays (`scripts/setup-web-https.js` kept, not re-run).
 
 ## 26. Git workflow — a fix lands when it is merged
 
