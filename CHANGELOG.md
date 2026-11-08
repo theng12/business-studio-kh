@@ -1,5 +1,14 @@
 # What's new
 
+## 0.1.104 — 2026-11-08
+
+- NEW — Pick & Pack: bring in the day's orders from a CSV or Excel file. The column choices are remembered for each source, so the next import is pick file, next, import.
+- NEW — Quick add for chat and paper orders: customer, phone and address, then add items by search or by scanning.
+- NEW — The /pack page for the packing bench: parcels to pack, packed today and problems, with large product photos and no prices. Scan each item to confirm it, or tap it; an item that is not in the order turns red.
+- NEW — Every parcel needs one photo before it is sealed. A value limit in the Photo rule setting can make the photo optional for smaller orders. A sealed parcel, its items and its photo can no longer be changed.
+- NEW — Two new permissions, Pack parcels and Manage orders, so a packer account sees only the packing screen.
+- Internal — The app is now signed with the shared KH Studio Local Signing identity, so macOS keeps its permissions for Media Studio KH across updates.
+
 ## 0.1.103 — 2026-11-04
 
 - NEW — Record branch expenses in dollars or riel, with an optional receipt photo from the desktop or phone.
