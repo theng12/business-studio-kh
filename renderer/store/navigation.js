@@ -29,6 +29,8 @@ const MODULES = ['home', 'dashboard', 'company', 'brands', 'library', 'workspace
   'kiosk',
   // Fixed Assets A1 + A2 (docs/ASSETS_AND_BRANCHES_PLAN.md §8).
   'assetregister', 'assetdepreciation', 'assettax', 'assetreports',
+  // Pick & Pack Phase 0.
+  'orders',
   'financeexpenses', 'financeaccounts', 'financereports'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the

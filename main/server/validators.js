@@ -1156,9 +1156,11 @@ const { FUEL_VALIDATORS } = require('./fuelValidators');
 // HR1: hr:*, attendance:*, leave:* and kiosk:* (main/server/hrValidators.js).
 const { HR_VALIDATORS } = require('./hrValidators');
 const { PAYROLL_VALIDATORS } = require('./payrollValidators');
+// Pick & Pack Phase 0: pack:* and orders:* (main/server/packValidators.js).
+const { PACK_VALIDATORS } = require('./packValidators');
 
 function getValidator(channel) {
-  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? PAYROLL_VALIDATORS[channel] ?? null;
+  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? PAYROLL_VALIDATORS[channel] ?? PACK_VALIDATORS[channel] ?? null;
 }
 
 module.exports = {

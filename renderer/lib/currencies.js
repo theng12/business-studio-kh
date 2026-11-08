@@ -25,7 +25,7 @@ export const CURRENCIES = [
 ];
 
 export const DEFAULT_CURRENCY = 'USD';
-const WHOLE_NUMBER = new Set(['KHR', 'VND', 'IDR', 'JPY', 'KRW']);
+export const WHOLE_NUMBER = new Set(['KHR', 'VND', 'IDR', 'JPY', 'KRW']);
 const CODES = new Set(CURRENCIES.map((c) => c.code));
 
 export function isCurrency(code) {
