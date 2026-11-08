@@ -1,6 +1,8 @@
 // electron-builder `mac.sign` hook. The shared local identity is self-signed and untrusted,
-// so electron-builder's `find-identity -v` discovery skips it; this hook hands the packager's
-// own sign options to @electron/osx-sign with that identity. osx-sign signs nested code
+// so electron-builder's `find-identity -v` discovery skips it and, in 26.x, skips signing
+// entirely unless `mac.identity` is "-". With "-" the packager still calls this hook, which
+// always replaces the identity with the shared one and hands the packager's own sign options
+// to @electron/osx-sign. osx-sign signs nested code
 // inside-out, then the bundle (never deep-sealed). No ad-hoc fallback.
 const { execFileSync } = require('node:child_process')
 const { signApp } = require('@electron/osx-sign')

@@ -97,7 +97,7 @@
       "category": "public.app-category.graphics-design",
       "darkModeSupport": true,
       "minimumSystemVersion": "12.0.0",
-      "identity": "KH Studio Local Signing",
+      "identity": "-",
       "sign": "./scripts/sign-mac.js",
       "hardenedRuntime": false,
       "timestamp": "none",
