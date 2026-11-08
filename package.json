@@ -97,7 +97,10 @@
       "category": "public.app-category.graphics-design",
       "darkModeSupport": true,
       "minimumSystemVersion": "12.0.0",
-      "identity": null,
+      "identity": "KH Studio Local Signing",
+      "sign": "./scripts/sign-mac.js",
+      "hardenedRuntime": false,
+      "timestamp": "none",
       "gatekeeperAssess": false,
       "extendInfo": {
         "NSCameraUsageDescription": "កុំព្យូទ័រកត់ត្រាវត្តមានថតរូបអ្នក នៅពេលអ្នកចូល និងចេញពីការងារ។ The attendance kiosk takes your photo when you clock in and out."
