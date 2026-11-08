@@ -39,7 +39,10 @@ test('packaging builds ONE DMG — Apple silicon — unless Intel is asked for',
 test('packaging signs with the shared KH identity through electron-builder, never ad-hoc or --deep', () => {
   // Owner 2026-11-08: one stable self-signed identity for all KH apps, so the designated
   // requirement (and permissions) survive updates. SIGNING.md in _orchestra/developer-handoff.
-  assert.equal(pkg.build.mac.identity, 'KH Studio Local Signing');
+  // "-" is the only qualifier electron-builder 26 accepts without a trusted identity; it still calls
+  // the sign hook, which always substitutes the shared identity and has no ad-hoc fallback.
+  assert.equal(pkg.build.mac.identity, '-');
+  assert.match(fs.readFileSync(path.join(root, 'scripts', 'sign-mac.js'), 'utf8'), /identity: IDENTITY/);
   assert.equal(pkg.build.mac.sign, './scripts/sign-mac.js');
   const hook = fs.readFileSync(path.join(root, 'scripts', 'sign-mac.js'), 'utf8');
   assert.match(hook, /signApp\(/);
