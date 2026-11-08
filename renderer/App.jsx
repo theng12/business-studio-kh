@@ -114,6 +114,8 @@ const FinanceReports = lazy(() => import('./modules/Finance/index.jsx').then((m)
 // HR1: the attendance kiosk screen, previewed inside the app (hidden page; the
 // real kiosk is its own window — renderer/main.jsx #kiosk).
 const KioskPreview = lazy(() => import('./modules/Kiosk/KioskPreview.jsx').then((m) => ({ default: m.KioskPreview })));
+// Pick & Pack Phase 0: orders (import, quick add, edit open orders).
+const Orders = lazy(() => import('./modules/Pack/index.jsx').then((m) => ({ default: m.Orders })));
 
 const PAGES = {
   home:      Home,
@@ -158,6 +160,7 @@ const PAGES = {
   financeexpenses: FinanceExpenses,
   financeaccounts: FinanceAccounts,
   financereports: FinanceReports,
+  orders: Orders,
   kiosk: KioskPreview,
   history:   History,
   settings:  Settings,

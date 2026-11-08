@@ -3190,6 +3190,8 @@ const PAGE_LABELS = [
   ['financeexpenses', 'Expenses', 'finance'],
   ['financeaccounts', 'Money accounts', 'finance'],
   ['financereports', 'Reports', 'finance'],
+  // Pick & Pack Phase 0.
+  ['orders', 'Orders', 'packing'],
   ['history', 'History', 'system'],
 ];
 /* Labels are unique except across modules; the deep flows name pages by

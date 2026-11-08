@@ -63,6 +63,17 @@ function IconFuel({ className }) {
   );
 }
 
+function IconPack({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
+      <path d="M3 6.2 9 3l6 3.2v5.6L9 15l-6-3.2V6.2Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M3 6.2 9 9.4l6-3.2M9 9.4V15" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M6.6 4.3 12.4 7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+      <path d="m7.2 11.4 1.3 1.3 2.4-2.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function IconVehicle({ className }) {
   return (
     <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -512,6 +523,7 @@ export const NAV_ICONS = {
   po: IconPo,
   costcalc: IconCostCalc,
   fuel: IconFuel,
+  pack: IconPack,
   vehicle: IconVehicle,
   fillup: IconFillUp,
   tank: IconTank,

@@ -502,6 +502,40 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('fuel:changed', fn);
     },
   },
+  /** Pick & Pack Phase 0: the packing bench page and the parcel queue. */
+  pack: {
+    list:          (opts)                 => invoke('pack:list', opts ?? {}),
+    get:           (orderId)              => invoke('pack:get', orderId),
+    scan:          (orderId, code)        => invoke('pack:scan', { orderId, code }),
+    confirmLine:   (orderId, lineId, delta) => invoke('pack:confirmLine', { orderId, lineId, delta }),
+    addPhoto:      (orderId, kind, bytes) => invoke('pack:addPhoto', { orderId, kind, bytes }),
+    getPhoto:      (photoId, thumb)       => invoke('pack:getPhoto', { photoId, thumb }),
+    seal:          (orderId)              => invoke('pack:seal', orderId),
+    getSettings:   ()                     => invoke('pack:getSettings'),
+    updateSettings:(patch)                => invoke('pack:updateSettings', patch),
+    onChanged: (cb) => {
+      const fn = (_e, data) => cb(data);
+      ipcRenderer.on('pack:changed', fn);
+      return () => ipcRenderer.removeListener('pack:changed', fn);
+    },
+  },
+  /** Pick & Pack Phase 0: orders — import, quick add, edit open orders. */
+  orders: {
+    list:          (opts)                 => invoke('orders:list', opts ?? {}),
+    get:           (id)                   => invoke('orders:get', id),
+    update:        (id, patch)            => invoke('orders:update', { id, patch }),
+    remove:        (id)                   => invoke('orders:remove', id),
+    import:        (args)                 => invoke('orders:import', args),
+    quickAdd:      (input)                => invoke('orders:quickAdd', input),
+    getMapping:    (source)               => invoke('orders:getMapping', { source }),
+    saveMapping:   (source, mapping)      => invoke('orders:saveMapping', { source, mapping }),
+    lookupProduct: (code)                 => invoke('orders:lookupProduct', { code }),
+    onChanged: (cb) => {
+      const fn = (_e, data) => cb(data);
+      ipcRenderer.on('pack:changed', fn);
+      return () => ipcRenderer.removeListener('pack:changed', fn);
+    },
+  },
   /** HR1: staff profiles, schedules, holidays, kiosk PINs, documents, the month
    *  workbook. Full list: docs/PEOPLE_AND_FUEL_PLAN.md §10 "HR1 API". */
   // HR2: one object argument throughout, including a caller-bound companyId.

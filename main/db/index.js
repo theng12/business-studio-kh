@@ -473,6 +473,11 @@ function initDb(dataDir) {
   require('./assetSchema').ensureAssetSchema(db);
   require('./financeSchema').ensureFinanceSchema(db);
 
+  // Pick & Pack Phase 0 (docs/PICK_AND_PACK_PLAN.md §4): orders, lines,
+  // parcel photos, saved import mappings, photo-threshold settings. Additive
+  // only — CREATE TABLE IF NOT EXISTS / triggers, no SCHEMA_VERSION bump.
+  require('./packSchema').ensurePackSchema(db);
+
   return db;
 }
 

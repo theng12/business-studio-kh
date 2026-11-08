@@ -65,4 +65,4 @@ function formatPrice(amount, code) {
   return `${symbolFor(cur)}${num}`;
 }
 
-module.exports = { CURRENCIES, DEFAULT_CURRENCY, isCurrency, normalizeCurrency, symbolFor, formatAmount, formatPrice };
+module.exports = { CURRENCIES, DEFAULT_CURRENCY, WHOLE_NUMBER, isCurrency, normalizeCurrency, symbolFor, formatAmount, formatPrice };
