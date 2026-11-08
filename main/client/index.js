@@ -1256,6 +1256,12 @@ const PROXIED_CHANNELS = [
   // v0.1.86: the recycle bin acts on the data folder, so a client Mac can
   // list, restore and purge just like the backups it sits beside.
   'deleted:list','deleted:restore','deleted:purge','deleted:empty',
+  // Pick & Pack Phase 0: orders, packing and parcel photos live with the
+  // data, so a client Mac proxies them to the server (capability-gated there).
+  'pack:list','pack:get','pack:scan','pack:confirmLine','pack:addPhoto','pack:getPhoto',
+  'pack:seal','pack:getSettings','pack:updateSettings',
+  'orders:list','orders:get','orders:update','orders:remove','orders:import','orders:quickAdd',
+  'orders:getMapping','orders:saveMapping','orders:lookupProduct',
 ];
 
 /**

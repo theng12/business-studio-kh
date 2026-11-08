@@ -1,7 +1,7 @@
 {
   "name": "media-studio-kh",
   "private": true,
-  "version": "0.1.103",
+  "version": "0.1.104",
   "description": "Media Studio KH — product images, labels, and catalogs in one workspace",
   "author": "TerraNash",
   "main": "dist-electron/main/index.js",
@@ -18,7 +18,7 @@
     "dist:arm64": "vite build && electron-builder --arm64",
     "dist:x64": "vite build && electron-builder --x64",
     "test": "node --test 'test/**/*.test.js'",
-    "test:native": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test test/productImageFilename.test.js test/stockQty.test.js test/assetDirCollision.test.js test/archiveRestore.test.js test/productsListQuery.test.js test/purchaseOrderTenant.test.js test/dataFolderSafety.test.js test/importLifecycle.test.js test/workspaceImageIdentity.test.js test/overlayOutcome.test.js test/overlayPriceTokens.test.js test/pricePaths.test.js test/legacyBackupImport.test.js test/archiveRoundTrip.test.js test/maintenanceRecovery.test.js test/archiveConcurrency.test.js test/editorConcurrency.test.js test/workspaceConcurrency.test.js test/importOverwriteNull.test.js test/priceGroups.test.js test/socialGridTemplates.test.js test/catalogTemplates.test.js test/importPriceGroups.test.js test/listToolsDelete.test.js test/bulkColumnSets.test.js test/fileTrash.test.js test/deletedItems.test.js test/userAccessControl.test.js test/dataSafety.test.js test/mainPerfDb.test.js test/poCost.test.js test/overlayPreviewIpc.test.js test/uxSweepNative.test.js test/brandRenameIntegrity.test.js test/aiGalleryOwnership.test.js test/aiProductImageCap.test.js test/purchaseOrderRevision.test.js test/overlayTemplateConcurrency.test.js test/productOrganizationConcurrency.test.js test/outputCompletionNative.test.js test/cropImageNative.test.js test/attentionSearchNative.test.js test/exportProfileScope.test.js test/opsAuditNative.test.js test/studiosAuditNative.test.js test/libraryAuditNative.test.js test/reviewFixesExport.test.js test/reviewFixesNative.test.js test/reviewFixesWebclient.test.js test/fuelNative.test.js test/fuelReviewQueueNative.test.js test/fuelPhoneNative.test.js test/hrPhoneNative.test.js test/fuelBackupNative.test.js test/fuelReviewNative.test.js test/hrNative.test.js test/hr2Native.test.js test/hr2Transport.test.js test/hr2Truth.test.js test/hr2PayrollOptionsNative.test.js test/hr2LoanImportNative.test.js test/hr2LoanImportPayrollNative.test.js test/kioskNative.test.js test/ledgerNative.test.js test/assetsNative.test.js test/assetsBackupNative.test.js test/assetsReviewNative.test.js test/assetsDepreciationNative.test.js test/assetsLagNative.test.js test/productWorkbookNative.test.js test/financeNative.test.js test/financeScopeNative.test.js test/financeReceipts.test.js test/sharedFxRateNative.test.js",
+    "test:native": "cross-env ELECTRON_RUN_AS_NODE=1 electron --test test/productImageFilename.test.js test/stockQty.test.js test/assetDirCollision.test.js test/archiveRestore.test.js test/productsListQuery.test.js test/purchaseOrderTenant.test.js test/dataFolderSafety.test.js test/importLifecycle.test.js test/workspaceImageIdentity.test.js test/overlayOutcome.test.js test/overlayPriceTokens.test.js test/pricePaths.test.js test/legacyBackupImport.test.js test/archiveRoundTrip.test.js test/maintenanceRecovery.test.js test/archiveConcurrency.test.js test/editorConcurrency.test.js test/workspaceConcurrency.test.js test/importOverwriteNull.test.js test/priceGroups.test.js test/socialGridTemplates.test.js test/catalogTemplates.test.js test/importPriceGroups.test.js test/listToolsDelete.test.js test/bulkColumnSets.test.js test/fileTrash.test.js test/deletedItems.test.js test/userAccessControl.test.js test/dataSafety.test.js test/mainPerfDb.test.js test/poCost.test.js test/overlayPreviewIpc.test.js test/uxSweepNative.test.js test/brandRenameIntegrity.test.js test/aiGalleryOwnership.test.js test/aiProductImageCap.test.js test/purchaseOrderRevision.test.js test/overlayTemplateConcurrency.test.js test/productOrganizationConcurrency.test.js test/outputCompletionNative.test.js test/cropImageNative.test.js test/attentionSearchNative.test.js test/exportProfileScope.test.js test/opsAuditNative.test.js test/studiosAuditNative.test.js test/libraryAuditNative.test.js test/reviewFixesExport.test.js test/reviewFixesNative.test.js test/reviewFixesWebclient.test.js test/fuelNative.test.js test/fuelReviewQueueNative.test.js test/fuelPhoneNative.test.js test/hrPhoneNative.test.js test/fuelBackupNative.test.js test/fuelReviewNative.test.js test/hrNative.test.js test/hr2Native.test.js test/hr2Transport.test.js test/hr2Truth.test.js test/hr2PayrollOptionsNative.test.js test/hr2LoanImportNative.test.js test/hr2LoanImportPayrollNative.test.js test/kioskNative.test.js test/ledgerNative.test.js test/assetsNative.test.js test/assetsBackupNative.test.js test/assetsReviewNative.test.js test/assetsDepreciationNative.test.js test/assetsLagNative.test.js test/productWorkbookNative.test.js test/financeNative.test.js test/financeScopeNative.test.js test/financeReceipts.test.js test/sharedFxRateNative.test.js test/packNative.test.js",
     "lint": "eslint .",
     "check": "npm run lint && npm test",
     "postinstall": "electron-builder install-app-deps",
@@ -97,7 +97,10 @@
       "category": "public.app-category.graphics-design",
       "darkModeSupport": true,
       "minimumSystemVersion": "12.0.0",
-      "identity": null,
+      "identity": "-",
+      "sign": "./scripts/sign-mac.js",
+      "hardenedRuntime": false,
+      "timestamp": "none",
       "gatekeeperAssess": false,
       "extendInfo": {
         "NSCameraUsageDescription": "កុំព្យូទ័រកត់ត្រាវត្តមានថតរូបអ្នក នៅពេលអ្នកចូល និងចេញពីការងារ។ The attendance kiosk takes your photo when you clock in and out."

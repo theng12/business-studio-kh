@@ -11,8 +11,9 @@ trap 'npm run native:host' EXIT
 npm run webclient:bundle
 npm run build
 ./node_modules/.bin/electron-builder --dir --arm64 --publish never
-codesign --force --deep --sign - "$APP"
+# electron-builder signs nested code and the bundle via build.mac.sign (scripts/sign-mac.js).
 codesign --verify --deep --strict "$APP"
+codesign -dvv "$APP" 2>&1 | grep -x 'Authority=KH Studio Local Signing' >/dev/null
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = 'com.terranash.mediastudiokh'
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$VERSION"
 ditto "$APP" "$STAGE/Media Studio KH.app"

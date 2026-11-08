@@ -60,6 +60,7 @@ const kioskModeDomain   = require('./ipc/kioskMode');    // HR1: this Mac as the
 const payrollDomain     = require('./ipc/payroll');
 const loansDomain       = require('./ipc/loans');
 const financeDomain     = require('./ipc/finance');
+const packDomain        = require('./ipc/pack');         // Pick & Pack Phase 0
 
 function registerIpc(_ctx) {
   const helpers = {
@@ -108,6 +109,7 @@ function registerIpc(_ctx) {
   payrollDomain.register(helpers);
   loansDomain.register(helpers);
   financeDomain.register(helpers);
+  packDomain.register(helpers);             // Pick & Pack Phase 0
 }
 
 module.exports = { registerIpc };

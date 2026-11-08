@@ -36,6 +36,24 @@ test('packaging builds ONE DMG — Apple silicon — unless Intel is asked for',
   assert.equal(fs.existsSync(path.join(root, '.github/workflows/release.yml')), false);
 });
 
+test('packaging signs with the shared KH identity through electron-builder, never ad-hoc or --deep', () => {
+  // Owner 2026-11-08: one stable self-signed identity for all KH apps, so the designated
+  // requirement (and permissions) survive updates. SIGNING.md in _orchestra/developer-handoff.
+  // "-" is the only qualifier electron-builder 26 accepts without a trusted identity; it still calls
+  // the sign hook, which always substitutes the shared identity and has no ad-hoc fallback.
+  assert.equal(pkg.build.mac.identity, '-');
+  assert.match(fs.readFileSync(path.join(root, 'scripts', 'sign-mac.js'), 'utf8'), /identity: IDENTITY/);
+  assert.equal(pkg.build.mac.sign, './scripts/sign-mac.js');
+  const hook = fs.readFileSync(path.join(root, 'scripts', 'sign-mac.js'), 'utf8');
+  assert.match(hook, /signApp\(/);
+  assert.doesNotMatch(hook, /--deep/);
+  const updaterSh = fs.readFileSync(path.join(root, 'scripts', 'build-updater-dmg.sh'), 'utf8');
+  assert.doesNotMatch(updaterSh, /codesign[^\n]*--deep[^\n]*--sign/);
+  assert.doesNotMatch(updaterSh, /codesign --force[^\n]*"\$APP"/);
+  assert.ok(updaterSh.includes("grep -x 'Authority=KH Studio Local Signing'"),
+    'an app that is not signed by the shared identity is refused');
+});
+
 test('updater packaging refuses a failed app signature before creating an installer', () => {
   const { spawnSync } = require('node:child_process');
   const scratch = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'media-signature-test-'));

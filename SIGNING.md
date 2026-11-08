@@ -1,9 +1,32 @@
 # Code signing + notarization
 
-## KH Updater builds (verified 2026-11-02)
+## Shared local signing identity (owner-approved, verified 2026-11-08)
+
+Builds sign with the shared **KH Studio Local Signing** identity in this build Mac's login
+Keychain (the same certificate Library Studio KH uses), so the app's designated requirement —
+`identifier "com.terranash.mediastudiokh" and certificate leaf = H"b8f43e85…"` — stays the same
+across versions and macOS permissions survive updates. The certificate is self-signed and
+untrusted on purpose: never copy, export, recreate or change its trust; stop and leave any
+password, key-access or trust prompt to the owner.
+
+- electron-builder signs, through `build.mac.sign` → `scripts/sign-mac.js`, which calls
+  `@electron/osx-sign` (nested code first, then the bundle; no `--deep` signing, no hand-sealing).
+- `build.mac.identity` is `"-"` only because electron-builder 26 skips signing entirely when it
+  cannot find a *trusted* identity; with `"-"` it still calls the hook, and the hook always
+  substitutes the shared identity and fails loudly if it is missing. There is no ad-hoc fallback.
+- `hardenedRuntime` is off and `timestamp` is `none`, as with the earlier ad-hoc builds (offline,
+  no Developer ID).
+- Check a build: `python3 -I scripts/verify-macos-signing.py '<app-or-dmg>' --receipt <r.json>`
+  (add `--previous-receipt <older.json>` to require unchanged requirements for the app, its main
+  executable and all four helper apps across two differing builds). It also starts the packaged
+  app as a throwaway launchd job with its own user-data folder, data folder and port, checks
+  `/api/ping` health and version and that the process survives, then boots it out.
+
+## KH Updater builds (verified 2026-11-02; signing updated 2026-11-08)
 
 Run `npm ci` once, then `npm run dist:updater`. This builds one arm64 app,
-ad-hoc signs and strictly verifies the app, and creates and signs
+signs it with the shared identity above and strictly verifies the app (refusing one not signed
+by that identity), and creates and ad-hoc signs
 `dist/Media Studio KH-<package-version>.dmg` (arm64; filename standard verified 2026-11-03). Bundle ID stays
 `com.terranash.mediastudiokh`. The script checks the packaged ID and version,
 verifies DMG integrity, restores host native bindings, and moves older installers
