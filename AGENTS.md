@@ -607,3 +607,26 @@ leave completed work sitting uncommitted in a worktree.
 
 *(Added at Theng's request, 2026-09-21, replacing the older "ask before
 integrating" handoff habit.)*
+
+## 27. Test policy — fast lane, receipt, no duplicate full runs
+
+Canonical controller: `~/Developer/portfolio/bin/testctl`; lanes are defined in
+`~/Developer/portfolio/test-policy/projects.json` (project name `media`).
+
+- **Every edit:** `testctl run media fast` (the unit suite). Do not run
+  `test:native` or `npm test` as a reflex.
+- **Before handoff:** `testctl check media full`.
+  - Exit 0 — a passing receipt exists for this exact tree; cite it and stop.
+  - Exit 1 — run `testctl run media full` once, then continue.
+- **Full + native runs** only for a release gate, the nightly run, or when Theng
+  asks. Never run a full suite twice for the same tree.
+- **On failure:** rerun only the failing file/test. Do not loop the full suite.
+- **Hosted Actions stays disabled** (§26). The full gate runs locally on a
+  schedule, not in CI.
+- **Never two heavy (Electron/native) runs concurrently.** Cap at two.
+- `testctl clean media` is a dry run; `--build --yes` only with explicit
+  approval. It removes generated artifacts, never source or `_trash`.
+
+*(Added 2026-11-08 to stop re-running already-passing suites; the receipt is
+machine-local evidence for one exact tree + toolchain.)*
+
