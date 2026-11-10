@@ -28,5 +28,5 @@ codesign --verify --strict "$DMG"
 hdiutil verify "$DMG"
 mkdir -p _trash/updater-staging
 mv "$STAGE" "_trash/updater-staging/$(basename "$STAGE")"
-npm run dmgs:prune
+# Retention runs only after installed acceptance (verify-macos-signing.py --retain-dist).
 printf 'Built %s (com.terranash.mediastudiokh, %s)\n' "$DMG" "$VERSION"

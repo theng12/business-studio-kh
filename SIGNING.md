@@ -29,8 +29,37 @@ signs it with the shared identity above and strictly verifies the app (refusing 
 by that identity), and creates and ad-hoc signs
 `dist/Media Studio KH-<package-version>.dmg` (arm64; filename standard verified 2026-11-03). Bundle ID stays
 `com.terranash.mediastudiokh`. The script checks the packaged ID and version,
-verifies DMG integrity, restores host native bindings, and moves older installers
-to `_trash/` through the existing retention script.
+verifies DMG integrity and restores host native bindings. Building never prunes rollback installers.
+
+### Retention after installed acceptance (2026-11-10)
+
+Build and test on ATLAS; keep the canonical owner's `dist/` unchanged until the new app is
+installed and accepted. The final installed verification is also the retention hook:
+
+```bash
+python3 -I scripts/verify-macos-signing.py '/Applications/Media Studio KH.app' --receipt /absolute/task/installed.json --packaged-receipt /absolute/task/packaged.json --retain-dist /absolute/task/accepted-pins.json
+```
+
+`packaged.json` comes from running the same verifier against the final DMG (it now records the
+DMG's SHA-256 and byte count). The hook requires an actual launch check, matching version,
+designated requirements and executable/asar hashes, and a current pin matching that DMG and
+citing the installed receipt. Package-only checks and `--skip-launch` cannot run retention.
+
+Write trusted pins following `Shared Tools/portfolio/README.md` → Release dist retention:
+`schema: 1`, one `apps` entry with `app: "Media Studio KH"`, canonical `project`, and one or two
+accepted `releases` (current plus rollback). Each pins `version`, absolute DMG `source`,
+`sha256`, `bytes` and absolute existing acceptance `evidence`. The previous release's acceptance
+is checked by the lead; evidence existence alone does not prove it. Do dependency/job checks
+before this hook. The installed receipt is saved first; the hook then calls the accepted shared
+`~/Developer/Shared Tools/portfolio/tools/release-dist.py`. Helper failure exits nonzero and is
+not an accepted retention result. No filename discovery or automatic version promotion occurs.
+
+The helper records provenance in `dist/.release-dist.json`, only retires its recorded matching
+bytes, and leaves unowned files alone. It requires a real `<project>/_trash/dist/`, so the
+canonical Media `_trash` symlink needs a separately reviewed migration before any retirement;
+never change it or recreate missing evidence to make the helper pass. The historical 0.1.103 /
+0.1.104 pair is preserved pending independent eligibility/provenance review. Legacy
+`dmgs:prune` is not part of the release path and must not be used to bypass acceptance.
 
 This is local ad-hoc signing for the owner's KH Updater, as requested on
 2026-11-02. It is not Apple Developer ID signing or notarization. Feed publishing

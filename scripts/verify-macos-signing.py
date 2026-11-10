@@ -145,6 +145,28 @@ def packaged_app(package, work):
         run(['hdiutil', 'detach', device])
 
 
+def retain_dist(pins_path, packaged_receipt, receipt_path, result, helper):
+    """Only an accepted installed payload may advance the caller's trusted retention pins."""
+    packaged = json.loads(packaged_receipt.read_text())
+    for key in ('version', 'requirements', 'hashes'):
+        if result[key] != packaged[key]:
+            raise ValueError('Installed app differs from the packaged receipt: ' + key)
+    pins = json.loads(pins_path.read_text())
+    if len(pins['apps']) != 1 or pins['apps'][0]['app'] != APP_NAME:
+        raise ValueError('Retention pins must name only ' + APP_NAME)
+    current = next(r for r in pins['apps'][0]['releases'] if r['version'] == result['version'])
+    for key in ('sha256', 'bytes'):
+        if current[key] != packaged['artifact'][key]:
+            raise ValueError('Retention pin differs from the verified DMG: ' + key)
+    if Path(current['evidence']).resolve() != receipt_path.resolve():
+        raise ValueError('Current retention pin must cite this installed receipt')
+    for release in pins['apps'][0]['releases']:
+        if not Path(release['evidence']).is_file():
+            raise ValueError('Retention acceptance evidence is missing: ' + release['version'])
+    # The shared helper owns pin validation, copying, provenance, locking and retirement.
+    subprocess.run(['python3', '-I', str(helper), str(pins_path)], check=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('app', type=Path)
@@ -152,7 +174,12 @@ def main():
     parser.add_argument('--previous-receipt', type=Path)
     parser.add_argument('--receipt', type=Path, required=True)
     parser.add_argument('--skip-launch', action='store_true', help='signature checks only')
+    parser.add_argument('--retain-dist', type=Path, help='trusted shared-helper pins, after installed acceptance only')
+    parser.add_argument('--packaged-receipt', type=Path, help='verified DMG receipt for the installed payload')
     args = parser.parse_args()
+    if args.retain_dist and (args.skip_launch or not args.packaged_receipt
+                            or args.app.resolve() != Path('/Applications/Media Studio KH.app')):
+        parser.error('--retain-dist requires the installed /Applications app, launch check and --packaged-receipt')
     work = Path(tempfile.mkdtemp(prefix='media-signing-test-', dir=args.receipt.parent))
     with packaged_app(args.app.resolve(), work) as app:
         result = signed_identity(app, args.identity)
@@ -162,8 +189,18 @@ def main():
         if not args.skip_launch:
             result['launchd'] = launchd_start(app, result['version'], work)
     result['testWork'] = str(work)
+    if args.app.suffix.lower() == '.dmg':
+        digest = hashlib.sha256()
+        with args.app.open('rb') as artifact:
+            for chunk in iter(lambda: artifact.read(1 << 20), b''):
+                digest.update(chunk)
+        result['artifact'] = {'sha256': digest.hexdigest(), 'bytes': args.app.stat().st_size}
     args.receipt.write_text(json.dumps(result, indent=2) + '\n')
     print('Packager signature, certificate-based requirements' + ('' if args.skip_launch else ' and isolated launchd start') + ': PASS')
+    if args.retain_dist:
+        retain_dist(args.retain_dist, args.packaged_receipt, args.receipt, result,
+                    Path.home() / 'Developer/Shared Tools/portfolio/tools/release-dist.py')
+        print('Accepted installer retention: PASS')
 
 
 if __name__ == '__main__':

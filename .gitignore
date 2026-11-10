@@ -4,6 +4,7 @@ dist
 dist-electron
 dist-renderer
 release
+.release-dist.lock
 .vite
 
 # Stale build stragglers at the project root (pre-v0.7.x layout when the
