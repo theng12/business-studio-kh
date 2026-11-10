@@ -421,7 +421,7 @@ scripts/                 # 16 files: build-icon.js, build-webclient.js (/m + /f)
                          #   --assets ~300 fixed assets via seed-assets.js with an
                          #   independent month-end truth check),
                          # probe-fuel-phone.js (the /f phone page in Chromium),
-                         # prune-dmgs.js           (`npm run dmgs:prune`)
+                         # verify-macos-signing.py (installed acceptance + shared retention)
                          # probe-render-paint.js  (`npm run check:render`)
                          # probe-app-image-cors.js (`npm run check:images`)
                          # probe-server-client.js  (`npm run check:client-server`)
@@ -500,13 +500,15 @@ History: x64 dropped at 0.1.9, both built 2026-09-22 to 0.1.83, arm64 only since
 - Do NOT use `arch: ["universal"]` — a universal binary bundles both slices into
   one app, roughly doubling the file size.
 
-**Keep only the newest two releases (added 2026-09-26, Theng's ask).** When a build is
-finished, `dist/` holds the release just made plus the one before it, and anything two or
-more generations old is cleared out — a version that is two releases back is never opened
-again, and twelve 240 MB DMGs had piled up. Use `npm run dmgs:prune` (dry run:
-`npm run dmgs:prune:dry`); it **moves** the old DMGs to `_trash/old-dmgs/`, never deletes
-them, per the working rule at the top of this file. The rule, the numeric version sort and
-the no-delete property are pinned by `test/dmgRetention.test.js`.
+**Keep the latest two installed-and-verified releases (owner, 2026-11-10).** Building
+never prunes rollback installers. After normal installed acceptance, use the explicit
+`verify-macos-signing.py --retain-dist` flow in `SIGNING.md` with trusted exact-version
+pins and its matching packaged receipt. The shared portfolio helper owns retention;
+legacy `dmgs:prune` must not be used in the release flow or to bypass acceptance.
+Only matching ledger-owned obsolete files may retire recoverably. Preserve the current
+pair while acceptance or the canonical `_trash` compatibility review is incomplete.
+Synthetic acceptance, preservation and helper-failure checks are in
+`test/test_macos_retention.py`; record the tested shared-helper hash with their receipt.
 
 **KH Updater packaging (owner, verified 2026-11-02; signing 2026-11-08):** `npm run dist:updater` builds one arm64 app signed by electron-builder with the shared KH Studio Local Signing identity (`SIGNING.md`; never ad-hoc or `--deep` signing), ad-hoc signs the DMG, verifies both, and never publishes. The stable bundle ID is `com.terranash.mediastudiokh`. Feed publication belongs to the KH Updater lead; no in-app updater is needed.
 

@@ -46,13 +46,15 @@ designated requirements and executable/asar hashes, and a current pin matching t
 citing the installed receipt. Package-only checks and `--skip-launch` cannot run retention.
 
 Write trusted pins following `Shared Tools/portfolio/README.md` → Release dist retention:
-`schema: 1`, one `apps` entry with `app: "Business Studio KH"`, canonical `project`, and one or two
-accepted `releases` (current plus rollback). Each pins `version`, absolute DMG `source`,
+`schema: 1`, one `apps` entry with `app: "Business Studio KH"`,
+`project: "$HOME/Developer/My Own Apps/media-studio-kh"` (the real directory,
+not a compatibility symlink), and one or two accepted `releases` (current plus rollback). Each pins `version`, absolute DMG `source`,
 `sha256`, `bytes` and absolute existing acceptance `evidence`. The previous release's acceptance
 is checked by the lead; evidence existence alone does not prove it. Do dependency/job checks
 before this hook. The installed receipt is saved first; the hook then calls the accepted shared
 `~/Developer/Shared Tools/portfolio/tools/release-dist.py`. Helper failure exits nonzero and is
-not an accepted retention result. No filename discovery or automatic version promotion occurs.
+not an accepted retention result. Earlier verified copies may remain after a later failure;
+refusal does not mean `dist/` was untouched. No filename discovery or automatic version promotion occurs.
 
 The helper records provenance in `dist/.release-dist.json`, only retires its recorded matching
 bytes, and leaves unowned files alone. It requires a real `<project>/_trash/dist/`, so the

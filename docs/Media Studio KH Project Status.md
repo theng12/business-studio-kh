@@ -63,11 +63,15 @@ The full step list is the handoff's "working loop". In short:
 
 1. Work on a `codex/<topic>` branch; `npm run check` and, for database work, `npm run test:native`.
 2. Patch version bump in `package.json` plus a new top changelog entry (AGENTS.md §23, §24).
-3. `npm run dist` builds **one** arm64 DMG (AGENTS.md §20; Intel only on request with
-   `npm run dist:x64`). Copy it into the owner's `dist/` (his checkout on the Mac you are on),
-   then `npm run dmgs:prune`, which keeps the newest two releases and moves older DMGs to `_trash/old-dmgs/`.
-4. Install: copy the app to `/Applications` and clear the quarantine flag
-   (`xattr -cr "/Applications/Business Studio KH.app"`) — builds are unsigned (see `SIGNING.md`).
+3. Build the signed arm64 candidate on ATLAS through the current packaging flow in
+   `SIGNING.md` (Intel only on request). Keep the accepted rollback pair in the owner's
+   canonical `dist/`; building does not run legacy `dmgs:prune` or retire installers.
+4. Install through the approved signed release flow and verify actual installed launch,
+   health, version, designated requirements and executable/asar hashes. Then use the
+   `SIGNING.md` installed-verifier command with matching `--packaged-receipt` and explicit
+   `--retain-dist` trusted pins. Its project is `$HOME/Developer/My Own Apps/media-studio-kh`.
+   Preserve both installers and the existing `_trash` link while acceptance or retirement-layout
+   compatibility is unresolved; helper refusal is not successful retention.
 5. Push, open a PR, merge. Hosted GitHub Actions stays disabled; tags, GitHub Releases, signing
    and publishing are separate decisions that have not been made (AGENTS.md §26).
 
