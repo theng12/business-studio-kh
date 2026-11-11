@@ -1454,6 +1454,11 @@ function registerClientProxies(loadConfigFn) {
     refreshConfig();
     return next;
   });
+  // Machine-local in every mode — check this Mac's update feed and open the
+  // updater on this Mac, never the server's.
+  const updates = require('../ipc/updates');
+  handleLocal('updates:check', () => updates.check());
+  handleLocal('updates:openUpdater', () => updates.openUpdater());
   handleLocal('settings:setMode', async (nextMode) => {
     if (!['standalone', 'server', 'client'].includes(nextMode)) {
       throw new Error(`Invalid mode: ${nextMode}`);
