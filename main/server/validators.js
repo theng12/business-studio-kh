@@ -1025,6 +1025,8 @@ const VALIDATORS = {
   'samples:getProductSheet':      () => true,
 
   /* app — this Mac's own folders, cache and lifecycle */
+  'updates:check':               () => true,
+  'updates:openUpdater':         () => true,
   'app:clearCache':              () => true,
   'app:getCacheInfo':            () => true,
   'app:getVersionInfo':          () => true,
