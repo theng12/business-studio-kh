@@ -618,7 +618,7 @@ async function handleRequest(req, res, dataDir) {
     // viewer trying to hit `products:update` gets "Forbidden" rather than a
     // misleading "Bad request" if the payload also happens to be wrong.
     // Local IPC is bypassed entirely — this only fires for /api/rpc.
-    const { isAllowed, impliedChannels } = require('../util/permissions');
+    const { isAllowed, impliedChannels, capsForRole } = require('../util/permissions');
     if (!isAllowed(user.role, channel)
       || (impliedChannels?.(channel, body.args) ?? []).some((c) => !isAllowed(user.role, c))) {
       // v0.1.89: a plain sentence — this text is shown as-is in a toast on
@@ -634,7 +634,17 @@ async function handleRequest(req, res, dataDir) {
         user.id,
         () => handler(deserializeFromClient(body.args)),
       );
-      sendJson(res, 200, { result: serializeResultForWire(result) }, req);
+      // Pick & Pack Phase 0 (docs/PICK_AND_PACK_PLAN.md §7): a packer role
+      // must see no prices, and the two baseline product reads carry them to
+      // every authenticated user. Strip them here, on the server, for a
+      // price-blind role only — no other role or channel changes.
+      const priceRead = channel === 'products:list' || channel === 'products:get';
+      const { canSeePrices } = require('../util/capabilities');
+      const { stripProductPrices } = require('../util/productPrices');
+      const visible = priceRead && !canSeePrices(capsForRole(user.role))
+        ? stripProductPrices(channel, result)
+        : result;
+      sendJson(res, 200, { result: serializeResultForWire(visible) }, req);
     } catch (err) {
       // Surface the error message but not the stack trace by default. A refusal
       // a handler threw on purpose (main/util/userError.js) is 422, so a client

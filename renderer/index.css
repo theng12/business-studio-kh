@@ -29,6 +29,8 @@
   --radius-lg: 10px;
   --radius-xl: 14px;
   --radius-pill: 999px;
+  /* KH UI conventions: dialogs/sheets get their own 12px radius. */
+  --radius-sheet: 12px;
 
   /* Type scale. Nothing in the app goes below --fs-xs; the studio block's
      8–10.5px labels move up to 11px when their page is converted. */
@@ -2738,7 +2740,7 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 
 .modal {
   background: var(--c-surface);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-sheet);
   box-shadow: var(--shadow-modal);
   max-width: 540px;
   width: 100%;
