@@ -276,7 +276,7 @@ test("what's new dot: shown until the running version has been opened; storage f
   const w = loadEsm('renderer/lib/whatsNewSeen.js');
   const mem = new Map();
   const storage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
-  assert.equal(w.hasUnseenWhatsNew('0.1.95', w.loadLastSeenVersion(storage)), true);
+  assert.equal(w.hasUnseenWhatsNew('0.1.95', w.loadLastSeenVersion(storage)), false, 'no dot on a first-ever run');
   w.saveLastSeenVersion('0.1.95', storage);
   assert.equal(w.hasUnseenWhatsNew('0.1.95', w.loadLastSeenVersion(storage)), false);
   assert.equal(w.hasUnseenWhatsNew('0.1.96', w.loadLastSeenVersion(storage)), true, 'the next update brings it back');

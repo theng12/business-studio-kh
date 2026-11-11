@@ -23,7 +23,11 @@ export function saveLastSeenVersion(version, storage) {
   try { storageOf(storage)?.setItem(WHATS_NEW_SEEN_KEY, String(version)); } catch { /* storage unavailable: the dot comes back next launch */ }
 }
 
-/** True when there is a running version and it is not the one last opened. */
+/**
+ * True when there is a running version and it is not the one last opened.
+ * A first-ever run has no stored version, and the KH UI conventions say the
+ * What's New dot never shows on a first run (only after an upgrade).
+ */
 export function hasUnseenWhatsNew(version, lastSeen) {
-  return Boolean(version) && String(version) !== String(lastSeen || '');
+  return Boolean(version) && Boolean(lastSeen) && String(version) !== String(lastSeen);
 }
