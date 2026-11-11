@@ -1,5 +1,13 @@
 # What's new
 
+## 0.1.105 — 2026-11-11
+
+- FIX — A packer account no longer sees product prices when it opens the desktop product list. The packing screen never showed prices; now the server hides them there too.
+- POLISH — Success messages stay a little longer and error messages stay on screen until you read or dismiss them, with at most three shown at once.
+- POLISH — The "new" dot on What's new no longer appears the very first time the app is opened; it still marks a real update.
+- POLISH — Dialog corners now match the other KH apps.
+- Internal — Adopted the shared KH app UI conventions for messages, dialogs and the What's new marker.
+
 ## 0.1.104 — 2026-11-08
 
 - NEW — Pick & Pack: bring in the day's orders from a CSV or Excel file. The column choices are remembered for each source, so the next import is pick file, next, import.
