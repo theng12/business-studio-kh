@@ -262,6 +262,28 @@ for (const k of ASSET_CAPABILITY_KEYS) OPT_IN_CAPABILITIES.add(k);
 const ASSET_BASELINE_READS = ['branches:list', 'branches:get', 'fx:list', 'fx:rateOn', 'fx:getShared'];
 for (const ch of ASSET_BASELINE_READS) BASELINE_READS.add(ch);
 
+// Pick & Pack Phase 0: capabilities that mean the role plainly works with
+// catalog prices or costs. A role holding `pack.work` and none of these is
+// the packer role from docs/PICK_AND_PACK_PLAN.md §7 (pack capabilities only,
+// no prices), so the server strips price fields from the two baseline product
+// reads for it (main/util/productPrices.js). A role without `pack.work` is
+// unaffected, so no existing role changes.
+const PRICE_VISIBLE_CAPS = new Set([
+  'products.edit', 'products.delete', 'images.add', 'images.manage', 'catalog.meta',
+  'ai.run', 'overlay.use', 'export.run', 'labels.use', 'catalog.design',
+  'costing.view', 'costing.manage', 'history.view', 'users.manage', 'system.manage',
+  'assets.view', 'assets.manage', 'finance.view', 'orders.manage',
+]);
+
+/** Pure: may this role's callers receive price fields? */
+function canSeePrices(caps) {
+  const set = caps instanceof Set ? caps : new Set(caps || []);
+  if (set.has('*')) return true;
+  if (!set.has('pack.work')) return true;
+  for (const key of PRICE_VISIBLE_CAPS) if (set.has(key)) return true;
+  return false;
+}
+
 /**
  * Resolve a channel to one of:
  *   'baseline'      — always allowed
@@ -283,6 +305,7 @@ module.exports = {
   BASELINE_READS,
   CHANNEL_RULES,
   channelCapability,
+  canSeePrices,
   ADMIN_ONLY,
   OPT_IN_CAPABILITIES,
 };

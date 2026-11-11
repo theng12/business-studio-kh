@@ -3,6 +3,17 @@
 const TOAST_DURATION_MS = 3000;
 // A toast with an action button (Undo) stays long enough to reach it.
 export const ACTION_TOAST_DURATION_MS = 6000;
+// KH UI conventions: a success stays 5–8 s, and an error stays until it is
+// read or dismissed (0 = no timer).
+export const SUCCESS_TOAST_DURATION_MS = 6000;
+export const ERROR_TOAST_DURATION_MS = 0;
+
+function durationFor(variant, hasAction) {
+  if (variant === 'error') return ERROR_TOAST_DURATION_MS;
+  if (hasAction) return ACTION_TOAST_DURATION_MS;
+  if (variant === 'success') return SUCCESS_TOAST_DURATION_MS;
+  return TOAST_DURATION_MS;
+}
 
 /** A valid `{ label, onClick }` action, or null. Pure, for tests. */
 export function toastAction(action) {
@@ -42,12 +53,25 @@ export function createToastsSlice(set, _get) {
       const id = ++toastSeq;
       const message = cleanToastMessage(rawMessage);
       const action = toastAction(opts?.action);
-      set((s) => ({ toasts: [...s.toasts, { id, message, variant, ...(action ? { action } : {}) }] }));
-      const timer = setTimeout(() => {
-        toastTimers.delete(id);
-        set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
-      }, action ? ACTION_TOAST_DURATION_MS : TOAST_DURATION_MS);
-      toastTimers.set(id, timer);
+      // KH UI conventions: at most three at once. Adding a fourth drops the
+      // oldest (and its pending timer) so hidden ones never pile up.
+      set((s) => {
+        const next = [...s.toasts, { id, message, variant, ...(action ? { action } : {}) }];
+        while (next.length > 3) {
+          const dropped = next.shift();
+          const timer = toastTimers.get(dropped.id);
+          if (timer != null) { clearTimeout(timer); toastTimers.delete(dropped.id); }
+        }
+        return { toasts: next };
+      });
+      const ms = durationFor(variant, Boolean(action));
+      if (ms > 0) {
+        const timer = setTimeout(() => {
+          toastTimers.delete(id);
+          set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+        }, ms);
+        toastTimers.set(id, timer);
+      }
       return id;
     },
 
