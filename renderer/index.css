@@ -15,7 +15,7 @@
   --s-8: 32px;
 
   /* Layout */
-  --sidebar-width: 220px;
+  --sidebar-width: 248px;
   --titlebar-height: 38px;
   /* Radii — THE scale (UI pass, 2026-10). The later "studio shell" block
      hard-codes 7/9/11/12/13/15/16/17px; page packages map those onto these:
@@ -477,11 +477,32 @@ input, textarea, select {
 
 .sidebar__footer {
   border-top: 1px solid var(--c-border);
-  padding: var(--s-3);
+  padding: 8px;
   -webkit-app-region: no-drag;
   font-size: 12px;
   color: var(--c-text-muted);
 }
+.sidebar__update-group { border-top: 1px solid var(--c-border); margin-top: 8px; padding-top: 9px; }
+.sidebar__update-controls { display: flex; align-items: center; gap: 6px; }
+.sidebar__version-pill, .sidebar__update-button {
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 26px; color: var(--c-text-muted); background: var(--c-active-bg);
+  border: 0; cursor: pointer;
+}
+.sidebar__version-pill { position: relative; gap: 4px; padding: 0 7px; border-radius: 999px; white-space: nowrap; }
+.sidebar__pill-name { font-size: 11px; }
+.sidebar__pill-version { font-size: 10px; }
+.sidebar__pill-icon { width: 16px; height: 16px; flex: none; }
+.sidebar__update-button { width: 26px; flex: none; padding: 5px; border-radius: 7px; }
+.sidebar__update-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.sidebar__version-pill:hover, .sidebar__update-button:hover { background: var(--c-hover-bg); color: var(--c-text); }
+.sidebar__update-button:disabled { opacity: .5; cursor: default; }
+.sidebar__update-status { margin-top: 6px; font-size: 11px; overflow-wrap: anywhere; }
+.sidebar.is-collapsed .sidebar__update-controls { flex-direction: column; }
+.sidebar.is-collapsed .sidebar__pill-name, .sidebar.is-collapsed .sidebar__pill-version { display: none; }
+.sidebar.is-collapsed .sidebar__version-pill { width: 26px; padding: 0; }
+.sidebar.is-collapsed .sidebar__update-status { overflow-wrap: anywhere; }
+.connection-status { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 
 .sidebar__footer-row {
   display: flex;
@@ -546,8 +567,8 @@ input, textarea, select {
 .sidebar__nav--pinned .sidebar__section { margin-bottom: 0; }
 
 .sidebar__footer-btn-icon {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   stroke: currentColor;
   opacity: 0.7;
 }
