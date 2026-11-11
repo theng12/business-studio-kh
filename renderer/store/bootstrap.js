@@ -230,7 +230,7 @@ export function createBootstrapSlice(set, get) {
       const platform = platformR.status === 'fulfilled' ? platformR.value : null;
       const activeId = activeIdR.status === 'fulfilled' ? activeIdR.value : null;
       const settings = settingsR.status === 'fulfilled' ? settingsR.value : null;
-      const theme = settings?.theme ?? 'light';
+      const theme = settings?.theme ?? 'system';
       applyTheme(theme);
       set({
         appVersion: version,
