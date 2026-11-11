@@ -31,6 +31,10 @@ contextBridge.exposeInMainWorld('api', {
     getCacheInfo:    ()       => invoke('app:getCacheInfo'),
     clearCache:      ()       => invoke('app:clearCache'),
   },
+  updates: {
+    check:       () => invoke('updates:check'),
+    openUpdater: () => invoke('updates:openUpdater'),
+  },
   settings: {
     getAll:                 ()                 => invoke('settings:getAll'),
     setOne:                 (key, value)       => invoke('settings:setOne', { key, value }),

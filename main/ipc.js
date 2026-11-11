@@ -25,6 +25,7 @@ const {
 // sidebar order the user sees.
 const appDomain        = require('./ipc/app');
 const settingsDomain   = require('./ipc/settings');
+const updatesDomain    = require('./ipc/updates');
 const usersDomain      = require('./ipc/users');
 const rolesDomain      = require('./ipc/roles');         // v0.49.51: custom roles + permission matrix
 const filesDomain      = require('./ipc/files');
@@ -75,6 +76,7 @@ function registerIpc(_ctx) {
   };
   appDomain.register(helpers);
   settingsDomain.register(helpers);
+  updatesDomain.register(helpers);
   usersDomain.register(helpers);
   rolesDomain.register(helpers);            // v0.49.51
   filesDomain.register(helpers);
