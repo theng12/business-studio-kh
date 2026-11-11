@@ -59,6 +59,7 @@
   "build": {
     "appId": "com.terranash.mediastudiokh",
     "productName": "Business Studio KH",
+    "afterPack": "./scripts/after-pack.js",
     "asar": true,
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
