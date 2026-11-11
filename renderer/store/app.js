@@ -12,7 +12,7 @@ export function createAppSlice(set, _get) {
     // — App context
     appVersion: '',
     platform: '',
-    theme: 'light',
+    theme: 'system',
     // v0.13.0: mirror the main-process `dataDirIsCloud` flag so the
     // sidebar's footer can show an ☁ iCloud badge. Set in `refreshAppConfig`.
     dataDirIsCloud: false,
@@ -117,10 +117,10 @@ export function createAppSlice(set, _get) {
     /* ─── Theme ─── */
 
     async setTheme(theme) {
-      const next = ['light', 'dark', 'system'].includes(theme) ? theme : 'light';
+      const next = ['light', 'dark', 'system', 'default'].includes(theme) ? theme : 'system';
       applyTheme(next);
       set({ theme: next });
-      try { await window.api.settings.setOne('theme', next); }
+      try { await window.api.settings.setMany({ theme: next, themeExplicit: true }); }
       catch (err) { /* persistence is best-effort */ }
     },
 

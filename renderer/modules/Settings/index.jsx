@@ -989,9 +989,10 @@ function ThemeSegment() {
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
   const opts = [
-    { value: 'light',  label: 'Light' },
-    { value: 'dark',   label: 'Dark' },
-    { value: 'system', label: 'System' },
+    { value: 'system',  label: 'System' },
+    { value: 'light',   label: 'Light' },
+    { value: 'dark',    label: 'Dark' },
+    { value: 'default', label: 'Default' },
   ];
   return (
     <div className="segments" style={{ alignSelf: 'flex-start' }}>

@@ -53,7 +53,9 @@ function defaultConfig() {
     // still have these keys are harmless; we just ignore them.
     defaultSeparator: '-',     // '-' | '_' | ''
     defaultTokens: ['SKU', 'INDEX'],
-    theme: 'light',            // 'light' | 'dark' | 'system'
+    theme: 'system',           // 'system' | 'light' | 'dark' | 'default'
+    themeExplicit: false,
+    themeMigrated: true,
     customPresets: [],         // [{ id, name, width, height, format, colorProfile }]
 
     // AI Studio — OpenAI image generation (edits + generations)
@@ -137,6 +139,15 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function migrateThemePreference(config) {
+  if (config.themeMigrated) return config;
+  return {
+    ...config,
+    ...(config.theme === 'light' && config.themeExplicit !== true ? { theme: 'system' } : {}),
+    themeMigrated: true,
+  };
+}
+
 function loadConfig() {
   const p = configPath();
   if (!fs.existsSync(p)) {
@@ -145,17 +156,14 @@ function loadConfig() {
     ensureDir(cfg.dataDir);
     return cfg;
   }
+  let parsed;
   try {
-    const raw = fs.readFileSync(p, 'utf8');
-    const parsed = JSON.parse(raw);
-    const cfg = { ...defaultConfig(), ...parsed };
-    ensureDir(cfg.dataDir);
-    return cfg;
+    parsed = JSON.parse(fs.readFileSync(p, 'utf8'));
   } catch (err) {
     const recoveryPath = recoveryConfigPath();
     try {
       const recovered = JSON.parse(fs.readFileSync(recoveryPath, 'utf8'));
-      const cfg = { ...defaultConfig(), ...recovered };
+      const cfg = { ...defaultConfig(), ...migrateThemePreference(recovered) };
       writeConfigAtomically(cfg);
       ensureDir(cfg.dataDir);
       process.stderr.write(`[config] primary config was unreadable; recovered the last valid configuration from ${recoveryPath}\n`);
@@ -168,6 +176,11 @@ function loadConfig() {
       );
     }
   }
+  const migrated = migrateThemePreference(parsed);
+  const cfg = { ...defaultConfig(), ...migrated };
+  if (migrated !== parsed) writeConfigAtomically(cfg);
+  ensureDir(cfg.dataDir);
+  return cfg;
 }
 
 function saveConfig(cfg) {
@@ -288,6 +301,8 @@ function validExchangeRate(value) {
 }
 
 module.exports = {
+  defaultConfig,
+  migrateThemePreference,
   loadConfig,
   saveConfig,
   updateConfig,
