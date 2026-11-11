@@ -18,6 +18,7 @@ import { RolesPanel } from './RolesPanel.jsx';
 import { ExchangeRateControl } from './ExchangeRateControl.jsx';
 import { KioskModePanel } from '../Kiosk/KioskModeSettings.jsx';
 import { BackupReminder } from '../../components/BackupReminder.jsx';
+import { ConnectionStatus } from '../../components/ConnectionStatus.jsx';
 // Fuel F1: Settings → Fuel. Lazy so the fuel screens stay out of the boot bundle.
 const FuelSettingsPanel = lazy(() => import('../Fuel/FuelSettingsPanel.jsx').then((m) => ({ default: m.FuelSettingsPanel })));
 // Fixed Assets: Settings → Assets (register, categories, rates, closed months) and
@@ -35,6 +36,7 @@ const PayrollSettingsPanel = lazy(() => import('../People/PayrollSettings.jsx').
 // return body.
 const SETTINGS_TABS = [
   { key: 'general',     label: 'General' },
+  { key: 'this-mac',    label: 'This Mac' },
   { key: 'library',     label: 'Product Library' },
   // v0.22.14: Categories is a tab here, not a top-level sidebar
   // entry. Reasoning: categories are `{ id, name }` — they don't
@@ -311,6 +313,14 @@ export function Settings() {
         </nav>
 
         <div className="settings-pane">
+
+        {tab === 'this-mac' && (
+          <div className="settings-page">
+            <h2 className="section-title">This Mac</h2>
+            <ConnectionStatus />
+            <p className="muted">Build: {versionInfo?.app ?? 'Unknown'} · {versionInfo ? `${versionInfo.platform} · ${versionInfo.arch}` : 'platform unknown'}</p>
+          </div>
+        )}
 
         {tab === 'multi-mac' && (
         <div className="settings-page">

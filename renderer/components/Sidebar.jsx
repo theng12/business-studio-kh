@@ -5,9 +5,6 @@ import { useAppStore } from '../store/index.js';
 import { hasCap } from '../lib/capabilities.js';
 import { WhatsNewModal } from './WhatsNewModal.jsx';
 import { hasUnseenWhatsNew, loadLastSeenVersion, saveLastSeenVersion } from '../lib/whatsNewSeen.js';
-import { PresenceModal } from './PresenceModal.jsx';
-import { ConnectionLegendModal } from './ConnectionLegendModal.jsx';
-import { timeAgo } from '../lib/format.js';
 import { HOME_PAGE, entryPage, getPage, moduleOfPage, noCompanyReason, visibleModules, visibleSections } from '../lib/modules.js';
 import { IconHome, NavIcon } from './navIcons.jsx';
 
@@ -73,28 +70,30 @@ export function Sidebar({ onSearch }) {
   const setActiveModule = useAppStore((s) => s.setActiveModule);
   const platform = useAppStore((s) => s.platform);
   const version = useAppStore((s) => s.appVersion);
-  // v0.13.0: cloud-folder indicator. The store mirrors the
-  // `dataDirIsCloud` flag the main process computes on each settings
-  // read, so the sidebar can show a small iCloud badge when the user is
-  // running against an iCloud-synced data folder.
-  const dataDirIsCloud = useAppStore((s) => s.dataDirIsCloud);
-  // v0.14.0: show mode chip in the footer when mode != standalone.
-  // Helps users quickly verify whether the laptop's pointing at the
-  // right server vs accidentally talking to its own data.
-  const appMode = useAppStore((s) => s.appMode);
-  // v0.14.3: live client-mode connection state (green/red dot). Updated
-  // by the main-process ping loop and pushed via `client:connectionState`.
-  // Select only the fields the chip shows — the object itself is replaced on
-  // connection pushes, and subscribing to it re-rendered the sidebar per RPC.
-  const connStatus = useAppStore((s) => s.clientConnection?.status);
-  const connServerVersion = useAppStore((s) => s.clientConnection?.serverVersion);
-  const connLastError = useAppStore((s) => s.clientConnection?.lastError);
-  const connServerName = useAppStore((s) => s.clientConnection?.serverName);
-  // v0.17.0: currently-connected users (server + clients with an open
-  // WebSocket). Updated via the `users:presence` push event from main.
-  // Only meaningful in server / client modes; in standalone it's [].
-  const presence = useAppStore((s) => s.presence);
   const isModuleAvailable = useAppStore((s) => s.isModuleAvailable);
+  const addToast = useAppStore((s) => s.addToast);
+  const [update, setUpdate] = useState({ state: 'not-checked' });
+  async function checkUpdates() {
+    setUpdate({ state: 'checking' });
+    try {
+      const result = await window.api.updates.check();
+      if (!result || !['not-checked', 'up-to-date', 'available', 'failed'].includes(result.state) || (result.state === 'available' && !result.version)) throw new Error('Invalid update check response');
+      setUpdate(result);
+    } catch (error) { setUpdate({ state: 'failed', reason: error.message || 'Unknown error' }); }
+  }
+  useEffect(() => { checkUpdates(); }, []);
+  async function openUpdater() {
+    try {
+      const result = await window.api.updates.openUpdater();
+      if (!result?.ok) throw new Error('Could not open the updater');
+    } catch (error) { addToast(error.message || 'Could not open the updater', 'error'); }
+  }
+  const updateLine = update.state === 'checking' ? 'Checking…'
+    : update.state === 'up-to-date' ? 'Checked just now · up to date'
+    : update.state === 'available' ? `Checked just now · ${update.version} is available`
+    : update.state === 'failed' ? `Check failed: ${update.reason || 'Unknown error'}. Try again.`
+    : 'Not checked';
+  const modKey = platform === 'darwin' ? '⌘' : 'Ctrl+';
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   // 0.1.95: a dot on What's new after an update, until it is opened.
   const [whatsNewSeen, setWhatsNewSeen] = useState(() => loadLastSeenVersion());
@@ -103,25 +102,6 @@ export function Sidebar({ onSearch }) {
     setWhatsNewOpen(true);
     if (version) { saveLastSeenVersion(version); setWhatsNewSeen(version); }
   }
-  // v0.22.11: clickable presence + connection chip → modals.
-  const [presenceOpen, setPresenceOpen] = useState(false);
-  const [connLegendOpen, setConnLegendOpen] = useState(false);
-
-  const modKey = platform === 'darwin' ? '⌘' : 'Ctrl+';
-
-  // Tooltip for the client chip and the collapsed-rail dot.
-  const connTitle = (() => {
-    const s = connStatus;
-    const server = connServerName ? `the server Mac “${connServerName}”` : 'the server Mac';
-    if (s === 'connected') return `Connected to ${server}${connServerVersion ? ` (v${connServerVersion})` : ''}. Click for details.`;
-    if (s === 'disconnected') return `Can't reach ${server}: ${connLastError || 'check the server address and token in Settings.'} Click for help.`;
-    // v0.26.38: 'degraded' — server returned a 5xx on
-    // /api/ping. Connection is up but the server had a
-    // transient hiccup. Distinct from disconnected.
-    if (s === 'degraded') return `${connServerName || 'The server Mac'} is reachable but returned an error: ${connLastError || 'unknown'}. Click for details.`;
-    return 'Checking the connection to the server Mac… click for details.';
-  })();
-
   // v0.26.30: collapse/expand toggle. The state lives here (not in
   // the store) because it's a pure UI preference local to the sidebar
   // component; nothing else in the app cares whether the sidebar is
@@ -312,94 +292,31 @@ export function Sidebar({ onSearch }) {
         ) : null}
 
         <div className="sidebar__footer">
-          <button
-            type="button"
-            className="sidebar__footer-btn"
-            onClick={openWhatsNew}
-            aria-label={whatsNewUnseen ? `What's new — new in version ${version}` : undefined}
-            title={whatsNewUnseen ? `New in version ${version}` : undefined}
-          >
-            <IconSparkles className="sidebar__footer-btn-icon" />
-            <span>What's new</span>
-            {whatsNewUnseen ? <i className="sidebar__new-dot" aria-hidden="true" /> : null}
+          <button type="button" className={`sidebar__footer-btn${activeModule === 'support' ? ' is-active' : ''}`}
+            onClick={() => setActiveModule('support')} title="Support this app" aria-label="Support this app">
+            <IconHeart className="sidebar__footer-btn-icon" /><span>Support this app</span>
           </button>
-          <button
-            type="button"
-            className={`sidebar__footer-btn${activeModule === 'support' ? ' is-active' : ''}`}
-            onClick={() => setActiveModule('support')}
-          >
-            <IconHeart className="sidebar__footer-btn-icon" />
-            <span>Support this app</span>
-          </button>
-
-          {/* v0.22.11: always render the presence row in non-standalone
-              modes so the user has a stable click target — even when
-              nobody else is connected. Empty list still opens the modal
-              and explains the situation. */}
-          {appMode !== 'standalone' ? (
-            <PresenceRow
-              presence={presence}
-              onClick={() => setPresenceOpen(true)}
-            />
-          ) : null}
-
-          {/* v0.26.33: steady-state network heartbeat for client mode.
-              Always-on once the boot SyncOverlay dismisses — gives the
-              user a persistent "data is flowing" affordance so they
-              never have to guess whether a slow page is "still
-              loading" or "frozen". */}
-          {appMode === 'client' ? <NetworkChip /> : null}
-
-          {/* 0.1.94: the collapsed rail hides the whole footer row, which used
-              to take every connection signal with it — a red server went
-              unnoticed. This dot is shown only when collapsed (CSS) and opens
-              the same legend as the chip. */}
-          {appMode === 'client' ? (
-            <button
-              type="button"
-              className={`sidebar__conn-rail sidebar__storage-tag--conn-${connStatus || 'unknown'}`}
-              onClick={() => setConnLegendOpen(true)}
-              title={connTitle}
-              aria-label={connTitle}
-            >
-              <span className="sidebar__conn-dot" aria-hidden="true" />
-            </button>
-          ) : null}
-
-          <div className="sidebar__footer-row">
-            <span className="sidebar__version">v{version || '0.0.0'}</span>
-            {appMode === 'server' ? (
-              <span
-                className="sidebar__storage-tag sidebar__storage-tag--server"
-                title="This Mac is running in Server mode — it hosts data for other Macs."
-              ><IconServer className="sidebar__storage-tag-icon" />Server</span>
-            ) : appMode === 'client' ? (
-              // v0.22.11: clickable. Opens the legend modal which
-              // explains what each colour means + shows live state +
-              // a "Test connection now" button.
-              <button
-                type="button"
-                className={`sidebar__storage-tag sidebar__storage-tag--client sidebar__storage-tag--conn-${connStatus || 'unknown'}`}
-                onClick={() => setConnLegendOpen(true)}
-                title={connTitle}
-              >
-                <span className="sidebar__conn-dot" aria-hidden="true" />
-                Client
-                {connServerName ? <span className="sidebar__conn-server">· {connServerName}</span> : null}
+          <div className="sidebar__update-group">
+            <div className="sidebar__update-controls">
+              <button type="button" className="sidebar__version-pill" onClick={openWhatsNew}
+                aria-label={`Business Studio KH ${version || 'version unknown'} — What's new`} title="What's new">
+                <IconSparkles className="sidebar__pill-icon" />
+                <span className="sidebar__pill-name">Business Studio KH</span><span className="sidebar__pill-version">{version || 'Unknown'}</span>
+                {whatsNewUnseen ? <i className="sidebar__new-dot" aria-hidden="true" /> : null}
               </button>
-            ) : dataDirIsCloud ? (
-              <span
-                className="sidebar__storage-tag"
-                title="Data folder is on iCloud Drive. Quit before switching Macs; don't open on two Macs at once."
-              ><IconCloud className="sidebar__storage-tag-icon" />iCloud</span>
-            ) : null}
+              <button type="button" className="sidebar__update-button" onClick={checkUpdates} disabled={update.state === 'checking'} title="Check for updates" aria-label="Check for updates">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.8" /><path d="M13.4 2.4v2.9h-2.9" /></svg>
+              </button>
+              {update.state === 'available' ? <button type="button" className="sidebar__update-button" onClick={openUpdater} title={`Update to ${update.version}`} aria-label={`Update to ${update.version}`}>
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6" /></svg>
+              </button> : null}
+            </div>
+            <div className="sidebar__update-status" role="status" aria-live="polite">{updateLine}</div>
           </div>
         </div>
       </aside>
 
       <WhatsNewModal open={whatsNewOpen} onClose={() => setWhatsNewOpen(false)} />
-      <PresenceModal open={presenceOpen} onClose={() => setPresenceOpen(false)} />
-      <ConnectionLegendModal open={connLegendOpen} onClose={() => setConnLegendOpen(false)} />
     </>
   );
 }
@@ -495,176 +412,6 @@ function CompanySwitcher() {
   );
 }
 
-/**
- * v0.17.0: Presence chip in the sidebar footer. Shows currently-
- * connected WebSocket users with a green dot and their names. When
- * there are 4+ users, collapses to the first three names plus "+N
- * more" so the chip stays one line in the 220px sidebar.
- *
- * Hover the chip to see the full list with roles. Standalone Macs
- * never render this (parent gates on `appMode !== 'standalone'` and
- * a non-empty list).
- */
-function PresenceRow({ presence, onClick }) {
-  // v0.22.11: clickable; opens the PresenceModal. The empty case
-  // ("Nobody else online") still shows a click target so the user
-  // can confirm + see help when they expect a teammate but don't
-  // see them.
-  const list = presence ?? [];
-  const MAX_INLINE = 3;
-  const inline = list.slice(0, MAX_INLINE);
-  const overflow = list.length - inline.length;
-
-  // Tooltip = full list with roles, one per line. Helps the user
-  // identify e.g. "Sarah (editor)" vs "Theng (admin)" at a glance.
-  const titleText = list.length === 0
-    ? 'Nobody else online. Click for details.'
-    : list.map((u) => `${u.name}${u.role ? ` (${u.role})` : ''}`).join(' · ') + ' · click for details';
-
-  return (
-    <button
-      type="button"
-      className={`sidebar__presence${list.length === 0 ? ' is-empty' : ''}`}
-      title={titleText}
-      onClick={onClick}
-    >
-      <span className="sidebar__presence-dot" aria-hidden="true" />
-      <span className="sidebar__presence-label">
-        {list.length === 0 ? (
-          <span className="sidebar__presence-more">Nobody else online</span>
-        ) : (
-          <>
-            {inline.map((u, i) => (
-              <span key={u.id}>
-                {u.name}
-                {i < inline.length - 1 ? ', ' : ''}
-              </span>
-            ))}
-            {overflow > 0 ? <span className="sidebar__presence-more"> +{overflow} more</span> : null}
-          </>
-        )}
-      </span>
-    </button>
-  );
-}
-
-/**
- * v0.26.33: NetworkChip — sidebar footer indicator showing cumulative
- * bytes downloaded + time since last RPC activity. Visible in client
- * mode only. The user always has a "yes, the app is alive" signal,
- * not just during boot.
- *
- * Why this matters: the connection-state chip above (Client · green
- * dot) tells the user "I CAN reach the server," but it doesn't tell
- * them "I JUST received data from the server." On a slow link those
- * are different facts — pings come back fast, but the actual catalog
- * RPC might still be hung on a 3-second response. This chip surfaces
- * the more useful signal: when did data last actually arrive.
- *
- * Re-rendering: subscribes to client:rpcActivity push events for the
- * counter updates + a 1s timer to keep the "Xs ago" string honest
- * between calls.
- */
-function NetworkChip() {
-  const [stats, setStats] = useState(null);
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    if (!window.api?.client?.syncStats) return undefined;
-    let cancelled = false;
-    window.api.client.syncStats().then((s) => {
-      if (!cancelled) setStats(s);
-    }).catch(() => {});
-    const off = window.api.client.onRpcActivity?.((evt) => {
-      if (cancelled) return;
-      if (evt?.stats) setStats(evt.stats);
-    });
-    return () => { cancelled = true; off?.(); };
-  }, []);
-
-  // Tick once a second so the "X seconds ago" text doesn't go stale
-  // between RPC calls. setInterval over setTimeout because we want
-  // it always running, not stop-on-quiet — except while the window is
-  // hidden, where nobody can read it: the timer stops, and coming back
-  // ticks at once so the text is current on the first visible frame.
-  useEffect(() => {
-    let t = null;
-    const start = () => {
-      if (t) return;
-      setNow(Date.now());
-      t = setInterval(() => setNow(Date.now()), 1000);
-    };
-    const stop = () => {
-      if (t) clearInterval(t);
-      t = null;
-    };
-    const onVisibility = () => (document.visibilityState === 'hidden' ? stop() : start());
-    onVisibility();
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      stop();
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, []);
-
-  if (!stats) return null;
-
-  // Byte formatter — duplicated from ClientSyncOverlay so the chip
-  // can stay rendered in trees that don't import the overlay (none
-  // today, but defensive). Times come from renderer/lib/format.js.
-  function fmtBytes(n) {
-    if (!Number.isFinite(n) || n <= 0) return '0 B';
-    const units = ['B', 'KB', 'MB', 'GB'];
-    let i = 0; let v = n;
-    while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
-    return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
-  }
-  const idle = stats.lastActivityAt ? (now - stats.lastActivityAt) : null;
-  const isActive = stats.inFlight > 0;
-  const isStale  = idle != null && idle > 60_000;
-  // v0.26.44: boot-state detection. The dedicated full-window
-  // ClientSyncOverlay was removed; this chip now picks up that job.
-  // Heuristic: if call count is still small (< 12, which roughly
-  // matches the bootstrap fan-out) AND elapsed since launch is < 30s,
-  // we're still in the initial-sync phase. The chip gets a more
-  // prominent "Syncing data…" label so the user knows what's happening
-  // without a window-blocking modal.
-  const elapsedSinceStart = stats.startedAt ? (now - stats.startedAt) : 0;
-  const isBooting = stats.callCount < 12 && elapsedSinceStart < 30_000 && (isActive || stats.callCount === 0);
-
-  return (
-    <div
-      className={`sidebar__net-chip${isActive ? ' is-active' : ''}${isStale ? ' is-stale' : ''}${isBooting ? ' is-booting' : ''}`}
-      title={[
-        isBooting ? 'First sync in progress — pages will fill in as their data arrives.' : null,
-        `Downloaded: ${fmtBytes(stats.totalBytesIn)}`,
-        `Uploaded: ${fmtBytes(stats.totalBytesOut)}`,
-        `Total calls: ${stats.callCount}${stats.errorCount > 0 ? ` (${stats.errorCount} failed)` : ''}`,
-        `In flight: ${stats.inFlight}`,
-        `Last call: ${stats.lastChannel || '—'}`,
-        idle != null ? `Last activity: ${timeAgo(stats.lastActivityAt, now)}` : 'No activity yet',
-      ].filter(Boolean).join('\n')}
-    >
-      <span className="sidebar__net-chip-arrow" aria-hidden>↓</span>
-      <span className="sidebar__net-chip-bytes">{fmtBytes(stats.totalBytesIn)}</span>
-      <span className="sidebar__net-chip-sep" aria-hidden>·</span>
-      <span className="sidebar__net-chip-ago">
-        {/* v0.26.44: boot-state label takes priority — replaces the
-            old full-window ClientSyncOverlay. "First sync…" reads as
-            "this is normal, data is loading", whereas the steady-
-            state "syncing…" reads as "an action just fired now". */}
-        {isBooting
-          ? 'first sync…'
-          : isActive
-            ? 'syncing…'
-            : idle != null
-              ? timeAgo(stats.lastActivityAt, now)
-              : 'idle'}
-      </span>
-    </div>
-  );
-}
-
 /* ─── Inline SVG icons ─────────────────────────────────────────── */
 
 /* Fuel F1 + People — inline, stroke-based, 18px like the rest (§1). */
@@ -697,8 +444,8 @@ function IconSparkles({ className }) {
 
 function IconHeart({ className }) {
   return (
-    <svg className={className} width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path d="M7 12.5S1.5 9.5 1.5 5.5C1.5 3.6 3 2 5 2c1.1 0 2.1.5 2.7 1.4l.3.4.3-.4C8.9 2.5 9.9 2 11 2c2 0 3.5 1.6 3.5 3.5 0 4-5.5 7-5.5 7z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" transform="translate(-1, 0)" />
+    <svg className={className} width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M8 13.1S2.4 9.9 2.4 6a2.9 2.9 0 0 1 5.1-1.9L8 4.6l.5-.5A2.9 2.9 0 0 1 13.6 6c0 3.9-5.6 7.1-5.6 7.1Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -716,29 +463,3 @@ function IconCheck({ className }) {
 /* UI pass, 2026-10: one glyph per nav entry. All 18 × 18, stroke-based,
    1.4 stroke (IconSettings draws on a 24 grid, so 1.85 there renders the
    same weight). */
-
-
-
-
-
-
-
-
-// Footer mode chips (replace the old emoji). 12 × 12, same stroke style.
-function IconServer({ className }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <rect x="1.5" y="1.5" width="9" height="4" rx="1" stroke="currentColor" strokeWidth="1.2" />
-      <rect x="1.5" y="6.5" width="9" height="4" rx="1" stroke="currentColor" strokeWidth="1.2" />
-      <path d="M3.5 3.5h.01M3.5 8.5h.01" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function IconCloud({ className }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path d="M3.5 9.5a2.25 2.25 0 0 1-.3-4.48A3 3 0 0 1 9 4.6a2.45 2.45 0 0 1-.25 4.9z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-    </svg>
-  );
-}
