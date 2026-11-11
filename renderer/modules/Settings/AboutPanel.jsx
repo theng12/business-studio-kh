@@ -47,14 +47,6 @@ export function AboutCard({ versionInfo }) {
         </div>
       </AboutRow>
 
-      <AboutRow title="Updates" hint="When a new build is available it appears in What's new.">
-        <div className="setting-control-row">
-          <Button onClick={() => useAppStore.getState().addToast(`You're on v${versionInfo?.app ?? '?'} — the latest dev build.`, 'info')}>
-            Check for updates
-          </Button>
-        </div>
-      </AboutRow>
-
       <AboutRow title="Folders" hint="Where this Mac keeps your data and the app's logs.">
         <div className="setting-control-row">
           <Button onClick={() => openFolder(() => window.api?.app.openDataFolder())}>Open data folder</Button>
