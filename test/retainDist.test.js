@@ -18,15 +18,15 @@ const makeDist = () => {
   return { root, distDir, trashDir };
 };
 
-test('the two newest installers are kept and older ones retire, newest first', () => {
-  const plan = planRetention([dmg('0.1.9'), dmg('0.1.10'), dmg('0.1.107'), dmg('0.1.106'), 'notes.txt', 'Business Studio KH-0.1.107.dmg.blockmap']);
-  assert.deepEqual(plan.kept, [dmg('0.1.107'), dmg('0.1.106')]);
+test('the three newest installers are kept and older ones retire, newest first', () => {
+  const plan = planRetention([dmg('0.1.9'), dmg('0.1.10'), dmg('0.1.105'), dmg('0.1.107'), dmg('0.1.106'), 'notes.txt', 'Business Studio KH-0.1.107.dmg.blockmap']);
+  assert.deepEqual(plan.kept, [dmg('0.1.107'), dmg('0.1.106'), dmg('0.1.105')]);
   assert.deepEqual(plan.retired, [dmg('0.1.10'), dmg('0.1.9')]);
 });
 
 test('a protected version named by a pin or the ledger is never retired', () => {
-  const plan = planRetention([dmg('0.1.104'), dmg('0.1.105'), dmg('0.1.106'), dmg('0.1.107')], 2, new Set(['0.1.105']));
-  assert.deepEqual(plan.retired, [dmg('0.1.104')]);
+  const plan = planRetention([dmg('0.1.103'), dmg('0.1.104'), dmg('0.1.105'), dmg('0.1.106'), dmg('0.1.107')], 3, new Set(['0.1.105']));
+  assert.deepEqual(plan.retired, [dmg('0.1.104'), dmg('0.1.103')]);
 });
 
 test('protected versions come from release.json, previous-release.json and the ledger', () => {
@@ -40,14 +40,14 @@ test('protected versions come from release.json, previous-release.json and the l
 
 test('retainDist moves old installers to the rotation folder and logs hash and destination', () => {
   const { distDir, trashDir } = makeDist();
-  for (const v of ['0.1.104', '0.1.105', '0.1.106', '0.1.107']) fs.writeFileSync(path.join(distDir, dmg(v)), v);
+  for (const v of ['0.1.103', '0.1.104', '0.1.105', '0.1.106', '0.1.107']) fs.writeFileSync(path.join(distDir, dmg(v)), v);
   fs.writeFileSync(path.join(distDir, 'builder-debug.yml'), 'x');
 
   const result = retainDist({ distDir, trashDir, log: () => {} });
 
-  assert.deepEqual(result.kept, [dmg('0.1.107'), dmg('0.1.106')]);
-  assert.deepEqual(fs.readdirSync(distDir).filter((n) => n.endsWith('.dmg')).sort(), [dmg('0.1.106'), dmg('0.1.107')].sort());
-  assert.deepEqual(fs.readdirSync(trashDir).sort(), [dmg('0.1.104'), dmg('0.1.105')].sort());
+  assert.deepEqual(result.kept, [dmg('0.1.107'), dmg('0.1.106'), dmg('0.1.105')]);
+  assert.deepEqual(fs.readdirSync(distDir).filter((n) => n.endsWith('.dmg')).sort(), [dmg('0.1.105'), dmg('0.1.106'), dmg('0.1.107')].sort());
+  assert.deepEqual(fs.readdirSync(trashDir).sort(), [dmg('0.1.103'), dmg('0.1.104')].sort());
 
   const receipt = JSON.parse(fs.readFileSync(path.join(distDir, '.retention-receipt.json'), 'utf8'));
   assert.equal(receipt.length, 2);
