@@ -116,7 +116,7 @@ export function ProductCombobox({ id, products, value, onChange, placeholder = '
         title={selected ? buttonLabel : undefined}
       >
         <span className="product-combobox__label">{buttonLabel}</span>
-        <span className="product-combobox__chev" aria-hidden>▾</span>
+        <span className="product-combobox__chev" aria-hidden><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 4l2.5 2.5L7.5 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg></span>
       </button>
 
       {open ? (

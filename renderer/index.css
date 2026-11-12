@@ -87,6 +87,9 @@
 }
 
 [data-theme="dark"] {
+  /* 2026-11-13 acceptance: native controls (checks, date pickers, scrollbars)
+     follow the dark theme instead of keeping their light chrome. */
+  color-scheme: dark;
   /* Color tokens — dark overrides only */
   --c-bg:        #0e0e11;
   --c-surface:   #17171b;
@@ -416,7 +419,8 @@ input, textarea, select {
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--c-text-subtle);
+  /* DESIGN.md: sidebar section labels are muted (5.35:1), not subtle. */
+  color: var(--c-text-muted);
   padding: 0 var(--s-2);
   margin-bottom: var(--s-1);
 }
@@ -491,7 +495,7 @@ input, textarea, select {
 }
 .sidebar__version-pill { position: relative; gap: 4px; padding: 0 7px; border-radius: 999px; white-space: nowrap; }
 .sidebar__pill-name { font-size: 11px; }
-.sidebar__pill-version { font-size: 10px; }
+.sidebar__pill-version { font-size: var(--fs-xs); }
 .sidebar__pill-icon { width: 16px; height: 16px; flex: none; }
 .sidebar__update-button { width: 26px; flex: none; padding: 5px; border-radius: 7px; }
 .sidebar__update-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -3834,11 +3838,26 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
 }
 .lightbox__title {
   font-weight: 600;
-  margin-bottom: 2px;
+  /* 2026-11-13 acceptance: at 1280 the title ran off the dark scrim onto a
+     light photo. Each line gets its own backing and a width cap. */
+  display: block;
+  width: fit-content;
+  max-width: min(52ch, 38vw);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.62);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  margin-bottom: 3px;
 }
 .lightbox__counter {
-  color: rgba(255, 255, 255, 0.7);
+  display: block;
+  width: fit-content;
+  color: rgba(255, 255, 255, 0.78);
   font-size: 12px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.62);
 }
 .lightbox__filename {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
@@ -3856,12 +3875,20 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
    Selector targets `.lightbox__header .lightbox__meta` so any future
    reuse of `.lightbox__meta` outside the header gets its own styles. */
 .lightbox__header .lightbox__meta {
+  display: inline-block;
   margin-top: 4px;
-  color: rgba(255, 255, 255, 0.78);
-  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: var(--radius-sm);
+  /* 2026-11-13 acceptance: cap the line and keep it on its own dark backing,
+     so the hash tail stays legible even over a light photo. */
+  max-width: min(64ch, 46vw);
+  background: rgba(0, 0, 0, 0.62);
+  color: rgba(255, 255, 255, 0.86);
+  font-size: var(--fs-xs);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   letter-spacing: 0.02em;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   pointer-events: auto;
   user-select: text;
 }
@@ -3892,7 +3919,7 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   color: #fff;
   background: rgba(255, 255, 255, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .lightbox__spinbtn:hover { background: rgba(255, 255, 255, 0.2); }
@@ -4491,7 +4518,7 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--c-text-subtle);
+  color: var(--c-text-muted);
 }
 .card__title {
   font-size: var(--fs-lg);
@@ -4882,6 +4909,11 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .lib-main .pagination__page-size,
 .lib-main .pagination__indicator,
 .lib-main .pagination__btn { white-space: nowrap; }
+
+/* 2026-11-13 acceptance: one accent — the library's checkboxes use the ink
+   token, not the system-blue default. */
+.lib-table input[type="checkbox"],
+.lib-card__select input[type="checkbox"] { accent-color: var(--c-text); }
 
 /* Narrow column (detail panel open on a laptop): drop the two columns
    that are least useful at a glance; the Columns picker still governs
@@ -5281,7 +5313,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   align-items: center;
   justify-content: center;
   gap: 6px;
-  color: var(--c-text-subtle);
+  color: var(--c-text-muted);
   font-size: 11px;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -5527,6 +5559,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 .pagination__btn:hover:not(:disabled) { background: var(--c-hover-bg); }
 .pagination__btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pagination__btn svg { display: block; }
 
 .pagination__indicator { font-variant-numeric: tabular-nums; }
 
@@ -5608,7 +5641,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   left: 6px;
   background: var(--c-emerald);
   color: white;
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   padding: 2px 6px;
   border-radius: 4px;
@@ -6790,6 +6823,8 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   cursor: pointer;
   user-select: none;
 }
+/* One accent everywhere: native checks and radios take the ink token. */
+input[type="checkbox"], input[type="radio"] { accent-color: var(--c-text); }
 .toggle input[type="checkbox"] {
   width: 14px;
   height: 14px;
@@ -7596,7 +7631,8 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   min-width: 0;
 }
 .product-combobox__chev {
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
   color: var(--c-text-muted);
   flex: 0 0 auto;
 }
@@ -9357,7 +9393,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .settings-tokens .token-chip { padding: 4px 12px; }
 .settings-tokens .token-chip.is-active {
   background: var(--c-accent);
-  color: white;
+  color: var(--c-accent-fg);
   border-color: var(--c-accent);
 }
 
@@ -9534,11 +9570,9 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 /* ─── Auto-match modal ──────────────────────────────────────── */
 
 .automatch__heading {
-  font-size: 12px;
+  font-size: var(--fs-md);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--c-text-subtle);
+  color: var(--c-text);
   margin: var(--s-4) 0 var(--s-2);
 }
 
@@ -9916,6 +9950,9 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
   animation: toast-in 160ms ease-out;
 }
 
+/* Dark theme lightens the status fills, so the toast text must invert with
+   them (white on #34d399 was ~1.9:1). */
+[data-theme="dark"] .toast { color: var(--c-bg); }
 .toast--info    { background: var(--c-slate); }
 .toast--success { background: var(--c-emerald); }
 .toast--error   { background: var(--c-rose); }
@@ -10300,6 +10337,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 .role-card {
   text-align: left;
+  color: var(--c-text);
   padding: 10px 12px;
   border: 1px solid var(--c-border);
   border-radius: 8px;
@@ -10315,7 +10353,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .role-card__name { font-weight: 600; font-size: var(--fs-md); display: flex; align-items: center; gap: 6px; }
 .role-card__lock { display: inline-flex; color: var(--c-text-muted); }
 .role-card__tag {
-  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.04em;
+  font-size: var(--fs-xs);
   color: var(--c-text-muted, #71717a); border: 1px solid var(--c-border);
   border-radius: 999px; padding: 1px 6px;
 }
@@ -10529,7 +10567,9 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 
 /* Business Studio KH — unified studio shell */
-.shell__content{background:radial-gradient(circle at 82% -10%,rgba(99,102,241,.08),transparent 34%),var(--c-bg)}
+/* 2026-11-13 acceptance: the retired indigo wash was the last decorative
+   gradient in the shell; the visual world is flat by design. */
+.shell__content{background:var(--c-bg)}
 .sidebar{width:232px;background:color-mix(in srgb,var(--c-sidebar) 94%,transparent)}
 .sidebar__brand-mark{width:30px;height:30px;border-radius:var(--radius-md);background:var(--c-brand);color:var(--c-brand-fg);box-shadow:none;font-size:var(--fs-xs)}
 .sidebar__collapse-btn{width:28px;height:28px;border-radius:8px;border-color:var(--c-border);background:var(--c-surface)}
@@ -10628,7 +10668,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 /* Barcode Maker — UI pass, 2026-10: full width like every other page (it
  * was capped at 1050px), `Field` labels and hints, tokens for radius. */
 .barcode-maker{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:var(--s-5)}
-.barcode-maker__controls{display:flex;flex-direction:column;gap:var(--s-4);padding:var(--s-5);border:1px solid var(--c-border);border-radius:var(--radius-lg);background:var(--c-surface)}
+.barcode-maker__controls{display:flex;flex-direction:column;gap:var(--s-4);padding:var(--s-5);border:1px solid var(--c-border);border-radius:var(--radius-md);background:var(--c-surface)}
 .barcode-maker__controls .field__label{flex-direction:row;font-size:12px;font-weight:500;color:var(--c-text)}
 .barcode-actions{display:flex;flex-wrap:wrap;gap:var(--s-2)}
 .barcode-paper{min-height:360px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s-5);padding:var(--s-8);border:1px solid var(--c-border);border-radius:var(--radius-lg);background:#fff}
@@ -10913,10 +10953,9 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .catalog-product-panel > header strong { font-size: var(--fs-md); font-weight: 600; }
 .catalog-product-panel > header span { margin-top: 2px; font-size: var(--fs-xs); color: var(--c-text-muted); }
 .catalog-product-search { padding: var(--s-2); border-bottom: 1px solid var(--c-border); }
-.catalog-product-list { flex: 1 1 auto; min-height: 220px; overflow: auto; padding: var(--s-1) var(--s-2); }
-/* Audit 2026-10: with nothing capping its height a 50-row page made the
- * editor 6,000+ px tall; the two lists now scroll inside their panels. */
-.catalog-product-list { max-height: min(560px, 62vh); overscroll-behavior: contain; }
+/* The list is the only scroll area; the panel keeps its pager visible at any
+   window height (2026-11-13 acceptance: the pager clipped at 1440×900). */
+.catalog-product-list { flex: 1 1 0; min-height: 0; max-height: none; overflow: auto; padding: var(--s-1) var(--s-2); overscroll-behavior: contain; }
 .catalog-product-list article {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -11365,6 +11404,8 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 .ld-align button:hover:not(:disabled) { background: var(--c-hover-bg); }
 .ld-align button:disabled { opacity: .45; cursor: not-allowed; }
+/* A destructive element action reads rose here too (2026-11-13 acceptance). */
+.ld-align__delete:not(:disabled) { color: var(--c-rose); border-color: var(--c-rose); }
 .ld-align__sep { width: 1px; height: 18px; background: var(--c-border); margin: 0 3px; }
 .ld-layers { border-top: 1px solid var(--c-border); background: var(--c-surface); max-height: 190px; overflow: auto; }
 .ld-layers__head.section-head { justify-content: space-between; margin: 0; padding: var(--s-2) var(--s-3) var(--s-1); }
@@ -11380,9 +11421,10 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 }
 .ld-layers__type { width: 8px; height: 8px; border-radius: 2px; background: #94a3b8; flex: none; }
 .ld-layers__type--text, .ld-layers__type--sku, .ld-layers__type--price, .ld-layers__type--date, .ld-layers__type--country { background: var(--c-text); }
-.ld-layers__type--barcode, .ld-layers__type--qr { background: #0f766e; }
-.ld-layers__type--productImage, .ld-layers__type--logo, .ld-layers__type--image, .ld-layers__type--cert { background: #b45309; }
-.ld-layers__type--rect, .ld-layers__type--colorbar, .ld-layers__type--divider { background: #64748b; }
+/* 2026-11-13 acceptance: layer-type dots are neutral — status colours belong to state. */
+.ld-layers__type--barcode, .ld-layers__type--qr { background: var(--c-text-muted); }
+.ld-layers__type--productImage, .ld-layers__type--logo, .ld-layers__type--image, .ld-layers__type--cert { background: var(--c-text-subtle); }
+.ld-layers__type--rect, .ld-layers__type--colorbar, .ld-layers__type--divider { background: var(--c-border-strong); }
 .ld-layers__toggle {
   display: inline-grid; place-items: center;
   border: 0; background: none; color: var(--c-text-subtle); font-size: var(--fs-xs);
@@ -11660,7 +11702,7 @@ button.save-status.save-status--error:hover { background: rgba(185, 28, 28, 0.12
 .catalog-preview__tools .input--select { width: auto; min-width: 100px; }
 .catalog-preview__note { margin: 0; padding: var(--s-2) var(--s-3); font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.4; }
 .catalog-preview__message { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-3); font-size: var(--fs-sm); color: var(--c-text); background: var(--c-surface); border-bottom: 1px solid var(--c-border); }
-.catalog-collection-tools .input { max-width: 400px; }
+.catalog-collection-tools .input { max-width: 400px; min-width: 220px; }
 .catalog-collection-tools .input--select { max-width: 200px; }
 .catalog-icon-btn { min-width: 32px; min-height: 32px; }
 .catalog-preview iframe { min-height: 360px; }
@@ -12374,7 +12416,7 @@ a:hover { text-decoration-thickness: 2px; }
   padding: var(--s-1) var(--s-2) 2px;
   font-size: var(--fs-xs);
   font-weight: 500;
-  color: var(--c-text-subtle);
+  color: var(--c-text-muted);
 }
 .sidebar.is-collapsed .sidebar__sublabel { display: none; }
 .sidebar.is-collapsed .sidebar__group + .sidebar__group { margin-top: 0; padding-top: var(--s-1); border-top: 1px solid var(--c-border); }

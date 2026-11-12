@@ -1,5 +1,16 @@
 # What's new
 
+## 0.1.109 — 2026-11-13
+
+- FIX — Generate & Print no longer shows a product preview while nothing is selected; it asks you to select a product first.
+- FIX — A one-brand catalog now lists the products it will actually print, so the project card, the included list and the PDF agree.
+- FIX — The photo viewer's details stay readable over a light photo, and the "Main" badge is easier to read.
+- POLISH — The label designer's spread buttons, layer dots and zoom readout are clearer, and the background-colour swatch is named for screen readers.
+- POLISH — The Barcode Maker keeps Copy value and Save PNG in the page header and names formats in plain words.
+- POLISH — The library, catalog and paging controls use the app's own icons instead of text symbols, and checkboxes use the app's ink colour.
+- POLISH — Settings: Payroll has one page title inside Settings, Branches has one primary button, and the built-in role tag is no longer shouted in capitals.
+- POLISH — The window background is flat (the faint indigo wash is gone) and the version number in the footer meets the app's minimum text size.
+
 ## 0.1.108 — 2026-11-12
 
 - NEW — Only one copy of Business Studio KH runs at a time. Opening it again brings the running window forward.

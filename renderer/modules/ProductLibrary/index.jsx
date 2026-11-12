@@ -1100,7 +1100,8 @@ export function ProductLibrary() {
                     AI Studio…
                   </Button>
                   <BulkActionsMenu
-                    label="Image operations ▾"
+                    variant="default"
+                    label="Image operations"
                     disabled={bulkDeleting}
                     sections={[
                       {
@@ -1155,7 +1156,7 @@ export function ProductLibrary() {
                     <BulkActionsMenu
                       variant="default"
                       searchable={false}
-                      label="Use in ▾"
+                      label="Use in"
                       disabled={bulkDeleting}
                       sections={[{ label: 'Send the selection to', items: useInItems }]}
                     />
@@ -1171,7 +1172,7 @@ export function ProductLibrary() {
                   <BulkActionsMenu
                     variant="default"
                     searchable={false}
-                    label="⋯ More ▾"
+                    label="More"
                     disabled={bulkDeleting}
                     sections={[
                       {
@@ -1912,7 +1913,7 @@ function BulkActionsMenu({ label, count, disabled, sections, variant = 'primary'
 
   // v0.49.30: caller can pass a custom `label` (e.g. "Image operations (N) ▾").
   // Falls back to the v0.49.29 generic label when not given.
-  const triggerLabel = label || `Bulk actions${count != null ? ` (${count})` : ''} ▾`;
+  const triggerLabel = label || `Bulk actions${count != null ? ` (${count})` : ''}`;
 
   return (
     <div
@@ -1930,6 +1931,9 @@ function BulkActionsMenu({ label, count, disabled, sections, variant = 'primary'
         aria-expanded={open}
       >
         {triggerLabel}
+        <svg className="lib-header-menu__caret" width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+          <path d="M2.5 4l2.5 2.5L7.5 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
       </Button>
       {open ? (
         <div

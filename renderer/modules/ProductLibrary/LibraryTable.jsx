@@ -162,7 +162,13 @@ function SortHeader({ sortKey, label, sort, onSort, numeric = false, className =
       >
         <span>{label}</span>
         <span className="lib-th-sort__arrow" aria-hidden>
-          {dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : '↕'}
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            {dir === 'asc'
+              ? <path d="M3 7.5 6 4.5l3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              : dir === 'desc'
+                ? <path d="M3 4.5 6 7.5l3-3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                : <path d="M3 4.5 6 2l3 2.5M3 7.5 6 10l3-2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />}
+          </svg>
         </span>
       </button>
     </th>

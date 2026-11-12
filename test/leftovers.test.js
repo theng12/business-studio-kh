@@ -69,7 +69,7 @@ test('use in: navigation carries company-scoped hand-offs and the export queue',
 
 test('use in: wiring — menu, receivers subscribe to the store, company switch clears', () => {
   const lib = read('renderer/modules/ProductLibrary/index.jsx');
-  assert.match(lib, /label="Use in ▾"/);
+  assert.match(lib, /label="Use in"/);
   assert.match(lib, /sendProductsToLabels\(selectionInListOrder\(\)\)/);
   assert.match(lib, /sendProductsToExport\(ids\)/);
   assert.match(lib, /<UseInCatalogModal/);

@@ -4,7 +4,6 @@ import { useUserCaps } from '../../components/Sidebar.jsx';
 import { Badge, Button, Field, Input, Select, Textarea } from '../../components/ui.jsx';
 import { SaveStatus } from '../../components/SaveStatus.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
-import { PageHeader } from '../../components/PageHeader.jsx';
 import { hasCap } from '../../lib/capabilities.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { useHrTick } from './hrHooks.js';
@@ -694,11 +693,15 @@ export function PayrollSettings() {
 
   return (
     <div className="settings-page payroll-settings">
-      <PageHeader
-        title="Payroll settings"
-        subtitle="Pay schedule, company policies, exchange rates and statutory drafts."
-        actions={isAdmin && visible ? <SaveStatus state={save.state} savedAt={save.savedAt} error={save.error} onSave={flushSettings} /> : null}
-      />
+      {/* Inside Settings the pane head is the house 13 px section title, not a
+          second 22 px page header (2026-11-13 acceptance). */}
+      <div className="section-head">
+        <div>
+          <h2 className="section-title">Payroll settings</h2>
+          <p className="section-hint">Pay schedule, company policies, exchange rates and statutory drafts.</p>
+        </div>
+        {isAdmin && visible ? <div className="section-head__actions"><SaveStatus state={save.state} savedAt={save.savedAt} error={save.error} onSave={flushSettings} /></div> : null}
+      </div>
       {!visible && !loadError ? <p className="muted" role="status">Loading this company’s payroll settings…</p> : null}
       {loadError?.companyId === activeCompanyId && loadError.sequence === requestSequence.current ? <div role="alert"><p className="field__error">Couldn’t load payroll settings: {loadError.message}</p><Button onClick={() => setReload((value) => value + 1)}>Retry</Button></div> : null}
       {visible && settings && draft ? (

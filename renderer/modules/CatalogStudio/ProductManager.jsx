@@ -11,6 +11,17 @@ function ProductThumb({ product }) {
 
 const SORT_NAMES = { sku: 'SKU', name: 'product name' };
 
+/* SVG move arrows — the app draws its own icons (no Unicode glyphs as icons). */
+function MoveIcon({ kind }) {
+  const d = {
+    top: 'M3 2h6M6 10V4.5M3.7 6.8 6 4.5l2.3 2.3',
+    up: 'M6 10V3M3.7 5.3 6 3l2.3 2.3',
+    down: 'M6 2v7M3.7 6.7 6 9l2.3-2.3',
+    bottom: 'M3 10h6M6 2v5.5M3.7 5.2 6 7.5l2.3-2.3',
+  }[kind];
+  return <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d={d} stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+}
+
 export function ProductManager({ products, config, onChange, brands = [], categories = [] }) {
   const availablePanel = useRef(null); const includedPanel = useRef(null);
   const [query, setQuery] = useState(''); const [includedQuery, setIncludedQuery] = useState('');
@@ -144,10 +155,10 @@ export function ProductManager({ products, config, onChange, brands = [], catego
               <span className="catalog-order-number">{index + 1}</span>
               <div className="catalog-product-name"><strong>{p.sku}</strong><span>{p.name || 'Unnamed product'}</span></div>
               <div className="catalog-product-row-actions">
-                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the top`} title="Move to top" disabled={index === 0} onClick={() => commit(moveToEdge(includedIds, p.id, 'top'), { manual: true })}>⤒</button>
-                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} up`} title="Move up" disabled={index === 0} onClick={() => move(p.id, -1)}>↑</button>
-                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} down`} title="Move down" disabled={index === included.length - 1} onClick={() => move(p.id, 1)}>↓</button>
-                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the bottom`} title="Move to bottom" disabled={index === included.length - 1} onClick={() => commit(moveToEdge(includedIds, p.id, 'bottom'), { manual: true })}>⤓</button>
+                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the top`} title="Move to top" disabled={index === 0} onClick={() => commit(moveToEdge(includedIds, p.id, 'top'), { manual: true })}><MoveIcon kind="top" /></button>
+                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} up`} title="Move up" disabled={index === 0} onClick={() => move(p.id, -1)}><MoveIcon kind="up" /></button>
+                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} down`} title="Move down" disabled={index === included.length - 1} onClick={() => move(p.id, 1)}><MoveIcon kind="down" /></button>
+                <button type="button" className="catalog-icon-btn" aria-label={`Move ${p.sku} to the bottom`} title="Move to bottom" disabled={index === included.length - 1} onClick={() => commit(moveToEdge(includedIds, p.id, 'bottom'), { manual: true })}><MoveIcon kind="bottom" /></button>
                 <Button variant="danger" size="sm" aria-label={`Remove ${p.sku} from the catalog`} onClick={(e) => { focusSearch(includedPanel, e); commit(includedIds.filter((id) => id !== p.id)); }}>Remove</Button>
               </div>
             </article>;

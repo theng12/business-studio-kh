@@ -129,7 +129,9 @@ function TemplateVisual({ template, large = false }) {
 function ProjectCard({ project, onOpen, onDuplicate, onDelete }) {
   const c = project.config || {};
   const count = (c.productIds || []).length;
-  const productLabel = c.selectionMode === 'explicit' ? `${count} product${count === 1 ? '' : 's'}` : 'All active products';
+  const productLabel = c.selectionMode === 'explicit'
+    ? `${count} product${count === 1 ? '' : 's'}`
+    : (c.brandIds?.length || c.categoryIds?.length ? 'Filtered selection' : 'All active products');
   return <article className="card catalog-card">
     <div className="card__media">
       <button type="button" className="catalog-cover-mini" style={{ background: `linear-gradient(145deg, ${c.primaryColor || '#111827'}, ${c.accentColor || '#6366f1'})` }} onClick={onOpen} aria-label={`Open ${project.name}`}>
@@ -137,7 +139,7 @@ function ProjectCard({ project, onOpen, onDuplicate, onDelete }) {
       </button>
     </div>
     <div className="card__body">
-      <span className="card__eyebrow">{c.columns || 3} columns · {c.pageSize || 'A4'}</span>
+      <span className="card__eyebrow">{c.columns || 3} column{(c.columns || 3) === 1 ? '' : 's'} · {c.pageSize || 'A4'}</span>
       <h3 className="card__title">{project.name}</h3>
       <p className="card__meta">{productLabel} · {project.lastExportedAt ? `Exported ${timeAgo(project.lastExportedAt)}` : 'Not exported yet'}</p>
     </div>
@@ -461,7 +463,7 @@ export function CatalogEditor({ projectId, onBack }) {
   </section>;
 }
 
-function useCatalogCollection(rows) {
+function useCatalogCollection(rows, noun = 'catalogs') {
   const [query, setQuery] = useState(''); const [sort, setSort] = useState('recent');
   const [page, setPage] = useState(0); const [size, setSize] = useState(50);
   const filtered = useMemo(() => rows.filter((r) => `${r.name} ${r.description || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
@@ -470,8 +472,8 @@ function useCatalogCollection(rows) {
   useEffect(() => { setPage(0); }, [query, sort, size]);
   useEffect(() => { if (page !== info.currentPage) setPage(info.currentPage); }, [page, info.currentPage]);
   return { rows: filtered.slice(info.pageStart, info.pageEnd), controls: <div className="toolbar catalog-collection-tools">
-    <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or description" aria-label="Search saved catalogs" />
-    <Select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort saved catalogs"><option value="recent">Recently updated</option><option value="name">Name</option></Select>
+    <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or description" aria-label={`Search ${noun}`} />
+    <Select value={sort} onChange={(e) => setSort(e.target.value)} aria-label={`Sort ${noun}`}><option value="recent">Recently updated</option><option value="name">Name</option></Select>
   </div>, pager: <Pagination total={filtered.length} pageStart={info.pageStart} pageEnd={info.pageEnd} currentPage={info.currentPage} maxPage={info.maxPage} pageSize={size} onPageChange={setPage} onPageSizeChange={setSize} /> };
 }
 
@@ -499,7 +501,7 @@ export function CatalogTemplates() {
   function cancelPendingTemplate() { builderIntent.current += 1; clearPendingTemplate?.(); }
   function openBuilder(draft) { cancelPendingTemplate(); setBuilderDraft(draft); }
   const requestSeq = useRef(0);
-  const collection = useCatalogCollection(templates);
+  const collection = useCatalogCollection(templates, 'templates');
 
   const loadTemplates = useCallback(async () => {
     const seq = ++requestSeq.current;
@@ -629,11 +631,11 @@ export function CatalogTemplates() {
                 <TemplateVisual template={{ id: t.config.theme || 'modern', name: t.name, config: t.config }} />
               </div>
               <div className="card__body">
-                <span className="card__eyebrow">{(t.config.columns || 3)} columns · {t.config.pageSize || 'A4'} {t.config.orientation || 'portrait'}</span>
+                <span className="card__eyebrow">{(t.config.columns || 3)} column{(t.config.columns || 3) === 1 ? '' : 's'} · {t.config.pageSize || 'A4'} {t.config.orientation || 'portrait'}</span>
                 <h3 className="card__title">{t.name}</h3>
                 <p className="card__meta">{t.description || 'No description.'}</p>
                 <p className="card__meta">
-                  {(t.config.fields || []).filter((f) => f.visible !== false).length} card fields
+                  {(t.config.fields || []).filter((f) => f.visible !== false).length} card field{(t.config.fields || []).filter((f) => f.visible !== false).length === 1 ? '' : 's'}
                   {' · '}{(t.config.theme || 'modern')} style
                   {t.config.coverEnabled === false ? ' · no cover' : ' · cover page'}
                 </p>
@@ -692,7 +694,7 @@ export function CatalogTemplates() {
         <TemplateVisual template={previewTemplate} large />
         <p>{previewTemplate.description}</p>
         <p><strong>Best for:</strong> {previewTemplate.bestFor}</p>
-        <div className="catalog-template-facts"><span>{previewTemplate.config.columns} columns</span><span>{previewTemplate.config.theme} style</span><span>{previewTemplate.config.fields.length} product fields</span></div>
+        <div className="catalog-template-facts"><span>{previewTemplate.config.columns} column{previewTemplate.config.columns === 1 ? '' : 's'}</span><span>{previewTemplate.config.theme} style</span><span>{previewTemplate.config.fields.length} product field{previewTemplate.config.fields.length === 1 ? '' : 's'}</span></div>
       </div> : null}
     </Modal>
     <Modal
@@ -712,7 +714,7 @@ export function CatalogProjects() {
   const companyId = useAppStore((s) => s.activeCompanyId); const addToast = useAppStore((s) => s.addToast); const setActiveModule = useAppStore((s) => s.setActiveModule);
   const pendingProjectId = useAppStore((s) => s.pendingCatalogProjectId); const clearPendingCatalogNav = useAppStore((s) => s.clearPendingCatalogNav);
   const [projects, setProjects] = useState([]); const [editing, setEditing] = useState(null); const requestSeq = useRef(0);
-  const collection = useCatalogCollection(projects);
+  const collection = useCatalogCollection(projects, 'projects');
   const load = useCallback(async () => {
     const seq = ++requestSeq.current;
     if (!companyId) { setProjects([]); setEditing(null); return; }

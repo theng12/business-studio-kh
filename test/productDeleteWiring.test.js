@@ -40,10 +40,10 @@ test('no product-delete button is left in a row of everyday controls', () => {
 
   // The bulk toolbar: same rule, and it must not be the primary-styled trigger.
   assert.doesNotMatch(LIBRARY, /<Button variant="danger" onClick=\{handleBulkDelete\}/);
-  assert.match(LIBRARY, /label="⋯ More ▾"/);
+  assert.match(LIBRARY, /label="More"/);
   assert.match(LIBRARY, /danger: true,\s*\n\s*onClick: handleBulkDelete/,
     'the bulk delete item must be marked destructive');
-  assert.match(LIBRARY, /variant="default"[\s\S]{0,200}label="⋯ More ▾"/,
+  assert.match(LIBRARY, /variant="default"[\s\S]{0,200}label="More"/,
     'a destructive action must not be dressed as the primary button');
   assert.match(LIBRARY, /searchable=\{false\}/, 'one row does not need a filter field');
 });

@@ -688,24 +688,30 @@ async function deepImageFlow(crawl, photoPath) {
   if (applyOk !== 'ok') {
     crawl.step('deep: apply to this image', false, applyOk);
   } else {
+    // 2026-11-13: a stale "Created …" toast used to end this wait instantly, so
+    // the row was checked before processing finished. Wait for the row itself,
+    // accept only a toast that names processing, and allow a cold @imgly model
+    // download (the crawl profile's HTTP cache makes later runs instant).
     let toast = '';
-    const deadline = Date.now() + 240_000;
+    let processed = [];
+    const deadline = Date.now() + 480_000;
     while (Date.now() < deadline) {
-      toast = await crawl.eval('window.__ui.toastText()');
-      if (toast) break;
-      await delay(500);
+      await delay(1000);
+      processed = await crawl.eval(`(async () => {
+        const cid = await window.api.companies.getActiveId();
+        const ps = await window.api.products.list(cid, {});
+        const p = ps.find((x) => x.sku === ${JSON.stringify(sku)});
+        if (!p) return [];
+        const imgs = await window.api.images.listByProduct(p.id);
+        const list = imgs.images || imgs;
+        return list.map((i) => ({ filename: i.filename, isProcessed: i.isProcessed, processedFilepath: i.processedFilepath }));
+      })()`, true).catch(() => []);
+      const nowToast = await crawl.eval('window.__ui.toastText()');
+      if (/processed/i.test(nowToast)) toast = nowToast;
+      if (Array.isArray(processed) && processed.some((r) => r.isProcessed || r.processedFilepath)) break;
     }
-    await crawl.settle(1500);
+    await crawl.settle(800);
     const crashAfter = await crawl.eval('window.__ui.crash()');
-    const processed = await crawl.eval(`(async () => {
-      const cid = await window.api.companies.getActiveId();
-      const ps = await window.api.products.list(cid, {});
-      const p = ps.find((x) => x.sku === ${JSON.stringify(sku)});
-      if (!p) return { error: 'product vanished' };
-      const imgs = await window.api.images.listByProduct(p.id);
-      const list = imgs.images || imgs;
-      return list.map((i) => ({ filename: i.filename, isProcessed: i.isProcessed, processedFilepath: i.processedFilepath }));
-    })()`, true).catch((err) => ({ error: err.message }));
     await crawl.shot('workspace-after-apply');
     const okToast = /processed/i.test(toast);
     const okRow = Array.isArray(processed) && processed.some((r) => r.isProcessed || r.processedFilepath);
