@@ -1,5 +1,9 @@
 # What's new
 
+## 0.1.107 — 2026-11-12
+
+- NEW — The application menu now has a visible "Quit Media Studio KH" item with ⌘Q, so you never need Activity Monitor to close the app.
+
 ## 0.1.106 — 2026-11-12
 
 - NEW — The bottom of the sidebar now has one pill with the app name and version that opens What's new, a small Check for updates button, and an update button only when a newer version is offered.
