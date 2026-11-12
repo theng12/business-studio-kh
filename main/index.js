@@ -25,6 +25,15 @@ const fs = require('node:fs');
 // Must run before app.whenReady().
 app.setName('Media Studio KH');
 
+// Owner 2026-11-12: uninstall cleanup runs headlessly from the bundle itself —
+// clear this app's login item, then exit without a window. The uninstall script
+// calls this before it moves the bundle out of /Applications.
+if (process.argv.includes('--clear-login-item')) {
+  app.setLoginItemSettings({ openAtLogin: false });
+  logEvent('uninstall:login-item-cleared');
+  app.exit(0);
+}
+
 // Owner 2026-11-12: one copy per Mac. A second launch hands over to the copy
 // already running instead of racing it for the data folder and the server port.
 if (!app.requestSingleInstanceLock()) {
