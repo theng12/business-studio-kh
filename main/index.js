@@ -248,7 +248,14 @@ function createWindow() {
     },
   });
 
+  // Owner 2026-11-12 / Developer: hidden runs (tests, acceptance) pass --hidden
+  // so the window is created and driven over CDP but never shown or focused.
+  const HIDDEN_RUN = process.argv.includes('--hidden');
   mainWindow.once('ready-to-show', () => {
+    if (HIDDEN_RUN) {
+      logEvent('window:hidden-run');
+      return;
+    }
     mainWindow.show();
     logEvent('window:shown');
   });
