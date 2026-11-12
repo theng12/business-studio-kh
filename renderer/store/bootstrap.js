@@ -230,7 +230,9 @@ export function createBootstrapSlice(set, get) {
       const platform = platformR.status === 'fulfilled' ? platformR.value : null;
       const activeId = activeIdR.status === 'fulfilled' ? activeIdR.value : null;
       const settings = settingsR.status === 'fulfilled' ? settingsR.value : null;
-      const theme = settings?.theme ?? 'system';
+      // Owner 2026-11-12: three appearance choices; a stored 'default' is System.
+      const storedTheme = settings?.theme;
+      const theme = storedTheme === 'default' ? 'system' : (storedTheme ?? 'system');
       applyTheme(theme);
       set({
         appVersion: version,

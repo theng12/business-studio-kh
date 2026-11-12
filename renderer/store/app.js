@@ -117,7 +117,10 @@ export function createAppSlice(set, _get) {
     /* ─── Theme ─── */
 
     async setTheme(theme) {
-      const next = ['light', 'dark', 'system', 'default'].includes(theme) ? theme : 'system';
+      // Owner 2026-11-12: three choices only; a legacy 'default' reads as System.
+      const next = ['light', 'dark', 'system'].includes(theme) || theme === 'default'
+        ? (theme === 'default' ? 'system' : theme)
+        : 'system';
       applyTheme(next);
       set({ theme: next });
       try { await window.api.settings.setMany({ theme: next, themeExplicit: true }); }
