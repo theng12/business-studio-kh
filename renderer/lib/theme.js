@@ -8,6 +8,9 @@ function setAttr(theme) {
 }
 
 export function applyTheme(themePref) {
+  // Owner 2026-11-12: Appearance is System | Light | Dark; a stored 'default'
+  // from 0.1.106 behaves as System.
+  if (themePref === 'default') themePref = 'system';
   // Detach any previous system listener.
   if (cleanupSystemListener) {
     cleanupSystemListener();

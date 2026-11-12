@@ -34,3 +34,18 @@ test('migration keeps dark and system preferences', () => {
     assert.equal(config.migrateThemePreference({ theme }).theme, theme);
   }
 });
+
+test('a stored default maps to system on read (owner 2026-11-12)', () => {
+  assert.equal(config.migrateThemePreference({ theme: 'default' }).theme, 'system');
+  // Also when the one-time Light migration already ran.
+  assert.equal(config.migrateThemePreference({ theme: 'default', themeMigrated: true }).theme, 'system');
+  assert.equal(config.migrateThemePreference({ theme: 'default', themeExplicit: true, themeMigrated: true }).theme, 'system');
+});
+
+test('Settings offers exactly System, Light and Dark', () => {
+  const fs = require('node:fs');
+  const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'renderer', 'modules', 'Settings', 'index.jsx'), 'utf8');
+  const block = source.slice(source.indexOf('function ThemeSegment'), source.indexOf('function SettingRow'));
+  assert.ok(block.includes("value: 'system'") && block.includes("value: 'light'") && block.includes("value: 'dark'"));
+  assert.ok(!block.includes("'default'"), 'the Default option must be gone');
+});

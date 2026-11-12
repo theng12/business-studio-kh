@@ -1002,7 +1002,6 @@ function ThemeSegment() {
     { value: 'system',  label: 'System' },
     { value: 'light',   label: 'Light' },
     { value: 'dark',    label: 'Dark' },
-    { value: 'default', label: 'Default' },
   ];
   return (
     <div className="segments" style={{ alignSelf: 'flex-start' }}>

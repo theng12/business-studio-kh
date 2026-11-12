@@ -140,12 +140,14 @@ function ensureDir(dir) {
 }
 
 function migrateThemePreference(config) {
-  if (config.themeMigrated) return config;
-  return {
-    ...config,
-    ...(config.theme === 'light' && config.themeExplicit !== true ? { theme: 'system' } : {}),
-    themeMigrated: true,
-  };
+  // 2026-11-12: the owner settled Appearance on System | Light | Dark. A value
+  // saved as 'default' by 0.1.106 maps to 'system' on read, whenever it was written.
+  let theme = config.theme === 'default' ? 'system' : config.theme;
+  if (!config.themeMigrated && theme === 'light' && config.themeExplicit !== true) theme = 'system';
+  if (theme === config.theme && config.themeMigrated) return config;
+  const next = { ...config, themeMigrated: true };
+  if (theme !== config.theme) next.theme = theme;
+  return next;
 }
 
 function loadConfig() {
