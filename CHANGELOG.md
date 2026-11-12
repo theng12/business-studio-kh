@@ -3,6 +3,7 @@
 ## 0.1.107 — 2026-11-12
 
 - NEW — The application menu now has a visible "Quit Business Studio KH" item with ⌘Q, so you never need Activity Monitor to close the app.
+- POLISH — Appearance now offers exactly System, Light and Dark. If you had picked Default in 0.1.106 it now follows System; System remains the starting choice.
 
 ## 0.1.106 — 2026-11-12
 
