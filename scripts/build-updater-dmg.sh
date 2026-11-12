@@ -19,9 +19,10 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Con
 ditto "$APP" "$STAGE/Media Studio KH.app"
 ln -s /Applications "$STAGE/Applications"
 if [ -e "$DMG" ]; then
-  # Owner 2026-11-12: superseded installers go straight to the macOS Trash.
-  mkdir -p "$HOME/.Trash"
-  mv "$DMG" "$HOME/.Trash/$(basename "$DMG" .dmg) $(date +%Y-%m-%d %H-%M-%S).dmg"
+  # Owner 2026-11-12: a superseded build rotates into the app's own _trash.
+  ROTATE="_trash/$(date +%Y-%m-%d) retention"
+  mkdir -p "$ROTATE"
+  mv "$DMG" "$ROTATE/$(basename "$DMG" .dmg) $(date +%H-%M-%S).dmg"
 fi
 hdiutil create -volname "Media Studio KH $VERSION" -srcfolder "$STAGE" -format UDZO "$DMG"
 codesign --sign - "$DMG"
@@ -30,6 +31,6 @@ hdiutil verify "$DMG"
 mkdir -p _trash/updater-staging
 mv "$STAGE" "_trash/updater-staging/$(basename "$STAGE")"
 # Owner 2026-11-12: retention is automatic — keep the newest two installers,
-# move anything older straight to the macOS Trash (recoverable, no hand step).
+# move anything older to the app's own _trash (guards and receipt in the script).
 node scripts/retain-dist.js
 printf 'Built %s (com.terranash.mediastudiokh, %s)\n' "$DMG" "$VERSION"

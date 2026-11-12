@@ -512,9 +512,13 @@ History: x64 dropped at 0.1.9, both built 2026-09-22 to 0.1.83, arm64 only since
 2026-11-10 manual flow).** Retention is part of packaging: both build paths
 (`npm run dist` via `postdist`, and `scripts/build-updater-dmg.sh`) call
 `scripts/retain-dist.js`, which keeps the two newest versioned installers in
-`dist/` and moves anything older **straight to the macOS Trash** (`~/.Trash`,
-recoverable) — no hand step, no `_trash` staging for installers. A file that
-cannot be moved (mounted, in use) is reported and left in place. The
+`dist/` and moves anything older automatically into the app's own
+`_trash/<date> retention/` — no hand step. Guards: never move a version named by
+`release.json`, `previous-release.json`, the ledger or a running/queued job;
+never move the runtime a loaded launchd job is running; never move a mounted or
+open file (left in place and reported). Every move is logged with its hash,
+version and destination in `dist/.retention-receipt.json`; `_trash` is for
+rotation only. The
 `verify-macos-signing.py --retain-dist` flow and the shared portfolio helper are
 no longer part of the normal release; legacy `dmgs:prune` stays forbidden.
 `test/retainDist.test.js` pins the plan and the move.
