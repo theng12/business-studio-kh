@@ -40,6 +40,15 @@ test('the application menu carries a visible Quit with the app name and ⌘Q', (
   assert.equal(quit.accelerator, 'CommandOrControl+Q');
 });
 
+test('the application menu can bring a closed window back', () => {
+  let shown = 0;
+  const menu = appMenu.appMenuTemplate('Media Studio KH', () => { shown += 1; });
+  const item = menu[0].submenu.find((entry) => entry.label === 'Show Media Studio KH Window');
+  assert.ok(item, 'no Show Window item');
+  item.click();
+  assert.equal(shown, 1);
+});
+
 test('the menu keeps the standard editing and window roles', () => {
   const roles = appMenu.appMenuTemplate('Media Studio KH').slice(1).map((item) => item.role);
   assert.deepEqual(roles, ['editMenu', 'viewMenu', 'windowMenu']);
