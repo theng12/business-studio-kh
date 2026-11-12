@@ -13,6 +13,7 @@ if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '8';
 
 const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, protocol, session, shell } = require('electron');
 const { installAppMenu } = require('./appMenu');
+const { secondInstanceMessage, portBusyMessage } = require('./util/startupGuards');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -23,6 +24,13 @@ const fs = require('node:fs');
 // ~/Library/Application Support that don't share data or config.
 // Must run before app.whenReady().
 app.setName('Business Studio KH');
+
+// Owner 2026-11-12: one copy per Mac. A second launch hands over to the copy
+// already running instead of racing it for the data folder and the server port.
+if (!app.requestSingleInstanceLock()) {
+  logEvent('second-instance:exit', secondInstanceMessage());
+  app.exit(0);
+}
 
 const {
   isPathWithinRoot,
@@ -461,6 +469,14 @@ function handleFirstLaunch(config) {
 
 app.whenReady().then(() => {
   logEvent('app:ready');
+  // The copy already running gets the second launch: bring it forward.
+  app.on('second-instance', () => {
+    logEvent('second-instance:focus', secondInstanceMessage());
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
   // A visible "Quit <App Name>" with ⌘Q in the application menu (kiosk mode
   // replaces this with its own PIN-guarded menu later).
   installAppMenu();
@@ -637,7 +653,7 @@ app.whenReady().then(() => {
         logEvent('server:listening', `port=${info.port} addresses=${info.addresses.map((a) => a.ip).join(',')}`);
       })
       .catch((err) => {
-        logEvent('server:failed', err.message);
+        logEvent('server:failed', err.code === 'EADDRINUSE' ? portBusyMessage(config.serverPort || 13180) : err.message);
       });
   }
 
@@ -739,7 +755,20 @@ app.whenReady().then(() => {
   app.exit(1);
 });
 
-app.on('before-quit', () => logEvent('before-quit'));
+app.on('before-quit', (event) => {
+  logEvent('before-quit');
+  // Owner 2026-11-12: quit must release everything — stop the server so its
+  // port and sockets are freed before the process goes away.
+  try {
+    const server = require('./server');
+    if (server.getStatus().running) {
+      event.preventDefault();
+      server.stopServer().finally(() => app.exit(0));
+    }
+  } catch (err) {
+    logEvent('before-quit:stop-failed', err.message);
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
