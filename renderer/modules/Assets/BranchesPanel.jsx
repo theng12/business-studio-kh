@@ -63,7 +63,7 @@ export function BranchesPanel() {
       </div>
       {!caps.canBranches ? <p className="muted">Adding or changing branches needs the “Manage system” permission.</p> : null}
       {!branches ? <p className="muted">Loading…</p> : !branches.length ? (
-        <EmptyState title="No branches yet" body="Add the head office and each shop, farm or workshop." action={caps.canBranches ? <Button variant="primary" onClick={() => setEditing({})}>+ New branch</Button> : null} />
+        <EmptyState title="No branches yet" body="Add the head office and each shop, farm or workshop." action={caps.canBranches ? <Button onClick={() => setEditing({})}>+ New branch</Button> : null} />
       ) : (
         <div className="data-table-wrap">
           <table className="data-table">

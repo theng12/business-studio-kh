@@ -359,7 +359,7 @@ export function Pagination({
           onClick={() => onPageChange(0)}
           aria-label="First page"
           title="First page"
-        >«</button>
+        ><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M8 2.5 4.5 6 8 9.5M5 2.5 1.5 6 5 9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg></button>
         <button
           type="button"
           className="pagination__btn"
@@ -384,7 +384,7 @@ export function Pagination({
           onClick={() => onPageChange(maxPage)}
           aria-label="Last page"
           title="Last page"
-        >»</button>
+        ><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4 2.5 7.5 6 4 9.5M7 2.5 10.5 6 7 9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg></button>
       </div>
     </div>
   );

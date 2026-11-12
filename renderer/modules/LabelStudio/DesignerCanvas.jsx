@@ -466,7 +466,9 @@ export function DesignerCanvas({
           <button type="button" onClick={() => onZoomChange(Math.max(0.25, Math.round(scale * 100 - 10) / 100))} title="Zoom out">−</button>
           <button type="button" onClick={() => onZoomChange(1)} className={scale === 1 && zoom !== 'fit' ? 'is-active' : ''} title="100%">100%</button>
           <button type="button" onClick={() => onZoomChange(Math.min(8, Math.round(scale * 100 + 10) / 100))} title="Zoom in">+</button>
-          <span className="ld-bar__percent">{zoom === 'fit' ? 'fit' : `${Math.round(scale * 100)}%`}</span>
+          {/* The Fit button already shows its active state; the readout only
+              appears once a real zoom level is in force. */}
+          {zoom === 'fit' ? null : <span className="ld-bar__percent">{`${Math.round(scale * 100)}%`}</span>}
           <button type="button" onClick={() => onSnapChange(!snap)} className={snap ? 'is-active' : ''} title="Snap to whole millimetres and show the grid">Snap {snap ? 'on' : 'off'}</button>
           <button
             type="button"

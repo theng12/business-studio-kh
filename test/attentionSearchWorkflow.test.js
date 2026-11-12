@@ -47,7 +47,7 @@ test('company queues clear conflicts; clearing attention keeps user refinements;
   const slice = load('renderer/store/products.js', { './productsDefaults.js': { DEFAULT_FILTERS: defaults, DEFAULT_SORT: {}, loadProductSort: () => ({}), saveProductSort() {} } }).createProductsSlice;
   const set = (patch) => Object.assign(state, typeof patch === 'function' ? patch(state) : patch);
   state = { activeCompanyId: 'active', addToast() {}, ...slice(set, () => state) };
-  global.window = { api: { products: { list: async (companyId, filters) => { requests.push({ companyId, filters }); return [{ id: filters.attentionFilter ? 'missing' : 'full' }]; } } } };
+  global.window = { addEventListener() {}, removeEventListener() {}, api: { products: { list: async (companyId, filters) => { requests.push({ companyId, filters }); return [{ id: filters.attentionFilter ? 'missing' : 'full' }]; } } } };
   state.productFilters = { ...defaults, search: 'wrong', brandIds: ['wrong'], hasImages: 'with', status: 'archived', processStatus: 'exported' };
   state.page = 7;
   await state.setCompanyAttentionFilter('missingBarcode');
@@ -99,7 +99,7 @@ test('palette ignores obsolete companies and closed searches, and opens saved re
   const state = { activeCompanyId: 'a', openLibraryProduct: async (...args) => { opened.push(['product', ...args]); return allowNavigation; }, openCatalogProject: async (...args) => { opened.push(['project', ...args]); return allowNavigation; }, openCatalogTemplate: async (...args) => { opened.push(['template', ...args]); return allowNavigation; } };
   const useAppStore = (select) => select(state); useAppStore.getState = () => state;
   const Component = load('renderer/components/SearchPalette.jsx', { react: hook.React, 'react/jsx-runtime': hook.runtime, '../store/index.js': { useAppStore }, './Sidebar.jsx': { useUserCaps: () => caps }, '../lib/capabilities.js': { hasCap: (values, cap) => values.includes(cap) }, '../lib/modules.js': realModules() }, timers).SearchPalette;
-  global.window = { api: { search: { global: (...args) => { const gate = deferred(); requests.push({ args, gate }); return gate.promise; } } } };
+  global.window = { addEventListener() {}, removeEventListener() {}, api: { search: { global: (...args) => { const gate = deferred(); requests.push({ args, gate }); return gate.promise; } } } };
   const props = { open: true, onClose: () => { closed++; } }; let output;
   const render = () => { output = hook.render(Component, props); };
   const input = () => findAll(output, (n) => n.type === 'input')[0];

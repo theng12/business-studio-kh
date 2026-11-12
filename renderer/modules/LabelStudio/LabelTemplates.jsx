@@ -533,7 +533,7 @@ export function LabelTemplates() {
 
         <div className="designer-toolbar">
           <div className="designer-toolbar__brand">
-            <Input value={draft.name} onChange={(e) => change({ name: e.target.value })} />
+            <Input aria-label="Template name" value={draft.name} onChange={(e) => change({ name: e.target.value })} />
           </div>
           <div className="designer-toolbar__tools">
             {TYPES.map(([type, label]) => (
@@ -557,7 +557,7 @@ export function LabelTemplates() {
             <span>×</span>
             <NumberField aria-label="Label height (mm)" min={5} max={500} step="0.5" value={draft.heightMm} onCommit={(v) => change({ heightMm: v })} />
             <span>mm</span>
-            <Input type="color" value={draft.backgroundColor} onChange={(e) => change({ backgroundColor: e.target.value })} />
+            <Input type="color" aria-label="Label background colour" title="Label background colour" value={draft.backgroundColor} onChange={(e) => change({ backgroundColor: e.target.value })} />
           </div>
         </div>
 
@@ -580,11 +580,11 @@ export function LabelTemplates() {
             </button>
           ))}
           <span className="ld-align__sep" />
-          <button type="button" disabled={selectedIds.length < 3} onClick={() => distributeSelection('x')}>Spread ↔</button>
-          <button type="button" disabled={selectedIds.length < 3} onClick={() => distributeSelection('y')}>Spread ↕</button>
+          <button type="button" disabled={selectedIds.length < 3} onClick={() => distributeSelection('x')} title="Space the selected elements evenly across">Spread horizontally</button>
+          <button type="button" disabled={selectedIds.length < 3} onClick={() => distributeSelection('y')} title="Space the selected elements evenly down">Spread vertically</button>
           <span className="ld-align__sep" />
           <button type="button" disabled={!selectedIds.length} onClick={() => duplicateElement()}>Duplicate</button>
-          <button type="button" disabled={!selectedIds.length} onClick={() => removeElements()}>Delete</button>
+          <button type="button" className="ld-align__delete" disabled={!selectedIds.length} onClick={() => removeElements()}>Delete</button>
         </div>
 
         <div className="designer-shell designer-shell--v2">

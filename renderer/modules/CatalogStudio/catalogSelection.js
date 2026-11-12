@@ -27,10 +27,16 @@ export function catalogIdLists(config, products) {
   const c = config || {};
   const list = Array.isArray(products) ? products : [];
   const active = list.filter((p) => p && p.status !== 'inactive');
+  // The saved brand/category scope applies to BOTH modes, exactly as the print
+  // renderer does (buildCatalogHtml). 2026-11-13 acceptance: an "all products"
+  // catalog scoped to one brand said "113 included" while the preview printed 6.
+  const inScope = active.filter((p) => (!c.brandIds?.length || c.brandIds.includes(p.brandId))
+    && (!c.categoryIds?.length || c.categoryIds.includes(p.categoryId)));
   const activeIds = new Set(active.map((p) => p.id));
   const explicit = c.selectionMode === 'explicit' || (Array.isArray(c.productIds) && c.productIds.length > 0);
   const storedIds = explicit && Array.isArray(c.productIds) ? c.productIds : [];
-  const includedIds = explicit ? storedIds.filter((id) => activeIds.has(id)) : active.map((p) => p.id);
+  const inScopeIds = new Set(inScope.map((p) => p.id));
+  const includedIds = explicit ? storedIds.filter((id) => inScopeIds.has(id)) : inScope.map((p) => p.id);
   const hiddenIds = storedIds.filter((id) => !activeIds.has(id));
   return { storedIds, includedIds, hiddenIds };
 }
