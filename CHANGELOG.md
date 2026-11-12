@@ -1,5 +1,15 @@
 # What's new
 
+## 0.1.106 — 2026-11-12
+
+- NEW — The bottom of the sidebar now has one pill with the app name and version that opens What's new, a small Check for updates button, and an update button only when a newer version is offered.
+- NEW — Settings → Appearance offers System, Light, Dark and Default. New setups follow the Mac's appearance; an existing Light setting moves to System once, and you can change it any time.
+- NEW — Settings → This Mac shows the connection and storage details that used to sit in the sidebar footer.
+- POLISH — The sidebar is a little wider so the footer controls fit on one line.
+- POLISH — The packaged helper processes now show the app's name and icon.
+- Internal — Check for updates reads the signed Update Studio feed, verifies it and only opens the updater; it never downloads or installs anything itself.
+- Internal — Messages stay at bottom-centre, a deliberate choice for this app.
+
 ## 0.1.105 — 2026-11-11
 
 - FIX — A packer account no longer sees product prices when it opens the desktop product list. The packing screen never showed prices; now the server hides them there too.
