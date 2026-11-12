@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { appImageSrc } from '../lib/imageUrl.js';
 import { exportSpinVideo } from '../lib/spinExport.js';
+import { useAppStore } from '../store/index.js';
 
 /**
  * Full-screen image preview overlay. Shows one image at a time with
@@ -251,7 +252,7 @@ export function Lightbox({ open, onClose, images, startIndex = 0, title, product
       setPendingFlipV(false);
     } catch (err) {
       console.error('[lightbox] flip failed:', err);
-      window.alert(`Flip failed: ${err.message}`);
+      useAppStore.getState().addToast(`Flip failed: ${err.message}`, 'error');
     } finally {
       setFlipState('idle');
     }
@@ -315,7 +316,7 @@ export function Lightbox({ open, onClose, images, startIndex = 0, title, product
       // Defer revoke a tick so Chromium can pick the blob up before we drop it.
       setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (err) {
-      window.alert(`Spin export failed: ${err.message}`);
+      useAppStore.getState().addToast(`Spin export failed: ${err.message}`, 'error');
     } finally {
       setExportState(null);
     }
