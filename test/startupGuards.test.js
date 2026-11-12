@@ -38,3 +38,11 @@ test('a hidden run never shows or focuses a window', () => {
   assert.match(block, /if \(HIDDEN_RUN\)/);
   assert.match(block, /window:hidden-run/);
 });
+
+test('the menu-bar item offers Show and Quit, and a click opens its menu', () => {
+  const tray = fs.readFileSync(path.join(__dirname, '..', 'main', 'tray.js'), 'utf8');
+  assert.match(tray, /Show \$\{app\.getName\(\)/);
+  assert.match(tray, /role: 'quit'/);
+  assert.match(tray, /tray\.on\('click', \(\) => tray\.popUpContextMenu\(\)\)/);
+  assert.match(INDEX, /installTray\(\{ showWindow: showMainWindow/);
+});

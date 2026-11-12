@@ -13,6 +13,7 @@ if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '8';
 
 const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, protocol, session, shell } = require('electron');
 const { installAppMenu } = require('./appMenu');
+const { installTray, destroyTray } = require('./tray');
 const { secondInstanceMessage, portBusyMessage } = require('./util/startupGuards');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -495,7 +496,20 @@ app.whenReady().then(() => {
   });
   // A visible "Quit <App Name>" with ⌘Q in the application menu (kiosk mode
   // replaces this with its own PIN-guarded menu later).
-  installAppMenu();
+  // Fleet rule 2026-11-12: a closed window can always be brought back — from
+  // the application menu and from the menu-bar item — and a click rebuilds the
+  // window when it is gone instead of doing nothing.
+  const showMainWindow = () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      return;
+    }
+    createWindow();
+  };
+  installAppMenu(showMainWindow);
+  installTray({ showWindow: showMainWindow, log: logEvent });
 
   // v0.15.1: initialise the event bus before anything that might
   // call broadcast() (queueRunner, IPC writes, server WS handler).
@@ -773,6 +787,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', (event) => {
   logEvent('before-quit');
+  destroyTray();
   // Owner 2026-11-12: quit must release everything — stop the server so its
   // port and sockets are freed before the process goes away.
   try {
