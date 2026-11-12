@@ -12,6 +12,7 @@
 if (!process.env.UV_THREADPOOL_SIZE) process.env.UV_THREADPOOL_SIZE = '8';
 
 const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, protocol, session, shell } = require('electron');
+const { installAppMenu } = require('./appMenu');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -460,6 +461,9 @@ function handleFirstLaunch(config) {
 
 app.whenReady().then(() => {
   logEvent('app:ready');
+  // A visible "Quit <App Name>" with ⌘Q in the application menu (kiosk mode
+  // replaces this with its own PIN-guarded menu later).
+  installAppMenu();
 
   // v0.15.1: initialise the event bus before anything that might
   // call broadcast() (queueRunner, IPC writes, server WS handler).
