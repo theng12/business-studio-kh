@@ -18,6 +18,9 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 const APP = read('renderer/App.jsx');
 const SIDEBAR = read('renderer/components/Sidebar.jsx');
+// 2026-11-12: the connection chips moved from the sidebar footer into
+// Settings -> This Mac, so the chip lives in ConnectionStatus.jsx.
+const CONNECTION_STATUS = read('renderer/components/ConnectionStatus.jsx');
 const BOOTSTRAP = read('renderer/store/bootstrap.js');
 const TEMPLATE_EDITOR = read('renderer/modules/OverlayStudio/TemplateEditor.jsx');
 const WORKSPACE = read('renderer/modules/ImageWorkspace/index.jsx');
@@ -58,7 +61,7 @@ test('bootstrap drops connection pushes that only moved lastOkAt', () => {
 });
 
 test('the Sidebar network chip pauses its 1 s tick while the window is hidden', () => {
-  const chip = fnBody(SIDEBAR, 'NetworkChip');
+  const chip = fnBody(CONNECTION_STATUS, 'NetworkChip');
   assert.match(chip, /visibilitychange/, 'the chip no longer listens for visibility changes');
   assert.match(chip, /document\.visibilityState === 'hidden'/, 'the chip does not check for a hidden window');
 });

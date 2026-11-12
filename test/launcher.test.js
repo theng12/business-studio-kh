@@ -222,7 +222,7 @@ test('Settings is one click away on every screen, and Home on every screen', () 
   assert.match(sidebar, /currentModule\?\.id !== 'system' \? \(\s*<nav className="sidebar__nav sidebar__nav--pinned"/);
   assert.match(sidebar, /\{renderPage\(getPage\('settings'\)\)\}/);
   assert.match(sidebar, /className=\{`sidebar__item sidebar__home/);
-  assert.match(sidebar, /<span>What's new<\/span>/, 'What\'s new stays in the footer (§3)');
+  assert.match(sidebar, /className="sidebar__version-pill" onClick=\{openWhatsNew\}/, 'the version + What\'s new pill stays in the footer (§3)');
   assert.match(sidebar, /<span>Support this app<\/span>/, 'Support stays in the footer (§4)');
   assert.doesNotMatch(sidebar, /Sidebar\.closedSections/, 'the old collapsible-section state is gone');
 });
