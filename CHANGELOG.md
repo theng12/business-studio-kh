@@ -1,5 +1,12 @@
 # What's new
 
+## 0.1.108 — 2026-11-12
+
+- NEW — Only one copy of Media Studio KH runs at a time. Opening it again brings the running window forward.
+- NEW — If the server port is already taken, the app says which port and how to fix it instead of failing quietly.
+- NEW — Quitting releases the server port and closes the app's connections cleanly.
+- NEW — Uninstalling removes the app, its helper and its login item, and keeps your data.
+
 ## 0.1.107 — 2026-11-12
 
 - NEW — The application menu now has a visible "Quit Media Studio KH" item with ⌘Q, so you never need Activity Monitor to close the app.
