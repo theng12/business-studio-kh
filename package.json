@@ -14,7 +14,7 @@
     "predist": "npm run webclient:bundle && npm run install:sharp",
     "dist": "vite build && electron-builder",
     "dist:updater": "bash scripts/build-updater-dmg.sh",
-    "postdist": "npm run native:host",
+    "postdist": "npm run native:host && node scripts/retain-dist.js",
     "dist:arm64": "vite build && electron-builder --arm64",
     "dist:x64": "vite build && electron-builder --x64",
     "test": "node --test 'test/**/*.test.js'",

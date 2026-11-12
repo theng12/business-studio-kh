@@ -19,8 +19,9 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Con
 ditto "$APP" "$STAGE/Business Studio KH.app"
 ln -s /Applications "$STAGE/Applications"
 if [ -e "$DMG" ]; then
-  mkdir -p _trash/updater-dmgs
-  mv "$DMG" "_trash/updater-dmgs/$(basename "$DMG").$(date +%s)"
+  # Owner 2026-11-12: superseded installers go straight to the macOS Trash.
+  mkdir -p "$HOME/.Trash"
+  mv "$DMG" "$HOME/.Trash/$(basename "$DMG" .dmg) $(date +%Y-%m-%d %H-%M-%S).dmg"
 fi
 hdiutil create -volname "Business Studio KH $VERSION" -srcfolder "$STAGE" -format UDZO "$DMG"
 codesign --sign - "$DMG"
@@ -28,5 +29,7 @@ codesign --verify --strict "$DMG"
 hdiutil verify "$DMG"
 mkdir -p _trash/updater-staging
 mv "$STAGE" "_trash/updater-staging/$(basename "$STAGE")"
-# Retention runs only after installed acceptance (verify-macos-signing.py --retain-dist).
+# Owner 2026-11-12: retention is automatic — keep the newest two installers,
+# move anything older straight to the macOS Trash (recoverable, no hand step).
+node scripts/retain-dist.js
 printf 'Built %s (com.terranash.mediastudiokh, %s)\n' "$DMG" "$VERSION"

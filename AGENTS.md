@@ -508,15 +508,16 @@ History: x64 dropped at 0.1.9, both built 2026-09-22 to 0.1.83, arm64 only since
 - Do NOT use `arch: ["universal"]` — a universal binary bundles both slices into
   one app, roughly doubling the file size.
 
-**Keep the latest two installed-and-verified releases (owner, 2026-11-10).** Building
-never prunes rollback installers. After normal installed acceptance, use the explicit
-`verify-macos-signing.py --retain-dist` flow in `SIGNING.md` with trusted exact-version
-pins and its matching packaged receipt. The shared portfolio helper owns retention;
-legacy `dmgs:prune` must not be used in the release flow or to bypass acceptance.
-Only matching ledger-owned obsolete files may retire recoverably. Preserve the current
-pair while acceptance or the canonical `_trash` compatibility review is incomplete.
-Synthetic acceptance, preservation and helper-failure checks are in
-`test/test_macos_retention.py`; record the tested shared-helper hash with their receipt.
+**Keep the latest two releases, automatically (owner, 2026-11-12; supersedes the
+2026-11-10 manual flow).** Retention is part of packaging: both build paths
+(`npm run dist` via `postdist`, and `scripts/build-updater-dmg.sh`) call
+`scripts/retain-dist.js`, which keeps the two newest versioned installers in
+`dist/` and moves anything older **straight to the macOS Trash** (`~/.Trash`,
+recoverable) — no hand step, no `_trash` staging for installers. A file that
+cannot be moved (mounted, in use) is reported and left in place. The
+`verify-macos-signing.py --retain-dist` flow and the shared portfolio helper are
+no longer part of the normal release; legacy `dmgs:prune` stays forbidden.
+`test/retainDist.test.js` pins the plan and the move.
 
 **KH Updater packaging (owner, verified 2026-11-02; signing 2026-11-08):** `npm run dist:updater` builds one arm64 app signed by electron-builder with the shared KH Studio Local Signing identity (`SIGNING.md`; never ad-hoc or `--deep` signing), ad-hoc signs the DMG, verifies both, and never publishes. The stable bundle ID is `com.terranash.mediastudiokh`. Feed publication belongs to the KH Updater lead; no in-app updater is needed.
 
