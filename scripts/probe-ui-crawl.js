@@ -3300,7 +3300,8 @@ async function main() {
   /* 1 ── shell is alive */
   crawl.phase = 'shell';
   await crawl.waitFor(`window.__ui.count('.sidebar__item') > 5`, 20_000, 'sidebar to render');
-  const version = await crawl.eval(`window.__ui.textOf(document.querySelector('.sidebar__version'))`);
+  // 0.1.106: the footer version text became the version + What's new pill.
+  const version = await crawl.eval(`window.__ui.textOf(document.querySelector('.sidebar__version-pill .sidebar__pill-version'))`);
   await crawl.step('shell renders', true, `version chip ${version || '(missing)'}`);
   if (!version || version === 'v0.0.0') crawl.step('version chip is real', false, `got ${version}`);
 
@@ -3457,7 +3458,8 @@ async function main() {
 
   /* 6 ── What's new: Esc and backdrop dismissal (§2) */
   crawl.phase = "what's new";
-  const openedWN = await crawl.eval(`window.__ui.click('.sidebar__footer-btn', "What's new")`);
+  // 0.1.106: What's new opens from the version pill, not a text footer button.
+  const openedWN = await crawl.eval(`(() => { const p = document.querySelector('.sidebar__version-pill'); if (!p) return 'MISS pill'; p.click(); return 'ok'; })()`);
   if (openedWN !== 'ok') {
     crawl.step("What's new opens", false, openedWN);
   } else {
@@ -3479,7 +3481,7 @@ async function main() {
     }
     // and the backdrop path, from a fresh open
     if (closed) {
-      await crawl.eval(`window.__ui.click('.sidebar__footer-btn', "What's new")`);
+      await crawl.eval(`(() => { const p = document.querySelector('.sidebar__version-pill'); if (p) p.click(); return 'ok'; })()`);
       await crawl.waitFor(`window.__ui.modalCount() > 0`, 4000, "What's new modal (2nd)");
       await crawl.eval(`window.__ui.mouseDown('.modal-backdrop')`);
       await crawl.settle(300);
