@@ -31,3 +31,10 @@ test('quit stops the server before the process goes away', () => {
 test('a busy port reports the plain sentence, not a raw error', () => {
   assert.match(INDEX, /EADDRINUSE' \? portBusyMessage/);
 });
+
+test('a hidden run never shows or focuses a window', () => {
+  assert.match(INDEX, /process\.argv\.includes\('--hidden'\)/);
+  const block = INDEX.slice(INDEX.indexOf("mainWindow.once('ready-to-show'"), INDEX.indexOf("mainWindow.webContents.on('render-process-gone'"));
+  assert.match(block, /if \(HIDDEN_RUN\)/);
+  assert.match(block, /window:hidden-run/);
+});
