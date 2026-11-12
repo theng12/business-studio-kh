@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Owner rule 2026-11-12 (corrected): retention is automatic. After a build,
-// dist/ keeps the newest two versioned installers and anything older goes to
+// dist/ keeps the newest three versioned installers and anything older goes to
 // the app's own `_trash/<date> retention/` — recoverable, no hand step.
 //
 // Guards, per the owner: never move a version that `release.json`,
@@ -63,7 +63,7 @@ function isBusy(file) {
   try { return execFileSync('/usr/bin/hdiutil', ['info'], { encoding: 'utf8' }).includes(file); } catch { return false; }
 }
 
-function planRetention(names, keep = 2, protectedSet = new Set()) {
+function planRetention(names, keep = 3, protectedSet = new Set()) {
   const installers = names.filter((name) => parseVersion(name)).sort((a, b) => compare(b, a));
   const kept = installers.slice(0, keep);
   const retired = installers.slice(keep).filter((name) => !protectedSet.has(parseVersion(name)));
@@ -88,7 +88,7 @@ function retainDist({ distDir, trashDir, log = console.log } = {}) {
   const runtime = launchdRuntimeVersion();
   if (runtime) protectedSet.add(runtime);
 
-  const { kept, retired } = planRetention(fs.readdirSync(distDir), 2, protectedSet);
+  const { kept, retired } = planRetention(fs.readdirSync(distDir), 3, protectedSet);
   const destDir = trashDir || rotationDir(projectDir);
   const moved = [];
   const failed = [];

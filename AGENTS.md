@@ -508,10 +508,10 @@ History: x64 dropped at 0.1.9, both built 2026-09-22 to 0.1.83, arm64 only since
 - Do NOT use `arch: ["universal"]` — a universal binary bundles both slices into
   one app, roughly doubling the file size.
 
-**Keep the latest two releases, automatically (owner, 2026-11-12; supersedes the
-2026-11-10 manual flow).** Retention is part of packaging: both build paths
+**Keep the latest three releases, automatically (owner, 2026-11-12; supersedes the
+2026-11-10 manual flow and the earlier two-version rule).** Retention is part of packaging: both build paths
 (`npm run dist` via `postdist`, and `scripts/build-updater-dmg.sh`) call
-`scripts/retain-dist.js`, which keeps the two newest versioned installers in
+`scripts/retain-dist.js`, which keeps the three newest versioned installers in
 `dist/` and moves anything older automatically into the app's own
 `_trash/<date> retention/` — no hand step. Guards: never move a version named by
 `release.json`, `previous-release.json`, the ledger or a running/queued job;
@@ -521,7 +521,8 @@ version and destination in `dist/.retention-receipt.json`; `_trash` is for
 rotation only. The
 `verify-macos-signing.py --retain-dist` flow and the shared portfolio helper are
 no longer part of the normal release; legacy `dmgs:prune` stays forbidden.
-`test/retainDist.test.js` pins the plan and the move.
+`test/retainDist.test.js` pins the plan and the move. 1301's feed artifacts follow
+the same three-version rule, owned by the Updater lead.
 
 **KH Updater packaging (owner, verified 2026-11-02; signing 2026-11-08):** `npm run dist:updater` builds one arm64 app signed by electron-builder with the shared KH Studio Local Signing identity (`SIGNING.md`; never ad-hoc or `--deep` signing), ad-hoc signs the DMG, verifies both, and never publishes. The stable bundle ID is `com.terranash.mediastudiokh`. Feed publication belongs to the KH Updater lead; no in-app updater is needed.
 
