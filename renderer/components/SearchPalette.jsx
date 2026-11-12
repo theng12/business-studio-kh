@@ -118,6 +118,19 @@ export function SearchPalette({ open, onClose }) {
     queueMicrotask(() => inputRef.current?.focus());
   }, [open]);
 
+  // Owner rule 2026-11-12: Escape closes the palette from anywhere while it is
+  // open — not only when the input happens to hold focus.
+  useEffect(() => {
+    if (!open) return undefined;
+    function onWindowKey(e) {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      onClose?.();
+    }
+    window.addEventListener('keydown', onWindowKey);
+    return () => window.removeEventListener('keydown', onWindowKey);
+  }, [open, onClose]);
+
   // Debounced search.
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
