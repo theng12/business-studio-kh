@@ -153,9 +153,14 @@ export function ImageWorkspace() {
     const generation = activeEditorGenerationRef.current;
     const cropSettings = settings;
     if (destination === 'overwrite') {
-      const ok = window.confirm(
-        'Overwrite the source image with the cropped version?\n\nThis rewrites the original file on disk — there\'s no undo.',
-      );
+      // Owner 2026-11-13: native window.confirm is a silent no-op in the
+      // packaged webview; this is the in-app dialog.
+      const ok = await confirm({
+        title: 'Overwrite the source image?',
+        message: 'This rewrites the original file on disk. There is no undo.',
+        confirmLabel: 'Overwrite',
+        danger: true,
+      });
       if (!ok) return;
     }
     processingRunRef.current = true;
