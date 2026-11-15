@@ -250,8 +250,9 @@ function createWindow() {
   });
 
   // Owner 2026-11-12 / Developer: hidden runs (tests, acceptance) pass --hidden
-  // so the window is created and driven over CDP but never shown or focused.
-  const HIDDEN_RUN = process.argv.includes('--hidden');
+  // (or --test-mode, the name the studio gate asks for) so the window is created
+  // and driven over CDP but never shown or focused.
+  const HIDDEN_RUN = process.argv.includes('--hidden') || process.argv.includes('--test-mode');
   mainWindow.once('ready-to-show', () => {
     if (HIDDEN_RUN) {
       logEvent('window:hidden-run');
@@ -514,6 +515,19 @@ app.whenReady().then(() => {
   // v0.15.1: initialise the event bus before anything that might
   // call broadcast() (queueRunner, IPC writes, server WS handler).
   events.init({ getMainWindow: () => mainWindow });
+
+  /* Update hold (owner 2026-11-15; contract _orchestra/youtube-stack/update-hold/):
+   * the installer POSTs /api/maintenance/hold on loopback before it replaces this
+   * app. Started for every mode — a client or kiosk copy has work to keep too —
+   * and never shows anything. A port already in use is logged and the app carries
+   * on: the installer then refuses to replace a running copy rather than quit it
+   * mid-job (main/updateHold.js). */
+  try {
+    require('./updateHold').setLog((message) => logEvent('update-hold', message));
+    require('./updateHold').startListener();
+  } catch (err) {
+    logEvent('update-hold:failed', err.message);
+  }
 
   let config = loadConfig();
   logEvent('config:loaded', `dataDir=${config.dataDir} mode=${config.mode}`);

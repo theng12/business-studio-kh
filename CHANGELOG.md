@@ -6,6 +6,8 @@
 - FIX — Overwriting a cropped image asks inside the app, with a clear option to keep the original.
 - FIX — Photo flip and spin-export failures show an error message in the app.
 - FIX — An attendance kiosk can now be updated while nobody is standing at it. An installer's Quit used to be refused forever, so updates retried and never installed. A Quit from outside the kiosk screen still asks for a manager PIN and a manager can still turn it down; a Quit nobody answers within 45 seconds is released and written to the log. A quit is never forced while an export or a print render is still running — that update waits for the next try instead.
+- NEW — An update now asks the app to pause first: new work stops being picked up, what is already running gets up to 30 seconds to finish, and the update is told exactly what it would interrupt. Anything still running keeps its task so the next start picks it up, nothing new starts while paused, and a pause that no update finishes ends by itself after two minutes. Reopening the app always starts work again — a cancelled update can never leave it refusing jobs.
+- Internal — Loopback-only `POST`/`DELETE /api/maintenance/hold` on 127.0.0.1:13181 (`main/updateHold.js`), the shared fleet contract; the AI queue's claim path is closed while it is held.
 - Internal — Installer rotation keeps the latest two versions while preserving protected and in-use copies.
 
 ## 0.1.109 — 2026-11-13

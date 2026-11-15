@@ -27,6 +27,7 @@
     "check:render": "electron scripts/probe-render-paint.js",
     "check:images": "electron scripts/probe-app-image-cors.js",
     "check:client-server": "cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/probe-server-client.js",
+    "check:update-hold": "node scripts/probe-update-hold.js",
     "dmgs:prune": "node scripts/prune-dmgs.js --apply",
     "dmgs:prune:dry": "node scripts/prune-dmgs.js"
   },
