@@ -300,7 +300,7 @@ test('who may enable the kiosk', () => {
 
 /* ── wiring ── */
 
-const KIOSK_MODE_CHANNELS = ['kioskMode:askCamera', 'kioskMode:enable', 'kioskMode:leave', 'kioskMode:logError', 'kioskMode:newRecoveryCode', 'kioskMode:quit', 'kioskMode:recover', 'kioskMode:status'];
+const KIOSK_MODE_CHANNELS = ['kioskMode:askCamera', 'kioskMode:enable', 'kioskMode:leave', 'kioskMode:logError', 'kioskMode:newRecoveryCode', 'kioskMode:quit', 'kioskMode:quitDismissed', 'kioskMode:recover', 'kioskMode:status'];
 
 test('kioskMode:* are LOCAL on both paths (exposeLocal + handleLocal), same names, same shared handlers', () => {
   const standalone = strip(read('main/ipc/kioskMode.js'));
@@ -427,4 +427,153 @@ test('NSCameraUsageDescription ships in the Mac build, in Khmer and English', ()
   assert.ok(text, 'build.mac.extendInfo.NSCameraUsageDescription is missing');
   assert.match(text, /[ក-៿]/, 'Khmer text');
   assert.match(text, /photo when you clock in and out/);
+});
+/* ── an unattended quit (0.1.110) ────────────────────────────────── */
+
+/**
+ * The kiosk module again, against a fake Electron that records the guard
+ * handler, the exits and each quit source. `work.has` stands in for "a job is
+ * running", so the release can be tested without starting a real export.
+ */
+function loadGuardedKiosk({ work } = {}) {
+  const handlers = {};
+  const exits = [];
+  const fake = {
+    app: {
+      isPackaged: true,
+      getPath: () => userData,
+      getName: () => 'Media Studio KH',
+      on: (event, fn) => { handlers[event] = fn; },
+      exit: (code) => { exits.push(`exit:${code}`); },
+      relaunch: () => {},
+      quit: () => { exits.push('quit'); },
+      setLoginItemSettings: () => {},
+    },
+    systemPreferences: fakeElectron.systemPreferences,
+    Menu: { buildFromTemplate: (t) => t, setApplicationMenu: () => {} },
+    powerMonitor: { on: () => {} },
+    BrowserWindow: function BrowserWindow() {},
+  };
+  const id = require.resolve('electron');
+  require.cache[id] = { id, filename: id, loaded: true, exports: fake };
+  const exportsId = path.join(ROOT, 'main/ipc/exports.js');
+  const renderId = path.join(ROOT, 'main/renderWindow.js');
+  if (work) {
+    const stub = { hasActiveRun: work.has, isRendering: work.has };
+    for (const mid of [exportsId, renderId]) require.cache[mid] = { id: mid, filename: mid, loaded: true, exports: stub };
+  } else {
+    delete require.cache[exportsId];
+    delete require.cache[renderId];
+  }
+  delete require.cache[require.resolve('../main/kioskWindow')];
+  const fresh = require('../main/kioskWindow');
+  fresh.configureKiosk({ log: () => {} });
+  fresh.installKioskGuards();
+  return { fresh, handlers, exits };
+}
+
+const waitUntil = async (done, timeout) => {
+  const started = Date.now();
+  while (!done() && Date.now() - started < timeout) await new Promise((r) => setTimeout(r, 20));
+  return Date.now() - started;
+};
+
+test('a quit nobody answers is released inside the Updater wait; a person answering keeps the kiosk', async () => {
+  // A short budget keeps the fast lane fast; the shipped one is asserted below.
+  process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS = '1200';
+  try {
+    const { fresh, handlers, exits } = loadGuardedKiosk();
+    const wait = fresh.UNATTENDED_QUIT_BUDGET_MS;
+    assert.equal(wait, 1200, 'the test budget is the one in force');
+    assert.equal(fresh.isWorkInProgress(), false, 'nothing is running, so nothing holds the quit');
+
+    // Any quit (an installer's AppleEvent is the same event a Dock click sends)
+    // is refused and the kiosk screen is asked for a manager PIN.
+    const ask = { prevented: false, preventDefault() { this.prevented = true; } };
+    handlers['before-quit'](ask);
+    assert.equal(ask.prevented, true, 'the quit is refused, not ignored');
+    assert.deepEqual(exits, [], 'nothing is released yet');
+    // A second ask while the release is pending is refused too: one release, one quit.
+    const again = { prevented: false, preventDefault() { this.prevented = true; } };
+    handlers['before-quit'](again);
+    assert.equal(again.prevented, true);
+    assert.deepEqual(exits, [], 'no early quit');
+
+    // Nobody answers (an unattended install): released inside the budget, the
+    // ordinary way, so index.js still stops the server and frees the port.
+    const elapsed = await waitUntil(() => exits.length > 0, wait + 5000);
+    assert.deepEqual(exits, ['quit'], 'the unanswered quit is released');
+    assert.ok(elapsed >= wait - 200, 'not before the person had the budget to answer');
+    assert.ok(elapsed < 60000, 'and inside the Updater 60 s quit wait');
+  } finally {
+    delete process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS;
+  }
+});
+
+test('a person who turns the quit down keeps the kiosk (a PIN tried, or the prompt dismissed)', async () => {
+  process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS = '1200';
+  try {
+    const build = () => loadGuardedKiosk();
+    const mkHandlers = (fresh, verify) => fresh.makeKioskModeHandlers({
+      verifyManagerPin: verify, getCaps: () => ['*'], isServerReachable: () => true,
+    });
+
+    // Dismissed: main calls its release off and the app stays up.
+    const dismissed = build();
+    dismissed.handlers['before-quit']({ preventDefault() {} });
+    await mkHandlers(dismissed.fresh, async () => ({ ok: true })).quitDismissed();
+    await new Promise((r) => setTimeout(r, 1600));
+    assert.deepEqual(dismissed.exits, [], 'a dismissed quit never closes the kiosk');
+
+    // A wrong PIN proves someone is there too: the kiosk stays.
+    const wrong = build();
+    wrong.handlers['before-quit']({ preventDefault() {} });
+    await assert.rejects(mkHandlers(wrong.fresh, async () => { throw new Error('Wrong PIN'); }).quit({ employeeId: 'm1', pin: '0000' }));
+    await new Promise((r) => setTimeout(r, 1600));
+    assert.deepEqual(wrong.exits, [], 'a refused PIN never closes the kiosk');
+
+    // The right PIN quits, as it always did.
+    const allowed = build();
+    allowed.handlers['before-quit']({ preventDefault() {} });
+    await mkHandlers(allowed.fresh, async () => ({ ok: true })).quit({ employeeId: 'm1', pin: '5820' });
+    await waitUntil(() => allowed.exits.length > 0, 2000);
+    assert.deepEqual(allowed.exits, ['quit'], 'a manager PIN quits the kiosk');
+  } finally {
+    delete process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS;
+  }
+});
+
+test('the shipped unattended-quit budget sits under the Updater 60 s quit wait', () => {
+  const src = strip(read('main/kioskWindow.js'));
+  const budget = src.match(/UNATTENDED_QUIT_BUDGET_MS = [^;]+;/)[0];
+  assert.match(budget, /45 \* 1000/, 'the shipped bound is 45 s, not whatever a test set');
+});
+
+test('work mid-task is not forced: that update cycle is skipped and the next try quits', async () => {
+  process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS = '1200';
+  try {
+    let busy = true;
+    const lines = [];
+    const { fresh, handlers, exits } = loadGuardedKiosk({ work: { has: () => busy } });
+    fresh.configureKiosk({ log: (e, d) => lines.push(`${e} ${d || ''}`.trim()) });
+    const wait = fresh.UNATTENDED_QUIT_BUDGET_MS;
+
+    // An export is running: the budget runs out and the app does NOT quit.
+    handlers['before-quit']({ preventDefault() {} });
+    const waited = await waitUntil(() => lines.some((l) => l.startsWith('kiosk:quit-skipped')), wait + 3000);
+    assert.ok(waited >= wait - 200, 'it gave the budget before deciding');
+    assert.deepEqual(exits, [], 'a render or export in flight is never cut off');
+    assert.ok(lines.some((l) => l.startsWith('kiosk:quit-skipped')), 'the skip is logged');
+
+    // The next attempt, with nothing running, quits — logged as an unattended release.
+    busy = false;
+    const ask = { prevented: false, preventDefault() { this.prevented = true; } };
+    handlers['before-quit'](ask);
+    assert.equal(ask.prevented, true);
+    await waitUntil(() => exits.length > 0, wait + 3000);
+    assert.deepEqual(exits, ['quit'], 'the retry quits');
+    assert.ok(lines.some((l) => l.startsWith('kiosk:unattended-quit')), 'the release is logged');
+  } finally {
+    delete process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS;
+  }
 });

@@ -97,6 +97,8 @@ function installBrowser(api) {
   global.window = { api, addEventListener: noop, removeEventListener: noop, matchMedia: () => ({ matches: false, addEventListener: noop, removeEventListener: noop }) };
   global.navigator = global.navigator || { userAgent: 'node', platform: 'darwin' };
   global.__workspaceRegisterCompanySwitchFlusher ||= () => () => {};
+  // The in-app confirm dialog is shimmed above; these tests answer it here.
+  global.__workspaceConfirm ||= async () => true;
   global.__workspaceConflictChoice ||= async () => 'cancel';
 }
 
@@ -130,6 +132,9 @@ async function loadWorkspace(api, hook) {
       setup(build) {
         build.onResolve({ filter: /companySwitch\.js$/ }, () => ({ path: 'company-switch', namespace: 'test' }));
         build.onResolve({ filter: /ConflictModal\.jsx$/ }, () => ({ path: 'conflict-modal', namespace: 'test' }));
+        // The crop confirmation is an in-app dialog (a real one needs a live DOM
+        // and a click), so the answer comes from the test: __workspaceConfirm.
+        build.onResolve({ filter: /ConfirmModal\.jsx$/ }, () => ({ path: 'confirm-modal', namespace: 'test' }));
         build.onLoad({ filter: /^company-switch$/, namespace: 'test' }, () => ({
           contents: `
             export const registerCompanySwitchFlusher = globalThis.__workspaceRegisterCompanySwitchFlusher;
@@ -137,6 +142,13 @@ async function loadWorkspace(api, hook) {
           `,
           loader: 'js',
         }));
+        build.onLoad({ filter: /^confirm-modal$/, namespace: 'test' }, () => ({
+          contents: `
+            export const ConfirmModal = () => null;
+            export function confirm(opts) { return globalThis.__workspaceConfirm(opts); }
+          `,
+          loader: 'js',
+        })),
         build.onLoad({ filter: /^conflict-modal$/, namespace: 'test' }, () => ({
           contents: `
             export function parseConflictError(error) {
@@ -333,7 +345,7 @@ test('active overwrite-crop adopts rotation zero without clearing legacy canvas 
     settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, sourceCropRect: { x: 0, y: 0, width: 0.4, height: 0.5 } });
     await hook.settle(Component);
     await readyCrop(hook, Component);
-    global.window.confirm = () => true;
+    global.__workspaceConfirm = async () => true;
     await canvasView(hook).props.onApplyCrop('overwrite');
     await hook.settle(Component);
     const settings = settingsPanel(hook).props.settings;
@@ -356,7 +368,7 @@ for (const destination of ['overwrite', 'newImage']) test(`successful ${destinat
     settingsPanel(hook).props.onChange({ ...settingsPanel(hook).props.settings, sourceCropRect: { x: 0, y: 0, width: 0.4, height: 0.3 } });
     await hook.settle(Component);
     await readyCrop(hook, Component);
-    global.window.confirm = () => true;
+    global.__workspaceConfirm = async () => true;
     await canvasView(hook).props.onApplyCrop(destination);
     await hook.settle(Component);
     const messages = store.getState().toasts.map((toast) => toast.message);
@@ -795,7 +807,7 @@ test('review follow-up: overwrite-crop flushes the pending draft before rewritin
       sourceCropRect: { x: 0, y: 0, width: 0.5, height: 0.5 },
     });
     await hook.settle(Component);
-    global.window.confirm = () => true;
+    global.__workspaceConfirm = async () => true;
     await readyCrop(hook, Component);
     const canvas = findNode(hook.getOutput(), (node) => typeof node.props?.onApplyCrop === 'function');
     await canvas.props.onApplyCrop('overwrite');
@@ -826,7 +838,7 @@ test('review follow-up: a crop blocked by a conflict explains the conflict', asy
       sourceCropRect: { x: 0, y: 0, width: 0.5, height: 0.5 },
     });
     await hook.settle(Component);
-    global.window.confirm = () => true;
+    global.__workspaceConfirm = async () => true;
     await readyCrop(hook, Component);
     const canvas = findNode(hook.getOutput(), (node) => typeof node.props?.onApplyCrop === 'function');
     await canvas.props.onApplyCrop('overwrite');

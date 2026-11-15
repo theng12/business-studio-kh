@@ -55,6 +55,11 @@ function cancelRun(opId) {
   return { ok: true };
 }
 
+/** Is an export running on this Mac? The kiosk's unattended-quit guard asks. */
+function hasActiveRun() {
+  return activeRuns.size > 0;
+}
+
 /** Build the product workbook for the active company (see exports:getProductsWorkbook). */
 function buildProductsWorkbook({ companyId, scope = 'all', ids } = {}, { countOnly = false } = {}) {
   const activeId = companies.getActiveId();
@@ -414,4 +419,4 @@ function runNotes(result) {
   return lines.length ? lines.join('\n') : null;
 }
 
-module.exports = { register, cancelRun, startRun, pickRunId, buildProductsWorkbook };
+module.exports = { register, cancelRun, startRun, pickRunId, buildProductsWorkbook, hasActiveRun };

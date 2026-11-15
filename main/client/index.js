@@ -1554,6 +1554,7 @@ function registerClientProxies(loadConfigFn) {
     handleLocal('kioskMode:leave', (args) => kioskModeHandlers.leave(args));
     handleLocal('kioskMode:quit', (args) => kioskModeHandlers.quit(args));
     handleLocal('kioskMode:logError', (args) => kioskModeHandlers.logError(args));
+    handleLocal('kioskMode:quitDismissed', () => kioskModeHandlers.quitDismissed());
   }
 
   /* ─── v0.16.0: client-mode local handlers ──────────────────────

@@ -204,7 +204,12 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const corr = await ok(kioskUser.token, 'kiosk:requestCorrection', { sessionToken: tokenA, workDate: yesterday, outTime: '17:05', reason: 'I forgot to clock out' });
   assert.equal(corr.status, 'pending');
   assert.equal(db.getDb().prepare('SELECT COUNT(*) n FROM attendance_events').get().n, eventsBefore, 'a correction request is never an event');
-  const leaveReq = await ok(kioskUser.token, 'kiosk:requestLeave', { sessionToken: tokenA, leaveTypeId: types.find((x) => x.code === 'sick').id, fromDate: calc.addDays(calc.ppDate(Date.now()), 7), toDate: calc.addDays(calc.ppDate(Date.now()), 8) });
+  // The request must land on work days: "today + 7" used to fall on a weekend or
+  // a public holiday and the server rightly refused it (422, no work days).
+  let leaveFrom = calc.addDays(calc.ppDate(Date.now()), 7);
+  const leaveHolidays = new Set((await ok(manager.token, 'hr:listHolidays', { year: leaveFrom.slice(0, 4) })).map((h) => h.date));
+  while (calc.weekdayMon0(leaveFrom) >= 5 || leaveHolidays.has(leaveFrom)) leaveFrom = calc.addDays(leaveFrom, 1);
+  const leaveReq = await ok(kioskUser.token, 'kiosk:requestLeave', { sessionToken: tokenA, leaveTypeId: types.find((x) => x.code === 'sick').id, fromDate: leaveFrom, toDate: calc.addDays(leaveFrom, 1) });
   assert.equal(leaveReq.requestedVia, 'kiosk');
   await fails(kioskUser.token, 'kiosk:verifyManagerPin', { employeeId: A.id, pin: '4071' }, 422, /Only a manager/);
   assert.deepEqual(await ok(kioskUser.token, 'kiosk:verifyManagerPin', { employeeId: M.id, pin: '5820' }), { ok: true, managerId: M.id });

@@ -184,6 +184,7 @@ const HR_VALIDATORS = {
   'kioskMode:recover': obj((a) => (isString(a.code) && a.code.length > 0 && a.code.length <= 64 ? true : 'code must be text')),
   'kioskMode:leave': obj((a) => first(need(a, 'employeeId'), pin(a))),
   'kioskMode:quit': obj((a) => first(need(a, 'employeeId'), pin(a))),
+  'kioskMode:quitDismissed': () => true,
 };
 
 function purpose(a) {
