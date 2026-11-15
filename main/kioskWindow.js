@@ -17,12 +17,12 @@
  *     Monitor's plain Quit) is refused in `before-quit` and the screen asks for
  *     a manager PIN instead (kioskMode:quit) — but only for 45 s. An installer
  *     quits by the same AppleEvent a person does and nobody is there to answer,
- *     so a quit nobody answers is released, logged, at the end of that budget
- *     (an export or render in flight holds it, up to the budget). A person
- *     keeps the kiosk: dismissing the prompt (kioskMode:quitDismissed) or
- *     trying a PIN calls the release off. A system shutdown / restart / log-out
- *     is let through (powerMonitor 'shutdown'), so the shop Mac can still be
- *     turned off;
+ *     so a quit nobody answers is released, logged, at the end of that budget.
+ *     A person keeps the kiosk: dismissing the prompt (kioskMode:quitDismissed)
+ *     or trying a PIN calls the release off. An export or render still running
+ *     at the deadline is never cut off — that cycle is skipped and the next one
+ *     quits. A system shutdown / restart / log-out is let through
+ *     (powerMonitor 'shutdown'), so the shop Mac can still be turned off;
  *   - navigation away from the page and new windows are refused;
  *   - it opens at login (`app.setLoginItemSettings`) when that box was ticked.
  *
@@ -59,14 +59,15 @@ const KIOSK_WINDOW_ARG = '--mskh-kiosk-window';
 const RELAUNCH_DELAY_MS = 300;
 
 /**
- * An unattended quit (an installer's AppleEvent) waits this long for work in
- * flight, then quits anyway. Under the Updater's 60 s quit wait
- * (kh-updater Recipes.quit, `wait: 60`), so a released kiosk still finishes
- * the install instead of being reported as "the app did not quit".
- * A test shortens it with MSKH_KIOSK_UNATTENDED_QUIT_MS rather than waiting 45 s.
+ * How long a refused quit waits for a person to answer the manager PIN prompt
+ * before it is treated as an installer's (nobody is there) and released. Under
+ * the Updater's 60 s quit wait (kh-updater Recipes.quit, `wait: 60`), so a
+ * released kiosk still finishes the install instead of being reported as "the
+ * app did not quit". A test shortens it with MSKH_KIOSK_UNATTENDED_QUIT_MS
+ * rather than waiting 45 s.
  */
 const UNATTENDED_QUIT_BUDGET_MS = Number(process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS) || 45 * 1000;
-/** How often the deadline is re-checked while an export or render holds the quit. */
+/** How often a pending quit is re-checked, so a dismissal can call it off before the deadline. */
 const UNATTENDED_QUIT_RETRY_MS = 500;
 
 let log = (event, detail) => process.stdout.write(`[kiosk] ${event}${detail ? ` :: ${detail}` : ''}\n`);
@@ -251,7 +252,8 @@ function installKioskGuards() {
     if (!unattendedQuitTimer) {
       log('kiosk:quit-blocked', `a manager PIN is needed to close the kiosk; released in ${Math.round(UNATTENDED_QUIT_BUDGET_MS / 1000)} s if nobody answers`);
       const deadline = Date.now() + UNATTENDED_QUIT_BUDGET_MS;
-      // The timer is also the poll tick: it holds while work is in flight, up to the deadline.
+      // The timer is also the poll tick: it fires again until the deadline, which is
+      // how a dismissal or a PIN can cancel the release before it happens.
       unattendedQuitTimer = setTimeout(
         () => releaseUnansweredQuit(deadline, 'nobody answered the manager PIN prompt'),
         UNATTENDED_QUIT_RETRY_MS,
