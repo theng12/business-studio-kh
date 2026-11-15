@@ -1,5 +1,12 @@
 # What's new
 
+## 0.1.110 — 2026-11-15
+
+- FIX — Check for Updates uses this Mac's saved Launcher connection, so a connected Mac can check for updates correctly.
+- FIX — Overwriting a cropped image asks inside the app, with a clear option to keep the original.
+- FIX — Photo flip and spin-export failures show an error message in the app.
+- Internal — Installer rotation keeps the latest two versions while preserving protected and in-use copies.
+
 ## 0.1.109 — 2026-11-13
 
 - FIX — Generate & Print no longer shows a product preview while nothing is selected; it asks you to select a product first.
