@@ -39,8 +39,10 @@ test('no UI file calls window.confirm, alert or prompt', () => {
 
 test('the overwrite crop confirm uses the in-app dialog', () => {
   const source = fs.readFileSync(path.join(RENDERER, 'modules', 'ImageWorkspace', 'index.jsx'), 'utf8');
+  assert.match(source, /import\s*\{\s*confirm\s*\}\s*from\s*['"]\.\.\/\.\.\/components\/ConfirmModal\.jsx['"]/);
   assert.match(source, /await confirm\(\{/);
   assert.doesNotMatch(source, /window\.confirm\(/);
+  assert.doesNotMatch(source, /\bconst\s*\{\s*confirm\s*\}\s*=\s*world/i);
 });
 
 test('lightbox failures surface as error toasts', () => {

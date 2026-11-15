@@ -12,6 +12,7 @@ import { defaultSettings, mergeSettings } from '../../lib/workspaceSettings.js';
 import { removeBackground } from '../../lib/bgRemoval.js';
 import { registerCompanySwitchFlusher } from '../../lib/companySwitch.js';
 import { createLatestSaveQueue } from '../../lib/latestSaveQueue.js';
+import { confirm } from '../../components/ConfirmModal.jsx';
 import { parseConflictError, resolveSaveConflict } from '../../components/ConflictModal.jsx';
 import { shortcutBlocked } from '../../components/ShortcutsModal.jsx';
 import { ProductCombobox } from '../AIStudio/ProductCombobox.jsx';
