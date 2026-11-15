@@ -47,7 +47,7 @@ test('check returns honest states from verified feeds', async () => {
   const originalRead = fs.readFileSync;
   let publisher;
   fs.readFileSync = (filename, ...args) => {
-    if (String(filename).endsWith('/Library/KHUpdater/publisher.json')) {
+    if (String(filename).endsWith('/Library/KHUpdater/base/config.json')) {
       if (!publisher) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
       return JSON.stringify(publisher);
     }

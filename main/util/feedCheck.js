@@ -51,7 +51,7 @@ function verifyFeedResponse(response, publicKeyBase64) {
 
 function readPublisher(homeDir) {
   let text;
-  try { text = fs.readFileSync(path.join(homeDir, 'Library', 'KHUpdater', 'publisher.json'), 'utf8'); }
+  try { text = fs.readFileSync(path.join(homeDir, 'Library', 'KHUpdater', 'base', 'config.json'), 'utf8'); }
   catch (error) { return { reason: error.code === 'ENOENT' ? 'missing' : 'unreadable' }; }
   let publisher;
   try { publisher = JSON.parse(text); } catch { return { reason: 'incomplete' }; }
