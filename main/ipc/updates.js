@@ -18,7 +18,7 @@ function installedVersion() {
   return app.getVersion();
 }
 
-// Machine-local in every mode: this Mac's publisher.json and feed are what
+// Machine-local in every mode: this Mac's enrolled base/config.json and feed are what
 // matter, so client mode registers the same two handlers below.
 function check() {
   return checkForUpdate({
