@@ -16,6 +16,8 @@ async function flush() { for (let i = 0; i < 25; i += 1) await Promise.resolve()
 function harness(options = {}) {
   const tasks = new Map(); const gallery = []; const calls = []; const writes = []; const attachments = [];
   const timers = []; const events = []; const logs = []; const mainSets = [];
+  /* The update hold (main/updateHold.js): paused stops claims, ids are the real in-flight set. */
+  const hold = { paused: false, ids: [] };
   const aiTasks = {
     get: (id) => { const t = tasks.get(id); return t ? { ...t, galleryCount: gallery.filter((g) => g.taskId === id).length } : null; },
     update: (id, patch) => { if (tasks.has(id)) Object.assign(tasks.get(id), patch); return aiTasks.get(id); },
@@ -43,6 +45,7 @@ function harness(options = {}) {
     './costs': { actualForModel: () => ({ usd: 0.25 }) },
     './_fetchTimeouts': { fetchWithTimeout: async () => { throw new Error('download failed (403)'); }, TIMEOUT_DOWNLOAD: 1 },
     '../events': { broadcast: (...args) => events.push(args) },
+    '../updateHold': { isPaused: () => hold.paused, inflightIds: () => [...hold.ids] },
   };
   const sandbox = { require: (name) => { assert.ok(name in stubs, `unexpected dependency ${name}`); return stubs[name]; }, module: { exports: {} }, Buffer, Date,
     process: { stderr: { write: (line) => logs.push(line) } },
@@ -52,7 +55,7 @@ function harness(options = {}) {
   const runner = sandbox.module.exports;
   const runTick = async () => { const fn = timers.shift(); assert.ok(fn, 'scheduled tick'); fn(); await flush(); };
   runner.start({ getConfig: () => ({ openaiConcurrency: 1, openaiApiKey: 'synthetic-key' }) });
-  return { runner, aiTasks, tasks, gallery, calls, writes, attachments, events, logs, mainSets, runTick };
+  return { runner, aiTasks, tasks, gallery, calls, writes, attachments, events, logs, mainSets, runTick, hold };
 }
 
 test('cancelled provider retains its slot, refuses live Repair, and late success records charge without accepting results', async () => {
@@ -212,4 +215,22 @@ test('an attachment already started may finish after Cancel, without a later mai
   h.runner.cancel(a.id); attaching.resolve({ image: { id: 'attached-image', filepath: 'attached.png' } }); await h.runner.stop();
   assert.equal(h.aiTasks.get(a.id).status, 'cancelled'); assert.equal(h.gallery.length, 1);
   assert.equal(h.gallery[0].promotedToProduct, true); assert.equal(h.mainSets.length, 0); assert.equal(h.writes.length, 1);
+});
+
+test('an update hold closes the claim path, says why, and hands the work back when it ends', async () => {
+  const h = harness();
+  const a = h.aiTasks.create({});
+  h.hold.paused = true;
+  h.runner.nudge(); await h.runTick();
+  assert.equal(h.calls.length, 0, 'nothing starts while the app is held for an update');
+  assert.equal(h.aiTasks.get(a.id).status, 'queued', 'the task keeps the queued row the next start finds');
+  assert.ok(h.logs.some((line) => /new work is paused for an update: 1 queued task/.test(line)),
+    'the refusal says why in plain words');
+  h.hold.paused = false;
+  h.runner.nudge(); await h.runTick();
+  assert.equal(h.calls.length, 1, 'dispatch resumes with no operator step');
+  assert.deepEqual([...h.runner.inflightIds()], [a.id], 'the hold reads the real in-flight id while a generation runs');
+  h.calls[0].resolve(response()); await h.runner.stop();
+  assert.deepEqual([...h.runner.inflightIds()], []);
+  assert.equal(h.aiTasks.get(a.id).status, 'done');
 });

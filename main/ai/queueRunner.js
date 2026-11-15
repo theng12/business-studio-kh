@@ -22,8 +22,10 @@ const { slugify } = require('../util/slug');
 const { byKey: modelByKey } = require('./models');
 const openai = require('./providers/openai');
 const aiCosts = require('./costs');
+const updateHold = require('../updateHold');
 
 const TICK_MS = 2000;
+const PAUSED_NOTICE_MS = 10_000;
 
 let ctx = null;     // { getMainWindow, getConfig }
 let timer = null;
@@ -65,8 +67,22 @@ function apiKeyFor() {
 
 /* ── Tick loop ─────────────────────────────────────────────── */
 
+/* An update hold stops claims here, not queuing: a task added meanwhile stays
+ * a queued row and starts by itself after the restart. Said out loud once per
+ * 10 s so the log reads in plain words instead of a silent pause. */
+let pausedNoticedAt = 0;
+function notePaused() {
+  if (Date.now() - pausedNoticedAt < PAUSED_NOTICE_MS) return;
+  pausedNoticedAt = Date.now();
+  let waiting = 0;
+  try { waiting = aiTasks.listPendingForRunner().filter((t) => t.status === 'queued').length; }
+  catch (_) { /* count is a courtesy; the pause is not */ }
+  process.stderr.write(`[update-hold] new work is paused for an update: ${waiting} queued task(s) wait for the restart, nothing is lost\n`);
+}
+
 async function tick() {
   if (!enabled || running) return; // stopped, or a single tick already owns the runner
+  if (updateHold.isPaused()) { notePaused(); return; }
   running = true;
   try {
     const pending = aiTasks.listPendingForRunner();
@@ -573,4 +589,7 @@ function cancel(taskId) {
   return aiTasks.get(taskId);
 }
 
-module.exports = { start, stop, nudge, repair, queueFresh, cancel, galleryFileName };
+module.exports = { start, stop, nudge, repair, queueFresh, cancel, galleryFileName, inflightIds };
+
+/** The task ids this process is generating right now — the update hold's `in_flight`. */
+function inflightIds() { return [...inflight]; }
