@@ -232,11 +232,23 @@ export function Kiosk({ preview = true, onExitPreview }) {
   }, [lang, sessionEnded]);
 
   /* ── PIN ── */
+  /**
+   * A person at the kiosk turned the quit down (Cancel / back). Main releases a
+   * quit nobody answers (an installer's, after 45 s), so say someone is here:
+   * the kiosk stays until a manager PIN says otherwise. The idle timeout is
+   * deliberately not this — an installer leaves the screen untouched too.
+   */
+  const declineQuit = useCallback(() => {
+    if (stateRef.current.managerAction !== 'quit') return;
+    window.api.kioskMode?.quitDismissed?.().catch(() => {});
+  }, []);
+
   const cancelPin = useCallback(() => {
     pinAttempt.current++;
     setPin(''); setBusy(false); setMessage(null);
+    declineQuit();
     dispatch(stateRef.current.screen === 'managerPin' ? { type: 'MANAGER_BACK' } : { type: 'RESET' });
-  }, []);
+  }, [declineQuit]);
 
   const submitPin = useCallback(async () => {
     const s = stateRef.current;
@@ -388,7 +400,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
             onTap={tapTile}
             onRetry={loadTiles}
             onManager={screen === 'tiles' ? () => { setMessage(null); dispatch({ type: 'MANAGER_MENU' }); } : null}
-            onBack={screen === 'managerPick' ? () => { setMessage(null); dispatch({ type: 'MANAGER_BACK' }); } : null}
+            onBack={screen === 'managerPick' ? () => { setMessage(null); declineQuit(); dispatch({ type: 'MANAGER_BACK' }); } : null}
             onRecovery={openRecovery}
             recoveryLabel={recoveryLabel}
           />
@@ -488,7 +500,7 @@ export function Kiosk({ preview = true, onExitPreview }) {
               </button>
               {!preview ? <button type="button" className="kiosk-btn" onClick={() => dispatch({ type: 'MANAGER_ACTION', action: 'quit' })}>{t(lang, 'manager_quit')}</button> : null}
               {openRecovery ? <button type="button" className="kiosk-btn" onClick={openRecovery}>{recoveryLabel}</button> : null}
-              <button type="button" className="kiosk-btn" onClick={() => dispatch({ type: 'RESET' })}>{t(lang, 'cancel')}</button>
+              <button type="button" className="kiosk-btn" onClick={() => { declineQuit(); dispatch({ type: 'RESET' }); }}>{t(lang, 'cancel')}</button>
             </div>
           </div>
         )}

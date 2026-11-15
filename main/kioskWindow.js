@@ -15,9 +15,14 @@
  *     them (`isBlockedShortcut`);
  *   - a quit from anywhere else (Dock menu, `osascript … quit`, Activity
  *     Monitor's plain Quit) is refused in `before-quit` and the screen asks for
- *     a manager PIN instead (kioskMode:quit). A system shutdown / restart /
- *     log-out is let through (powerMonitor 'shutdown'), so the shop Mac can
- *     still be turned off;
+ *     a manager PIN instead (kioskMode:quit) — but only for 45 s. An installer
+ *     quits by the same AppleEvent a person does and nobody is there to answer,
+ *     so a quit nobody answers is released, logged, at the end of that budget
+ *     (an export or render in flight holds it, up to the budget). A person
+ *     keeps the kiosk: dismissing the prompt (kioskMode:quitDismissed) or
+ *     trying a PIN calls the release off. A system shutdown / restart / log-out
+ *     is let through (powerMonitor 'shutdown'), so the shop Mac can still be
+ *     turned off;
  *   - navigation away from the page and new windows are refused;
  *   - it opens at login (`app.setLoginItemSettings`) when that box was ticked.
  *
@@ -53,10 +58,22 @@ const KIOSK_HASH = 'kiosk';
 const KIOSK_WINDOW_ARG = '--mskh-kiosk-window';
 const RELAUNCH_DELAY_MS = 300;
 
+/**
+ * An unattended quit (an installer's AppleEvent) waits this long for work in
+ * flight, then quits anyway. Under the Updater's 60 s quit wait
+ * (kh-updater Recipes.quit, `wait: 60`), so a released kiosk still finishes
+ * the install instead of being reported as "the app did not quit".
+ * A test shortens it with MSKH_KIOSK_UNATTENDED_QUIT_MS rather than waiting 45 s.
+ */
+const UNATTENDED_QUIT_BUDGET_MS = Number(process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS) || 45 * 1000;
+/** How often the deadline is re-checked while an export or render holds the quit. */
+const UNATTENDED_QUIT_RETRY_MS = 500;
+
 let log = (event, detail) => process.stdout.write(`[kiosk] ${event}${detail ? ` :: ${detail}` : ''}\n`);
 let allowQuit = false;
 let guardsInstalled = false;
 let kioskWin = null;
+let unattendedQuitTimer = null;
 
 /** index.js hands in its crash-log writer so kiosk events land in crash.log (AGENTS.md §19). */
 function configureKiosk({ log: logFn } = {}) {
@@ -162,8 +179,67 @@ function notifyQuitRequested() {
 }
 
 /**
+ * Is a job the app must not abandon halfway through running right now? An
+ * export or a client-mode render is tracked; an import or an image edit is a
+ * single server call, so an unattended quit lands between rows (the database
+ * is WAL and every write commits on its own) rather than inside one.
+ */
+function isWorkInProgress() {
+  try {
+    return require('./ipc/exports').hasActiveRun() || require('./renderWindow').isRendering();
+  } catch (_) {
+    return false;  // never hold an installer hostage to a lookup failure
+  }
+}
+
+/**
+ * The end of the budget: a person had UNATTENDED_QUIT_BUDGET_MS to answer the
+ * PIN prompt and did not, so this quit is unattended (an installer's) and is
+ * released. Work mid-task is not forced: that cycle is skipped and the Updater
+ * tries again, as it does for any busy app.
+ */
+function releaseUnansweredQuit(deadline, reason) {
+  if (allowQuit) { unattendedQuitTimer = null; return; }
+  if (Date.now() < deadline) {
+    unattendedQuitTimer = setTimeout(() => releaseUnansweredQuit(deadline, reason), UNATTENDED_QUIT_RETRY_MS);
+    return;
+  }
+  unattendedQuitTimer = null;
+  if (isWorkInProgress()) {
+    log('kiosk:quit-skipped', `${reason}: work in flight, so this update waits for the next try`);
+    return;
+  }
+  allowQuit = true;
+  log('kiosk:unattended-quit', `${reason}: released`);
+  // Quit the ordinary way, so index.js still stops the server and frees the
+  // port; the hard exit below is the net for a server that will not stop.
+  app.quit();
+  setTimeout(() => { log('kiosk:unattended-quit-exit', 'the app did not quit in time; exiting'); app.exit(0); }, 10000).unref?.();
+}
+
+/**
+ * A person at the kiosk answered the prompt (a PIN was tried, or the prompt was
+ * dismissed): the kiosk stays, and the release above is called off. Nothing
+ * else cancels it — an installer has nobody to press anything.
+ */
+function cancelUnansweredQuit(why) {
+  if (!unattendedQuitTimer) return false;
+  clearTimeout(unattendedQuitTimer);
+  unattendedQuitTimer = null;
+  log('kiosk:quit-kept', why);
+  return true;
+}
+
+/**
  * Menu, quit guard and shutdown pass-through. Once per process, from the boot
  * path that creates the kiosk window (after `ready`).
+ *
+ * A quit (Dock, `osascript … quit`, the Updater's install) is refused and the
+ * screen asks for a manager PIN — but only for UNATTENDED_QUIT_BUDGET_MS. An
+ * installer's quit is the same AppleEvent a person's is, and nobody is there to
+ * answer it, so refusing it forever is what made every unattended update fail
+ * (the 0.1.110 updater bug). A person keeps the kiosk by dismissing the prompt
+ * or trying a PIN: either calls cancelUnansweredQuit().
  */
 function installKioskGuards() {
   if (guardsInstalled) return;
@@ -172,7 +248,15 @@ function installKioskGuards() {
   app.on('before-quit', (e) => {
     if (allowQuit) return;
     e.preventDefault();
-    log('kiosk:quit-blocked', 'a manager PIN is needed to close the kiosk');
+    if (!unattendedQuitTimer) {
+      log('kiosk:quit-blocked', `a manager PIN is needed to close the kiosk; released in ${Math.round(UNATTENDED_QUIT_BUDGET_MS / 1000)} s if nobody answers`);
+      const deadline = Date.now() + UNATTENDED_QUIT_BUDGET_MS;
+      // The timer is also the poll tick: it holds while work is in flight, up to the deadline.
+      unattendedQuitTimer = setTimeout(
+        () => releaseUnansweredQuit(deadline, 'nobody answered the manager PIN prompt'),
+        UNATTENDED_QUIT_RETRY_MS,
+      );
+    }
     notifyQuitRequested();
   });
   // A shutdown, restart or log-out must not be held up by the kiosk.
@@ -437,10 +521,22 @@ function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = 
     },
 
     quit: async ({ employeeId, pin } = {}) => {
-      await verifyManagerPin({ employeeId, pin, purpose: 'quit' });
+      try {
+        await verifyManagerPin({ employeeId, pin, purpose: 'quit' });
+      } catch (err) {
+        cancelUnansweredQuit('a manager PIN was tried, so someone is at the kiosk');   // wrong PIN: the kiosk stays
+        throw err;
+      }
       log('kiosk:quit', `manager=${employeeId}`);
+      cancelUnansweredQuit('a manager PIN allowed the quit');
       allowQuit = true;
       setTimeout(() => app.quit(), RELAUNCH_DELAY_MS);
+      return { ok: true };
+    },
+
+    /** A person dismissed the quit prompt: the kiosk stays (see cancelUnansweredQuit). */
+    quitDismissed: async () => {
+      cancelUnansweredQuit('someone dismissed the quit prompt');
       return { ok: true };
     },
   };
@@ -448,12 +544,16 @@ function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = 
 
 module.exports = {
   KIOSK_HASH,
+  UNATTENDED_QUIT_BUDGET_MS,
   configureKiosk,
   isKioskMode,
   createKioskWindow,
+  installKioskGuards,
   makeKioskModeHandlers,
   KIOSK_WINDOW_ARG,
   // pure, for tests
+  isWorkInProgress,
+  cancelUnansweredQuit,
   isKioskNavigationAllowed,
   isBlockedShortcut,
   kioskMenuTemplate,

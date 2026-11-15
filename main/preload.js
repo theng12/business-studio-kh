@@ -713,6 +713,8 @@ contextBridge.exposeInMainWorld('api', {
     recover:         (code)                => invoke('kioskMode:recover', { code }),
     leave:           (employeeId, pin)     => invoke('kioskMode:leave', { employeeId, pin }),
     quit:            (employeeId, pin)     => invoke('kioskMode:quit', { employeeId, pin }),
+    /** A person dismissed the quit prompt: the kiosk stays, and main calls off its own release. */
+    quitDismissed:   ()                    => invoke('kioskMode:quitDismissed'),
     /** A quit was refused (Dock, AppleScript, Activity Monitor's Quit): ask for a manager PIN. */
     onQuitRequested: (cb) => {
       const fn = () => cb();

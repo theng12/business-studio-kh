@@ -57,12 +57,23 @@ async function renderIn(win, html, options, task) {
   }
 }
 
+/** Renders in flight on this Mac, so an unattended quit can wait for one to finish. */
+let activeRenders = 0;
+function isRendering() {
+  return activeRenders > 0;
+}
+
 async function withWindow(html, options, task) {
-  const win = createRenderWindow(options);
+  activeRenders += 1;
   try {
-    return await renderIn(win, html, options, task);
+    const win = createRenderWindow(options);
+    try {
+      return await renderIn(win, html, options, task);
+    } finally {
+      if (!win.isDestroyed()) win.destroy();
+    }
   } finally {
-    if (!win.isDestroyed()) win.destroy();
+    activeRenders -= 1;
   }
 }
 
@@ -77,11 +88,16 @@ async function withWindow(html, options, task) {
  * window `options` describe: the size is fixed for the run.
  */
 async function withReusedWindow(options, body) {
-  const win = createRenderWindow(options);
+  activeRenders += 1;
   try {
-    return await body((html, task) => renderIn(win, html, options, task));
+    const win = createRenderWindow(options);
+    try {
+      return await body((html, task) => renderIn(win, html, options, task));
+    } finally {
+      if (!win.isDestroyed()) win.destroy();
+    }
   } finally {
-    if (!win.isDestroyed()) win.destroy();
+    activeRenders -= 1;
   }
 }
 
@@ -239,4 +255,4 @@ async function printHtml(html, options = {}) {
  * memory and then hand the raw pixels to sharp for exact-size normalization.
  * Going through toImage() would mean writing a temp PNG, reading it back and
  * deleting it — a file round-trip per image, for no benefit. */
-module.exports = { toPdf, toPdfBuffer, toImage, toImages, listPrinters, printHtml, withWindow, withReusedWindow, captureTarget };
+module.exports = { toPdf, toPdfBuffer, toImage, toImages, listPrinters, printHtml, withWindow, withReusedWindow, captureTarget, isRendering };

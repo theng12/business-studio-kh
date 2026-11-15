@@ -5,6 +5,7 @@
 - FIX — Check for Updates uses this Mac's saved Launcher connection, so a connected Mac can check for updates correctly.
 - FIX — Overwriting a cropped image asks inside the app, with a clear option to keep the original.
 - FIX — Photo flip and spin-export failures show an error message in the app.
+- FIX — An attendance kiosk can now be updated while nobody is standing at it. An installer's Quit used to be refused forever, so updates retried and never installed. A Quit from outside the kiosk screen still asks for a manager PIN and a manager can still turn it down; a Quit nobody answers within 45 seconds is released and written to the log. A quit is never forced while an export or a print render is still running — that update waits for the next try instead.
 - Internal — Installer rotation keeps the latest two versions while preserving protected and in-use copies.
 
 ## 0.1.109 — 2026-11-13

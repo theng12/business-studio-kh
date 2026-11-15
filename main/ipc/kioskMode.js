@@ -37,6 +37,7 @@ function register({ exposeLocal }) {
   exposeLocal('kioskMode:leave', (args) => h.leave(args));
   exposeLocal('kioskMode:quit', (args) => h.quit(args));
   exposeLocal('kioskMode:logError', (args) => h.logError(args));
+  exposeLocal('kioskMode:quitDismissed', () => h.quitDismissed());
 }
 
 module.exports = { register };
