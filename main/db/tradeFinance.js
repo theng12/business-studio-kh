@@ -933,24 +933,33 @@ function runCapitalisation(companyId, asOf = todayPhnomPenh()) {
         .get(facility.id, periodStart, periodEnd);
       if (!exists) {
         const figure = monthInterest(facility, y, m);
-        db.transaction(() => {
-          if (figure.amountMinor > 0) {
-            db.prepare(`INSERT INTO tf_ledger_entries
-              (id, company_id, client_uuid, facility_id, entry_date, kind, amount_minor, note, created_at, created_by_user_id)
-              VALUES (?,?,?,?,?,'interest_capitalised',?,?,?,NULL)`).run(
-              randomUUID(), companyId, null, facility.id, periodEnd, figure.amountMinor,
-              `Interest capitalised for ${periodStart.slice(0, 7)}`, Date.now(),
+        try {
+          db.transaction(() => {
+            if (figure.amountMinor > 0) {
+              db.prepare(`INSERT INTO tf_ledger_entries
+                (id, company_id, client_uuid, facility_id, entry_date, kind, amount_minor, note, created_at, created_by_user_id)
+                VALUES (?,?,?,?,?,'interest_capitalised',?,?,?,NULL)`).run(
+                randomUUID(), companyId, null, facility.id, periodEnd, figure.amountMinor,
+                `Interest capitalised for ${periodStart.slice(0, 7)}`, Date.now(),
+              );
+            }
+            db.prepare(`INSERT INTO tf_interest_postings
+              (id, company_id, facility_id, drawdown_id, period_start, period_end, basis_minor, rate, day_count,
+               days, amount_minor, source, note, created_at, created_by_user_id)
+              VALUES (?,?,?,NULL,?,?,?,?,?,?,?,'charged',?,?,NULL)`).run(
+              randomUUID(), companyId, facility.id, periodStart, periodEnd,
+              figure.basisMinor, facility.rate, facility.dayCount, figure.days, figure.amountMinor,
+              'Month-end capitalisation', Date.now(),
             );
-          }
-          db.prepare(`INSERT INTO tf_interest_postings
-            (id, company_id, facility_id, drawdown_id, period_start, period_end, basis_minor, rate, day_count,
-             days, amount_minor, source, note, created_at, created_by_user_id)
-            VALUES (?,?,?,NULL,?,?,?,?,?,?,?,'charged',?,?,NULL)`).run(
-            randomUUID(), companyId, facility.id, periodStart, periodEnd,
-            figure.basisMinor, facility.rate, facility.dayCount, figure.days, figure.amountMinor,
-            'Month-end capitalisation', Date.now(),
-          );
-        })();
+          })();
+        } catch (err) {
+          // Another run posted this month while we computed it. Its own row is
+          // the truth; leave the balance alone instead of charging twice.
+          if (!/UNIQUE/.test(String(err?.message || ''))) throw err;
+          m += 1;
+          if (m > 12) { m = 1; y += 1; }
+          continue;
+        }
         posted.push({
           facilityId: facility.id, facilityName: facility.name, currency: facility.currency,
           period: periodStart.slice(0, 7), periodStart, periodEnd, days: figure.days,

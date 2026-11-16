@@ -83,7 +83,7 @@ export function TradeReports() {
               </tbody>
             </table>
           </div>
-          <p className="muted finance-hint">Average rate is weighted by the amount drawn.</p>
+          <p className="muted finance-hint">Average rate is weighted by the amount drawn. A fee recorded without a facility is in the year total below, not in a bank row.</p>
         </section>
       ) : null}
 

@@ -86,6 +86,12 @@ test('capitalisation posts each completed month once and compounds a catch-up', 
   assert.equal(trade.getFacility(company.id, facility.id).balanceMinor, 10_197_631);
   assert.deepEqual(trade.runCapitalisation(company.id, '2026-03-15'), []);
 
+  // A second writer cannot add a second capitalisation for the same month,
+  // which is what keeps a concurrent run from moving the balance twice.
+  assert.throws(() => db.getDb().prepare(`INSERT INTO tf_ledger_entries
+    (id, company_id, client_uuid, facility_id, entry_date, kind, amount_minor, note, created_at, created_by_user_id)
+    VALUES ('dup', ?, NULL, ?, '2026-01-31', 'interest_capitalised', 1, NULL, 0, NULL)`).run(company.id, facility.id), /UNIQUE/);
+
   // The posted rows belong to the Interest page's recorded table.
   const recorded = trade.listPostings(company.id, { page: 1, pageSize: 50 });
   assert.equal(recorded.total, 2);

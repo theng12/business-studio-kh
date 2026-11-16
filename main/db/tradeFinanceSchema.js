@@ -163,6 +163,11 @@ function ensureTradeFinanceSchema(db) {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS uq_tf_ledger_client
       ON tf_ledger_entries(company_id, client_uuid) WHERE client_uuid IS NOT NULL;
+    /* One capitalisation per facility per month, whatever two runs decide at
+       the same moment — the posting's own unique index is not enough, because
+       the matching ledger entry is what moves the balance. */
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tf_ledger_capitalised
+      ON tf_ledger_entries(facility_id, entry_date) WHERE kind = 'interest_capitalised';
     CREATE INDEX IF NOT EXISTS idx_tf_ledger_facility ON tf_ledger_entries(facility_id, entry_date, created_at);
 
     /* Phase B: fees charged by the bank (TT, commitment, commission, handling),
