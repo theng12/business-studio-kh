@@ -46,3 +46,4 @@ graphify-out
 # _trash/ rather than removed. It is deliberately outside Git — see
 # _trash/README.md and the "Working rules" section in AGENTS.md.
 _trash/
+/_trash
