@@ -91,6 +91,10 @@ export default [
       // `_trash/` is the owner's recoverable-delete folder — nothing in it is
       // read by the app, tests or build, so lint must not scan it either.
       '_trash/**',
+      // `.cache/` holds throwaway fixtures a test wrote (mskh-* temp dirs);
+      // they are generated, not source, and linting them turns a green tree
+      // red after any test run.
+      '.cache/**',
     ],
   },
   js.configs.recommended,
