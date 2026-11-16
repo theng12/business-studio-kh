@@ -268,6 +268,23 @@ export const APP_MODULES = [
     }],
   },
   {
+    // Trade Finance (docs/TRADE_FINANCE_PLAN.md). Opt-in: an account with
+    // neither trade cap never sees the tile, so the feature is absent rather
+    // than broken-looking. Both caps are granted per role in Settings → Roles.
+    id: 'trade',
+    name: 'Trade Finance',
+    description: 'Bank credit lines, drawdowns, interest and maturity reports.',
+    icon: 'bank',
+    sections: [{
+      pages: [
+        { id: 'tradefacilities', name: 'Facilities', icon: 'bank', caps: ['trade.view', 'trade.manage'] },
+        { id: 'tradedrawdowns', name: 'Drawdowns', icon: 'loan', caps: ['trade.view', 'trade.manage'] },
+        { id: 'tradeinterest', name: 'Interest', icon: 'interest', caps: ['trade.view', 'trade.manage'] },
+        { id: 'tradereports', name: 'Reports', icon: 'assetreport', caps: ['trade.view', 'trade.manage'] },
+      ],
+    }],
+  },
+  {
     id: 'system',
     name: 'System',
     description: 'Settings, backups and the history of every change.',

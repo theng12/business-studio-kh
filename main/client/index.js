@@ -1100,6 +1100,12 @@ const PROXIED_CHANNELS = [
   'finance:context','finance:list','finance:get','finance:saveDraft','finance:submit','finance:approve',
   'finance:reject','finance:cancel','finance:reverse','finance:accounts','finance:saveAccount',
   'finance:saveCategory','finance:updateSettings','finance:reports','finance:setReceipt','finance:getReceipt','finance:removeReceipt',
+  // Trade Finance Phase A (docs/TRADE_FINANCE_PLAN.md): data channels only —
+  // every one is expose()d with a validator, so a client Mac gets the same rules.
+  'trade:context','trade:banks:create','trade:banks:update','trade:banks:archive',
+  'trade:facilities:list','trade:facilities:get','trade:facilities:create','trade:facilities:update','trade:facilities:setActive',
+  'trade:drawdowns:list','trade:drawdowns:get','trade:drawdowns:create','trade:drawdowns:update','trade:drawdowns:setStatus',
+  'trade:repayments:add','trade:interest:list','trade:interest:preview','trade:reports:summary',
   'fx:getShared','fx:setShared',
   'fx:list','fx:rateOn','fx:setRate','fx:voidRate','ledger:listAccounts','ledger:updateAccount','ledger:getEntry',
   'ledger:entriesForAsset','ledger:listPeriods','ledger:checkIntegrity','ledger:lockPeriod','ledger:unlockPeriod',

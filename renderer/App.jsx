@@ -111,6 +111,11 @@ const Loans = lazy(() => import('./modules/People/Loans.jsx').then((m) => ({ def
 const FinanceExpenses = lazy(() => import('./modules/Finance/index.jsx').then((m) => ({ default: m.FinanceExpenses })));
 const FinanceAccounts = lazy(() => import('./modules/Finance/index.jsx').then((m) => ({ default: m.FinanceAccounts })));
 const FinanceReports = lazy(() => import('./modules/Finance/index.jsx').then((m) => ({ default: m.FinanceReports })));
+// Trade Finance Phase A (docs/TRADE_FINANCE_PLAN.md).
+const TradeFacilities = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeFacilities })));
+const TradeDrawdowns = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeDrawdowns })));
+const TradeInterest = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeInterest })));
+const TradeReports = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeReports })));
 // HR1: the attendance kiosk screen, previewed inside the app (hidden page; the
 // real kiosk is its own window — renderer/main.jsx #kiosk).
 const KioskPreview = lazy(() => import('./modules/Kiosk/KioskPreview.jsx').then((m) => ({ default: m.KioskPreview })));
@@ -160,6 +165,10 @@ const PAGES = {
   financeexpenses: FinanceExpenses,
   financeaccounts: FinanceAccounts,
   financereports: FinanceReports,
+  tradefacilities: TradeFacilities,
+  tradedrawdowns: TradeDrawdowns,
+  tradeinterest: TradeInterest,
+  tradereports: TradeReports,
   orders: Orders,
   kiosk: KioskPreview,
   history:   History,

@@ -3196,6 +3196,11 @@ const PAGE_LABELS = [
   ['financeexpenses', 'Expenses', 'finance'],
   ['financeaccounts', 'Money accounts', 'finance'],
   ['financereports', 'Reports', 'finance'],
+  // Trade Finance Phase A.
+  ['tradefacilities', 'Facilities', 'trade'],
+  ['tradedrawdowns', 'Drawdowns', 'trade'],
+  ['tradeinterest', 'Interest', 'trade'],
+  ['tradereports', 'Reports', 'trade'],
   // Pick & Pack Phase 0.
   ['orders', 'Orders', 'packing'],
   ['history', 'History', 'system'],

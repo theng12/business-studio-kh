@@ -499,6 +499,38 @@ function IconLoans({ className }) {
   );
 }
 
+// Trade Finance — a bank with columns.
+function IconBank({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M2.5 6.5 9 3l6.5 3.5M3.8 7.5h10.4M4.6 8.5v5M8.2 8.5v5M12 8.5v5M2.8 14.5h12.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// Trade Finance — a drawdown: money moving out and a maturity date.
+function IconLoan({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <rect x="2.5" y="3" width="13" height="12" rx="1.6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M5 6.2h5M5 9h8M5 11.8h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M11.2 6.2h1.6v1.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// Trade Finance — interest: a percent sign in a circle.
+function IconInterest({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <circle cx="9" cy="9" r="6.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M6.4 11.6 11.6 6.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="6.7" cy="6.9" r="1.1" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="11.3" cy="11.1" r="1.1" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+
 export const NAV_ICONS = {
   home: IconHome,
   products: IconProducts,
@@ -534,6 +566,9 @@ export const NAV_ICONS = {
   depreciation: IconDepreciation,
   taxyear: IconTaxYear,
   assetreport: IconAssetReport,
+  bank: IconBank,
+  loan: IconLoan,
+  interest: IconInterest,
   staff: IconStaff,
   attendance: IconAttendance,
   attreview: IconAttReview,

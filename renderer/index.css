@@ -13112,3 +13112,34 @@ button.hr-cell:focus-visible { outline: 2px solid var(--c-brand); outline-offset
 .finance-pending strong { font-size: var(--fs-lg); }
 .finance-pending__amount { margin-left: auto; font-weight: 600; }
 tr.is-retired { opacity: 0.6; }
+
+/* ── Trade Finance (docs/TRADE_FINANCE_PLAN.md) ─────────────────────── */
+.tf-actions { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.tf-actions__spacer { flex: 1 1 auto; }
+.tf-checks { display: flex; flex-direction: column; gap: var(--s-1); }
+.tf-sub { font-size: var(--fs-sm); margin-top: 2px; }
+.tf-cards { display: flex; flex-wrap: wrap; gap: var(--s-3); margin: var(--s-4) 0 var(--s-2); }
+.tf-card {
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 180px; padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--c-border); border-radius: var(--radius-md);
+  background: var(--c-surface);
+}
+.tf-card__label { font-size: var(--fs-sm); color: var(--c-text-muted); }
+.tf-card__value { font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.tf-meter { display: flex; align-items: center; gap: var(--s-2); min-width: 130px; }
+.tf-meter__track {
+  flex: 1 1 auto; height: 6px; min-width: 70px;
+  background: var(--c-hover-bg); border-radius: 999px; overflow: hidden;
+}
+.tf-meter__fill { height: 100%; background: var(--c-brand); border-radius: 999px; }
+.tf-meter__label { font-size: var(--fs-sm); color: var(--c-text-muted); min-width: 34px; text-align: right; }
+.tf-archived-toggle { margin-top: var(--s-4); }
+.tf-editor-actions { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-4); }
+.tf-repayment-form {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: var(--s-2); align-items: end; margin-top: var(--s-3);
+}
+@media (max-width: 900px) {
+  .tf-repayment-form { grid-template-columns: 1fr 1fr; }
+}

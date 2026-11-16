@@ -58,7 +58,7 @@ test('the registry covers every routed page exactly once, Home aside', () => {
 });
 
 test('the grouping the owner sees, and no tile for an unbuilt module', () => {
-  assert.deepEqual(reg.APP_MODULES.map((m) => m.id), ['products', 'media', 'labels', 'purchasing', 'packing', 'fuel', 'assets', 'people', 'finance', 'system']);
+  assert.deepEqual(reg.APP_MODULES.map((m) => m.id), ['products', 'media', 'labels', 'purchasing', 'packing', 'fuel', 'assets', 'people', 'finance', 'trade', 'system']);
   for (const m of reg.APP_MODULES) {
     assert.ok(m.name && m.description && m.icon, `${m.id} has a name, a description and an icon`);
     assert.ok(m.description.length <= 60, `${m.id}: the description fits a tile in one or two lines`);
@@ -86,7 +86,7 @@ test('which module a page belongs to is derived from its id', () => {
 
 test('caps hide pages, empty sections and whole tiles', () => {
   const ids = (mods) => mods.map((m) => m.id);
-  assert.deepEqual(ids(reg.visibleModules(['*'])), ['products', 'media', 'labels', 'purchasing', 'packing', 'fuel', 'assets', 'people', 'finance', 'system']);
+  assert.deepEqual(ids(reg.visibleModules(['*'])), ['products', 'media', 'labels', 'purchasing', 'packing', 'fuel', 'assets', 'people', 'finance', 'trade', 'system']);
   // Fixed Assets: view or manage; the count-only role (stage A3, phone) has no desktop page yet.
   assert.deepEqual(ids(reg.visibleModules(['assets.view'])), ['products', 'assets', 'system']);
   assert.deepEqual(ids(reg.visibleModules(['assets.count'])), ['products', 'system']);

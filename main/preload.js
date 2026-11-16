@@ -412,6 +412,45 @@ contextBridge.exposeInMainWorld('api', {
       return () => ipcRenderer.removeListener('finance:changed', fn);
     },
   },
+  /** Trade Finance (docs/TRADE_FINANCE_PLAN.md): lender-side credit lines,
+   *  drawdowns, repayments, the interest record and trade-finance reports. */
+  trade: {
+    context:          ()             => invoke('trade:context'),
+    banks: {
+      create:         (input)        => invoke('trade:banks:create', input),
+      update:         (id, patch)    => invoke('trade:banks:update', { id, patch }),
+      archive:        (id)           => invoke('trade:banks:archive', { id }),
+    },
+    facilities: {
+      list:           (opts)         => invoke('trade:facilities:list', opts),
+      get:            (id)           => invoke('trade:facilities:get', { id }),
+      create:         (input)        => invoke('trade:facilities:create', input),
+      update:         (id, patch)    => invoke('trade:facilities:update', { id, patch }),
+      setActive:      (id, active)   => invoke('trade:facilities:setActive', { id, active }),
+    },
+    drawdowns: {
+      list:           (filters)      => invoke('trade:drawdowns:list', filters),
+      get:            (id)           => invoke('trade:drawdowns:get', { id }),
+      create:         (input)        => invoke('trade:drawdowns:create', input),
+      update:         (id, patch)    => invoke('trade:drawdowns:update', { id, patch }),
+      setStatus:      (id, status)   => invoke('trade:drawdowns:setStatus', { id, status }),
+    },
+    repayments: {
+      add:            (input)        => invoke('trade:repayments:add', input),
+    },
+    interest: {
+      list:           (filters)      => invoke('trade:interest:list', filters),
+      preview:        ()             => invoke('trade:interest:preview'),
+    },
+    reports: {
+      summary:        ()             => invoke('trade:reports:summary'),
+    },
+    onChanged: (cb) => {
+      const fn = (_e, data) => cb(data);
+      ipcRenderer.on('trade:changed', fn);
+      return () => ipcRenderer.removeListener('trade:changed', fn);
+    },
+  },
   /** Fixed Assets A0: riel-per-dollar rates (house + official). */
   fx: {
     getShared: ()                            => invoke('fx:getShared'),

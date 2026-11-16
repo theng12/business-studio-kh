@@ -31,7 +31,9 @@ const MODULES = ['home', 'dashboard', 'company', 'brands', 'library', 'workspace
   'assetregister', 'assetdepreciation', 'assettax', 'assetreports',
   // Pick & Pack Phase 0.
   'orders',
-  'financeexpenses', 'financeaccounts', 'financereports'];
+  'financeexpenses', 'financeaccounts', 'financereports',
+  // Trade Finance Phase A (docs/TRADE_FINANCE_PLAN.md).
+  'tradefacilities', 'tradedrawdowns', 'tradeinterest', 'tradereports'];
 // Overlay Studio templates are global (not company-scoped), so the module
 // stays clickable even when no company has been picked yet — matches the
 // header copy inside the module itself.

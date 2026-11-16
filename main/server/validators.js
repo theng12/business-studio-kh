@@ -1160,9 +1160,11 @@ const { HR_VALIDATORS } = require('./hrValidators');
 const { PAYROLL_VALIDATORS } = require('./payrollValidators');
 // Pick & Pack Phase 0: pack:* and orders:* (main/server/packValidators.js).
 const { PACK_VALIDATORS } = require('./packValidators');
+// Trade Finance Phase A: trade:* (main/server/tradeValidators.js).
+const { TRADE_VALIDATORS } = require('./tradeValidators');
 
 function getValidator(channel) {
-  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? PAYROLL_VALIDATORS[channel] ?? PACK_VALIDATORS[channel] ?? null;
+  return VALIDATORS[channel] ?? FUEL_VALIDATORS[channel] ?? HR_VALIDATORS[channel] ?? PAYROLL_VALIDATORS[channel] ?? PACK_VALIDATORS[channel] ?? TRADE_VALIDATORS[channel] ?? null;
 }
 
 module.exports = {

@@ -472,6 +472,9 @@ function initDb(dataDir) {
   // CREATE TABLE IF NOT EXISTS / addColumnIfMissing, no SCHEMA_VERSION bump.
   require('./assetSchema').ensureAssetSchema(db);
   require('./financeSchema').ensureFinanceSchema(db);
+  // Trade Finance (docs/TRADE_FINANCE_PLAN.md): banks, credit facilities,
+  // drawdowns, repayments and interest postings. Additive only.
+  require('./tradeFinanceSchema').ensureTradeFinanceSchema(db);
 
   // Pick & Pack Phase 0 (docs/PICK_AND_PACK_PLAN.md §4): orders, lines,
   // parcel photos, saved import mappings, photo-threshold settings. Additive
