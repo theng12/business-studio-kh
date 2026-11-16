@@ -18,7 +18,7 @@ on looks alone (completeness-gates.md).
 | Read the lender picture: per-bank, year-to-date interest, maturity ladder, cash flow | native "reports derive drawn, ladder and cash flow from the records" |
 | Stay inside one company | native "every read and write is scoped to one company" |
 | The module is off until granted, and a viewer is read-only | hidden UI proof: tile absent for a role without caps, present after `trade.view`, pages render without the management buttons |
-| Money follows the hand calculation to the minor unit | hidden UI proof: USD 100,000 at 7.5% / 360, 151 days charged = $2,000.00, 168 days accrued = $3,500.00, 45 days to maturity = $937.50 |
+| Money follows the hand calculation to the minor unit | hidden UI proof: USD 100,000 at 7.5% / 360 — 173 days charged = $3,604.17, 7 days accrued = $145.83, 30 days to maturity = $625.00, undrawn commitment fee $62.50 |
 
 ### 2. Capability cross-check (the rules a facility declares are the rules the screen exposes)
 
