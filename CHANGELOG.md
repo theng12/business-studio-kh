@@ -1,5 +1,15 @@
 # What's new
 
+## 0.1.111 — 2026-11-17
+
+- NEW — Trade Finance, a separate module for the money the business owes its banks. Record each bank's credit line: its limit, currency, yearly rate, 360 or 365 day count, whether it revolves, its maturity, and its commitment fee. The list shows what is drawn, what is still available, how much of the line is used, and the fee for one period.
+- NEW — Record what is drawn on a line: the principal, value date, maturity, rate, the bank's reference, and the currency actually paid to the supplier with the rate used. A repayment can be part of the amount, with principal and interest recorded separately, and the line stays open until it is fully repaid.
+- NEW — Interest is worked out on real calendar days, one rounding at the end, and it follows a part-repayment exactly. The Interest screen shows what each drawdown has accrued since its last charge, and every interest figure that was recorded.
+- NEW — Reports gives the lender-side picture: each bank's lines, limits, drawn amount, use and average rate; interest recorded this year; a maturity ladder; and a cash-flow forecast of principal plus estimated interest.
+- NEW — Trade Finance is off until an owner grants it. Settings → Roles has two new capabilities, View trade finance and Manage trade finance; grant one and the module appears for that role.
+- Internal — New additive tables (banks, facilities, rate history, drawdowns, repayments, interest postings); no schema-version bump, no deletes. Pure money and date math in main/util/tradeMath.js. Every channel is validated and reaches client Macs. Overdraft movements, month-end capitalisation, bank reconciliation, reminders and the purchase-order link are later phases.
+- Internal — An overdraft (running-balance) facility is not offered yet; the form says so rather than showing a control that does nothing. Trade finance stays its own register and does not post to the Finance ledger.
+
 ## 0.1.110 — 2026-11-15
 
 - FIX — Check for Updates uses this Mac's saved Launcher connection, so a connected Mac can check for updates correctly.
