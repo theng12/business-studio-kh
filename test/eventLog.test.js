@@ -79,3 +79,14 @@ test('the app wires the bounded logger and flushes on quit', () => {
   assert.match(src, /app\.on\('before-quit'[\s\S]{0,200}eventLog\.flush\(\)/);
   assert.doesNotMatch(src, /fs\.appendFileSync\(crashLogPath\(\)/, 'no unbounded append left behind');
 });
+
+test('an oversized log left by an older build shrinks at the first new line', () => {
+  const { dir, file } = tmp();
+  fs.writeFileSync(file, Buffer.alloc(MAX_BYTES + 1024, 0x41));
+  const log = createEventLog({ filePath: file, fs });
+  log.log('boot', 'pid=1');
+  assert.ok(fs.statSync(file).size < 4096, `live log small at once, got ${fs.statSync(file).size}`);
+  assert.ok(fs.existsSync(`${file}.1`), 'the tail is kept');
+  assert.ok(fs.statSync(`${file}.1`).size <= 64 * 1024);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

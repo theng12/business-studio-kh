@@ -79,11 +79,14 @@ function createEventLog({ filePath, mirror, fs, maxBytes = MAX_BYTES }) {
       flushRepeats();
       lastKey = key;
       writes += 1;
-      write(`[${stamp}] ${key}\n`);
-      if (writes % STAT_EVERY === 0 && rotateIfLarge(filePath, fs, maxBytes)) {
+      // Check on the very first line too: a build that had no bound at all
+      // left a 1.95 GB file, and it should shrink at the next start, not
+      // after two hundred events.
+      if ((writes === 1 || writes % STAT_EVERY === 0) && rotateIfLarge(filePath, fs, maxBytes)) {
         lastKey = null;
         write(`[${stamp}] log:rotated :: previous ${KEEP_TAIL} bytes kept in ${path.basename(filePath)}.1\n`);
       }
+      write(`[${stamp}] ${key}\n`);
     },
     flush: flushRepeats,
     filePath,
