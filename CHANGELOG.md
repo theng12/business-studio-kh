@@ -1,18 +1,13 @@
 # What's new
 
-## 0.1.113 — 2026-11-17
-
-- FIX — Stop also works on a Social Grid image export. The button was there but that kind of export answered "already finished" and kept rendering; it now stops the same way an ordinary export does.
-- Internal — `ProgressOverlay` cancels a row on the channel its kind belongs to (`socialGrid:cancelExport` for social runs, `exports:cancel` otherwise), and `test/progressOverlayCancel.test.js` pins the routing.
-
 ## 0.1.112 — 2026-11-17
 
-- FIX — An export can be stopped. The progress panel has a Stop button, and it stops after the image being written rather than leaving half a file.
+- FIX — An export can be stopped. The progress panel has a Stop button, and it stops after the image being written rather than leaving half a file. It works the same for a Social Grid export.
 - FIX — Closing the app can no longer stall. If the background server does not stop in five seconds the app closes anyway, so an update's restart is not left waiting on it.
 - FIX — The attendance kiosk no longer blocks an update for good when an export is running: it checks again every second and closes as soon as the work ends, giving up after ten minutes instead of holding on.
 - FIX — The app's own log file is now small. It was growing without limit — 1.95 GB on one Mac — and now keeps the last 2 MB plus a short tail of the previous one. The next start shrinks an existing oversized log by itself.
 - FIX — A start that fails no longer waits for a click when the app was launched in the background.
-- Internal — Four smaller fixes in the same paths: a repeated log line is counted instead of repeated, and the log, server, kiosk and boot paths each keep their own bound.
+- Internal — Four smaller fixes in the same paths: a repeated log line is counted instead of repeated, and the log, server, kiosk and boot paths each keep their own bound. The progress overlay cancels a row on the channel its kind belongs to (`socialGrid:cancelExport` for social runs, `exports:cancel` otherwise).
 
 ## 0.1.111 — 2026-11-17
 
