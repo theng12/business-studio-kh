@@ -28,6 +28,14 @@ test('quit stops the server before the process goes away', () => {
   assert.match(block, /stopServer\(\)/);
 });
 
+test('a server that will not stop cannot keep the process and its single-instance lock alive', () => {
+  const block = INDEX.slice(INDEX.indexOf("app.on('before-quit'"), INDEX.indexOf("app.on('window-all-closed'"));
+  // Bounded: a timer exits anyway, and the normal path clears it.
+  assert.match(block, /setTimeout\(\(\) => \{[\s\S]{0,160}app\.exit\(0\)/);
+  assert.match(block, /clearTimeout\(bail\)/);
+  assert.match(block, /before-quit:stop-timeout/);
+});
+
 test('a busy port reports the plain sentence, not a raw error', () => {
   assert.match(INDEX, /EADDRINUSE' \? portBusyMessage/);
 });
@@ -45,4 +53,10 @@ test('the menu-bar item offers Show and Quit, and a click opens its menu', () =>
   assert.match(tray, /role: 'quit'/);
   assert.match(tray, /tray\.on\('click', \(\) => tray\.popUpContextMenu\(\)\)/);
   assert.match(INDEX, /installTray\(\{ showWindow: showMainWindow/);
+});
+
+test('a failed boot never waits for a click on a hidden or unattended start', () => {
+  const block = INDEX.slice(INDEX.indexOf("logEvent('boot:failed'"), INDEX.indexOf("app.exit(1)"));
+  assert.match(block, /const unattended = process\.argv\.includes\('--hidden'\)/);
+  assert.match(block, /if \(!unattended\) \{\s*dialog\.showErrorBox/);
 });

@@ -1433,6 +1433,19 @@ body[data-role="photographer"] .image-tile__nav-btn { display: none !important; 
   font-size: 11px;
   color: var(--c-text-subtle);
 }
+.progress-overlay__cancel {
+  margin-left: auto;
+  padding: 2px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--c-text);
+  background: transparent;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.progress-overlay__cancel:hover:not(:disabled) { background: var(--c-hover-bg); }
+.progress-overlay__cancel:disabled { opacity: 0.6; cursor: default; }
 .progress-overlay__label {
   font-size: 11px;
   color: var(--c-text-subtle);

@@ -4,11 +4,12 @@
  * `window.api.events.onProgress`; the store routes them into
  * `progressOps` keyed by id. We render one row per active op.
  *
- * Designed to be glanceable, not interactive: no dismiss button (the
- * operation finishes itself), no clicks. If we ever need cancel, the
- * row gets an X button that fires a `progress:cancel` event with the
- * id back to main.
+ * Glanceable, not interactive — except where main says the row can stop:
+ * an event carrying `cancellable: true` gets a Stop button that calls the
+ * runner's own cancel with this row's id (`exports:cancel`), so the row has
+ * a terminal escape instead of a bar that only ends when the work does.
  */
+import { useState } from 'react';
 import { useAppStore } from '../store/index.js';
 
 function kindLabel(kind) {
@@ -25,8 +26,24 @@ function kindLabel(kind) {
 
 export function ProgressOverlay() {
   const progressOps = useAppStore((s) => s.progressOps);
+  const addToast = useAppStore((s) => s.addToast);
+  const [stopping, setStopping] = useState({});
   const ids = Object.keys(progressOps || {});
   if (ids.length === 0) return null;
+
+  async function stop(id) {
+    setStopping((s) => ({ ...s, [id]: true }));
+    try {
+      const res = await window.api.exports.cancel(id);
+      if (!res?.ok) {
+        addToast('That export has already finished.', 'info');
+        setStopping((s) => ({ ...s, [id]: false }));
+      }
+    } catch (err) {
+      addToast(err?.message || 'Could not stop the export.', 'error');
+      setStopping((s) => ({ ...s, [id]: false }));
+    }
+  }
 
   return (
     <div className="progress-overlay" role="status" aria-live="polite">
@@ -42,6 +59,18 @@ export function ProgressOverlay() {
               <span className="progress-overlay__count">
                 {op.total > 0 ? `${op.done} / ${op.total}` : `${op.done ?? 0}`}
               </span>
+              {op.cancellable ? (
+                <button
+                  type="button"
+                  className="progress-overlay__cancel"
+                  onClick={() => stop(id)}
+                  disabled={stopping[id]}
+                  aria-label="Stop this export"
+                  title="Stops after the image being written"
+                >
+                  {stopping[id] ? 'Stopping…' : 'Stop'}
+                </button>
+              ) : null}
             </div>
             {op.label ? (
               <div className="progress-overlay__label" title={op.label}>{op.label}</div>

@@ -15,6 +15,7 @@ const { app, BrowserWindow, clipboard, dialog, Menu, nativeImage, net, protocol,
 const { installAppMenu } = require('./appMenu');
 const { installTray, destroyTray } = require('./tray');
 const { secondInstanceMessage, portBusyMessage } = require('./util/startupGuards');
+const { createEventLog } = require('./util/eventLog');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -134,15 +135,16 @@ function crashLogPath() {
   return userDataPath('crash.log');
 }
 
+// Bounded: rotates at 2 MB and collapses a repeated line (see util/eventLog.js).
+// The old append-forever version left a 1.95 GB crash.log on this Mac.
+const eventLog = createEventLog({
+  filePath: crashLogPath(),
+  fs,
+  mirror: (line) => process.stdout.write(line),
+});
+
 function logEvent(event, detail) {
-  const line = `[${new Date().toISOString()}] ${event}${detail ? ' :: ' + detail : ''}\n`;
-  process.stdout.write(line);
-  try {
-    fs.mkdirSync(path.dirname(crashLogPath()), { recursive: true });
-    fs.appendFileSync(crashLogPath(), line);
-  } catch (err) {
-    process.stderr.write(`[crash-log] failed to write: ${err.message}\n`);
-  }
+  eventLog.log(event, detail);
 }
 
 logEvent('boot', `pid=${process.pid} electron=${process.versions.electron} node=${process.versions.node}`);
@@ -785,13 +787,19 @@ app.whenReady().then(() => {
   // where the user can't read the terminal.
   logEvent('boot:failed', err && (err.stack || err.message || String(err)));
   const logPath = crashLogPath();
+  // A hidden or unattended start must never wait for a click: the dialog
+  // would sit invisible on an installer's launch, holding the
+  // single-instance lock so the next launch exits silently.
+  const unattended = process.argv.includes('--hidden') || process.argv.includes('--test-mode');
   try {
-    dialog.showErrorBox(
-      'Business Studio KH could not start',
-      `${(err && (err.message || String(err))) || 'Unknown error'}\n\n` +
-      `Details were written to:\n${logPath}\n\n` +
-      'Send that file to support if this keeps happening.',
-    );
+    if (!unattended) {
+      dialog.showErrorBox(
+        'Business Studio KH could not start',
+        `${(err && (err.message || String(err))) || 'Unknown error'}\n\n` +
+        `Details were written to:\n${logPath}\n\n` +
+        'Send that file to support if this keeps happening.',
+      );
+    }
   } catch (_) {
     // showErrorBox is unavailable before `ready` in some Electron
     // versions; the crash log above is still the durable record.
@@ -801,6 +809,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', (event) => {
   logEvent('before-quit');
+  eventLog.flush();
   destroyTray();
   // Owner 2026-11-12: quit must release everything — stop the server so its
   // port and sockets are freed before the process goes away.
@@ -808,7 +817,15 @@ app.on('before-quit', (event) => {
     const server = require('./server');
     if (server.getStatus().running) {
       event.preventDefault();
-      server.stopServer().finally(() => app.exit(0));
+      // A stop that never settles must not keep the process (and the
+      // single-instance lock) alive: the next launch would then exit
+      // silently and the app would look gone after an update. Bounded.
+      const bail = setTimeout(() => {
+        logEvent('before-quit:stop-timeout', 'the server did not stop in 5s; exiting anyway');
+        app.exit(0);
+      }, 5000);
+      bail.unref?.();
+      server.stopServer().finally(() => { clearTimeout(bail); app.exit(0); });
     }
   } catch (err) {
     logEvent('before-quit:stop-failed', err.message);

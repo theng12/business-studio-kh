@@ -69,12 +69,18 @@ const RELAUNCH_DELAY_MS = 300;
 const UNATTENDED_QUIT_BUDGET_MS = Number(process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS) || 45 * 1000;
 /** How often a pending quit is re-checked, so a dismissal can call it off before the deadline. */
 const UNATTENDED_QUIT_RETRY_MS = 500;
+// While an export or render is still running the quit is retried, not forced:
+// it goes through the moment the work ends, and gives up after this bound so a
+// stuck job cannot hold the single-instance lock for good.
+const UNATTENDED_QUIT_RECHECK_MS = 1000;
+const UNATTENDED_QUIT_MAX_DEFERRALS = 600; // 600 × 1 s = 10 min
 
 let log = (event, detail) => process.stdout.write(`[kiosk] ${event}${detail ? ` :: ${detail}` : ''}\n`);
 let allowQuit = false;
 let guardsInstalled = false;
 let kioskWin = null;
 let unattendedQuitTimer = null;
+let unattendedQuitDeferrals = 0;
 
 /** index.js hands in its crash-log writer so kiosk events land in crash.log (AGENTS.md §19). */
 function configureKiosk({ log: logFn } = {}) {
@@ -206,8 +212,22 @@ function releaseUnansweredQuit(deadline, reason) {
     return;
   }
   unattendedQuitTimer = null;
+  // Work in flight is never cut off, and it is never an open wait either: the
+  // check repeats so the quit happens the moment the work ends, and gives up
+  // after a bound. A quit blocked for good keeps the single-instance lock, and
+  // the next launch then exits silently — the app looks gone after an update.
   if (isWorkInProgress()) {
+    unattendedQuitDeferrals += 1;
+    if (unattendedQuitDeferrals > UNATTENDED_QUIT_MAX_DEFERRALS) {
+      log('kiosk:quit-deferred', `${reason}: work in flight for ${Math.round((UNATTENDED_QUIT_MAX_DEFERRALS * UNATTENDED_QUIT_RECHECK_MS) / 1000)} s; this update waits for the next try`);
+      return;
+    }
     log('kiosk:quit-skipped', `${reason}: work in flight, so this update waits for the next try`);
+    unattendedQuitTimer = setTimeout(
+      () => releaseUnansweredQuit(Date.now(), reason),
+      UNATTENDED_QUIT_RECHECK_MS,
+    );
+    unattendedQuitTimer.unref?.();
     return;
   }
   allowQuit = true;
@@ -251,6 +271,7 @@ function installKioskGuards() {
     e.preventDefault();
     if (!unattendedQuitTimer) {
       log('kiosk:quit-blocked', `a manager PIN is needed to close the kiosk; released in ${Math.round(UNATTENDED_QUIT_BUDGET_MS / 1000)} s if nobody answers`);
+      unattendedQuitDeferrals = 0;
       const deadline = Date.now() + UNATTENDED_QUIT_BUDGET_MS;
       // The timer is also the poll tick: it fires again until the deadline, which is
       // how a dismissal or a PIN can cancel the release before it happens.

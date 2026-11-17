@@ -577,3 +577,30 @@ test('work mid-task is not forced: that update cycle is skipped and the next try
     delete process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS;
   }
 });
+
+test('a skipped quit retries by itself and goes through the moment work ends', async () => {
+  process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS = '600';
+  try {
+    let busy = true;
+    const lines = [];
+    const { fresh, handlers, exits } = loadGuardedKiosk({ work: { has: () => busy } });
+    fresh.configureKiosk({ log: (e, d) => lines.push(`${e} ${d || ''}`.trim()) });
+    handlers['before-quit']({ preventDefault() {} });
+    await waitUntil(() => lines.some((l) => l.startsWith('kiosk:quit-skipped')), 4000);
+    assert.deepEqual(exits, [], 'work in flight is never cut off');
+
+    // No second quit request: the skipped cycle re-checks by itself.
+    busy = false;
+    await waitUntil(() => exits.length > 0, 5000);
+    assert.deepEqual(exits, ['quit'], 'the retry quits once the work ends, with no operator step');
+  } finally {
+    delete process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS;
+  }
+});
+
+test('the skip is bounded: a stuck job cannot hold the quit for good', () => {
+  const src = strip(read('main/kioskWindow.js'));
+  assert.match(src, /UNATTENDED_QUIT_MAX_DEFERRALS = \d+/);
+  assert.match(src, /unattendedQuitDeferrals > UNATTENDED_QUIT_MAX_DEFERRALS/);
+  assert.match(src, /kiosk:quit-deferred/);
+});
