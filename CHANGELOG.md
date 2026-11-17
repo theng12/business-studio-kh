@@ -1,5 +1,14 @@
 # What's new
 
+## 0.1.112 — 2026-11-17
+
+- FIX — An export can be stopped. The progress panel has a Stop button, and it stops after the image being written rather than leaving half a file.
+- FIX — Closing the app can no longer stall. If the background server does not stop in five seconds the app closes anyway, so an update's restart is not left waiting on it.
+- FIX — The attendance kiosk no longer blocks an update for good when an export is running: it checks again every second and closes as soon as the work ends, giving up after ten minutes instead of holding on.
+- FIX — The app's own log file is now small. It was growing without limit — 1.95 GB on one Mac — and now keeps the last 2 MB plus a short tail of the previous one. The next start shrinks an existing oversized log by itself.
+- FIX — A start that fails no longer waits for a click when the app was launched in the background.
+- Internal — Four smaller fixes in the same paths: a repeated log line is counted instead of repeated, and the log, server, kiosk and boot paths each keep their own bound.
+
 ## 0.1.111 — 2026-11-17
 
 - NEW — Trade Finance, a separate module for the money the business owes its banks. Record each bank's credit line: its limit, currency, yearly rate, 360 or 365 day count, whether it revolves, its maturity, and its commitment fee. The list shows what is drawn, what is still available, how much of the line is used, and the fee for one period.
