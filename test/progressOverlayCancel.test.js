@@ -26,6 +26,13 @@ test('the export run id the overlay holds is the id cancel expects', () => {
   assert.match(ipc, /const run = activeRuns\.get\(opId\)/);
 });
 
+test('a socialGrid row stops through its own cancel channel, not the export runner', () => {
+  // main/ipc/socialGrid.js marks its rows cancellable too; exports:cancel has
+  // no run for them and used to answer "already finished" while the render ran on.
+  assert.match(src, /kind === 'socialGrid'/);
+  assert.match(src, /window\.api\.socialGrid\.cancelExport\(id\)/);
+});
+
 test('a run that already ended says so instead of looking ignored', () => {
   assert.match(src, /That export has already finished\./);
 });

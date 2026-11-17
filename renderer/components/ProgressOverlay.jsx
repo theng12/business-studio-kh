@@ -31,10 +31,13 @@ export function ProgressOverlay() {
   const ids = Object.keys(progressOps || {});
   if (ids.length === 0) return null;
 
-  async function stop(id) {
+  async function stop(id, kind) {
     setStopping((s) => ({ ...s, [id]: true }));
     try {
-      const res = await window.api.exports.cancel(id);
+      // socialGrid runs cancel on their own channel; exports:cancel only knows export runs.
+      const res = kind === 'socialGrid'
+        ? await window.api.socialGrid.cancelExport(id)
+        : await window.api.exports.cancel(id);
       if (!res?.ok) {
         addToast('That export has already finished.', 'info');
         setStopping((s) => ({ ...s, [id]: false }));
@@ -63,7 +66,7 @@ export function ProgressOverlay() {
                 <button
                   type="button"
                   className="progress-overlay__cancel"
-                  onClick={() => stop(id)}
+                  onClick={() => stop(id, op.kind)}
                   disabled={stopping[id]}
                   aria-label="Stop this export"
                   title="Stops after the image being written"
