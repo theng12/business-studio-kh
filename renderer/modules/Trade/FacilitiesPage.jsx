@@ -11,7 +11,7 @@
  * offering a control that would do nothing.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import { Badge, Button, EmptyState, Field, Input, Modal, Select, Textarea } from '../../components/ui.jsx';
 import { confirm } from '../../components/ConfirmModal.jsx';
@@ -20,13 +20,13 @@ import { LoadError } from '../Fuel/FuelShared.jsx';
 import { useTradeContext, useTradeTick } from './tradeHooks.js';
 import {
   COMMITMENT_FREQS, KINDS, daysLabel, errText, formatMinor, formatPercent, formatRate,
-  minorToInput, parseAmount,
+  minorToInput, newClientId, parseAmount, todayISO,
 } from './tradeModel.js';
 
 const BLANK_FACILITY = {
   bankId: '', kind: 'RC', name: '', currency: 'USD', limit: '', rate: '',
   dayCount: '360', revolving: true, hasMaturity: true, commitmentRate: '',
-  commitmentFreq: 'monthly', termDays: '', note: '',
+  commitmentFreq: 'monthly', termDays: '', note: '', interestBasis: 'drawn',
 };
 
 function facilityToForm(f) {
@@ -37,6 +37,7 @@ function facilityToForm(f) {
     commitmentRate: f.commitmentRate ? String(f.commitmentRate) : '',
     commitmentFreq: f.commitmentFreq || 'monthly',
     termDays: f.termDays ? String(f.termDays) : '', note: f.note || '',
+    interestBasis: f.interestBasis || 'drawn',
   };
 }
 
@@ -51,6 +52,7 @@ function FacilityEditor({ facility, banks, onClose, onSaved }) {
   const rate = Number(form.rate || 0);
   const commitmentRate = Number(form.commitmentRate || 0);
   const termDays = form.termDays === '' ? null : Number(form.termDays);
+  const basisLocked = !isNew && ((facility.activeDrawdowns || 0) > 0 || (facility.movements || 0) > 0);
 
   async function save() {
     setError('');
@@ -71,9 +73,9 @@ function FacilityEditor({ facility, banks, onClose, onSaved }) {
         rate,
         dayCount: Number(form.dayCount),
         revolving: form.revolving,
-        hasMaturity: form.hasMaturity,
-        interestBasis: 'drawn',
-        interestBilling: 'at_repayment',
+        hasMaturity: form.interestBasis === 'balance' ? false : form.hasMaturity,
+        interestBasis: form.interestBasis,
+        interestBilling: form.interestBasis === 'balance' ? 'month_end_capitalised' : 'at_repayment',
         commitmentRate,
         commitmentFreq: form.commitmentFreq,
         termDays,
@@ -176,13 +178,16 @@ function FacilityEditor({ facility, banks, onClose, onSaved }) {
               Revolving — repaid money can be drawn again
             </label>
             <label className="finance-check">
-              <input type="checkbox" checked={form.hasMaturity} onChange={(e) => set('hasMaturity', e.target.checked)} disabled={busy} />
+              <input type="checkbox" checked={form.hasMaturity && form.interestBasis !== 'balance'} onChange={(e) => set('hasMaturity', e.target.checked)} disabled={busy || form.interestBasis === 'balance'} />
               Every drawdown has a maturity date
             </label>
           </div>
         </Field>
-        <Field label="Interest is charged on" hint="Drawn amount now. Running-balance overdrafts arrive in a later update.">
-          <Input value="The drawn amount" disabled />
+        <Field label="Interest is charged on" hint={basisLocked ? 'This facility already has history, so its basis cannot change.' : 'The drawn amount for RC/TR. The running balance for an overdraft.'}>
+          <Select value={form.interestBasis} onChange={(e) => set('interestBasis', e.target.value)} disabled={busy || basisLocked}>
+            <option value="drawn">The drawn amount (RC / TR)</option>
+            <option value="balance">The running balance (overdraft)</option>
+          </Select>
         </Field>
         <Field label="Note" span={2}>
           <Textarea rows={2} value={form.note} onChange={(e) => set('note', e.target.value)} disabled={busy} maxLength={500} />
@@ -245,6 +250,116 @@ function BankEditor({ onClose, onSaved }) {
   );
 }
 
+const MOVEMENT_KINDS = [
+  { value: 'draw', label: 'Draw — increases what is owed' },
+  { value: 'repay', label: 'Repayment — reduces what is owed' },
+  { value: 'opening', label: 'Opening balance' },
+  { value: 'adjustment', label: 'Adjustment' },
+];
+
+function MovementsModal({ facility, onClose }) {
+  const [rows, setRows] = useState([]);
+  const [form, setForm] = useState({ kind: 'draw', entryDate: todayISO(), amount: '', direction: 'up', note: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const clientId = useRef(newClientId());
+  const set = (key, value) => setForm((f) => ({ ...f, [key]: value }));
+
+  const load = useCallback(async () => {
+    const list = await window.api.trade.movements.list(facility.id);
+    setRows(Array.isArray(list) ? list : []);
+  }, [facility.id]);
+
+  useEffect(() => { load().catch((err) => setError(errText(err))); }, [load]);
+
+  async function add() {
+    setError('');
+    const parsed = parseAmount(form.amount, facility.currency);
+    if (!parsed.ok || parsed.minor <= 0) { setError(parsed.ok ? 'Enter the amount.' : parsed.error); return; }
+    const amountMinor = form.kind === 'adjustment' && form.direction === 'down' ? -parsed.minor : parsed.minor;
+    setBusy(true);
+    try {
+      const list = await window.api.trade.movements.add({
+        clientUuid: clientId.current,
+        facilityId: facility.id,
+        entryDate: form.entryDate,
+        kind: form.kind,
+        amountMinor,
+        note: form.note.trim() || null,
+      });
+      setRows(Array.isArray(list) ? list : []);
+      clientId.current = newClientId();
+      setForm((f) => ({ ...f, amount: '', note: '' }));
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const balance = rows.length ? rows[rows.length - 1].balanceMinor : 0;
+
+  return (
+    <Modal
+      open
+      onClose={busy ? undefined : onClose}
+      title={`Movements — ${facility.name}`}
+      wide
+      busy={busy}
+      footer={<div className="tf-actions"><span className="tf-actions__spacer" /><Button onClick={onClose} disabled={busy}>Close</Button></div>}
+    >
+      {error ? <p className="field__error">{error}</p> : null}
+      <p className="tf-card__value">{formatMinor(balance, facility.currency)} <span className="muted">owed now</span></p>
+      {rows.length ? (
+        <div className="data-table-wrap">
+          <table className="data-table">
+            <thead><tr><th>Date</th><th>What</th><th className="is-num">Amount</th><th className="is-num">Balance</th><th>Note</th></tr></thead>
+            <tbody>
+              {rows.map((m) => (
+                <tr key={m.id}>
+                  <td>{m.entryDate}</td>
+                  <td>{m.kind === 'interest_capitalised' ? 'Interest capitalised' : m.kind[0].toUpperCase() + m.kind.slice(1)}</td>
+                  <td className="is-num">{formatMinor(m.amountMinor, facility.currency)}</td>
+                  <td className="is-num">{formatMinor(m.balanceMinor, facility.currency)}</td>
+                  <td className="muted">{m.note || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="muted">No movements yet. Record the opening balance first.</p>}
+
+      <div className="tf-repayment-form">
+        <Field label="What">
+          <Select value={form.kind} onChange={(e) => set('kind', e.target.value)} disabled={busy}>
+            {MOVEMENT_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+          </Select>
+        </Field>
+        <Field label={`Amount (${facility.currency})`}>
+          <Input inputMode="decimal" value={form.amount} onChange={(e) => set('amount', e.target.value)} disabled={busy} />
+        </Field>
+        <Field label="Date">
+          <Input type="date" value={form.entryDate} onChange={(e) => set('entryDate', e.target.value)} disabled={busy} />
+        </Field>
+        <Field label={form.kind === 'adjustment' ? 'Direction' : 'Note'}>
+          {form.kind === 'adjustment' ? (
+            <Select value={form.direction} onChange={(e) => set('direction', e.target.value)} disabled={busy}>
+              <option value="up">Increase</option>
+              <option value="down">Reduce</option>
+            </Select>
+          ) : (
+            <Input value={form.note} onChange={(e) => set('note', e.target.value)} disabled={busy} maxLength={500} />
+          )}
+        </Field>
+        <Button variant="primary" onClick={add} disabled={busy}>{busy ? 'Saving…' : 'Add movement'}</Button>
+      </div>
+      {form.kind === 'adjustment' ? (
+        <Field label="Note"><Input value={form.note} onChange={(e) => set('note', e.target.value)} disabled={busy} maxLength={500} /></Field>
+      ) : null}
+    </Modal>
+  );
+}
+
 export function TradeFacilities() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
   const context = useTradeContext();
@@ -256,6 +371,7 @@ export function TradeFacilities() {
   const [editing, setEditing] = useState(null); // facility object
   const [newOpen, setNewOpen] = useState(false);
   const [bankOpen, setBankOpen] = useState(false);
+  const [movementsFor, setMovementsFor] = useState(null);
   const addToast = useAppStore((s) => s.addToast);
 
   useEffect(() => {
@@ -349,6 +465,7 @@ export function TradeFacilities() {
                 <th className="is-num">Commitment</th>
                 <th>Next maturity</th>
                 <th>Status</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -379,6 +496,9 @@ export function TradeFacilities() {
                   <td className="is-num">{f.commitmentPerPeriodMinor ? `${formatMinor(f.commitmentPerPeriodMinor, f.currency)}` : <span className="muted">Waived</span>}</td>
                   <td className="muted">{f.nextMaturity ? daysLabel(Math.round((Date.parse(`${f.nextMaturity}T00:00:00Z`) - Date.parse(`${context.today}T00:00:00Z`)) / 86400000)) : '—'}{f.nextMaturity ? <div className="tf-sub">{f.nextMaturity}</div> : null}</td>
                   <td>{f.active ? <Badge tone="emerald">Open</Badge> : <Badge tone="slate">Retired</Badge>}</td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    {f.balanceBased ? <Button size="sm" onClick={() => setMovementsFor(f)}>Movements</Button> : null}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -411,6 +531,9 @@ export function TradeFacilities() {
           onClose={() => setBankOpen(false)}
           onSaved={() => { setBankOpen(false); addToast('Bank added', 'success'); }}
         />
+      ) : null}
+      {movementsFor ? (
+        <MovementsModal facility={movementsFor} onClose={() => setMovementsFor(null)} />
       ) : null}
     </div>
   );

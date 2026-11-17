@@ -147,6 +147,63 @@ const TRADE_VALIDATORS = {
   }, true),
   'trade:interest:preview': noArgs,
   'trade:reports:summary': noArgs,
+
+  /* Phase B */
+  'trade:movements:list': shape(['facilityId'], (a) => id(a.facilityId) || 'facilityId is required'),
+  'trade:movements:add': shape(['clientUuid', 'facilityId', 'entryDate', 'kind', 'amountMinor', 'note'], (a) => {
+    if (!text(a.clientUuid, 80)) return 'clientUuid must be text';
+    if (!id(a.facilityId)) return 'facilityId is required';
+    if (!dateOrBlank(a.entryDate) || !a.entryDate) return 'entryDate must look like 2026-03-12';
+    if (!['opening', 'draw', 'repay', 'adjustment'].includes(a.kind)) return 'unknown movement kind';
+    if (!Number.isSafeInteger(a.amountMinor) || a.amountMinor === 0) return 'amountMinor must be a whole amount that is not zero';
+    return text(a.note) || 'note must be text';
+  }),
+  'trade:capitalisation:preview': noArgs,
+  'trade:capitalisation:run': noArgs,
+  'trade:reconciliation:list': noArgs,
+  'trade:reconciliation:add': shape(['facilityId', 'drawdownId', 'periodStart', 'periodEnd', 'amountMinor', 'note'], (a) => {
+    if (!id(a.facilityId)) return 'facilityId is required';
+    if (a.drawdownId != null && a.drawdownId !== '' && !id(a.drawdownId)) return 'drawdownId must be an id';
+    if (!dateOrBlank(a.periodStart) || !a.periodStart) return 'periodStart must look like 2026-03-12';
+    if (!dateOrBlank(a.periodEnd) || !a.periodEnd) return 'periodEnd must look like 2026-03-12';
+    if (!whole(a.amountMinor)) return 'amountMinor must be a whole non-negative amount';
+    return text(a.note) || 'note must be text';
+  }),
+  'trade:fees:list': shape(['limit'], (a) => a.limit == null || (Number.isSafeInteger(a.limit) && a.limit > 0) || 'limit must be a positive whole number', true),
+  'trade:fees:add': shape(['clientUuid', 'facilityId', 'drawdownId', 'kind', 'amountMinor', 'currency', 'feeDate', 'note'], (a) => {
+    if (!text(a.clientUuid, 80)) return 'clientUuid must be text';
+    if (a.facilityId != null && a.facilityId !== '' && !id(a.facilityId)) return 'facilityId must be an id';
+    if (a.drawdownId != null && a.drawdownId !== '' && !id(a.drawdownId)) return 'drawdownId must be an id';
+    if (!(typeof a.kind === 'string' && a.kind.trim())) return 'kind is required';
+    if (!whole(a.amountMinor)) return 'amountMinor must be a whole non-negative amount';
+    if (a.currency != null && a.currency !== '' && !/^[A-Za-z]{3}$/.test(a.currency)) return 'currency must be a three-letter code';
+    if (!dateOrBlank(a.feeDate) || !a.feeDate) return 'feeDate must look like 2026-03-12';
+    return text(a.note) || 'note must be text';
+  }),
+  'trade:recurring:list': noArgs,
+  'trade:recurring:add': shape(['facilityId', 'kind', 'amountMinor', 'currency', 'frequency', 'nextDate', 'enabled', 'note'], (a) => {
+    if (a.facilityId != null && a.facilityId !== '' && !id(a.facilityId)) return 'facilityId must be an id';
+    if (!(typeof a.kind === 'string' && a.kind.trim())) return 'kind is required';
+    if (!whole(a.amountMinor)) return 'amountMinor must be a whole non-negative amount';
+    if (a.currency != null && a.currency !== '' && !/^[A-Za-z]{3}$/.test(a.currency)) return 'currency must be a three-letter code';
+    if (a.frequency != null && !FREQS.includes(a.frequency)) return 'unknown frequency';
+    if (!dateOrBlank(a.nextDate) || !a.nextDate) return 'nextDate must look like 2026-03-12';
+    if (a.enabled != null && typeof a.enabled !== 'boolean') return 'enabled must be true or false';
+    return text(a.note) || 'note must be text';
+  }),
+  'trade:recurring:update': shape(['id', 'patch'], (a) => {
+    if (!id(a.id)) return 'id is required';
+    return shape(['kind', 'amountMinor', 'currency', 'frequency', 'nextDate', 'enabled', 'note'], (p) => {
+      if (p.kind != null && !(typeof p.kind === 'string' && p.kind.trim())) return 'kind must be text';
+      if (p.amountMinor != null && !whole(p.amountMinor)) return 'amountMinor must be a whole non-negative amount';
+      if (p.currency != null && !/^[A-Za-z]{3}$/.test(p.currency)) return 'currency must be a three-letter code';
+      if (p.frequency != null && !FREQS.includes(p.frequency)) return 'unknown frequency';
+      if (!dateOrBlank(p.nextDate)) return 'nextDate must look like 2026-03-12';
+      if (p.enabled != null && typeof p.enabled !== 'boolean') return 'enabled must be true or false';
+      return text(p.note) || 'note must be text';
+    })(a.patch);
+  }),
+  'trade:recurring:postDue': noArgs,
 };
 
 module.exports = { TRADE_VALIDATORS };

@@ -63,18 +63,22 @@ notification channels (Phase C is in-app), PWA/phone pages, and any GL posting (
 
 - **A — register and interest (this change):** schema, Facilities, Drawdowns with partial repayments,
   interest math and postings, Reports v1 (per-bank, YTD, ladder, cash flow).
-- **B — overdraft, reconciliation, fees:** movement ledger, month-end capitalisation, bank-actual variance,
-  fee list and scheduled fees.
+- **B — overdraft, reconciliation, fees (implemented 2026-11-17):** movement ledger with a running balance
+  on the facility form, month-end capitalisation that compounds a catch-up, bank-actual reconciliation with
+  a variance status, fee list and scheduled recurring fees that catch up every missed period.
 - **C — reminders:** rules, snooze, log, Home badge, daily pass, start-up notice (in-app only in v1).
 - **D — purchase-order financing:** link a drawdown to a PO and show its financing cost. Purchasing screens
   are not reshaped.
 
-## 6. Accepted limits in Phase A
+## 6. Accepted limits
 
-- Running-balance (overdraft) facilities have their schema columns ready but no movement screen; the form
-  records drawn-amount facilities and says so. Phase B adds the screen.
-- Interest is recorded when it is paid with a repayment. Month-end capitalisation and the bank's actual
-  figure are Phase B.
+- A running-balance (overdraft) facility has no drawdown, no maturity and no prepayment; its balance is
+  the sum of its movements. Changing the basis of a facility that already has drawdowns or movements is
+  refused, so the two shapes never mix. (Phase B, 2026-11-17.)
+- For drawn facilities, interest is recorded when it is paid with a repayment. A running-balance facility
+  is charged at month-end, and its interest is added to the balance so the next month compounds.
+- Capitalised interest starts earning the day after it is posted, so ours for a month equals what that
+  month was charged — the bank's own figure then reconciles to a real difference, not a self-made one.
 - No GL posting: trade-finance liabilities do not appear in the Finance balance sheet. Accepted by the
   Developer as written; adding a liability ledger is its own decision, not a quiet change.
 - Reminders are Phase C; until then the Reports page's cash-flow forecast is the due list.
@@ -85,4 +89,7 @@ notification channels (Phase C is in-app), PWA/phone pages, and any GL posting (
 period clamping, ladder buckets), `test/tradeWiring.test.js` (registry/routes/navigation/crawl, opt-in caps,
 validator coverage, preload surface, additive schema) and `test/tradeFinanceNative.test.js` (outstanding,
 over-repayment refused, posting period, clientUuid replay, reference uniqueness, company isolation,
-derived reports). The guarded native file runs under `npm run test:native`.
+derived reports) and `test/tradeFinancePhaseBNative.test.js` (movements and running balance, a drawdown
+refused on a balance facility, capitalisation posted once and compounding, ours equal to the charge,
+variance status, fee idempotency, recurring catch-up). The guarded native files run under
+`npm run test:native`.

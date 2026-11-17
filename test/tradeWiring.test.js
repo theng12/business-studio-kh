@@ -57,7 +57,7 @@ test('the caps are opt-in and resolve reads to view, writes to manage', () => {
   assert.match(caps, /key: 'trade\.view'/);
   assert.match(caps, /key: 'trade\.manage'/);
   assert.match(caps, /OPT_IN_CAPABILITIES = new Set\(\[[^\]]*'trade\.view', 'trade\.manage'/);
-  assert.match(caps, /\[\/\^trade:\(context\|facilities:\(list\|get\)\|drawdowns:\(list\|get\)\|interest:\(list\|preview\)\|reports:summary\)\$\/, 'trade\.view'\]/);
+  assert.match(caps, /\[\/\^trade:\(context\|facilities:\(list\|get\)\|drawdowns:\(list\|get\)\|interest:\(list\|preview\)\|reports:summary\|movements:list\|capitalisation:preview\|reconciliation:list\|fees:list\|recurring:list\)\$\/, 'trade\.view'\]/);
   assert.match(caps, /\[\/\^trade:\/, +'trade\.manage'\]/);
 });
 

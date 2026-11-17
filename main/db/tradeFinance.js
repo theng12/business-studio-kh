@@ -19,12 +19,12 @@ const {
 const {
   calendarDaysBetween, daysUntil, accruedMinor, outstandingMinor,
   commitmentPerPeriodMinor, utilisation, ladderBucket, LADDER_BUCKETS, interestMinor,
+  lastDayOfMonth, addPeriod,
 } = require('../util/tradeMath');
 
 const KINDS = ['OD', 'RC', 'TR', 'Other'];
 const FACILITY_CURRENCIES = ['USD', 'KHR'];
 const BASES = ['drawn', 'balance'];
-const BILLINGS = ['at_repayment', 'month_end_capitalised'];
 const COMMITMENT_FREQS = ['monthly', 'quarterly', 'yearly'];
 const DRAWDOWN_STATUSES = ['active', 'closed', 'cancelled'];
 
@@ -213,7 +213,11 @@ function facilityRow(companyId, id) {
  * reads 0 and the screen says so instead of inventing a balance.
  */
 function drawnMinor(facility) {
-  if (facility.interestBasis === 'balance') return 0;
+  if (facility.interestBasis === 'balance') {
+    const row = getDb().prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS balance
+      FROM tf_ledger_entries WHERE facility_id = ? AND company_id = ?`).get(facility.id, facility.companyId);
+    return Math.max(0, row?.balance || 0); // a credit balance uses none of the line
+  }
   const row = getDb().prepare(`
     SELECT COALESCE(SUM(CASE WHEN x.outstanding < 0 THEN 0 ELSE x.outstanding END), 0) AS drawn
     FROM (
@@ -236,6 +240,13 @@ function enrichFacility(facility) {
     SELECT COUNT(*) AS n, MIN(maturity_date) AS next_maturity
     FROM tf_drawdowns WHERE facility_id = ? AND company_id = ? AND status = 'active'`)
     .get(facility.id, facility.companyId);
+  const balanceMinor = facility.interestBasis === 'balance'
+    ? (getDb().prepare(`SELECT COALESCE(SUM(amount_minor), 0) AS balance
+        FROM tf_ledger_entries WHERE facility_id = ? AND company_id = ?`)
+      .get(facility.id, facility.companyId)?.balance || 0)
+    : null;
+  const movements = getDb().prepare('SELECT COUNT(*) AS n FROM tf_ledger_entries WHERE facility_id = ? AND company_id = ?')
+    .get(facility.id, facility.companyId)?.n || 0;
   return {
     ...facility,
     drawnMinor: drawn,
@@ -243,8 +254,13 @@ function enrichFacility(facility) {
     utilisation: utilisation(drawn, facility.limitMinor),
     commitmentPerPeriodMinor: commitment,
     activeDrawdowns: active?.n || 0,
+    movements,
     nextMaturity: active?.next_maturity || null,
     balanceBased: facility.interestBasis === 'balance',
+    balanceMinor,
+    dailyInterestMinor: facility.interestBasis === 'balance'
+      ? interestMinor({ principalMinor: Math.max(0, balanceMinor || 0), ratePct: facility.rate, days: 1, dayCount: facility.dayCount })
+      : 0,
   };
 }
 
@@ -280,7 +296,20 @@ function facilityInput(companyId, input, existing = null) {
   const dayCount = Number(input.dayCount ?? existing?.dayCount ?? 360);
   if (dayCount !== 360 && dayCount !== 365) throw badRequest('Day count must be 360 or 365');
   const interestBasis = oneOf(input.interestBasis ?? existing?.interestBasis, BASES, 'Interest basis', 'drawn');
-  const interestBilling = oneOf(input.interestBilling ?? existing?.interestBilling, BILLINGS, 'Interest billing', 'at_repayment');
+  // Phase B: a running-balance facility (overdraft) has no drawdowns, no
+  // maturity and month-end capitalised interest; a drawn facility bills at
+  // repayment. The two shapes are not mixed.
+  const interestBilling = interestBasis === 'balance'
+    ? 'month_end_capitalised'
+    : 'at_repayment';
+  if (existing && existing.interestBasis !== interestBasis) {
+    const used = getDb().prepare(`SELECT
+        (SELECT COUNT(*) FROM tf_drawdowns WHERE facility_id = ?) AS drawdowns,
+        (SELECT COUNT(*) FROM tf_ledger_entries WHERE facility_id = ?) AS movements`).get(existing.id, existing.id);
+    if (used.drawdowns || used.movements) {
+      throw badRequest('This facility already has drawdowns or movements — its interest basis cannot change');
+    }
+  }
   const commitmentFreq = oneOf(input.commitmentFreq ?? existing?.commitmentFreq, COMMITMENT_FREQS, 'Commitment frequency', 'monthly');
   const termDays = input.termDays === undefined ? existing?.termDays ?? null : input.termDays;
   if (termDays != null && (!Number.isSafeInteger(Number(termDays)) || Number(termDays) <= 0)) {
@@ -295,7 +324,7 @@ function facilityInput(companyId, input, existing = null) {
     rate: rateOr(input.rate ?? existing?.rate ?? 0, 'Interest rate'),
     dayCount,
     revolving: boolOr(input.revolving, existing?.revolving ?? true),
-    hasMaturity: boolOr(input.hasMaturity, existing?.hasMaturity ?? true),
+    hasMaturity: interestBasis === 'balance' ? 0 : boolOr(input.hasMaturity, existing?.hasMaturity ?? true),
     interestBasis,
     interestBilling,
     commitmentRate: rateOr(input.commitmentRate ?? existing?.commitmentRate ?? 0, 'Commitment rate'),
@@ -444,6 +473,9 @@ function drawdownInput(companyId, input, existing = null) {
   const facility = getDb().prepare(`SELECT * FROM tf_facilities WHERE id = ? AND company_id = ? AND active = 1`)
     .get(facilityId, companyId);
   if (!facility) throw badRequest('Choose an active facility');
+  if (facility.interest_basis === 'balance') {
+    throw badRequest('This facility runs a balance — record a movement instead of a drawdown');
+  }
   const principalMinor = wholeMinor(input.principalMinor ?? existing?.principalMinor, 'Principal', { min: 1 });
   const valueDate = calendarDate(input.valueDate ?? existing?.valueDate, 'Value date');
   const maturityDate = optionalDate(input.maturityDate === undefined ? existing?.maturityDate : input.maturityDate, 'Maturity date');
@@ -685,6 +717,10 @@ function reportSummary(companyId, asOf = todayPhnomPenh()) {
   })).sort((a, b) => (a.bank < b.bank ? -1 : a.bank > b.bank ? 1 : 0));
 
   const year = String(asOf).slice(0, 4);
+  const fees = feeTotals(companyId, year);
+  const feeByBank = Object.fromEntries(fees.byBank.map((r) => [`${r.bankId}|${r.currency}`, r.totalMinor]));
+  for (const row of perBankRows) row.feesMinor = feeByBank[`${row.bankId}|${row.currency}`] || 0;
+
   const ytd = getDb().prepare(`
     SELECT f.currency AS currency, COALESCE(SUM(p.amount_minor), 0) AS totalMinor
     FROM tf_interest_postings p JOIN tf_facilities f ON f.id = p.facility_id
@@ -724,6 +760,7 @@ function reportSummary(companyId, asOf = todayPhnomPenh()) {
     asOf,
     perBank: perBankRows,
     ytd,
+    ytdFees: fees.ytd,
     ladder: LADDER_BUCKETS.map((bucket) => ({
       bucket,
       totals: Object.entries(ladder[bucket]).map(([currency, totalMinor]) => ({ currency, totalMinor })),
@@ -732,10 +769,481 @@ function reportSummary(companyId, asOf = todayPhnomPenh()) {
   };
 }
 
+/* ── Phase B: overdraft movements ───────────────────────────────────── */
+
+const MOVEMENT_KINDS = ['opening', 'draw', 'repay', 'adjustment'];
+
+function facilityFor(companyId, id, { balanceOnly = false } = {}) {
+  const row = facilityRow(companyId, id);
+  if (!row) throw notFound('Facility');
+  const facility = rowToFacility(row);
+  if (balanceOnly && facility.interestBasis !== 'balance') {
+    throw badRequest('Movements belong to a running-balance (overdraft) facility');
+  }
+  return facility;
+}
+
+function rowToMovement(r) {
+  return {
+    id: r.id, companyId: r.company_id, facilityId: r.facility_id, entryDate: r.entry_date,
+    kind: r.kind, amountMinor: r.amount_minor, note: r.note ?? null, createdAt: r.created_at,
+  };
+}
+
+function listMovements(companyId, facilityId) {
+  facilityFor(companyId, facilityId, { balanceOnly: true });
+  const rows = getDb().prepare(`SELECT * FROM tf_ledger_entries
+    WHERE facility_id = ? AND company_id = ? ORDER BY entry_date, created_at`).all(facilityId, companyId).map(rowToMovement);
+  let balance = 0;
+  return rows.map((m) => { balance += m.amountMinor; return { ...m, balanceMinor: balance }; });
+}
+
+function addMovement(companyId, input = {}, userId = null) {
+  const facility = facilityFor(companyId, input.facilityId, { balanceOnly: true });
+  const clientUuid = str(input.clientUuid, 80);
+  if (clientUuid) {
+    const existing = getDb().prepare('SELECT 1 FROM tf_ledger_entries WHERE company_id = ? AND client_uuid = ?')
+      .get(companyId, clientUuid);
+    if (existing) return listMovements(companyId, facility.id);
+  }
+  const kind = oneOf(input.kind, MOVEMENT_KINDS, 'Movement kind');
+  const entryDate = calendarDate(input.entryDate, 'Date');
+  const raw = Number(input.amountMinor);
+  if (!Number.isSafeInteger(raw) || raw === 0) throw badRequest('Enter a whole amount that is not zero');
+  let signed = raw;
+  if (kind === 'opening' || kind === 'draw') {
+    if (raw < 0) throw badRequest(`A ${kind === 'opening' ? 'opening' : 'draw'} amount is positive`);
+    signed = Math.abs(raw);
+  } else if (kind === 'repay') {
+    signed = -Math.abs(raw);
+  }
+  const id = randomUUID();
+  getDb().prepare(`INSERT INTO tf_ledger_entries
+    (id, company_id, client_uuid, facility_id, entry_date, kind, amount_minor, note, created_at, created_by_user_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id, companyId, clientUuid, facility.id, entryDate, kind, signed, str(input.note, 500), Date.now(), userId);
+  audit('tf_movement', id, 'create', { after: { companyId, facilityId: facility.id, kind, amountMinor: signed, entryDate } });
+  return listMovements(companyId, facility.id);
+}
+
+/* ── Phase B: month-end capitalisation ──────────────────────────────── */
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const monthStart = (y, m) => `${y}-${pad2(m)}-01`;
+const monthEnd = (y, m) => `${y}-${pad2(m)}-${pad2(lastDayOfMonth(y, m))}`;
+
+/**
+ * Entries as they count for accrual. Capitalised interest starts earning the
+ * day after it is posted, so a month's own capitalisation never inflates the
+ * month it belongs to — ours for January then equals what we charged.
+ */
+function ledgerEntries(facilityId) {
+  return getDb().prepare(`SELECT
+      CASE WHEN kind = 'interest_capitalised' THEN date(entry_date, '+1 day') ELSE entry_date END AS entry_date,
+      amount_minor
+    FROM tf_ledger_entries WHERE facility_id = ? ORDER BY entry_date, created_at`).all(facilityId);
+}
+
+/**
+ * Interest for one completed month, integrated on the daily balance and
+ * rounded once. `extra` lets a dry run feed in earlier un-written
+ * capitalisations so a multi-month preview compounds exactly like the run.
+ */
+function monthInterest(facility, y, m, extra = []) {
+  const start = monthStart(y, m);
+  const end = monthEnd(y, m);
+  const dim = lastDayOfMonth(y, m);
+  const entries = ledgerEntries(facility.id).concat(extra)
+    .sort((a, b) => (a.entry_date < b.entry_date ? -1 : a.entry_date > b.entry_date ? 1 : 0));
+  let idx = 0;
+  let balance = 0;
+  while (idx < entries.length && entries[idx].entry_date < start) balance += entries[idx++].amount_minor;
+  let sum = 0;
+  for (let d = 1; d <= dim; d++) {
+    const day = `${y}-${pad2(m)}-${pad2(d)}`;
+    while (idx < entries.length && entries[idx].entry_date <= day) balance += entries[idx++].amount_minor;
+    if (balance > 0) sum += balance;
+  }
+  return {
+    periodStart: start,
+    periodEnd: end,
+    days: dim,
+    basisMinor: Math.round(sum / dim),
+    amountMinor: interestMinor({ principalMinor: sum, ratePct: facility.rate, days: 1, dayCount: facility.dayCount }),
+  };
+}
+
+function capitalisationFacilities(companyId) {
+  return getDb().prepare(`SELECT * FROM tf_facilities
+    WHERE company_id = ? AND active = 1 AND interest_basis = 'balance'
+      AND interest_billing = 'month_end_capitalised'`).all(companyId).map(rowToFacility);
+}
+
+function capitalisationDue(companyId, asOf = todayPhnomPenh()) {
+  const [ay, am] = String(asOf).split('-').map(Number);
+  const rows = [];
+  for (const facility of capitalisationFacilities(companyId)) {
+    const first = getDb().prepare('SELECT MIN(entry_date) AS first FROM tf_ledger_entries WHERE facility_id = ?')
+      .get(facility.id)?.first;
+    if (!first) continue;
+    let [y, m] = first.split('-').map(Number);
+    const simulated = [];
+    while (y < ay || (y === ay && m < am)) {
+      const periodStart = monthStart(y, m);
+      const periodEnd = monthEnd(y, m);
+      const posted = getDb().prepare(`SELECT 1 FROM tf_interest_postings
+        WHERE facility_id = ? AND period_start = ? AND period_end = ? AND source = 'charged' AND drawdown_id IS NULL`)
+        .get(facility.id, periodStart, periodEnd);
+      if (!posted) {
+        const figure = monthInterest(facility, y, m, simulated);
+        rows.push({
+          facilityId: facility.id, facilityName: facility.name, currency: facility.currency,
+          period: periodStart.slice(0, 7), periodStart, periodEnd, days: figure.days,
+          basisMinor: figure.basisMinor, amountMinor: figure.amountMinor, rate: facility.rate,
+          dayCount: facility.dayCount,
+        });
+        if (figure.amountMinor > 0) simulated.push({ entry_date: periodEnd, amount_minor: figure.amountMinor });
+      }
+      m += 1;
+      if (m > 12) { m = 1; y += 1; }
+    }
+  }
+  return rows;
+}
+
+/**
+ * Post every completed month that is not yet charged. Each month is computed
+ * AFTER the previous month's capitalisation is written, so a multi-month
+ * catch-up compounds exactly like a monthly run. The posting's unique index
+ * makes a re-run harmless.
+ */
+function runCapitalisation(companyId, asOf = todayPhnomPenh()) {
+  const [ay, am] = String(asOf).split('-').map(Number);
+  const db = getDb();
+  const posted = [];
+  for (const facility of capitalisationFacilities(companyId)) {
+    const first = db.prepare('SELECT MIN(entry_date) AS first FROM tf_ledger_entries WHERE facility_id = ?')
+      .get(facility.id)?.first;
+    if (!first) continue;
+    let [y, m] = first.split('-').map(Number);
+    while (y < ay || (y === ay && m < am)) {
+      const periodStart = monthStart(y, m);
+      const periodEnd = monthEnd(y, m);
+      const exists = db.prepare(`SELECT 1 FROM tf_interest_postings
+        WHERE facility_id = ? AND period_start = ? AND period_end = ? AND source = 'charged' AND drawdown_id IS NULL`)
+        .get(facility.id, periodStart, periodEnd);
+      if (!exists) {
+        const figure = monthInterest(facility, y, m);
+        db.transaction(() => {
+          if (figure.amountMinor > 0) {
+            db.prepare(`INSERT INTO tf_ledger_entries
+              (id, company_id, client_uuid, facility_id, entry_date, kind, amount_minor, note, created_at, created_by_user_id)
+              VALUES (?,?,?,?,?,'interest_capitalised',?,?,?,NULL)`).run(
+              randomUUID(), companyId, null, facility.id, periodEnd, figure.amountMinor,
+              `Interest capitalised for ${periodStart.slice(0, 7)}`, Date.now(),
+            );
+          }
+          db.prepare(`INSERT INTO tf_interest_postings
+            (id, company_id, facility_id, drawdown_id, period_start, period_end, basis_minor, rate, day_count,
+             days, amount_minor, source, note, created_at, created_by_user_id)
+            VALUES (?,?,?,NULL,?,?,?,?,?,?,?,'charged',?,?,NULL)`).run(
+            randomUUID(), companyId, facility.id, periodStart, periodEnd,
+            figure.basisMinor, facility.rate, facility.dayCount, figure.days, figure.amountMinor,
+            'Month-end capitalisation', Date.now(),
+          );
+        })();
+        posted.push({
+          facilityId: facility.id, facilityName: facility.name, currency: facility.currency,
+          period: periodStart.slice(0, 7), periodStart, periodEnd, days: figure.days,
+          basisMinor: figure.basisMinor, amountMinor: figure.amountMinor,
+        });
+      }
+      m += 1;
+      if (m > 12) { m = 1; y += 1; }
+    }
+  }
+  return posted;
+}
+
+/* ── Phase B: bank-actual reconciliation ────────────────────────────── */
+
+function eachDay(startISO, endISO, fn) {
+  let t = Date.parse(`${startISO}T00:00:00Z`);
+  const end = Date.parse(`${endISO}T00:00:00Z`);
+  if (Number.isNaN(t) || Number.isNaN(end) || t > end) return 0;
+  let days = 0;
+  for (; t <= end; t += 86_400_000) { fn(new Date(t).toISOString().slice(0, 10)); days += 1; }
+  return days;
+}
+
+function integrateLedger(facility, startISO, endISO) {
+  const entries = ledgerEntries(facility.id);
+  let idx = 0;
+  let balance = 0;
+  let sum = 0;
+  while (idx < entries.length && entries[idx].entry_date < startISO) balance += entries[idx++].amount_minor;
+  const days = eachDay(startISO, endISO, (day) => {
+    while (idx < entries.length && entries[idx].entry_date <= day) balance += entries[idx++].amount_minor;
+    if (balance > 0) sum += balance;
+  });
+  return {
+    amountMinor: interestMinor({ principalMinor: sum, ratePct: facility.rate, days: 1, dayCount: facility.dayCount }),
+    days, basisMinor: days ? Math.round(sum / days) : 0,
+  };
+}
+
+function integrateDrawdown(drawdown, facility, startISO, endISO) {
+  const repayments = repaymentsFor(drawdown.id);
+  let idx = 0;
+  let repaid = 0;
+  let sum = 0;
+  const days = eachDay(startISO, endISO, (day) => {
+    while (idx < repayments.length && repayments[idx].paidOn <= day) repaid += repayments[idx++].principalMinor;
+    const outstanding = drawdown.principalMinor - repaid;
+    if (day >= drawdown.valueDate && outstanding > 0) sum += outstanding;
+  });
+  return {
+    amountMinor: interestMinor({ principalMinor: sum, ratePct: drawdown.rate, days: 1, dayCount: facility.dayCount }),
+    days, basisMinor: days ? Math.round(sum / days) : 0,
+  };
+}
+
+function computeOurs(companyId, { facilityId, drawdownId, periodStart, periodEnd }) {
+  const facility = facilityFor(companyId, facilityId);
+  if (facility.interestBasis === 'balance') return { ...integrateLedger(facility, periodStart, periodEnd), method: 'balance' };
+  if (drawdownId) {
+    const row = getDb().prepare(`${DRAWDOWN_SELECT} WHERE d.id = ? AND d.company_id = ?`).get(drawdownId, companyId);
+    if (!row) throw notFound('Drawdown');
+    return { ...integrateDrawdown(rowToDrawdown(row), facility, periodStart, periodEnd), method: 'drawdown' };
+  }
+  let amountMinor = 0;
+  let basisMinor = 0;
+  let days = 0;
+  for (const row of getDb().prepare(`${DRAWDOWN_SELECT} WHERE d.facility_id = ? AND d.company_id = ?`).all(facilityId, companyId)) {
+    const r = integrateDrawdown(rowToDrawdown(row), facility, periodStart, periodEnd);
+    amountMinor += r.amountMinor;
+    basisMinor += r.basisMinor;
+    days = r.days;
+  }
+  return { amountMinor, days, basisMinor, method: 'facility' };
+}
+
+function varianceStatus(actual, ours) {
+  if (!actual && !ours) return 'match';
+  const denom = Math.abs(ours) || Math.abs(actual) || 1;
+  const variance = Math.abs(actual - ours) / denom;
+  return variance <= 0.01 ? 'match' : variance <= 0.05 ? 'minor' : 'review';
+}
+
+function listReconciliations(companyId) {
+  const rows = getDb().prepare(`
+    SELECT p.*, f.name AS facility_name, f.currency AS currency, d.reference AS drawdown_reference
+    FROM tf_interest_postings p
+    JOIN tf_facilities f ON f.id = p.facility_id
+    LEFT JOIN tf_drawdowns d ON d.id = p.drawdown_id
+    WHERE p.company_id = ? AND p.source = 'bank_actual'
+    ORDER BY p.period_end DESC, p.created_at DESC`).all(companyId);
+  return rows.map((r) => {
+    const ours = computeOurs(companyId, {
+      facilityId: r.facility_id, drawdownId: r.drawdown_id, periodStart: r.period_start, periodEnd: r.period_end,
+    });
+    return {
+      id: r.id, facilityId: r.facility_id, facilityName: r.facility_name, currency: r.currency,
+      drawdownId: r.drawdown_id ?? null, drawdownReference: r.drawdown_reference ?? null,
+      periodStart: r.period_start, periodEnd: r.period_end, days: r.days,
+      bankMinor: r.amount_minor, oursMinor: ours.amountMinor,
+      varianceMinor: r.amount_minor - ours.amountMinor,
+      status: varianceStatus(r.amount_minor, ours.amountMinor), note: r.note ?? null,
+    };
+  });
+}
+
+function addReconciliation(companyId, input = {}, userId = null) {
+  const facility = facilityFor(companyId, input.facilityId);
+  const drawdownId = input.drawdownId || null;
+  if (facility.interestBasis === 'balance' && drawdownId) throw badRequest('A running-balance facility has no drawdown');
+  if (drawdownId) {
+    const row = getDb().prepare('SELECT 1 FROM tf_drawdowns WHERE id = ? AND company_id = ?').get(drawdownId, companyId);
+    if (!row) throw notFound('Drawdown');
+  }
+  const periodStart = calendarDate(input.periodStart, 'Period start');
+  const periodEnd = calendarDate(input.periodEnd, 'Period end');
+  if (calendarDaysBetween(periodStart, periodEnd) < 0) throw badRequest('The period must end on or after it starts');
+  const amountMinor = wholeMinor(input.amountMinor, 'The bank\'s interest', { min: 0 });
+  const ours = computeOurs(companyId, { facilityId: facility.id, drawdownId, periodStart, periodEnd });
+  const id = randomUUID();
+  try {
+    getDb().prepare(`INSERT INTO tf_interest_postings
+      (id, company_id, facility_id, drawdown_id, period_start, period_end, basis_minor, rate, day_count,
+       days, amount_minor, source, note, created_at, created_by_user_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,'bank_actual',?,?,?)`).run(
+      id, companyId, facility.id, drawdownId, periodStart, periodEnd, ours.basisMinor,
+      facility.rate, facility.dayCount, ours.days, amountMinor, str(input.note, 500), Date.now(), userId,
+    );
+  } catch (err) {
+    if (/UNIQUE/.test(String(err?.message || ''))) throw badRequest('That period is already recorded for this facility');
+    throw err;
+  }
+  audit('tf_reconciliation', id, 'create', { after: { companyId, facilityId: facility.id, periodStart, periodEnd, amountMinor } });
+  return listReconciliations(companyId);
+}
+
+/* ── Phase B: fees and recurring fees ───────────────────────────────── */
+
+function rowToFee(r) {
+  return {
+    id: r.id, companyId: r.company_id, facilityId: r.facility_id, facilityName: r.facility_name ?? null,
+    drawdownId: r.drawdown_id, kind: r.kind, amountMinor: r.amount_minor, currency: r.currency,
+    feeDate: r.fee_date, note: r.note ?? null, createdAt: r.created_at,
+  };
+}
+
+function listFees(companyId, { limit = 500 } = {}) {
+  return getDb().prepare(`
+    SELECT fee.*, f.name AS facility_name
+    FROM tf_fees fee LEFT JOIN tf_facilities f ON f.id = fee.facility_id
+    WHERE fee.company_id = ? ORDER BY fee.fee_date DESC, fee.created_at DESC LIMIT ?`)
+    .all(companyId, Math.min(2000, Math.max(1, Number(limit) || 500))).map(rowToFee);
+}
+
+function addFee(companyId, input = {}, userId = null) {
+  const clientUuid = str(input.clientUuid, 80);
+  if (clientUuid) {
+    const existing = getDb().prepare('SELECT * FROM tf_fees WHERE company_id = ? AND client_uuid = ?').get(companyId, clientUuid);
+    if (existing) return rowToFee(existing);
+  }
+  const facilityIdInput = input.facilityId || null;
+  let facility = facilityIdInput ? facilityFor(companyId, facilityIdInput) : null;
+  let drawdownId = input.drawdownId || null;
+  if (drawdownId) {
+    const row = getDb().prepare(`${DRAWDOWN_SELECT} WHERE d.id = ? AND d.company_id = ?`).get(drawdownId, companyId);
+    if (!row) throw notFound('Drawdown');
+    if (facility && row.facility_id !== facility.id) throw badRequest('That drawdown is not on this facility');
+    if (!facility) facility = facilityFor(companyId, row.facility_id);
+  }
+  const kind = str(input.kind, 80);
+  if (!kind) throw badRequest('Name the fee');
+  const amountMinor = wholeMinor(input.amountMinor, 'Fee amount', { min: 0 });
+  const currency = metaCurrency(input.currency) || facility?.currency || 'USD';
+  const feeDate = calendarDate(input.feeDate, 'Fee date');
+  const id = randomUUID();
+  getDb().prepare(`INSERT INTO tf_fees
+    (id, company_id, client_uuid, facility_id, drawdown_id, kind, amount_minor, currency, fee_date, note, created_at, created_by_user_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    id, companyId, clientUuid, facility?.id || null, drawdownId, kind, amountMinor, currency, feeDate,
+    str(input.note, 500), Date.now(), userId,
+  );
+  audit('tf_fee', id, 'create', { after: { companyId, kind, amountMinor, currency, feeDate } });
+  return rowToFee(getDb().prepare('SELECT * FROM tf_fees WHERE id = ?').get(id));
+}
+
+function rowToRecurring(r) {
+  return {
+    id: r.id, companyId: r.company_id, facilityId: r.facility_id, facilityName: r.facility_name ?? null,
+    kind: r.kind, amountMinor: r.amount_minor, currency: r.currency, frequency: r.frequency,
+    nextDate: r.next_date, enabled: !!r.enabled, note: r.note ?? null,
+  };
+}
+
+function listRecurring(companyId) {
+  return getDb().prepare(`
+    SELECT rf.*, f.name AS facility_name
+    FROM tf_recurring_fees rf LEFT JOIN tf_facilities f ON f.id = rf.facility_id
+    WHERE rf.company_id = ? ORDER BY rf.next_date`).all(companyId).map(rowToRecurring);
+}
+
+function addRecurring(companyId, input = {}, userId = null) {
+  const facilityId = input.facilityId || null;
+  const facility = facilityId ? facilityFor(companyId, facilityId) : null;
+  const kind = str(input.kind, 80);
+  if (!kind) throw badRequest('Name the fee');
+  const amountMinor = wholeMinor(input.amountMinor, 'Fee amount', { min: 0 });
+  const currency = metaCurrency(input.currency) || facility?.currency || 'USD';
+  const frequency = oneOf(input.frequency, COMMITMENT_FREQS, 'Frequency', 'monthly');
+  const nextDate = calendarDate(input.nextDate, 'Next date');
+  const now = Date.now();
+  const id = randomUUID();
+  getDb().prepare(`INSERT INTO tf_recurring_fees
+    (id, company_id, facility_id, kind, amount_minor, currency, frequency, next_date, enabled, note, created_at, updated_at, updated_by_user_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    id, companyId, facilityId, kind, amountMinor, currency, frequency, nextDate,
+    input.enabled === false ? 0 : 1, str(input.note, 500), now, now, userId,
+  );
+  return listRecurring(companyId);
+}
+
+function updateRecurring(companyId, id, patch = {}, userId = null) {
+  const row = getDb().prepare('SELECT * FROM tf_recurring_fees WHERE id = ? AND company_id = ?').get(id, companyId);
+  if (!row) throw notFound('Recurring fee');
+  const data = {
+    kind: patch.kind === undefined ? row.kind : str(patch.kind, 80),
+    amount_minor: patch.amountMinor === undefined ? row.amount_minor : wholeMinor(patch.amountMinor, 'Fee amount', { min: 0 }),
+    currency: patch.currency === undefined ? row.currency : (metaCurrency(patch.currency) || row.currency),
+    frequency: patch.frequency === undefined ? row.frequency : oneOf(patch.frequency, COMMITMENT_FREQS, 'Frequency'),
+    next_date: patch.nextDate === undefined ? row.next_date : calendarDate(patch.nextDate, 'Next date'),
+    enabled: patch.enabled === undefined ? row.enabled : (patch.enabled ? 1 : 0),
+    note: patch.note === undefined ? row.note : str(patch.note, 500),
+  };
+  getDb().prepare(`UPDATE tf_recurring_fees SET kind = ?, amount_minor = ?, currency = ?, frequency = ?,
+      next_date = ?, enabled = ?, note = ?, updated_at = ?, updated_by_user_id = ?
+    WHERE id = ? AND company_id = ?`).run(
+    data.kind, data.amount_minor, data.currency, data.frequency, data.next_date, data.enabled,
+    data.note, Date.now(), userId, id, companyId,
+  );
+  return listRecurring(companyId);
+}
+
+/** Post every fee that is due, catching up missed periods. */
+function postDueRecurring(companyId, asOf = todayPhnomPenh(), { dryRun = false } = {}) {
+  const due = getDb().prepare(`SELECT * FROM tf_recurring_fees
+    WHERE company_id = ? AND enabled = 1 AND next_date <= ? ORDER BY next_date`).all(companyId, asOf);
+  const posted = [];
+  for (const rf of due) {
+    let next = rf.next_date;
+    let guard = 0;
+    while (next <= asOf && guard++ < 120) {
+      const clientUuid = `rec-${rf.id}-${next}`;
+      posted.push({ recurringId: rf.id, kind: rf.kind, amountMinor: rf.amount_minor, currency: rf.currency, feeDate: next });
+      if (!dryRun) {
+        try {
+          getDb().prepare(`INSERT INTO tf_fees
+            (id, company_id, client_uuid, facility_id, drawdown_id, kind, amount_minor, currency, fee_date, note, created_at, created_by_user_id)
+            VALUES (?,?,?,?,NULL,?,?,?,?,?,?,NULL)`).run(
+            randomUUID(), companyId, clientUuid, rf.facility_id, rf.kind, rf.amount_minor, rf.currency, next,
+            `Auto · ${rf.note || rf.kind}`, Date.now(),
+          );
+        } catch (err) {
+          if (!/UNIQUE/.test(String(err?.message || ''))) throw err; // already posted for that period
+        }
+      }
+      next = addPeriod(next, rf.frequency);
+    }
+    if (!dryRun) getDb().prepare('UPDATE tf_recurring_fees SET next_date = ?, updated_at = ? WHERE id = ? AND company_id = ?')
+      .run(next, Date.now(), rf.id, companyId);
+  }
+  return posted;
+}
+
+/* ── reporting helper included in reportSummary below ───────────────── */
+
+function feeTotals(companyId, year) {
+  const ytd = getDb().prepare(`SELECT currency, COALESCE(SUM(amount_minor), 0) AS totalMinor
+    FROM tf_fees WHERE company_id = ? AND substr(fee_date, 1, 4) = ? GROUP BY currency ORDER BY currency`)
+    .all(companyId, String(year));
+  const byBank = getDb().prepare(`
+    SELECT f.bank_id AS bankId, f.currency AS currency, COALESCE(SUM(fee.amount_minor), 0) AS totalMinor
+    FROM tf_fees fee JOIN tf_facilities f ON f.id = fee.facility_id
+    WHERE fee.company_id = ? GROUP BY f.bank_id, f.currency`).all(companyId);
+  return { ytd, byBank };
+}
+
 module.exports = {
-  KINDS, FACILITY_CURRENCIES, DRAWDOWN_STATUSES,
+  KINDS, FACILITY_CURRENCIES, DRAWDOWN_STATUSES, MOVEMENT_KINDS,
   listBanks, getBank, createBank, updateBank, archiveBank,
   listFacilities, getFacility, createFacility, updateFacility, setFacilityActive,
   listDrawdowns, getDrawdown, createDrawdown, updateDrawdown, setDrawdownStatus,
   addRepayment, listPostings, accrualPreview, reportSummary,
+  listMovements, addMovement,
+  capitalisationDue, runCapitalisation,
+  computeOurs, listReconciliations, addReconciliation,
+  listFees, addFee, listRecurring, addRecurring, updateRecurring, postDueRecurring,
 };

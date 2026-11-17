@@ -442,6 +442,28 @@ contextBridge.exposeInMainWorld('api', {
       list:           (filters)      => invoke('trade:interest:list', filters),
       preview:        ()             => invoke('trade:interest:preview'),
     },
+    movements: {
+      list:           (facilityId)   => invoke('trade:movements:list', { facilityId }),
+      add:            (input)        => invoke('trade:movements:add', input),
+    },
+    capitalisation: {
+      preview:        ()             => invoke('trade:capitalisation:preview'),
+      run:            ()             => invoke('trade:capitalisation:run'),
+    },
+    reconciliation: {
+      list:           ()             => invoke('trade:reconciliation:list'),
+      add:            (input)        => invoke('trade:reconciliation:add', input),
+    },
+    fees: {
+      list:           (filters)      => invoke('trade:fees:list', filters),
+      add:            (input)        => invoke('trade:fees:add', input),
+    },
+    recurring: {
+      list:           ()             => invoke('trade:recurring:list'),
+      add:            (input)        => invoke('trade:recurring:add', input),
+      update:         (id, patch)    => invoke('trade:recurring:update', { id, patch }),
+      postDue:        ()             => invoke('trade:recurring:postDue'),
+    },
     reports: {
       summary:        ()             => invoke('trade:reports:summary'),
     },

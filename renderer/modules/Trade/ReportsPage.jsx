@@ -60,7 +60,7 @@ export function TradeReports() {
           <div className="data-table-wrap">
             <table className="data-table">
               <thead>
-                <tr><th>Bank</th><th>Currency</th><th className="is-num">Facilities</th><th className="is-num">Limit</th><th className="is-num">Drawn</th><th>Used</th><th className="is-num">Average rate</th></tr>
+                <tr><th>Bank</th><th>Currency</th><th className="is-num">Facilities</th><th className="is-num">Limit</th><th className="is-num">Drawn</th><th>Used</th><th className="is-num">Average rate</th><th className="is-num">Fees</th></tr>
               </thead>
               <tbody>
                 {data.perBank.map((r) => (
@@ -77,6 +77,7 @@ export function TradeReports() {
                       </div>
                     </td>
                     <td className="is-num">{formatRate(r.avgRate)}</td>
+                    <td className="is-num">{formatMinor(r.feesMinor || 0, r.currency)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -94,6 +95,20 @@ export function TradeReports() {
               <thead><tr><th>Currency</th><th className="is-num">Interest</th></tr></thead>
               <tbody>
                 {data.ytd.map((r) => <tr key={r.currency}><td>{r.currency}</td><td className="is-num">{formatMinor(r.totalMinor, r.currency)}</td></tr>)}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {data?.ytdFees?.length ? (
+        <section className="finance-section">
+          <h2 className="section-title">Fees recorded this year</h2>
+          <div className="data-table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Currency</th><th className="is-num">Fees</th></tr></thead>
+              <tbody>
+                {data.ytdFees.map((r) => <tr key={r.currency}><td>{r.currency}</td><td className="is-num">{formatMinor(r.totalMinor, r.currency)}</td></tr>)}
               </tbody>
             </table>
           </div>
