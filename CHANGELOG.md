@@ -1,5 +1,11 @@
 # What's new
 
+## 0.1.113 — 2026-11-17
+
+- NEW — Trade Finance now supports overdraft (running-balance) credit lines: record opening, draw, repay and adjustment movements with a live running balance, preview and post month-end capitalised interest, compare the bank's actual interest figure with variance status, and record or auto-post recurring fees without double-posting.
+- FIX — The local update-hold endpoint now requires the updater's per-request hold-token credential so unauthenticated local processes cannot pause or resume background work.
+- Internal — Reconciled Trade Finance Phase B onto 0.1.112 without reverting bounded quit, bounded crash.log or export Stop; added hold-token verification on POST/DELETE /api/maintenance/hold matching Printer's MaintenanceHold contract.
+
 ## 0.1.112 — 2026-11-17
 
 - FIX — An export can be stopped. The progress panel has a Stop button, and it stops after the image being written rather than leaving half a file. It works the same for a Social Grid export.
