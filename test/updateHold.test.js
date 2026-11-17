@@ -7,6 +7,9 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const hold = require('../main/updateHold');
 const { takeHold, releaseHold, isPaused, startListener } = hold;
@@ -15,6 +18,14 @@ hold.setLog(() => {}); // the log is not what these assert
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const KEYS = ['dispatch_paused_s', 'in_flight', 'safe', 'unsettled'];
+
+function makeTempToken(t, value = 'secret-hold-token-0123456789abcdef') {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mskh-hold-tok-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'hold-token');
+  if (value !== null) fs.writeFileSync(file, `${value}\n`, { mode: 0o600 });
+  return file;
+}
 
 test.afterEach(() => releaseHold());
 
@@ -65,20 +76,50 @@ test('a hold with no DELETE expires by itself after pause_s', async () => {
   assert.equal(isPaused(), false, 'an aborted install never leaves the app refusing work');
 });
 
-test('the loopback listener answers the contract over plain HTTP', async (t) => {
-  const server = startListener({ port: 0 });
+test('the loopback listener answers the contract over plain HTTP and enforces hold-token', async (t) => {
+  const token = 'test-token-alpha-0123456789';
+  const tokenFile = makeTempToken(t, token);
+  const server = startListener({ port: 0, tokenFile });
   await new Promise((resolve) => server.once('listening', resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}/api/maintenance/hold`;
 
-  const held = await fetch(`${base}?timeout_s=1&pause_s=90`, { method: 'POST' });
+  const noToken = await fetch(`${base}?timeout_s=1&pause_s=90`, { method: 'POST' });
+  assert.equal(noToken.status, 401, 'POST without token is refused');
+  assert.equal(isPaused(), false, 'refused POST pauses nothing');
+
+  const wrongToken = await fetch(`${base}?timeout_s=1&pause_s=90`, {
+    method: 'POST',
+    headers: { 'X-Hub-Token': 'wrong-token' },
+  });
+  assert.equal(wrongToken.status, 401, 'POST with wrong token is refused');
+  assert.equal(isPaused(), false, 'wrong token pauses nothing');
+
+  const held = await fetch(`${base}?timeout_s=1&pause_s=90`, {
+    method: 'POST',
+    headers: { 'X-Hub-Token': token },
+  });
   assert.equal(held.status, 200);
   const reply = await held.json();
   assert.deepEqual(Object.keys(reply).sort(), KEYS);
   assert.equal(reply.dispatch_paused_s, 90);
   assert.equal(isPaused(), true);
 
-  const resumed = await fetch(base, { method: 'DELETE' });
+  const openDelete = await fetch(base, { method: 'DELETE' });
+  assert.equal(openDelete.status, 401, 'DELETE without token is refused');
+  assert.equal(isPaused(), true, 'refused DELETE does not release standing hold');
+
+  const wrongDelete = await fetch(base, {
+    method: 'DELETE',
+    headers: { Authorization: 'Bearer wrong-token' },
+  });
+  assert.equal(wrongDelete.status, 401, 'DELETE with wrong bearer token is refused');
+  assert.equal(isPaused(), true);
+
+  const resumed = await fetch(base, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
   assert.equal(resumed.status, 200);
   assert.equal((await resumed.json()).dispatch_paused_s, 0);
   assert.equal(isPaused(), false);
@@ -87,8 +128,58 @@ test('the loopback listener answers the contract over plain HTTP', async (t) => 
   assert.equal((await fetch(`${base}/other`)).status, 404);
 });
 
+test('the listener reads hold-token per request and fails closed when missing or rotated', async (t) => {
+  const token1 = 'rotated-token-1';
+  const token2 = 'rotated-token-2';
+  const tokenFile = makeTempToken(t, null); // file does not exist yet
+  const server = startListener({ port: 0, tokenFile });
+  await new Promise((resolve) => server.once('listening', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}/api/maintenance/hold`;
+
+  const missingFile = await fetch(`${base}?timeout_s=0&pause_s=60`, {
+    method: 'POST',
+    headers: { 'X-Hub-Token': token1 },
+  });
+  assert.equal(missingFile.status, 401, 'missing token file refuses the hold');
+  assert.equal(isPaused(), false);
+
+  fs.writeFileSync(tokenFile, '   \n', { mode: 0o600 });
+  const emptyFile = await fetch(`${base}?timeout_s=0&pause_s=60`, {
+    method: 'POST',
+    headers: { 'X-Hub-Token': token1 },
+  });
+  assert.equal(emptyFile.status, 401, 'whitespace-only token file refuses the hold');
+  assert.equal(isPaused(), false);
+
+  fs.writeFileSync(tokenFile, `${token1}\n`, { mode: 0o600 });
+  const firstOk = await fetch(`${base}?timeout_s=0&pause_s=60`, {
+    method: 'POST',
+    headers: { 'X-Hub-Token': token1 },
+  });
+  assert.equal(firstOk.status, 200);
+
+  // Rotate on disk without restarting listener: old token is rejected, new token works.
+  fs.writeFileSync(tokenFile, `${token2}\n`, { mode: 0o600 });
+  const staleToken = await fetch(base, {
+    method: 'DELETE',
+    headers: { 'X-Hub-Token': token1 },
+  });
+  assert.equal(staleToken.status, 401, 'old token is rejected after file rotation');
+  assert.equal(isPaused(), true);
+
+  const rotatedOk = await fetch(base, {
+    method: 'DELETE',
+    headers: { 'X-Hub-Token': token2 },
+  });
+  assert.equal(rotatedOk.status, 200);
+  assert.equal(isPaused(), false);
+});
+
 test('the listener refuses timeouts past the contract ceiling and bad numbers fall back', async (t) => {
-  const server = startListener({ port: 0 });
+  const token = 'ceiling-test-token';
+  const tokenFile = makeTempToken(t, token);
+  const server = startListener({ port: 0, tokenFile });
   await new Promise((resolve) => server.once('listening', resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}/api/maintenance/hold`;
@@ -96,7 +187,10 @@ test('the listener refuses timeouts past the contract ceiling and bad numbers fa
   // 999 s asked for, 30 s ceiling: with nothing running it still answers at once,
   // and the pause it reports is the one it applied.
   const startedAt = Date.now();
-  const reply = await (await fetch(`${base}?timeout_s=999&pause_s=abc`, { method: 'POST' })).json();
+  const reply = await (await fetch(`${base}?timeout_s=999&pause_s=abc`, {
+    method: 'POST',
+    headers: { 'X-Hub-Token': token },
+  })).json();
   assert.ok(Date.now() - startedAt < 1000);
   assert.equal(reply.dispatch_paused_s, 120, 'pause_s=abc falls back to the 120 s default');
   assert.equal(reply.safe, true);

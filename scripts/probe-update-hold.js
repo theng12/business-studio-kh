@@ -46,9 +46,9 @@ function parseArgs(argv) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function request(method, url, timeoutMs = 32_000) {
+function request(method, url, { timeoutMs = 32_000, headers = {} } = {}) {
   return new Promise((resolve) => {
-    const req = http.request(url, { method, timeout: timeoutMs }, (res) => {
+    const req = http.request(url, { method, headers, timeout: timeoutMs }, (res) => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => { body += chunk; });
@@ -73,14 +73,19 @@ function portInUse(port) {
   });
 }
 
-function launch(profile, appBinary) {
+function launch(profile, appBinary, tokenFile) {
   const command = appBinary || path.join(ROOT, 'node_modules', '.bin', 'electron');
   const args = appBinary
     ? ['--test-mode', `--user-data-dir=${path.join(profile, 'userdata')}`]   // a packaged .app's own binary
     : ['.', '--test-mode', `--user-data-dir=${path.join(profile, 'userdata')}`];
   const child = spawn(command, args, {
     cwd: ROOT,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined, VITE_DEV_SERVER_URL: undefined },
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: undefined,
+      VITE_DEV_SERVER_URL: undefined,
+      MEDIA_STUDIO_HOLD_TOKEN_FILE: tokenFile,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   const log = [];
@@ -142,6 +147,10 @@ async function main() {
     dataDir, mode: 'standalone', firstLaunchHandled: true, kioskMode: false,
   }));
   const crashLog = path.join(userData, 'crash.log');
+  const token = 'probe-hold-token-0123456789abcdef';
+  const tokenFile = path.join(profile, 'hold-token');
+  fs.writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
+  const authHeaders = { 'X-Hub-Token': token };
   const base = `http://127.0.0.1:${PORT}${URL_PATH}`;
   const checks = [];
   const check = (name, ok, detail) => {
@@ -151,7 +160,7 @@ async function main() {
 
   if (await portInUse(PORT)) throw new Error(`127.0.0.1:${PORT} is already in use; nothing was proved`);
 
-  let app = launch(profile, args.app);
+  let app = launch(profile, args.app, tokenFile);
   try {
     await waitListening(crashLog);
     await waitFor(async () => {
@@ -160,7 +169,12 @@ async function main() {
     const boot = fs.readFileSync(crashLog, 'utf8');
     check('no window was shown (headless run)', boot.includes('window:hidden-run') && !boot.includes('window:shown'));
 
-    const held = await request('POST', `${base}?timeout_s=20&pause_s=120`);
+    const unauth = await request('POST', `${base}?timeout_s=0&pause_s=120`);
+    check('POST without hold-token returns 401', unauth.status === 401, unauth.body);
+    const wrongAuth = await request('POST', `${base}?timeout_s=0&pause_s=120`, { headers: { 'X-Hub-Token': 'wrong' } });
+    check('POST with wrong hold-token returns 401', wrongAuth.status === 401, wrongAuth.body);
+
+    const held = await request('POST', `${base}?timeout_s=20&pause_s=120`, { headers: authHeaders });
     check('POST answers the contract reply', held.status === 200
       && held.json && JSON.stringify(Object.keys(held.json).sort()) === JSON.stringify(KEYS), held.body);
     check('in_flight is real (nothing running)', held.json?.in_flight === 0);
@@ -168,14 +182,14 @@ async function main() {
     check('the pause it applied is the pause it reports', held.json?.dispatch_paused_s === 120);
 
     const lan = lanAddress();
-    const remote = lan ? await request('POST', `http://${lan}:${PORT}${URL_PATH}?timeout_s=0`, 3_000) : null;
+    const remote = lan ? await request('POST', `http://${lan}:${PORT}${URL_PATH}?timeout_s=0`, { timeoutMs: 3_000, headers: authHeaders }) : null;
     check('loopback only (the LAN address cannot reach it)', remote ? remote.status === 0 : true,
       lan ? `${lan}:${PORT} → ${remote.error || remote.status}` : 'no LAN address');
 
-    const resumed = await request('DELETE', base);
+    const resumed = await request('DELETE', base, { headers: { Authorization: `Bearer ${token}` } });
     check('DELETE resumes at once', resumed.status === 200 && resumed.json?.dispatch_paused_s === 0, resumed.body);
 
-    const heldAgain = await request('POST', `${base}?timeout_s=1&pause_s=120`);
+    const heldAgain = await request('POST', `${base}?timeout_s=1&pause_s=120`, { headers: authHeaders });
     check('a second hold is taken while paused', heldAgain.json?.dispatch_paused_s === 120);
     await waitFor(async () => saidText(app, crashLog).includes('new work is paused for an update'),
       'the app to say it stopped claiming work');
@@ -186,7 +200,7 @@ async function main() {
 
     /* A restart with no DELETE: if the pause were persisted this copy would
      * still refuse work. It must start claiming again by itself. */
-    app = launch(profile, args.app);
+    app = launch(profile, args.app, tokenFile);
     const boots = () => fs.readFileSync(crashLog, 'utf8').split('update-hold :: listening').length - 1;
     await waitFor(async () => {
       try { return boots() >= 2; } catch (_) { return false; }
@@ -196,7 +210,7 @@ async function main() {
     check('a restart with no DELETE claims work again with no operator step',
       !restartSaid.includes('new work is paused'), 'two ticks after boot, no pause');
 
-    const fresh = await request('POST', `${base}?timeout_s=0&pause_s=2`);
+    const fresh = await request('POST', `${base}?timeout_s=0&pause_s=2`, { headers: authHeaders });
     check('the relaunched app takes a fresh hold', fresh.json?.dispatch_paused_s === 2);
     await waitFor(async () => saidText(app, crashLog).includes('new work resumes: the pause ran out'),
       'the pause to expire by itself', 15_000);

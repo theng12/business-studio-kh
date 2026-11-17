@@ -140,6 +140,55 @@ function register({ expose }) {
   expose('trade:interest:list', (filters = {}) => trade.listPostings(companyForView(), filters || {}));
   expose('trade:interest:preview', () => trade.accrualPreview(companyForView()));
 
+  /* Phase B: overdraft movements, month-end, reconciliation, fees */
+  expose('trade:movements:list', ({ facilityId } = {}) => trade.listMovements(companyForView(), facilityId));
+  expose('trade:movements:add', (input = {}) => {
+    const companyId = companyForManage();
+    const rows = trade.addMovement(companyId, input, getCallerUserId());
+    emitTradeChange('movement', 'create', input?.facilityId, companyId);
+    return rows;
+  });
+  expose('trade:capitalisation:preview', () => trade.capitalisationDue(companyForView()));
+  expose('trade:capitalisation:run', () => {
+    const companyId = companyForManage();
+    const rows = trade.runCapitalisation(companyId);
+    emitTradeChange('capitalisation', 'run', null, companyId);
+    return rows;
+  });
+  expose('trade:reconciliation:list', () => trade.listReconciliations(companyForView()));
+  expose('trade:reconciliation:add', (input = {}) => {
+    const companyId = companyForManage();
+    const rows = trade.addReconciliation(companyId, input, getCallerUserId());
+    emitTradeChange('reconciliation', 'create', input?.facilityId, companyId);
+    return rows;
+  });
+  expose('trade:fees:list', (filters = {}) => trade.listFees(companyForView(), filters || {}));
+  expose('trade:fees:add', (input = {}) => {
+    const companyId = companyForManage();
+    const row = trade.addFee(companyId, input, getCallerUserId());
+    emitTradeChange('fee', 'create', row.id, companyId);
+    return row;
+  });
+  expose('trade:recurring:list', () => trade.listRecurring(companyForView()));
+  expose('trade:recurring:add', (input = {}) => {
+    const companyId = companyForManage();
+    const rows = trade.addRecurring(companyId, input, getCallerUserId());
+    emitTradeChange('recurring', 'create', null, companyId);
+    return rows;
+  });
+  expose('trade:recurring:update', ({ id, patch } = {}) => {
+    const companyId = companyForManage();
+    const rows = trade.updateRecurring(companyId, id, patch || {}, getCallerUserId());
+    emitTradeChange('recurring', 'update', id, companyId);
+    return rows;
+  });
+  expose('trade:recurring:postDue', () => {
+    const companyId = companyForManage();
+    const rows = trade.postDueRecurring(companyId);
+    emitTradeChange('recurring', 'post', null, companyId);
+    return rows;
+  });
+
   /* reports */
   expose('trade:reports:summary', () => trade.reportSummary(companyForView()));
 }

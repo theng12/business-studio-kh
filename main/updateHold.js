@@ -13,7 +13,10 @@
  * never leave an app that has stopped taking work — a restart always resumes.
  */
 
+const fs = require('node:fs');
 const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
 
 const DEFAULT_TIMEOUT_S = 20;
 const MAX_TIMEOUT_S = 30;              // the contract's ceiling, not a job's own bound
@@ -142,11 +145,64 @@ function send(res, status, body) {
  * can replace a standalone, kiosk or client copy, and each one has work to
  * keep. A port already in use is logged and the app carries on — the installer
  * then refuses to install over the running copy instead of quitting it mid-job.
+ *
+ * Per-request credential check (matching Printer/UpdateHold): POST and DELETE
+ * require the updater's `~/Library/KHUpdater/state/hold-token` via
+ * `X-Hub-Token` or `Authorization: Bearer`. Missing file, missing header, or
+ * mismatch returns 401 so an unauthenticated local process cannot hold or
+ * release this app.
  */
-function startListener({ port = HOLD_PORT } = {}) {
+function defaultTokenFile() {
+  return process.env.MEDIA_STUDIO_HOLD_TOKEN_FILE
+    || process.env.KHU_HOLD_TOKEN_FILE
+    || path.join(os.homedir(), 'Library', 'KHUpdater', 'state', 'hold-token');
+}
+
+function configuredToken(tokenFile) {
+  try {
+    const text = fs.readFileSync(tokenFile, 'utf8').trim();
+    return text || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function offeredCredential(req) {
+  const hubHeader = req.headers['x-hub-token'];
+  const hub = Array.isArray(hubHeader) ? hubHeader[0] : hubHeader;
+  if (typeof hub === 'string' && hub.trim()) return hub.trim();
+  const authHeader = req.headers.authorization;
+  const auth = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+  if (typeof auth === 'string' && auth.startsWith('Bearer ')) {
+    const token = auth.slice('Bearer '.length).trim();
+    return token || null;
+  }
+  return null;
+}
+
+function sameToken(offered, configured) {
+  const a = Buffer.from(offered, 'utf8');
+  const b = Buffer.from(configured, 'utf8');
+  const len = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < len; i += 1) {
+    diff |= (i < a.length ? a[i] : 0) ^ (i < b.length ? b[i] : 0);
+  }
+  return diff === 0;
+}
+
+function startListener({ port = HOLD_PORT, tokenFile } = {}) {
+  const resolvedTokenFile = tokenFile || defaultTokenFile();
   const server = http.createServer((req, res) => {
     const [pathname, search = ''] = (req.url || '').split('?');
     if (pathname !== '/api/maintenance/hold') return send(res, 404, { error: 'Not found' });
+    if (req.method === 'POST' || req.method === 'DELETE') {
+      const configured = configuredToken(resolvedTokenFile);
+      const offered = offeredCredential(req);
+      if (!configured || !offered || !sameToken(offered, configured)) {
+        return send(res, 401, { error: 'unauthorized' });
+      }
+    }
     if (req.method === 'POST') {
       const query = new URLSearchParams(search);
       const timeoutS = bounded(query.get('timeout_s'), DEFAULT_TIMEOUT_S, 0, MAX_TIMEOUT_S);

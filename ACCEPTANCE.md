@@ -19,6 +19,8 @@ on looks alone (completeness-gates.md).
 | Stay inside one company | native "every read and write is scoped to one company" |
 | The module is off until granted, and a viewer is read-only | hidden UI proof: tile absent for a role without caps, present after `trade.view`, pages render without the management buttons |
 | Money follows the hand calculation to the minor unit | hidden UI proof: USD 100,000 at 7.5% / 360 — 173 days charged = $3,604.17, 7 days accrued = $145.83, 30 days to maturity = $625.00, undrawn commitment fee $62.50 |
+| Run an overdraft: movements change the balance, interest is charged month-end, the bank's figure is compared | `test/tradeFinancePhaseBNative.test.js` — a $100,000 opening at 12% / 360 charges $1,033.33 for a 31-day January, compounds into February ($942.98), re-runs nothing, and January's own figure reconciles as "matches" |
+| Keep fees and recurring fees without double-posting | `test/tradeFinancePhaseBNative.test.js` "fees are idempotent and recurring fees catch up once per period" (three missed months post three fees, the next run posts none) |
 
 ### 2. Capability cross-check (the rules a facility declares are the rules the screen exposes)
 
@@ -27,10 +29,14 @@ on looks alone (completeness-gates.md).
 | Bank, name, kind, currency | yes | — |
 | Credit limit, annual rate, day count (360/365) | yes | — |
 | Revolving, has maturity, term days | yes | — |
-| Interest basis (drawn / running balance) | drawn yes | running balance is Phase B; the form says so instead of offering a dead control |
-| Interest billing (at repayment / month-end capitalised) | at repayment yes | month-end capitalisation is Phase B |
+| Interest basis (drawn / running balance) | both | — |
+| Interest billing (at repayment / month-end capitalised) | follows the basis; the form shows it read-only | — |
 | Commitment rate + frequency | yes, with the per-period fee shown | — |
 | Rate history | shown on edit; a rate change appends | — |
+| Overdraft movements (opening, draw, repay, adjustment) with a running balance | yes; Actions → Movements on a running-balance facility | — |
+| Month-end capitalisation preview and run | yes on Interest | — |
+| Bank-actual charge with its variance status | yes on Interest | — |
+| Fees and recurring fees, with a post-due action | yes on Interest; fees appear per bank and per year on Reports | — |
 | Drawdown: principal, dates, rate, reference, settlement currency, FX | yes | purchase-order link is Phase D |
 | Repayment: principal and interest split, partial amounts | yes | — |
 
@@ -40,8 +46,8 @@ Reference: the source product (facility-ledger) and a bank-portal/spreadsheet tr
 
 - Present: facility rules, utilisation, commitment fee, drawdowns, partial repayments, day-count interest,
   stored interest postings, per-bank/YTD/ladder/cash-flow reporting, rate history, unique bank reference.
-- Deliberately absent, with reason: out-of-app reminder channels (Phase C is in-app), overdraft movement
-  screen and month-end capitalisation (Phase B), purchase-order financing (Phase D), GL/liability posting
+- Deliberately absent, with reason: out-of-app reminder channels (Phase C is in-app), purchase-order
+  financing (Phase D), GL/liability posting
   (accepted limit; trade finance is its own register), multi-currency roll-ups beyond USD/KHR (settlement
   currency and rate are stored per drawdown; no CNY/VND rate history is invented).
 - Missing, a finding to carry: none opened by this feature; the standing DIALOGS scanner exception below.

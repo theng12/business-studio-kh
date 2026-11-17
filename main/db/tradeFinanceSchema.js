@@ -144,6 +144,69 @@ function ensureTradeFinanceSchema(db) {
       WHERE drawdown_id IS NULL;
     CREATE INDEX IF NOT EXISTS idx_tf_interest_facility ON tf_interest_postings(facility_id, period_end);
     CREATE INDEX IF NOT EXISTS idx_tf_interest_drawdown ON tf_interest_postings(drawdown_id);
+
+    /* Phase B: the running balance of an overdraft. Balance-based facilities
+       take no drawdowns; their balance is the sum of these signed entries
+       (+ increases what is owed, - reduces it). Month-end interest is
+       capitalised as a real entry, so the next month compounds. */
+    CREATE TABLE IF NOT EXISTS tf_ledger_entries (
+      id                  TEXT PRIMARY KEY,
+      company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      client_uuid         TEXT,
+      facility_id         TEXT NOT NULL REFERENCES tf_facilities(id),
+      entry_date          TEXT NOT NULL,
+      kind                TEXT NOT NULL CHECK (kind IN ('opening', 'draw', 'repay', 'interest_capitalised', 'adjustment')),
+      amount_minor        INTEGER NOT NULL,
+      note                TEXT,
+      created_at          INTEGER NOT NULL,
+      created_by_user_id  TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tf_ledger_client
+      ON tf_ledger_entries(company_id, client_uuid) WHERE client_uuid IS NOT NULL;
+    /* One capitalisation per facility per month, whatever two runs decide at
+       the same moment — the posting's own unique index is not enough, because
+       the matching ledger entry is what moves the balance. */
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tf_ledger_capitalised
+      ON tf_ledger_entries(facility_id, entry_date) WHERE kind = 'interest_capitalised';
+    CREATE INDEX IF NOT EXISTS idx_tf_ledger_facility ON tf_ledger_entries(facility_id, entry_date, created_at);
+
+    /* Phase B: fees charged by the bank (TT, commitment, commission, handling),
+       optionally tied to a facility or drawdown. */
+    CREATE TABLE IF NOT EXISTS tf_fees (
+      id                  TEXT PRIMARY KEY,
+      company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      client_uuid         TEXT,
+      facility_id         TEXT REFERENCES tf_facilities(id),
+      drawdown_id         TEXT REFERENCES tf_drawdowns(id),
+      kind                TEXT NOT NULL,
+      amount_minor        INTEGER NOT NULL CHECK (amount_minor >= 0),
+      currency            TEXT NOT NULL,
+      fee_date            TEXT NOT NULL,
+      note                TEXT,
+      created_at          INTEGER NOT NULL,
+      created_by_user_id  TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tf_fee_client
+      ON tf_fees(company_id, client_uuid) WHERE client_uuid IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_tf_fees_company ON tf_fees(company_id, fee_date);
+
+    /* Phase B: scheduled fees that post themselves when due (catch-up safe). */
+    CREATE TABLE IF NOT EXISTS tf_recurring_fees (
+      id                  TEXT PRIMARY KEY,
+      company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      facility_id         TEXT REFERENCES tf_facilities(id),
+      kind                TEXT NOT NULL,
+      amount_minor        INTEGER NOT NULL CHECK (amount_minor >= 0),
+      currency            TEXT NOT NULL,
+      frequency           TEXT NOT NULL DEFAULT 'monthly' CHECK (frequency IN ('monthly', 'quarterly', 'yearly')),
+      next_date           TEXT NOT NULL,
+      enabled             INTEGER NOT NULL DEFAULT 1,
+      note                TEXT,
+      created_at          INTEGER NOT NULL,
+      updated_at          INTEGER NOT NULL,
+      updated_by_user_id  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_tf_recurring_company ON tf_recurring_fees(company_id, next_date);
   `);
 }
 
