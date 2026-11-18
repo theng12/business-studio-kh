@@ -23,7 +23,7 @@
  * failed" because it includes at least the syscall + addr.
  *
  * Also validates URL shape — Node's native fetch throws a separate
- * "Invalid URL" error when the user typed `100.64.0.5:13180` without
+ * "Invalid URL" error when the user typed `192.0.2.10:13180` without
  * `http://`. We catch that BEFORE the fetch so the error is
  * deterministic and the message is friendly.
  */
@@ -34,8 +34,8 @@
  * WHY THIS EXISTS. Settings shows two lists of the same addresses that differ
  * only by a path:
  *
- *   client connection   http://100.118.161.120:13180      (the desktop app)
- *   mobile web viewer   http://100.118.161.120:13180/m    (a phone browser)
+ *   client connection   http://192.0.2.10:13180      (the desktop app)
+ *   mobile web viewer   http://192.0.2.10:13180/m    (a phone browser)
  *
  * Pasting the second one into the client's Connection field looked fine —
  * `validateServerUrl` checks the scheme, host and protocol but never the PATH —
@@ -70,7 +70,7 @@ function normalizeServerUrl(raw) {
  * What we check (in order):
  *   1. Non-empty + string type
  *   2. Includes a scheme (http:// or https://). The #1 cause of
- *      `Invalid URL` is the user typing `100.64.0.5:13180` and Node
+ *      `Invalid URL` is the user typing `192.0.2.10:13180` and Node
  *      thinking the `:13180` is the URL scheme.
  *   3. The URL parses as a valid WHATWG URL
  *   4. Host is non-empty
@@ -78,7 +78,7 @@ function normalizeServerUrl(raw) {
  */
 function validateServerUrl(url) {
   if (typeof url !== 'string' || !url.trim()) {
-    return { ok: false, error: 'Server URL is empty. Paste an address like http://100.64.0.5:13180 from the server Mac\'s Settings → Multi-Mac page.' };
+    return { ok: false, error: 'Server URL is empty. Paste an address like http://192.0.2.10:13180 from the server Mac\'s Settings → Multi-Mac page.' };
   }
   const trimmed = url.trim();
   if (!/^https?:\/\//i.test(trimmed)) {
@@ -93,10 +93,10 @@ function validateServerUrl(url) {
   try {
     parsed = new URL(trimmed);
   } catch (_err) {
-    return { ok: false, error: `Server URL is malformed: "${trimmed}". Format should be http://<ip-or-host>:<port> — e.g. http://100.64.0.5:13180` };
+    return { ok: false, error: `Server URL is malformed: "${trimmed}". Format should be http://<ip-or-host>:<port> — e.g. http://192.0.2.10:13180` };
   }
   if (!parsed.host) {
-    return { ok: false, error: `Server URL has no host part. Format: http://<ip-or-host>:<port> — e.g. http://100.64.0.5:13180` };
+    return { ok: false, error: `Server URL has no host part. Format: http://<ip-or-host>:<port> — e.g. http://192.0.2.10:13180` };
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return { ok: false, error: `Server URL must use http: or https: scheme (got "${parsed.protocol}").` };
@@ -219,7 +219,7 @@ function analyzeFetchError(err, baseUrl) {
       code: 'INVALID_URL',
       message:
         `Server URL is invalid${where}. ` +
-        `Format should be http://<ip-or-host>:<port> — e.g. http://100.64.0.5:13180`,
+        `Format should be http://<ip-or-host>:<port> — e.g. http://192.0.2.10:13180`,
       hint: 'Malformed URL',
     };
   }

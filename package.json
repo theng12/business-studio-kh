@@ -1,8 +1,8 @@
 {
   "name": "media-studio-kh",
   "private": true,
-  "version": "0.1.113",
-  "description": "Business Studio KH \u2014 product images, labels, and catalogs in one workspace",
+  "version": "0.1.114",
+  "description": "Business Studio KH — product images, labels, and catalogs in one workspace",
   "author": "TerraNash",
   "main": "dist-electron/main/index.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "predist": "npm run webclient:bundle && npm run install:sharp",
     "dist": "vite build && electron-builder",
     "dist:updater": "bash scripts/build-updater-dmg.sh",
-    "postdist": "npm run native:host && node scripts/retain-dist.js",
+    "postdist": "node scripts/scan-dmg-leaks.js && npm run native:host && node scripts/retain-dist.js",
     "dist:arm64": "vite build && electron-builder --arm64",
     "dist:x64": "vite build && electron-builder --x64",
     "test": "node --test 'test/**/*.test.js'",
@@ -105,7 +105,7 @@
       "timestamp": "none",
       "gatekeeperAssess": false,
       "extendInfo": {
-        "NSCameraUsageDescription": "\u1780\u17bb\u17c6\u1796\u17d2\u1799\u17bc\u1791\u17d0\u179a\u1780\u178f\u17cb\u178f\u17d2\u179a\u17b6\u179c\u178f\u17d2\u178f\u1798\u17b6\u1793\u1790\u178f\u179a\u17bc\u1794\u17a2\u17d2\u1793\u1780 \u1793\u17c5\u1796\u17c1\u179b\u17a2\u17d2\u1793\u1780\u1785\u17bc\u179b \u1793\u17b7\u1784\u1785\u17c1\u1789\u1796\u17b8\u1780\u17b6\u179a\u1784\u17b6\u179a\u17d4 The attendance kiosk takes your photo when you clock in and out."
+        "NSCameraUsageDescription": "កុំព្យូទ័រកត់ត្រាវត្តមានថតរូបអ្នក នៅពេលអ្នកចូល និងចេញពីការងារ។ The attendance kiosk takes your photo when you clock in and out."
       }
     },
     "dmg": {

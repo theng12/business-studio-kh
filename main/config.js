@@ -124,7 +124,7 @@ function defaultConfig() {
     kioskRecoveryFailures: 0,
     kioskRecoveryLockedUntil: 0,
     kioskRecoveryLockCount: 0,
-    clientServerUrl: '',                // client mode: e.g. 'http://100.64.0.5:13180'
+    clientServerUrl: '',                // client mode: e.g. 'http://192.0.2.10:13180'
     clientToken: '',                    // client mode: user token from server admin
     clientUserName: '',                 // client mode: cached display name
   };

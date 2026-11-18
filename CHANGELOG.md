@@ -1,5 +1,10 @@
 # What's new
 
+## 0.1.114 — 2026-11-19
+
+- FIX — The example server address shown in the phone viewer and Multi-Mac settings is now a neutral example (`http://192.0.2.10:13180`). It used to show a real machine's name and address.
+- Internal — The release build now checks the finished installer itself for the owner's own network name, tailnet address range, machine name, home folder and coordination path, and stops the build if any of them appears. The check was run against the 0.1.113 installer first and correctly rejected it.
+
 ## 0.1.113 — 2026-11-17
 
 - NEW — Trade Finance now supports overdraft (running-balance) credit lines: record opening, draw, repay and adjustment movements with a live running balance, preview and post month-end capitalised interest, compare the bank's actual interest figure with variance status, and record or auto-post recurring fees without double-posting.

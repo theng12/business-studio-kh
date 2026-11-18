@@ -812,7 +812,7 @@ export function ClientModePanel({ config, patch }) {
         <Input
           value={draft.url}
           onChange={(e) => applyNext({ ...latest.current, url: e.target.value })}
-          placeholder="http://100.64.0.5:13180"
+          placeholder="http://192.0.2.10:13180"
         />
       </SettingRow>
       <SettingRow

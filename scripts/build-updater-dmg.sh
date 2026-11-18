@@ -28,6 +28,8 @@ hdiutil create -volname "Business Studio KH $VERSION" -srcfolder "$STAGE" -forma
 codesign --sign - "$DMG"
 codesign --verify --strict "$DMG"
 hdiutil verify "$DMG"
+# A public download must not carry the owner's network or machine identity.
+node scripts/scan-dmg-leaks.js "$DMG"
 mkdir -p _trash/updater-staging
 mv "$STAGE" "_trash/updater-staging/$(basename "$STAGE")"
 # Owner 2026-11-12: retention is automatic — keep the newest two installers,

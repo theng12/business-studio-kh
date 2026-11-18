@@ -919,7 +919,7 @@ async function pollTick() {
     // had a hiccup. Don't flip to disconnected; flag as degraded
     // and leave a breadcrumb in stderr (mirrors to crash.log on
     // the server admin's `tail` workflow, useful for the headless
-    // mac-mini case where they don't see UI errors).
+    // headless remote-client case where they don't see UI errors).
     const detail = `Status ${res.status}`;
     process.stderr.write(`[client ping] server responded with ${detail} on /api/ping at ${new Date().toISOString()}\n`);
     // Reset the network-failure debounce — this ISN'T a network
