@@ -433,9 +433,11 @@ test('NSCameraUsageDescription ships in the Mac build, in Khmer and English', ()
 /**
  * The kiosk module again, against a fake Electron that records the guard
  * handler, the exits and each quit source. `work.has` stands in for "a job is
- * running", so the release can be tested without starting a real export.
+ * running", so the release can be tested without starting a real export;
+ * `updaterQuit` stands in for "a live update hold says this quit is the
+ * installer's" (main/updateHold.js).
  */
-function loadGuardedKiosk({ work } = {}) {
+function loadGuardedKiosk({ work, updaterQuit } = {}) {
   const handlers = {};
   const exits = [];
   const fake = {
@@ -465,6 +467,9 @@ function loadGuardedKiosk({ work } = {}) {
     delete require.cache[exportsId];
     delete require.cache[renderId];
   }
+  const holdId = path.join(ROOT, 'main/updateHold.js');
+  if (updaterQuit === undefined) delete require.cache[holdId];
+  else require.cache[holdId] = { id: holdId, filename: holdId, loaded: true, exports: { isUpdaterQuit: () => updaterQuit } };
   delete require.cache[require.resolve('../main/kioskWindow')];
   const fresh = require('../main/kioskWindow');
   fresh.configureKiosk({ log: () => {} });
@@ -508,6 +513,23 @@ test('a quit nobody answers is released inside the Updater wait; a person answer
   } finally {
     delete process.env.MSKH_KIOSK_UNATTENDED_QUIT_MS;
   }
+});
+
+test('the installer\'s own stop quits at once: no PIN screen, no deferral', () => {
+  // The Launcher POSTs the update hold (0600 hold-token), reads `safe`, then
+  // quits. That quit is the installer's, and nobody is at the kiosk to answer a
+  // PIN — this is the stall that left an unattended Mac waiting on angkor.
+  // (The tests above run with no live hold and still get the PIN screen, which
+  // is the other half of the decision.)
+  const lines = [];
+  const { fresh, handlers, exits } = loadGuardedKiosk({ updaterQuit: true });
+  fresh.configureKiosk({ log: (e, d) => lines.push(`${e} ${d || ''}`.trim()) });
+
+  const ask = { prevented: false, preventDefault() { this.prevented = true; } };
+  handlers['before-quit'](ask);
+  assert.equal(ask.prevented, false, 'the installer\'s quit is not refused');
+  assert.deepEqual(exits, [], 'index.js quits the ordinary way; nothing is force-exited here');
+  assert.ok(lines.some((l) => l.startsWith('kiosk:updater-quit')), 'and it is logged as the installer\'s');
 });
 
 test('a person who turns the quit down keeps the kiosk (a PIN tried, or the prompt dismissed)', async () => {

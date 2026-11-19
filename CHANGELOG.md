@@ -1,5 +1,10 @@
 # What's new
 
+## 0.1.115 — 2026-11-19
+
+- FIX — On an attendance-kiosk Mac, an automatic update no longer stops to ask for a manager PIN. The updater's stop is now told apart from a person's Quit by the update hold it takes first, so it pauses the queue, quits with no prompt and the relaunch carries on by itself. A person quitting by hand is still asked.
+- FIX — If the app cannot open the port an update uses to pause it, it now says so and will not start an update it cannot be paused for, instead of carrying on as if it could.
+
 ## 0.1.114 — 2026-11-19
 
 - FIX — The example server address shown in the phone viewer and Multi-Mac settings is now a neutral example (`http://192.0.2.10:13180`). It used to show a real machine's name and address.

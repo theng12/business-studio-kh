@@ -16,8 +16,10 @@
  *   - a quit from anywhere else (Dock menu, `osascript … quit`, Activity
  *     Monitor's plain Quit) is refused in `before-quit` and the screen asks for
  *     a manager PIN instead (kioskMode:quit) — but only for 45 s. An installer
- *     quits by the same AppleEvent a person does and nobody is there to answer,
- *     so a quit nobody answers is released, logged, at the end of that budget.
+ *     quits by the same AppleEvent a person does, so what tells them apart is
+ *     the update hold it takes first (main/updateHold.js): a quit that follows
+ *     a live hold is let through at once, and anything else is a person's and
+ *     waits for an answer, released at the end of that budget if nobody gives one.
  *     A person keeps the kiosk: dismissing the prompt (kioskMode:quitDismissed)
  *     or trying a PIN calls the release off. An export or render still running
  *     at the deadline is never cut off — that cycle is skipped and the next one
@@ -200,6 +202,21 @@ function isWorkInProgress() {
 }
 
 /**
+ * Is this quit the installer's rather than a person's? True only right after
+ * an authenticated update hold (main/updateHold.js), which a person at the
+ * kiosk cannot produce: it needs the updater's 0600 hold-token, and whoever can
+ * read that can already `kill` this app — same result, no token, no PIN.
+ * A lookup failure falls back to "a person's", so the kiosk stays guarded.
+ */
+function isUpdaterQuit() {
+  try {
+    return require('./updateHold').isUpdaterQuit();
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * The end of the budget: a person had UNATTENDED_QUIT_BUDGET_MS to answer the
  * PIN prompt and did not, so this quit is unattended (an installer's) and is
  * released. Work mid-task is not forced: that cycle is skipped and the Updater
@@ -256,11 +273,14 @@ function cancelUnansweredQuit(why) {
  * path that creates the kiosk window (after `ready`).
  *
  * A quit (Dock, `osascript … quit`, the Updater's install) is refused and the
- * screen asks for a manager PIN — but only for UNATTENDED_QUIT_BUDGET_MS. An
- * installer's quit is the same AppleEvent a person's is, and nobody is there to
- * answer it, so refusing it forever is what made every unattended update fail
- * (the 0.1.110 updater bug). A person keeps the kiosk by dismissing the prompt
- * or trying a PIN: either calls cancelUnansweredQuit().
+ * screen asks for a manager PIN — except the installer's own stop, which is let
+ * through: it follows a live update hold (main/updateHold.js), so the queue is
+ * already paused and whatever was still running was named to the installer.
+ * Nobody is at a kiosk to answer a PIN, so refusing it forever is what made
+ * every unattended update fail (the 0.1.110 updater bug); a quit that is not
+ * the installer's is answered, or released after UNATTENDED_QUIT_BUDGET_MS.
+ * A person keeps the kiosk by dismissing the prompt or trying a PIN: either
+ * calls cancelUnansweredQuit().
  */
 function installKioskGuards() {
   if (guardsInstalled) return;
@@ -268,6 +288,15 @@ function installKioskGuards() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(kioskMenuTemplate(app.getName())));
   app.on('before-quit', (e) => {
     if (allowQuit) return;
+    // The installer took this app's update hold and quits straight after reading
+    // `safe`: the queue is paused and work it could not settle was reported to
+    // it, not cut off here. No PIN screen — there is nobody to answer it — and
+    // no deferral, which is the ten minutes an unattended kiosk used to lose.
+    if (isUpdaterQuit()) {
+      allowQuit = true;
+      log('kiosk:updater-quit', 'the update hold is live, so this is the installer: quitting without the manager PIN');
+      return;
+    }
     e.preventDefault();
     if (!unattendedQuitTimer) {
       log('kiosk:quit-blocked', `a manager PIN is needed to close the kiosk; released in ${Math.round(UNATTENDED_QUIT_BUDGET_MS / 1000)} s if nobody answers`);

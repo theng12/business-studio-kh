@@ -23,6 +23,15 @@ const MAX_TIMEOUT_S = 30;              // the contract's ceiling, not a job's ow
 const DEFAULT_PAUSE_S = 120;
 const MAX_PAUSE_S = 900;
 const SETTLE_POLL_MS = 200;
+/**
+ * How long a quit that follows a hold still counts as the installer's. The
+ * Launcher quits straight after it reads the hold's answer, so this only has to
+ * cover its own settle and swap; anything later is a person's quit.
+ */
+const UPDATER_QUIT_WINDOW_MS = 60 * 1000;
+/** Bind attempts before the app accepts it cannot be held (a closing copy still holds the port). */
+const BIND_ATTEMPTS = 3;
+const BIND_RETRY_MS = 500;
 
 /* 13181: this app's own LAN server is 13180, so the hold sits beside it on the
  * same machine. Loopback only, plain HTTP — the signed feed names the full URL
@@ -31,6 +40,8 @@ const HOLD_PORT = 13181;
 
 let pausedUntil = 0;
 let pauseTimer = null;
+let updaterHoldUntil = 0;
+let available = false;
 let log = (message) => process.stderr.write(`[update-hold] ${message}\n`);
 
 function setLog(fn) { log = fn; }
@@ -63,13 +74,32 @@ function inFlightIds() {
 
 function pause(pauseS) {
   pausedUntil = Date.now() + pauseS * 1000;
+  updaterHoldUntil = Date.now() + Math.min(pauseS * 1000, UPDATER_QUIT_WINDOW_MS);
   if (pauseTimer) clearTimeout(pauseTimer);
   pauseTimer = setTimeout(() => {
     pauseTimer = null;
     pausedUntil = 0;
+    updaterHoldUntil = 0;
     resumed('the pause ran out');
   }, pauseS * 1000);
   pauseTimer.unref?.();
+}
+
+/**
+ * Is this quit the installer's? True only shortly after an authenticated hold:
+ * the Launcher POSTs the hold, reads `safe`, then quits. No hold, a released
+ * hold, or one that has run out is a person's quit. A local process gains
+ * nothing it did not already have — the hold needs the 0600
+ * `~/Library/KHUpdater/state/hold-token`, and anything that can read that can
+ * already `kill` this app, which needs no credential and skips no PIN.
+ */
+function isUpdaterQuit() {
+  return Date.now() < updaterHoldUntil;
+}
+
+/** Did the loopback hold open? When it did not, no update may start (main/ipc/updates.js). */
+function isAvailable() {
+  return available;
 }
 
 function resumed(why) {
@@ -114,6 +144,7 @@ function releaseHold() {
   pauseTimer = null;
   const wasPaused = isPaused();
   pausedUntil = 0;
+  updaterHoldUntil = 0;
   if (wasPaused) resumed('the installer said so');
   const left = inFlightIds();
   return {
@@ -143,8 +174,10 @@ function send(res, status, body) {
 /**
  * The loopback listener. Started on every boot, whatever the mode: an update
  * can replace a standalone, kiosk or client copy, and each one has work to
- * keep. A port already in use is logged and the app carries on — the installer
- * then refuses to install over the running copy instead of quitting it mid-job.
+ * keep. A port already in use is retried, then reported as unholdable and
+ * logged; from then on the app refuses to start an update (see
+ * `isAvailable`), because an update with nobody able to hold it is the
+ * mid-job install this endpoint exists to prevent.
  *
  * Per-request credential check (matching Printer/UpdateHold): POST and DELETE
  * require the updater's `~/Library/KHUpdater/state/hold-token` via
@@ -216,8 +249,24 @@ function startListener({ port = HOLD_PORT, tokenFile } = {}) {
     if (req.method === 'DELETE') return send(res, 200, releaseHold());
     return send(res, 405, { error: 'Use POST to hold this app, or DELETE to let it work again.' });
   });
-  server.on('error', (err) => log(`listener failed on 127.0.0.1:${port}: ${err.message}`));
-  server.listen(port, '127.0.0.1', () => log(`listening on 127.0.0.1:${port}`));
+  // Fail closed (owner 2026-11-19): an app that cannot open its hold port must
+  // not start an update it cannot be held for, so a port a closing copy still
+  // holds is retried and giving up is said out loud (updates:openUpdater refuses).
+  let attempts = 0;
+  const listen = () => {
+    server.listen(port, '127.0.0.1', () => {
+      available = true;
+      log(`listening on 127.0.0.1:${port}`);
+    });
+  };
+  server.on('error', (err) => {
+    if (server.listening) { log(`listener error on 127.0.0.1:${port}: ${err.message}`); return; }
+    attempts += 1;
+    if (attempts < BIND_ATTEMPTS) { setTimeout(listen, BIND_RETRY_MS).unref?.(); return; }
+    available = false;
+    log(`no hold on 127.0.0.1:${port} after ${attempts} tries (${err.message}); this app cannot be held, so it will not start an update`);
+  });
+  listen();
   server.unref?.();
   return server;
 }
@@ -230,4 +279,6 @@ module.exports = {
   releaseHold,
   startListener,
   setLog,
+  isUpdaterQuit,
+  isAvailable,
 };

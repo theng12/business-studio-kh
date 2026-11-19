@@ -30,6 +30,12 @@ function check() {
 }
 
 async function openUpdater() {
+  // Fail closed (owner 2026-11-19): an app that could not open its update-hold
+  // port cannot be paused for an update, so it does not start one. Quitting it
+  // first still works — the installer installs an app that is not running.
+  if (!require('../updateHold').isAvailable()) {
+    throw new Error('Updates are paused: this app could not open its update-hold port, so an automatic update could not pause it safely. Quit Business Studio KH and update it from Studio Launcher KH.');
+  }
   for (const name of ['Studio Launcher KH', 'Update Studio KH']) {
     try {
       const error = await shell.openPath(`/Applications/${name}.app`);

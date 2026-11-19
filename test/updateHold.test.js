@@ -11,8 +11,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+const net = require('node:net');
+
 const hold = require('../main/updateHold');
-const { takeHold, releaseHold, isPaused, startListener } = hold;
+const { takeHold, releaseHold, isPaused, startListener, isUpdaterQuit, isAvailable } = hold;
 
 hold.setLog(() => {}); // the log is not what these assert
 
@@ -194,4 +196,47 @@ test('the listener refuses timeouts past the contract ceiling and bad numbers fa
   assert.ok(Date.now() - startedAt < 1000);
   assert.equal(reply.dispatch_paused_s, 120, 'pause_s=abc falls back to the 120 s default');
   assert.equal(reply.safe, true);
+});
+
+/* ── the installer's quit, and failing closed (0.1.115) ────────────── */
+
+test('only a quit that follows a hold is the installer\'s; a released or expired hold is a person\'s', async () => {
+  assert.equal(isUpdaterQuit(), false, 'no hold, so a quit is a person\'s');
+  await takeHold(0, 900, () => []);
+  assert.equal(isUpdaterQuit(), true, 'the Launcher quits straight after its hold');
+  releaseHold();
+  assert.equal(isUpdaterQuit(), false, 'a released hold is not the installer\'s');
+
+  await takeHold(0, 1, () => []);
+  assert.equal(isUpdaterQuit(), true);
+  await sleep(1200);
+  assert.equal(isUpdaterQuit(), false, 'the marker expires with the pause, so it is never a latch');
+});
+
+test('the installer-quit window never outlives the pause it belongs to', () => {
+  const src = fs.readFileSync(require.resolve('../main/updateHold.js'), 'utf8');
+  assert.match(src, /UPDATER_QUIT_WINDOW_MS = 60 \* 1000/, 'a stale hold must not open the kiosk for long');
+  assert.match(src, /Math\.min\(pauseS \* 1000, UPDATER_QUIT_WINDOW_MS\)/);
+});
+
+test('a hold port it cannot open fails closed: unholdable and said out loud', async (t) => {
+  const tokenFile = makeTempToken(t, 'busy-port-token');
+  const opened = startListener({ port: 0, tokenFile });
+  await new Promise((resolve) => opened.once('listening', resolve));
+  assert.equal(isAvailable(), true, 'a hold that opened is usable');
+  await new Promise((resolve) => opened.close(resolve));
+
+  const taken = net.createServer();
+  await new Promise((resolve) => taken.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => taken.close(resolve)));
+
+  const logs = [];
+  hold.setLog((m) => logs.push(m));
+  t.after(() => hold.setLog(() => {}));
+  const blocked = startListener({ port: taken.address().port, tokenFile });
+  await sleep(2000); // three bind attempts, 500 ms apart
+
+  assert.equal(blocked.listening, false);
+  assert.equal(isAvailable(), false, 'the app knows it cannot be held, so no update may start');
+  assert.ok(logs.some((l) => /cannot be held, so it will not start an update/.test(l)), 'and says so');
 });
