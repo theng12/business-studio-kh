@@ -680,7 +680,7 @@ function SupplierFormModal({ open, editing, onClose, onSave, onArchive, onUnarch
               {({ id }) => <Input id={id} value={form.contactName} onChange={patch('contactName')} placeholder="e.g. Mr. Chen" />}
             </Field>
             <Field label="Email">
-              {({ id }) => <Input id={id} type="email" value={form.contactEmail} onChange={patch('contactEmail')} placeholder="sales@example.com" />}
+              {({ id }) => <Input id={id} type="email" value={form.contactEmail} onChange={patch('contactEmail')} placeholder="Contact e-mail" />}
             </Field>
           </div>
           <div className="grid-2">

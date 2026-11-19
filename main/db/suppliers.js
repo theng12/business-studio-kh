@@ -71,7 +71,7 @@ function list(companyId, filters = {}) {
     // Escape LIKE meta-chars (`%` and `_`) so literal user input doesn't
     // wildcard the query. Same defensive pattern the product search uses.
     // v0.1.67: contact name + email join name/country, so the one search
-    // box finds "Mr. Chen" or sales@example.com as well as the company.
+    // box finds "Mr. Chen" or the contact's e-mail as well as the company.
     const escaped = search.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
     const term = `%${escaped}%`;
     sql += ` AND (name LIKE ? ESCAPE '\\' COLLATE NOCASE`
