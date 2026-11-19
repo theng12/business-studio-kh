@@ -109,7 +109,10 @@ function getRegisteredChannels() {
 }
 
 let _server = null;
-let _bindings = null; // { port, addresses: string[] }
+// 0.1.116: loopback and each Tailscale address are separate listeners on one
+// port; `_server` is the first (loopback) and stays for the callers that use it.
+let _servers = [];
+let _bindings = null; // { port, bind, bound: string[], addresses: [{ip,kind}] }
 // A client gets two heartbeats (60s) to answer before it is dropped.
 const WS_HEARTBEAT_MS = 30_000;
 let _wss = null;
@@ -669,13 +672,21 @@ async function handleRequest(req, res, dataDir) {
 
 /**
  * Boot the HTTP server. Returns a promise that resolves to the
- * { port, addresses } binding info, or rejects if the port is taken.
- * Listens on 0.0.0.0 so Tailscale / LAN clients can reach it.
+ * { port, bind, bound, addresses } binding info, or rejects if the port is taken.
+ *
+ * It listens on loopback and on this Mac's Tailscale addresses — never on a
+ * plain Wi-Fi/LAN address. Every request carries the user's bearer token and the
+ * event socket carries it in the URL, so a listener on the LAN would hand that
+ * token to anything on the network that can read traffic (0.1.116). Tailscale is
+ * WireGuard-encrypted and loopback never leaves the Mac; `serverBind: 'lan'`
+ * restores the old 0.0.0.0 listener and is an explicit, warned choice.
  */
-function bootServer({ port, dataDir, wsHeartbeatMs = WS_HEARTBEAT_MS }) {
+function bootServer({ port, dataDir, bind = 'auto', wsHeartbeatMs = WS_HEARTBEAT_MS }) {
   if (_server) return Promise.resolve(_bindings);
+  const mode = bind === 'lan' ? 'lan' : 'auto';
   return new Promise((resolve, reject) => {
-    const srv = http.createServer((req, res) => {
+    let attachUpgrade = () => {};
+    const handle = (req, res) => {
       runTrackedOperation(`http:${req.method || 'UNKNOWN'}`, () => handleRequest(req, res, dataDir)).catch((err) => {
         if (err?.code === 'APP_MAINTENANCE') {
           try { sendJson(res, 503, { error: err.message }); } catch (_) {}
@@ -685,8 +696,7 @@ function bootServer({ port, dataDir, wsHeartbeatMs = WS_HEARTBEAT_MS }) {
           // Last-seen / presence bookkeeping. Failing to stamp a timestamp must not
         try { sendJson(res, 500, { error: 'Internal server error' }); } catch (_) {}
       });
-    });
-    srv.on('error', reject);
+    };
 
     // v0.15.1: attach a WebSocket server to the same HTTP port.
     // Endpoint: ws://host:port/api/events?token=<bearer>. We can't
@@ -694,6 +704,8 @@ function bootServer({ port, dataDir, wsHeartbeatMs = WS_HEARTBEAT_MS }) {
     // client, so the token rides in the query string. The transport
     // is private (Tailscale / LAN) so the leak risk is low; we log
     // only the user.name + connection event, never the raw token.
+    // 0.1.116: every listener is loopback or Tailscale, so the URL is never
+    // readable off this Mac or by anything other than a WireGuard peer.
     try {
       if (!WebSocketServer) WebSocketServer = require('ws').WebSocketServer;
       const events = require('../events');
@@ -701,7 +713,7 @@ function bootServer({ port, dataDir, wsHeartbeatMs = WS_HEARTBEAT_MS }) {
       const wss = new WebSocketServer({ noServer: true });
       _wss = wss;
 
-      srv.on('upgrade', (req, socket, head) => {
+      attachUpgrade = (srv) => srv.on('upgrade', (req, socket, head) => {
         if (isMaintenanceActive()) {
           socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
           socket.destroy();
@@ -798,14 +810,62 @@ function bootServer({ port, dataDir, wsHeartbeatMs = WS_HEARTBEAT_MS }) {
       process.stderr.write(`[server] ws init failed: ${err.message}\n`);
     }
 
-    srv.listen(port, '0.0.0.0', () => {
-      _server = srv;
-      _bindings = { port, addresses: collectLocalAddresses() };
-      process.stdout.write(`[server] listening on port ${port}\n`);
+    // The first target names the port (`port: 0` in tests); the rest share it.
+    const targets = bindTargets(mode);
+    const servers = [];
+    const listenOn = (address, boundPort) => new Promise((ok, fail) => {
+      const srv = http.createServer(handle);
+      attachUpgrade(srv);
+      srv.once('error', fail);
+      srv.listen(boundPort, address, () => { srv.removeListener('error', fail); ok(srv); });
+    });
+
+    listenOn(targets[0], port).then(async (first) => {
+      servers.push(first);
+      const boundPort = first.address().port;
+      for (const address of targets.slice(1)) {
+        try { servers.push(await listenOn(address, boundPort)); }
+        catch (err) { process.stderr.write(`[server] not listening on ${address}: ${err.message}\n`); }
+      }
+      _servers = servers;
+      _server = servers[0];
+      _bindings = {
+        port: boundPort,
+        bind: mode,
+        bound: servers.map((s) => s.address().address),
+        addresses: reachableAddresses(mode),
+      };
+      process.stdout.write(`[server] listening on ${_bindings.bound.join(', ')} port ${boundPort}\n`);
       try { startKeepAwake(); } catch (err) { logSoftFailure('server', 'keep this Mac awake', err); }
       resolve(_bindings);
-    });
+    }).catch(reject);
   });
+}
+
+/**
+ * Where a listener may go. 'auto' is loopback plus this Mac's Tailscale
+ * addresses — the bearer token then only ever crosses a WireGuard link or stays
+ * on this Mac. 'lan' is the old 0.0.0.0 listener, kept only for someone who has
+ * explicitly accepted that anything on the network can read the traffic.
+ */
+function bindTargets(mode) {
+  if (mode === 'lan') return ['0.0.0.0'];
+  const targets = ['127.0.0.1'];
+  for (const address of collectLocalAddresses()) {
+    if (address.kind === 'tailscale') targets.push(address.ip);
+  }
+  return targets;
+}
+
+/**
+ * The addresses a client can actually reach on this build. Under 'auto' that is
+ * the Tailscale ones only — the Bonjour name and the raw Wi-Fi IPs resolve to an
+ * interface nothing is listening on, and offering them would send a person to an
+ * address that cannot work.
+ */
+function reachableAddresses(mode) {
+  const all = collectLocalAddresses();
+  return mode === 'lan' ? all : all.filter((a) => a.kind === 'tailscale');
 }
 
 function stopServer() {
@@ -817,15 +877,23 @@ function stopServer() {
   _wsHeartbeats.clear();
   try { _wss?.close(); } catch (_) {}
   _wss = null;
+  const listening = (_servers || [_server]).filter(Boolean);
   return new Promise((resolve) => {
-    _server.close(() => {
+    let open = listening.length;
+    const done = () => {
+      open -= 1;
+      if (open > 0) return;
+      _servers = [];
       _server = null;
       _bindings = null;
       // v0.20.0: clear rate-limit state so stale token buckets
       // don't survive a server stop / restart cycle.
       try { require('./rateLimit').reset(); } catch (_) {}
       resolve();
-    });
+    };
+    for (const srv of listening) {
+      try { srv.close(done); } catch (_) { done(); }
+    }
   });
 }
 
@@ -915,4 +983,7 @@ module.exports = {
   stopServer,
   getStatus,
   collectLocalAddresses,
+  // pure, for tests
+  bindTargets,
+  reachableAddresses,
 };

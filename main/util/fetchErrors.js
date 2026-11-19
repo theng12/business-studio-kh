@@ -114,6 +114,22 @@ function validateServerUrl(url) {
  *   message). Optional.
  * @returns {{ message: string, code: string | null, hint: string }}
  */
+/**
+ * The host of `baseUrl` when it is a plain Wi-Fi/LAN IPv4 address — the ones the
+ * server stopped listening on in 0.1.116 — else null. Loopback and Tailscale
+ * (100.64/10) are not "plain Wi-Fi", and a hostname (a .local name or a Tailscale
+ * DNS name) is left alone: it may resolve to a working address.
+ */
+function plainWifiHost(baseUrl) {
+  let host;
+  try { host = new URL(String(baseUrl || '')).hostname; } catch (_) { return null; }
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
+  if (host.startsWith('127.')) return null;
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)) return null;
+  if (/^192\.168\./.test(host) || /^10\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) return host;
+  return null;
+}
+
 function analyzeFetchError(err, baseUrl) {
   // The cause chain in Node's native fetch: TypeError(fetch failed)
   //   → cause: SystemError { code, errno, syscall, address, port }
@@ -164,7 +180,21 @@ function analyzeFetchError(err, baseUrl) {
           'This Mac keeps retrying on its own.',
         hint: 'Connection dropped',
       };
-    case 'ECONNREFUSED':
+    case 'ECONNREFUSED': {
+      // 0.1.116: the server listens on loopback and Tailscale only, so a Mac or
+      // phone still pointed at the old Wi-Fi address reaches the Mac and is
+      // refused. That is not a wrong port — say what actually changed.
+      const wifiHost = plainWifiHost(baseUrl);
+      if (wifiHost) {
+        return {
+          code,
+          message:
+            `Nothing is accepting connections at ${wifiHost}: Business Studio KH no longer answers over Wi-Fi, because anything on that network could read the access token. `
+            + "Join this Mac to the same Tailscale network and use the server Mac's Tailscale address from its Settings → Multi-Mac, "
+            + 'or turn on "Wi-Fi connections" there if a device has no Tailscale.',
+          hint: 'Server only answers over Tailscale now',
+        };
+      }
       return {
         code,
         message:
@@ -172,6 +202,7 @@ function analyzeFetchError(err, baseUrl) {
           'Check the app is open there and its Settings → Multi-Mac says "Listening". If it does, the port number here is wrong.',
         hint: 'Server not listening on this port',
       };
+    }
     case 'ENOTFOUND':
     case 'EAI_AGAIN':
       return {

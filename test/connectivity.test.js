@@ -57,6 +57,24 @@ test('network failures are explained in plain words, never as socket codes', () 
   }
 });
 
+test('a client still pointed at the Wi-Fi address is told the server only answers over Tailscale', () => {
+  const { analyzeFetchError } = require('../main/util/fetchErrors');
+  const refused = Object.assign(new TypeError('fetch failed'), {
+    cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED', port: 13180 }),
+  });
+
+  const wifi = analyzeFetchError(refused, 'http://192.168.1.24:13180').message;
+  assert.match(wifi, /no longer answers over Wi-Fi/, 'it names the real change, not a wrong port');
+  assert.match(wifi, /Tailscale/, 'and says what to do instead');
+  assert.doesNotMatch(wifi, /isn't accepting connections/);
+
+  // Loopback and Tailscale keep the ordinary refusal: those addresses are the
+  // ones the server still listens on, so a refusal there really is "not running".
+  for (const url of ['http://127.0.0.1:13180', 'http://100.64.0.5:13180', 'http://studio-mac.local:13180']) {
+    assert.match(analyzeFetchError(refused, url).message, /isn't accepting connections/, url);
+  }
+});
+
 test('the preload strips Electron\'s "Error invoking remote method" prefix once', async () => {
   let api = null;
   const originalLoad = Module._load;

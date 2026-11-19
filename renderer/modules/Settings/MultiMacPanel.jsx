@@ -227,6 +227,17 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
     try { await window.api.settings.setOne('serverKeepAwake', next); }
     catch (err) { setKeepAwake(!next); addToast?.(err.message, 'error'); }
   }
+  // 0.1.116: plain Wi-Fi (LAN) clients are off by default. A listener on a
+  // Wi-Fi address would put every user's token on the wire unencrypted;
+  // Tailscale is encrypted and works from anywhere. Restart-required.
+  const [wifiClients, setWifiClients] = useState(config?.serverBind === 'lan');
+  async function toggleWifiClients(next) {
+    setWifiClients(next);
+    try {
+      await window.api.settings.setOne('serverBind', next ? 'lan' : 'auto');
+      addToast?.(next ? 'Wi-Fi connections will be allowed after a restart.' : 'Wi-Fi connections will be off after a restart.', 'info');
+    } catch (err) { setWifiClients(!next); addToast?.(err.message, 'error'); }
+  }
   useEffect(() => {
     // v0.1.22: the server controls are server-only, so on a client Mac this poll
     // has nothing to ask — it would fail every three seconds and log a warning
@@ -400,7 +411,7 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
     {!clientMode && (
     <SettingRow
       label="Server status"
-      hint="The HTTP server clients connect to. Paste one of the addresses below (plus the port) into a client Mac's Connection settings. Tailscale addresses (100.x.x.x) work from anywhere; the Bonjour name (yourmac.local) is recommended for LAN clients because it doesn't change when your router hands out a new IP; raw LAN IPs (192.168 / 10.x) work but can stop working if DHCP gives the server a new lease."
+      hint="The HTTP server clients connect to. Paste one of the addresses below (plus the port) into a client Mac's Connection settings. Only addresses this Mac is actually listening on are listed: Tailscale addresses (100.x.x.x) work from anywhere — and from a phone or Mac on the same Wi-Fi too, once that device is on the tailnet. With Wi-Fi connections turned on, the Bonjour name (yourmac.local) and raw LAN IPs (192.168 / 10.x) are listed as well."
     >
       <div className="server-status">
         <div className="server-status__row">
@@ -422,9 +433,10 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
            * to type on my other Mac" saw nothing and no reason why — the Tailscale
            * address in particular appeared to be missing from the app. */
           <p className="server-status__hint">
-            Start the server (or switch this Mac to <strong>Server</strong> mode above) and its
-            addresses — Tailscale, Bonjour and LAN — will be listed here, ready to paste into the
-            other Mac&rsquo;s Connection settings. Nothing is reachable from another Mac until then.
+            Start the server (or switch this Mac to <strong>Server</strong> mode above) and the
+            addresses it is listening on — Tailscale, plus Bonjour and LAN if Wi-Fi connections are
+            allowed — will be listed here, ready to paste into the other Mac&rsquo;s Connection
+            settings. Nothing is reachable from another Mac until then.
           </p>
         ) : null}
         {serverStatus.running && serverStatus.addresses?.length > 0 ? (
@@ -499,6 +511,23 @@ export function ServerModePanel({ config, addToast, clientMode = false }) {
         <input type="checkbox" checked={keepAwake} onChange={(e) => toggleKeepAwake(e.target.checked)} />
         <span>{keepAwake ? 'On' : 'Off'}</span>
       </label>
+    </SettingRow>
+    )}
+    {!clientMode && (
+    <SettingRow
+      label="Wi-Fi connections"
+      hint="Off: this Mac accepts clients only over Tailscale (encrypted) or from this Mac itself. A phone or Mac joins the same tailnet and uses the Tailscale address below, so nothing travels over Wi-Fi in the clear. On: also accepts any device on the same Wi-Fi or LAN — the only way a device without Tailscale can connect, but anyone on that network can read the traffic and take a user's token. Needs a restart."
+    >
+      <label className="toggle">
+        <input type="checkbox" checked={wifiClients} onChange={(e) => toggleWifiClients(e.target.checked)} />
+        <span>{wifiClients ? 'Wi-Fi allowed' : 'Tailscale only'}</span>
+      </label>
+      {wifiClients ? (
+        <p className="server-status__hint" style={{ marginTop: 8 }}>
+          Anyone on this network can read what a client sends, including its token. Use it only on a
+          network you trust, and turn it off once the device has Tailscale.
+        </p>
+      ) : null}
     </SettingRow>
     )}
     {!clientMode && (

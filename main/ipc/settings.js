@@ -128,7 +128,7 @@ function register({ expose, exposeLocal }) {
   exposeLocal('server:start', async () => {
     const { bootServer } = require('../server');
     const cfg = config.loadConfig();
-    return bootServer({ port: cfg.serverPort || 13180, dataDir: cfg.dataDir });
+    return bootServer({ port: cfg.serverPort || 13180, dataDir: cfg.dataDir, bind: cfg.serverBind });
   });
 
   /* v0.14.2: client connection test. Lets the client UI verify

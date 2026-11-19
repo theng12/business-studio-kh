@@ -1,5 +1,10 @@
 # What's new
 
+## 0.1.116 — 2026-11-19
+
+- FIX — The server Mac no longer accepts other Macs or phones over ordinary Wi-Fi. Every request carries a person's access token, and on Wi-Fi anything on the network could read it. It now listens only on Tailscale (encrypted) and on the Mac itself. A phone or Mac joins the same tailnet and uses the Tailscale address shown in Settings → Multi-Mac.
+- NEW — Settings → Multi-Mac → Wi-Fi connections: turn it on for a device that has no Tailscale. The setting states plainly that anyone on that network can then read the traffic; it is off by default and needs a restart.
+
 ## 0.1.115 — 2026-11-19
 
 - FIX — On an attendance-kiosk Mac, an automatic update no longer stops to ask for a manager PIN. The updater's stop is now told apart from a person's Quit by the update hold it takes first, so it pauses the queue, quits with no prompt and the relaunch carries on by itself. A person quitting by hand is still asked.

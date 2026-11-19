@@ -88,6 +88,15 @@ function defaultConfig() {
      * between standalone/server and client). */
     mode: 'standalone',                 // 'standalone' | 'server' | 'client'
     serverPort: 13180,                  // server mode: HTTP port to bind
+    /* 0.1.116: which interfaces the server listens on.
+     *   'auto' (default) — loopback and this Mac's Tailscale addresses. Every
+     *      request carries a bearer token, so the server never listens on a
+     *      plain Wi-Fi/LAN address where anything on the network could read it.
+     *   'lan'  — the old 0.0.0.0 listener, for a phone or Mac with no Tailscale.
+     *      Anyone on that network can read the token; the setting says so
+     *      before it is turned on.
+     * Restart-required, like `mode`. */
+    serverBind: 'auto',                 // 'auto' | 'lan'
     // v0.34.0: when in server mode, also serve the lightweight mobile/iPad
     // web viewer at GET /m (view + search + add-photo). Default on; the
     // server checks this per-request so toggling takes effect immediately.
@@ -281,6 +290,9 @@ function assertValidConfigValues(patch) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) {
       throw new Error('Kiosk mode is turned on in Settings → Multi-Mac → Attendance kiosk, and turned off from the kiosk screen with a manager PIN.');
     }
+  }
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'serverBind')) {
+    if (patch.serverBind !== 'auto' && patch.serverBind !== 'lan') throw new Error('Wi-Fi connections are either on or off.');
   }
   if (patch &&Object.prototype.hasOwnProperty.call(patch, 'exchangeRateKhrPerUsd')) {
     if (validExchangeRate(patch.exchangeRateKhrPerUsd) == null) {

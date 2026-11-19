@@ -20,7 +20,10 @@
   main/webclientHtml.js (regenerate with `npm run webclient:bundle`, or just
   `npm run dist`, which does it in predist). On the iPad open
   http://<mac>:<serverPort>/m — the same address and port the Mac clients use —
-  and paste a user token from Settings → Multi-Mac. Do NOT hand-serve this
+  and paste a user token from Settings → Multi-Mac. Since 0.1.116 the server
+  listens only on loopback and on the Mac's Tailscale address, so from a phone
+  that address is the 100.x one (the phone joins the same tailnet first), unless
+  the admin turns on "Wi-Fi connections" in Settings → Multi-Mac. Do NOT hand-serve this
   folder with `python3 -m http.server`: the page has to come from the app's own
   server so /api/rpc and /assets/ share its origin.
 

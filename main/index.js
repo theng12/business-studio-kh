@@ -694,9 +694,9 @@ app.whenReady().then(() => {
   // "Server not running" and let the user pick a different port).
   if (config.mode === 'server') {
     const { bootServer } = require('./server');
-    bootServer({ port: config.serverPort || 13180, dataDir: config.dataDir })
+    bootServer({ port: config.serverPort || 13180, dataDir: config.dataDir, bind: config.serverBind })
       .then((info) => {
-        logEvent('server:listening', `port=${info.port} addresses=${info.addresses.map((a) => a.ip).join(',')}`);
+        logEvent('server:listening', `port=${info.port} bind=${info.bind} on=${info.bound.join(',')} addresses=${info.addresses.map((a) => a.ip).join(',')}`);
       })
       .catch((err) => {
         logEvent('server:failed', err.code === 'EADDRINUSE' ? portBusyMessage(config.serverPort || 13180) : err.message);
