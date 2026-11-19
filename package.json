@@ -1,7 +1,7 @@
 {
   "name": "media-studio-kh",
   "private": true,
-  "version": "0.1.116",
+  "version": "0.1.117",
   "description": "Business Studio KH — product images, labels, and catalogs in one workspace",
   "author": "TerraNash",
   "main": "dist-electron/main/index.js",
@@ -76,7 +76,10 @@
     "files": [
       "dist-renderer/**/*",
       "dist-electron/**/*",
-      "package.json"
+      "package.json",
+      "!**/{test,tests,__tests__,__mocks__,__snapshots__,spec,specs,fixtures,fixture}/**",
+      "!**/*.{test,spec}.*",
+      "!**/*_test.{py,go}"
     ],
     "extraResources": [
       {

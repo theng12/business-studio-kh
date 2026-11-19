@@ -82,3 +82,23 @@ test('updater packaging refuses a failed app signature before creating an instal
     fs.renameSync(scratch, path.join(trash, path.basename(scratch)));
   }
 });
+
+test('the shipped bundle carries code, never test code', () => {
+  // 0.1.116 was stopped by the release check because zod's own tests shipped in app.asar
+  // (dummy e-mail fixtures in `expect(d.safeParse(...)).toBe(true)`). The files exclusions are
+  // the fix and the afterPack guard proves the finished asar — this pins both halves together.
+  assert.ok(pkg.build.files.includes('!**/{test,tests,__tests__,__mocks__,__snapshots__,spec,specs,fixtures,fixture}/**'));
+  assert.ok(pkg.build.files.includes('!**/*.{test,spec}.*'));
+  assert.ok(pkg.build.files.includes('!**/*_test.{py,go}'));
+  const { TEST_PATH } = require('../scripts/after-pack.js');
+  assert.ok(TEST_PATH.test('node_modules/zod/src/v3/tests/email.test.ts'));
+  assert.ok(TEST_PATH.test('node_modules/zod/src/v3/tests/Mocker.ts'));
+  assert.ok(TEST_PATH.test('node_modules/foo/fixtures/data.json'));
+  assert.ok(TEST_PATH.test('node_modules/foo/lib/thing.spec.js'));
+  assert.ok(TEST_PATH.test('node_modules/foo/__snapshots__/a.snap'));
+  assert.ok(TEST_PATH.test('node_modules/foo/build/helper_test.py'));
+  assert.equal(TEST_PATH.test('main/index.js'), false);
+  // A dependency's build file named test_* is not a test path — the pattern must not take it.
+  assert.equal(TEST_PATH.test('node_modules/better-sqlite3/deps/test_extension.c'), false);
+  assert.match(fs.readFileSync(path.join(root, 'scripts', 'after-pack.js'), 'utf8'), /assertNoTestCode\(appPath\)/);
+});

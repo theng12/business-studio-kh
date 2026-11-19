@@ -1,5 +1,10 @@
 # What's new
 
+## 0.1.117 — 2026-11-19
+
+- FIX — The installer no longer carries other software's test files. A library this app uses shipped its own test suite inside the app, and a release check stopped the build for it. Nothing else changes; the app works as before.
+- Internal — Every `test/`, `tests/`, `__tests__/`, `spec/`, `fixtures/` path and every `*.test.*` / `*.spec.*` file is excluded from the app bundle across all dependencies, and the build now reads the finished bundle and fails if any come back.
+
 ## 0.1.116 — 2026-11-19
 
 - FIX — The server Mac no longer accepts other Macs or phones over ordinary Wi-Fi. Every request carries a person's access token, and on Wi-Fi anything on the network could read it. It now listens only on Tailscale (encrypted) and on the Mac itself. A phone or Mac joins the same tailnet and uses the Tailscale address shown in Settings → Multi-Mac.
