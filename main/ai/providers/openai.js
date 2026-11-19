@@ -17,7 +17,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { fetchWithTimeout, TIMEOUT_SUBMIT, TIMEOUT_HEALTH } = require('../_fetchTimeouts');
+const { fetchWithTimeout, TIMEOUT_GENERATE, TIMEOUT_HEALTH } = require('../_fetchTimeouts');
 
 const API_BASE = 'https://api.openai.com/v1';
 
@@ -124,10 +124,35 @@ async function readJson(res) {
   try { return JSON.parse(text); } catch { return { _raw: text }; }
 }
 
+/**
+ * How long the provider says to wait after a 429, from its own headers.
+ * `retry-after` is seconds (or an HTTP date); `x-ratelimit-reset-requests` is
+ * `1s` / `6m0s` / `1h2m3s`. Unknown means 30 s.
+ */
+function retryAfterMsFrom(headers) {
+  const h = (name) => (typeof headers?.get === 'function' ? headers.get(name) : headers?.[name]);
+  const parseSpan = (text) => {
+    const m = String(text ?? '').trim().match(/^(?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s$/);
+    return m ? (Number(m[1] || 0) * 3600 + Number(m[2] || 0) * 60 + Number(m[3])) * 1000 : null;
+  };
+  const retryAfter = String(h('retry-after') ?? '').trim();
+  let ms = retryAfter ? (/^\d+(\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now()) : null;
+  if (!Number.isFinite(ms) || ms <= 0) ms = parseSpan(h('x-ratelimit-reset-requests'));
+  if (!Number.isFinite(ms) || ms <= 0) ms = 30_000;
+  return Math.min(180_000, Math.max(5_000, ms));
+}
+
 function assertOk(res, body, label) {
   if (res.ok) return;
   if (res.status === 401) throw new Error('OpenAI rejected the API key (401)');
-  if (res.status === 429) throw new Error('OpenAI rate limit (429) — try again in a moment');
+  if (res.status === 429) {
+    // Capacity refused, not a generation: the request was never processed or
+    // charged. The queue runner waits the provider's own window and retries.
+    const err = new Error('OpenAI rate limit (429) — try again in a moment');
+    err.rateLimited = true;
+    err.retryAfterMs = retryAfterMsFrom(res.headers);
+    throw err;
+  }
   const message = body?.error?.message || body?._raw || `HTTP ${res.status}`;
   throw new Error(`OpenAI ${label} failed: ${message}`);
 }
@@ -180,13 +205,13 @@ async function generate(apiKey, { model, prompt, sourceImageAbs, options = {} } 
       method: 'POST',
       headers: authHeaders(apiKey),
       body: form,
-    }, TIMEOUT_SUBMIT);
+    }, TIMEOUT_GENERATE);
   } else {
     res = await fetchWithTimeout(`${API_BASE}/images/generations`, {
       method: 'POST',
       headers: { ...authHeaders(apiKey), 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, prompt: String(prompt ?? ''), n, ...(size ? { size } : {}), ...(quality ? { quality } : {}) }),
-    }, TIMEOUT_SUBMIT);
+    }, TIMEOUT_GENERATE);
   }
 
   const body = await readJson(res);
@@ -207,6 +232,7 @@ module.exports = {
   capabilitiesFor,
   sizeParamFor,
   outputUrlsFrom,
+  retryAfterMsFrom,
   STANDARD_SIZES,
   EXTENDED_SIZES,
 };

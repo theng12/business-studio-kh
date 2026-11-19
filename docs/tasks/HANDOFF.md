@@ -1,5 +1,19 @@
 # HANDOFF — Business Studio KH
 
+**0.1.118 — idle-capacity audit of the AI queue (2026-11-20, branch `fix/idle-capacity-0118`).**
+Two defects of the audited class, both in the AI queue; the other four shapes are clean here and the
+reasons are recorded in the lead's receipt (`_orchestra/media-lead/0118/`).
+
+- **Shape 6 (wrong ceiling).** `main/ai/providers/openai.js` sent `/images/generations` and
+  `/images/edits` with `TIMEOUT_SUBMIT` (30 s). A synchronous gpt-image call with up to 10 images
+  routinely outlives that, so a working — and billed — generation was aborted at 30 s and shown as
+  failed. Now `TIMEOUT_GENERATE` (300 s, `main/ai/_fetchTimeouts.js`).
+- **Shape 2 (capacity refused, work discarded).** A 429 threw a plain error and the runner marked every
+  waiting task failed; the user had to Repair each into a new paid generation. Now the 429 carries the
+  provider's own `retry-after` / `x-ratelimit-reset-requests` wait (clamped 5–180 s), the task returns
+  to `queued` with a plain-words reason, and claims pause for the whole queue in that window. Bounded:
+  5 automatic retries per task, then one visible failed row.
+
 **0.1.117 PUBLISHED 2026-11-19 — the bundle carries code, never another package's tests.** Branch
 `fix/no-test-code-in-bundle-0117`, commits `1095f23a` (the fix) and `7e72d16` (the placeholder), merged
 into `main` without rewriting.

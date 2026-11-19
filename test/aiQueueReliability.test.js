@@ -47,7 +47,7 @@ function harness(options = {}) {
     '../events': { broadcast: (...args) => events.push(args) },
     '../updateHold': { isPaused: () => hold.paused, inflightIds: () => [...hold.ids] },
   };
-  const sandbox = { require: (name) => { assert.ok(name in stubs, `unexpected dependency ${name}`); return stubs[name]; }, module: { exports: {} }, Buffer, Date,
+  const sandbox = { require: (name) => { assert.ok(name in stubs, `unexpected dependency ${name}`); return stubs[name]; }, module: { exports: {} }, Buffer, Date: options.Date || Date,
     process: { stderr: { write: (line) => logs.push(line) } },
     setTimeout: (fn) => { timers.push(fn); return fn; }, clearTimeout: () => {}, setInterval: () => 1, clearInterval: () => {},
   };
@@ -233,4 +233,52 @@ test('an update hold closes the claim path, says why, and hands the work back wh
   h.calls[0].resolve(response()); await h.runner.stop();
   assert.deepEqual([...h.runner.inflightIds()], []);
   assert.equal(h.aiTasks.get(a.id).status, 'done');
+});
+
+/* ── Rate limit: the provider declining capacity is not a failed generation ── */
+
+function fakeClock(start = 1_760_000_000_000) {
+  let now = start;
+  class FakeDate extends Date { static now() { return now; } }
+  return { Date: FakeDate, advance: (ms) => { now += ms; } };
+}
+const refusal = (retryAfterMs) => Object.assign(new Error('OpenAI rate limit (429) — try again in a moment'), { rateLimited: true, retryAfterMs });
+
+test('a 429 keeps the task queued, pauses claims for the provider window, then resumes by itself', async () => {
+  const clock = fakeClock();
+  const h = harness({ Date: clock.Date });
+  const a = h.aiTasks.create({});
+  await h.runTick();
+  assert.equal(h.calls.length, 1);
+  h.calls[0].reject(refusal(20_000)); await flush();
+  const row = h.aiTasks.get(a.id);
+  assert.equal(row.status, 'queued', 'a refusal returns to the queue instead of emptying it into Failed');
+  assert.equal(row.attempts, 0, 'a refused request never ran, so it is not an attempt');
+  assert.match(row.errorMessage, /slow down.*20 s/);
+
+  h.runner.nudge(); await h.runTick();
+  assert.equal(h.calls.length, 1, 'no claim inside the window the provider named');
+  clock.advance(20_001);
+  h.runner.nudge(); await h.runTick();
+  assert.equal(h.calls.length, 2, 'the same task resumes after the window, with no operator step');
+  h.calls[1].resolve(response()); await flush();
+  assert.equal(h.aiTasks.get(a.id).status, 'done');
+  assert.equal(h.aiTasks.get(a.id).attempts, 1);
+});
+
+test('rate-limit retries are bounded: a key that keeps refusing ends in one plain failed row', async () => {
+  const clock = fakeClock();
+  const h = harness({ Date: clock.Date });
+  const a = h.aiTasks.create({});
+  for (let i = 1; i <= 6; i += 1) {
+    if (i > 1) { clock.advance(10_001); h.runner.nudge(); }
+    await h.runTick();
+    assert.equal(h.calls.length, i);
+    h.calls[i - 1].reject(refusal(10_000)); await flush();
+    if (i <= 5) assert.equal(h.aiTasks.get(a.id).status, 'queued', `refusal ${i} stays queued`);
+  }
+  const row = h.aiTasks.get(a.id);
+  assert.equal(row.status, 'failed', 'past the ceiling the row settles visibly');
+  assert.match(row.errorMessage, /still refused after 5 automatic retries/);
+  assert.match(row.errorMessage, /rate limit/);
 });

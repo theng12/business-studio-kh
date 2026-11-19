@@ -23,6 +23,7 @@ function mockFetch(handler) {
     return {
       ok: out.status >= 200 && out.status < 300,
       status: out.status,
+      headers: new Headers(out.headers ?? {}),
       text: async () => (out.body == null ? '' : JSON.stringify(out.body)),
     };
   };
@@ -160,6 +161,37 @@ test('generate surfaces a 429 rate limit', async () => {
   try {
     await assert.rejects(() => openai.generate('sk-test', { model: 'gpt-image-1', prompt: 'x' }), /rate limit \(429\)/);
   } finally { m.restore(); }
+});
+
+test('a 429 carries the provider\'s own wait, so the queue can pause instead of failing the task', async () => {
+  const m = mockFetch(() => ({ status: 429, headers: { 'retry-after': '42' }, body: { error: { message: 'slow down' } } }));
+  try {
+    const err = await openai.generate('sk-test', { model: 'gpt-image-1', prompt: 'x' }).then(() => null, (e) => e);
+    assert.equal(err.rateLimited, true);
+    assert.equal(err.retryAfterMs, 42_000);
+  } finally { m.restore(); }
+  const span = mockFetch(() => ({ status: 429, headers: { 'x-ratelimit-reset-requests': '6m0s' }, body: {} }));
+  try {
+    const err = await openai.generate('sk-test', { model: 'gpt-image-1', prompt: 'x' }).then(() => null, (e) => e);
+    assert.equal(err.retryAfterMs, 180_000, 'a reset further out than our ceiling is clamped, never awaited whole');
+  } finally { span.restore(); }
+  const bare = mockFetch(() => ({ status: 429, body: {} }));
+  try {
+    const err = await openai.generate('sk-test', { model: 'gpt-image-1', prompt: 'x' }).then(() => null, (e) => e);
+    assert.equal(err.rateLimited, true);
+    assert.equal(err.retryAfterMs, 30_000, 'no header still means a bounded wait');
+  } finally { bare.restore(); }
+});
+
+test('generate allows a generation-length ceiling, not the 30 s submit one', async () => {
+  const timeouts = [];
+  const original = AbortSignal.timeout;
+  AbortSignal.timeout = (ms) => { timeouts.push(ms); return original.call(AbortSignal, ms); };
+  const m = mockFetch(() => ({ status: 200, body: { data: [{ b64_json: 'QQ==' }] } }));
+  try {
+    await openai.generate('sk-test', { model: 'gpt-image-1', prompt: 'x', options: { n: 10 } });
+    assert.deepEqual(timeouts, [300_000]);
+  } finally { AbortSignal.timeout = original; m.restore(); }
 });
 
 test('generate rejects an empty image response', async () => {

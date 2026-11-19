@@ -1,5 +1,11 @@
 # What's new
 
+## 0.1.118 — 2026-11-20
+
+- FIX — A single image generation is no longer cut off after 30 seconds. Long jobs (several images at once, high quality) were being aborted while OpenAI was still working on them and shown as failed.
+- FIX — When OpenAI asks us to slow down, the queue now waits the short time OpenAI names and carries on by itself, instead of marking every waiting job Failed and asking you to submit it again by hand. After five refusals in a row it stops and says why.
+- Internal — The generation request gets its own 5-minute ceiling (`TIMEOUT_GENERATE`); a 429 carries the provider's `retry-after` / `x-ratelimit-reset-requests` wait, clamped to 5–180 s, and the runner pauses claims for every task in that window, bounded at 5 automatic retries.
+
 ## 0.1.117 — 2026-11-19
 
 - FIX — The installer no longer carries other software's test files. A library this app uses shipped its own test suite inside the app, and a release check stopped the build for it. Nothing else changes; the app works as before.

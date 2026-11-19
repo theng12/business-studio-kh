@@ -12,6 +12,9 @@
  * sized to the operation:
  *
  *   - SUBMIT / UPLOAD   30s  ← large body in flight, allow generous time
+ *   - GENERATE         300s  ← a synchronous image generation (n up to 10)
+ *                              routinely outlives 30s; aborting it throws away
+ *                              a call the provider is still running and charges
  *   - POLL              10s  ← cheap status check, should be sub-second
  *   - HEALTH CHECK       8s  ← test-connection, account info
  *   - IMAGE DOWNLOAD    60s  ← potentially many-MB binary, slow CDN OK
@@ -27,6 +30,7 @@
 
 const TIMEOUT_SUBMIT   = 30_000;
 const TIMEOUT_UPLOAD   = 30_000;
+const TIMEOUT_GENERATE = 300_000;
 const TIMEOUT_POLL     = 10_000;
 const TIMEOUT_HEALTH   = 8_000;
 const TIMEOUT_DOWNLOAD = 60_000;
@@ -60,6 +64,7 @@ module.exports = {
   fetchWithTimeout,
   TIMEOUT_SUBMIT,
   TIMEOUT_UPLOAD,
+  TIMEOUT_GENERATE,
   TIMEOUT_POLL,
   TIMEOUT_HEALTH,
   TIMEOUT_DOWNLOAD,

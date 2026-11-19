@@ -26,11 +26,14 @@ const updateHold = require('../updateHold');
 
 const TICK_MS = 2000;
 const PAUSED_NOTICE_MS = 10_000;
+const RATE_LIMIT_MAX_REFUSALS = 5;
 
 let ctx = null;     // { getMainWindow, getConfig }
 let timer = null;
 let running = false; // a tick's scheduling loop is in progress
 let enabled = false;
+let claimsPausedUntil = 0;          // the provider's own wait after a 429
+const rateLimitRefusals = new Map(); // task id → automatic retries after 429s
 const pendingTicks = new Set();
 const idleWaiters = new Set();
 
@@ -83,6 +86,7 @@ function notePaused() {
 async function tick() {
   if (!enabled || running) return; // stopped, or a single tick already owns the runner
   if (updateHold.isPaused()) { notePaused(); return; }
+  if (Date.now() < claimsPausedUntil) return; // the provider asked us to wait
   running = true;
   try {
     const pending = aiTasks.listPendingForRunner();
@@ -177,7 +181,8 @@ async function generateFor(task, model, apiKey) {
     const actual = usage ? aiCosts.actualForModel(model.modelId, usage) : null;
     await onDone(task, outputUrls, { usage, actualUsd: actual?.usd ?? null });
   } catch (err) {
-    handleFailure(task, err.message);
+    if (err.rateLimited) deferForRateLimit(task, err);
+    else handleFailure(task, err.message);
   } finally {
     // Cancel stops accepting results; the synchronous provider request still
     // owns its slot until generation and any already-started filing settle.
@@ -384,6 +389,7 @@ async function onDone(task, outputUrls, billing = {}) {
     }
 
     if (!acceptsResults(task.id)) return;
+    rateLimitRefusals.delete(task.id);
     const messages = [...failures, ...warnings];
     aiTasks.update(task.id, {
       status: saved > 0 ? 'done' : 'failed',
@@ -413,7 +419,34 @@ function acceptsResults(taskId) {
  * No automatic retries. The user kicks recovery off explicitly via Repair.
  */
 
+/* A 429 is the provider declining capacity, not a failed generation: nothing
+ * was processed and nothing was charged. Wait the window OpenAI names, put
+ * the task back in the queue and pause claims for every task, instead of
+ * emptying the queue into Failed rows the user has to re-submit by hand.
+ * Bounded, so a persistently refusing key still ends in a plain failure. */
+function deferForRateLimit(task, err) {
+  const refusals = (rateLimitRefusals.get(task.id) ?? 0) + 1;
+  if (refusals > RATE_LIMIT_MAX_REFUSALS) {
+    rateLimitRefusals.delete(task.id);
+    handleFailure(task, `${err.message} — still refused after ${RATE_LIMIT_MAX_REFUSALS} automatic retries.`);
+    return;
+  }
+  rateLimitRefusals.set(task.id, refusals);
+  const waitMs = Number(err.retryAfterMs) || 30_000;
+  claimsPausedUntil = Date.now() + waitMs;
+  const waitSec = Math.ceil(waitMs / 1000);
+  aiTasks.update(task.id, {
+    status: 'queued',
+    attempts: Math.max(0, (aiTasks.get(task.id)?.attempts ?? 1) - 1),
+    completedAt: null,
+    errorMessage: `OpenAI asked us to slow down. Waiting ${waitSec} s, then this continues by itself.`,
+  });
+  emitTaskUpdate(aiTasks.get(task.id));
+  process.stderr.write(`[ai/queue] OpenAI rate limit: claims paused ${waitSec} s, task ${task.id} stays queued (retry ${refusals}/${RATE_LIMIT_MAX_REFUSALS})\n`);
+}
+
 function handleFailure(task, message) {
+  rateLimitRefusals.delete(task.id);
   const current = aiTasks.get(task.id);
   if (!current || current.status === 'cancelled') return;
   aiTasks.update(task.id, {
@@ -545,6 +578,7 @@ function repair(taskId) {
   if (!t) return null;
   if (inflight.has(t.id)) throw new Error('This request is still active. Wait for it to settle before Repair; Repair submits a new paid generation.');
   if (t.status !== 'failed' && t.status !== 'cancelled') throw new Error('Repair is only available for settled failed or cancelled tasks; queued or running tasks must wait.');
+  rateLimitRefusals.delete(taskId); // a deliberate retry gets the full automatic budget back
   aiTasks.update(taskId, {
     status: 'queued',
     progress: 0,
@@ -584,6 +618,7 @@ function cancel(taskId) {
   const t = aiTasks.get(taskId);
   if (!t) return null;
   if (t.status !== 'queued' && t.status !== 'running') return t;
+  rateLimitRefusals.delete(taskId);
   aiTasks.update(taskId, { status: 'cancelled', completedAt: Date.now() });
   emitTaskUpdate(aiTasks.get(taskId));
   return aiTasks.get(taskId);
