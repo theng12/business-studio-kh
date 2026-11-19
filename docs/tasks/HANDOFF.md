@@ -21,7 +21,17 @@ designated => identifier "com.terranash.mediastudiokh" and certificate leaf = H"
 designated => identifier "com.terranash.mediastudiokh" and certificate leaf = H"da7cb7317a7c679ef0f02c776369e9ace453a963"
 ```
 
-0.1.116's requirement is **identical to 0.1.115's**: this release does not change the code requirement the fleet already carries, so the one-time permission re-grant belongs to the 0.1.114 → 0.1.115 identity change, not to 0.1.116. **No trust setting was added, moved or removed for the new certificate on any Mac** — the identity is untrusted by policy (`security find-identity -v` reports 0 valid identities, as the old one did), and making it trusted is an owner decision not taken.
+Measured 2026-11-19T11:56Z by mounting each DMG in `dist/` and reading the requirement off the app — **not** from the build tree (local time is UTC+7; the identity cut is ~10:10Z):
+
+| Version | DMG built (local / UTC) | Certificate leaf SHA-256 | DR leaf | spctl (quarantined copy) |
+|---|---|---|---|---|
+| 0.1.114 | 02:14 / 18T19:14Z (prev day) | `FD:4E:A8:70:…:64:87:51:11` (retired, emailAddress in subject) | `b8f43e85…` | rejected |
+| 0.1.115 | 17:35 / **10:35Z** | `8E:F0:C6:C6:…:C0:F3:B8:EA` | `da7cb731…` | rejected |
+| 0.1.116 | 18:54 / 11:54Z | `8E:F0:C6:C6:…:C0:F3:B8:EA` | `da7cb731…` | rejected |
+
+**0.1.115 already carries the new leaf** — it was rebuilt at 10:35Z, after the cut, so it keeps its number and does not become 0.1.116. Had it measured old-leaf it would have been rebuilt as a new version instead. `spctl` rejects all three as quarantined copies; an install written by our own updater is not quarantined (Developer measured it running under launchd with no trust setting).
+
+0.1.116's requirement is **identical to 0.1.115's**: this release does not change the code requirement the fleet already carries, so the one-time permission re-grant belongs to the 0.1.114 → 0.1.115 identity change, not to 0.1.116. **No trust setting was added, moved or removed for the new certificate on any Mac** — the identity is untrusted by policy (`security find-identity -v` reports 0 valid identities, as the old one did; `security dump-trust-settings` has no KH Studio entry), and making it trusted is an owner decision not taken.
 
 `dist/` now holds 0.1.114, 0.1.115 and 0.1.116. 0.1.114 was **not** retired: it is still what the feed serves until the Developer publishes, and retention must not rotate an artifact an active release depends on. It retires to `~/Desktop/_trash/media-studio/` once 0.1.116 is live.
 
