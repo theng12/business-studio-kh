@@ -1,5 +1,70 @@
 # HANDOFF — Business Studio KH
 
+**0.1.117 PUBLISHED 2026-11-19 — the bundle carries code, never another package's tests.** Branch
+`fix/no-test-code-in-bundle-0117`, commits `1095f23a` (the fix) and `7e72d16` (the placeholder), merged
+into `main` without rewriting.
+
+*Why.* The release checker stopped 0.1.116 on a clean identity check: `app.asar` shipped zod's own test
+tree (`node_modules/zod/src/v3/tests/`), whose fixtures are dummy addresses (`allowed@example.com`,
+`EMAIL@EXAMPLE.COM`) inside `expect(d.safeParse(...)).toBe(true)`. Not owner data, but test code in a
+production bundle, and a finding is a stop. **0.1.114 fails the same check with 142 of the same files** —
+this was not a regression, it was the first media build the email class ever saw, because that class had
+been broken (an empty filter) on every earlier scan.
+
+*What changed.* Nothing the app does. `package.json` → `build.files` now excludes test,
+tests, `__tests__`, `__mocks__`, `__snapshots__`, `spec`, `specs`, `fixture(s)` directories and
+`*.test.*` / `*.spec.*` / `*_test.py|go` files across every dependency — deliberately the release
+checker's own pattern set, so the build and `asar-list.py` cannot disagree. `scripts/after-pack.js` reads
+the finished `app.asar` after packing and **fails the build** if any test path is there (`assertNoTestCode`,
+`TEST_PATH` exported), pinned by `test/releaseScripts.test.js`. zod's runtime entry points (`index.js`,
+`index.cjs`, `v3/*`, `v4/*`) are untouched; only its `src/` test tree went. The Suppliers contact field's
+placeholder became `Contact e-mail` — our own text no longer carries an address-shaped string.
+
+*Proof by file list, as the checker asks.* `asar-list.py` on the mounted artifact: **1714 files, no test
+or fixture files, exit 0** (0.1.116 measured 1977 entries in the build guard; 0.1.117 measures 1830).
+`scan-dmg.sh` on the same DMG: **exit 0, no owner hits** — it gained an asar-aware filter
+(`asar-filter.py`) that keeps an address only when it is **not** under `node_modules`, because every
+entry inside an asar shares one on-disk path. The checker's ruling, verbatim in effect: vendored
+addresses are exempt; RFC 2606 documentation domains never count; anything in our own bundle code, our
+own Mach-Os or the certificate still stops. **`asar-list.py` is therefore load-bearing and not optional
+for any asar-bearing app** — a scan that is clean no longer implies the bundle is.
+
+*Gate.* Pass 1 on `2802ddd`: lint 0 errors (6 pre-existing warnings), unit **2672/2672** (0 skipped,
+includes the retention tests), native **520/520**, build 0. Pass 2 on `1095f23a`: build 0,
+`bundle check: no test paths in app.asar (1830 entries)`. Final pass on `7e72d16`: lint, screens smoke
+31/31, build 0, asar guard 0, hidden packaged smoke PASS (React mounted, title `Business Studio KH`, no
+renderer crash, throwaway data dir), retention 2 DMGs, checker asar 0, checker scan 0 — **GATE PASS**.
+The one gap in that chain is stated plainly: the full unit and native lanes ran on `2802ddd`, and the
+only delta to `7e72d16` is one placeholder string and one comment.
+
+*Artifact.* `dist/Business Studio KH-0.1.117.dmg`, arm64, SHA-256
+`5de8c07685d68053f56fe87b1002c154b94f48a00907c0ea9b5d9a42b931bcce`, 255,447,061 bytes, signed
+`KH Studio Local Signing` (subject `CN=KH Studio Local Signing, C=KH`, leaf SHA-256 `8E:F0:C6:…:B8:EA`,
+no `emailAddress`; `signature-check.sh` OK). Read out of the **mounted** artifact, not the build tree.
+
+*Publish record — readback from 1301, 2026-11-19T14:02:44Z.* `release-push.sh media-studio 0.1.117` →
+`khu publish` on the host. The feed serves: version `0.1.117`, sha256 `5de8c076…`, bytes `255447061`,
+file `5de8c07685d6-Business Studio KH-0.1.117.dmg`, `holdURL` carried over, `bundleID
+com.terranash.mediastudiokh`, kind `app-dmg`, **previous `0.1.116`**. Artifact hash-checked, not just the
+record: the served file downloaded over HTTP from the host (200, 255,447,061 bytes) hashes to
+`5de8c076…`, identical to the canonical `dist/` copy. **Public page: the Developer's.** The page row
+moves only on the checker's pass.
+
+*Designated requirement.* `identifier "com.terranash.mediastudiokh" and certificate leaf =
+H"da7cb7317a7c679ef0f02c776369e9ace453a963"` — identical to 0.1.115 and 0.1.116, so this release adds no
+new permission prompt class; the one-time re-grant belongs to the 0.1.114 → 0.1.115 identity change.
+
+*Retention.* `dist/` holds 0.1.116 + 0.1.117; 0.1.115 moved recoverably to
+`~/Desktop/_trash/media-studio/2026-11-19 retention/` (receipt in `dist/.retention-receipt.json`). The
+build's own scratch: 7.7 GB of finished gate temp dirs moved to
+`~/Desktop/_trash/media-studio/2026-11-19 gate temp scratch/` with a manifest — that frees nothing until
+the owner empties the trash, and the data volume was 96% full (19 GB free) during this release.
+
+*Open, not this release.* The feed's `previous` is now **0.1.116, the build the checker refused** —
+`khu publish` offers no `--previous`, so pointing it at 0.1.114 is a feed-side decision for the
+Developer. `SMAppService` login start remains **not proven on a machine**. The renderer CSP
+`unsafe-eval` item in `_orchestra/media-lead/BACKLOG.md` is untouched.
+
 **0.1.116 built, gated and PUBLISHED 2026-11-19 — the server no longer puts a user's token on Wi-Fi.** Branch `fix/lan-token-over-tls-0116`, commit `55764c0` on `main`'s `74259f1`.
 
 *Publish record — readback from 1301, 2026-11-19T12:28:43Z.* `release-push.sh media-studio 0.1.116` → `khu publish` on the host. The feed now serves: version `0.1.116`, sha256 `f90179658daf08d879c5a796408a913742b3ac719a014d478bf535c6c13a4d6b`, bytes `255635228`, file `f90179658daf-Business Studio KH-0.1.116.dmg`, `holdURL http://127.0.0.1:13181/api/maintenance/hold` (carried over), `bundleID com.terranash.mediastudiokh`, kind `app-dmg`, previous `0.1.114`. **Artifact hash-checked, not just the record:** the served file downloaded from 1301 hashes to `f90179658daf…`, identical to the canonical `dist/` copy. Public page: the Developer's, not this session.
