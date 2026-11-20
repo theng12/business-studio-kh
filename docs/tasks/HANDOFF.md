@@ -6,6 +6,11 @@ into `main`. Gate `GATE PASS media 04c26b2f7 2026-11-20T00:37:56Z`; `dist/Busine
 sha256 `845318eab…93de670`, 255,444,227 bytes; checker-asar **0** (1714 files, no test files),
 checker-scan **0** (no owner hits); feed read back from 1301 at `0.1.118`, previous `0.1.117`, served
 file downloaded and hashed to the same sha. Receipt: `_orchestra/media-lead/0118/RECEIPT-0.1.118.md`.
+`04c26b2` moved the HR fixture's attendance window two days back so the maximum back-dating the product
+allows (12 h) now always falls inside employment — a fixture fix, no assertion relaxed. **Owed to the
+next release (2026-11-20):** the kiosk "a remote unlock defeats the PIN" comment, the window/Finder-action
+doc line, and `assert.equal(selfIn.event.workDate, calc.ppDate(selfIn.event.at))` so the before-noon
+case is pinned by arithmetic rather than by the clock.
 
 **0.1.118 — idle-capacity audit of the AI queue (2026-11-20, branch `fix/idle-capacity-0118`).**
 Two defects of the audited class, both in the AI queue; the other four shapes are clean here and the
