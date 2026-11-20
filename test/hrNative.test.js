@@ -217,6 +217,10 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   await fails(kioskUser.token, 'kiosk:me', { sessionToken: tokenA }, 422, /session has ended/);
 
   /* ─── phone: attendance.self ─── */
+  // The 12 h cap on a queued clock-in can land yesterday when the suite runs before noon;
+  // keep attendance tracking open far enough back that the held day is inside the window.
+  const freshStart = (await ok(manager.token, 'hr:getSettings')).attendanceStartDate;
+  await ok(manager.token, 'hr:updateSettings', { attendanceStartDate: calc.addDays(freshStart, -2) });
   await fails(phoneUser.token, 'attendance:clockSelf', {}, 400, /photo is required/);
   await fails(unlinked.token, 'attendance:clockSelf', { photo }, 422, /not linked/);
   await fails(phoneUser.token, 'attendance:day', {}, 403);
@@ -356,7 +360,7 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const F = emp('F1', 'Prak Sophea');
   const sumF = async () => (await ok(viewer.token, 'attendance:monthSummary', { month: lastMonth, employeeId: F.id })).rows[0];
   assert.equal((await sumF()).totals.absentDays, 0, 'nobody is absent before the app kept attendance');
-  assert.equal((await ok(manager.token, 'hr:getSettings')).attendanceStartDate, calc.ppDate(Date.now()));
+  assert.equal(freshStart, calc.ppDate(Date.now()), 'a fresh install starts attendance on the day HR was first used');
   await ok(manager.token, 'hr:updateSettings', { attendanceStartDate: `${lastMonth}-01` });
   const allAbsent = (await sumF()).totals.absentDays;
   assert.equal(allAbsent, workDays.length);
