@@ -1,5 +1,12 @@
 # HANDOFF — Business Studio KH
 
+**0.1.118 PUBLISHED 2026-11-20 — the AI queue waits instead of throwing work away.** Branch
+`fix/idle-capacity-0118`, commits `b6febf5` (fix) and `04c26b2` (HR fixture clock fix), fast-forwarded
+into `main`. Gate `GATE PASS media 04c26b2f7 2026-11-20T00:37:56Z`; `dist/Business Studio KH-0.1.118.dmg`
+sha256 `845318eab…93de670`, 255,444,227 bytes; checker-asar **0** (1714 files, no test files),
+checker-scan **0** (no owner hits); feed read back from 1301 at `0.1.118`, previous `0.1.117`, served
+file downloaded and hashed to the same sha. Receipt: `_orchestra/media-lead/0118/RECEIPT-0.1.118.md`.
+
 **0.1.118 — idle-capacity audit of the AI queue (2026-11-20, branch `fix/idle-capacity-0118`).**
 Two defects of the audited class, both in the AI queue; the other four shapes are clean here and the
 reasons are recorded in the lead's receipt (`_orchestra/media-lead/0118/`).
