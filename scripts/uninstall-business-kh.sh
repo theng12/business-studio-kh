@@ -18,7 +18,7 @@ fi
 "$APP/Contents/MacOS/Business Studio KH" --clear-login-item >/dev/null 2>&1 || true
 
 # 2. No launchd job exists for this app; if one ever appears, unload it.
-for label in $(/bin/launchctl list 2>/dev/null | awk '{print $3}' | grep -i 'mediastudiokh' || true); do
+for label in $(/bin/launchctl list 2>/dev/null | awk '{print $3}' | grep -iE 'businessstudiokh|mediastudiokh' || true); do
   /bin/launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
   echo "Unloaded launchd job $label"
 done

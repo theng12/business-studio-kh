@@ -23,7 +23,7 @@ test('the uninstall script clears the login item, unloads any job, trashes the b
   const script = read('scripts/uninstall-business-kh.sh');
   assert.match(script, /--clear-login-item/);
   assert.match(script, /launchctl list/);
-  assert.match(script, /grep -i 'mediastudiokh'/);
+  assert.match(script, /grep -iE 'businessstudiokh\|mediastudiokh'/);
   assert.match(script, /launchctl bootout/);
   assert.match(script, /mv "\$APP"/);
   assert.match(script, /User data kept/);

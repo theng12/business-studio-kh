@@ -524,9 +524,27 @@ no longer part of the normal release; legacy `dmgs:prune` stays forbidden.
 `test/retainDist.test.js` pins the plan and the move. 1301's feed artifacts follow
 the same two-version rule, owned by the Updater lead.
 
-**KH Updater packaging (owner, verified 2026-11-02; signing 2026-11-08):** `npm run dist:updater` builds one arm64 app signed by electron-builder with the shared KH Studio Local Signing identity (`SIGNING.md`; never ad-hoc or `--deep` signing), ad-hoc signs the DMG, verifies both, and never publishes. The stable bundle ID is `com.terranash.mediastudiokh`. Feed publication belongs to the KH Updater lead; no in-app updater is needed.
+**KH Updater packaging (owner, verified 2026-11-02; signing 2026-11-08):** `npm run dist:updater` builds one arm64 app signed by electron-builder with the shared KH Studio Local Signing identity (`SIGNING.md`; never ad-hoc or `--deep` signing), ad-hoc signs the DMG, verifies both, and never publishes. The stable bundle ID is `app.businessstudiokh.desktop`. Feed publication belongs to the KH Updater lead; no in-app updater is needed.
 
-**The name is not the identity (0.1.120, 2026-11-21).** The app was renamed Business Studio KH → Business Studio KH and every user-visible name moved with it, but the bundle ID above and the feed id `media-studio` did **not** change. They are what the updater matches: a DMG whose identifier differs from the installed app is refused (`update-studio-kh`, `Sources/KHUpdaterCore/Recipes.swift`, the `expectedBundleID ?? installedInfo.identifier` guard), so changing either stops every installed copy updating. When the owner asks for the identifier itself to move, that is a fleet migration led by the Updater lead, not a rename in this repo. Old backups keep their old marker and still restore (`LEGACY_BACKUP_KINDS`).
+**The identity moved at 0.1.121 (owner decision via the Developer, 2026-11-21).** The app was renamed
+Business Studio KH → Business Studio KH in 0.1.120 with the identifier left alone; 0.1.121 changes it from
+`com.terranash.mediastudiokh` to `app.businessstudiokh.desktop`, the family convention (storage and
+library use `app.*studiokh.desktop`), and because a `terranash` string anywhere in the feed blocks the
+public page rebuild. The feed id stays `media-studio` (the Launcher's key).
+
+*What this costs, stated plainly.* The updater installs only a DMG whose identifier equals the app it
+expects on that Mac (`update-studio-kh`, `Sources/KHUpdaterCore/Recipes.swift`: `expectedBundleID ??
+installedInfo.identifier`). An old-id install therefore **refuses** the new-id DMG — loudly, with
+"DMG holds app.businessstudiokh.desktop, this Mac's app is com.terranash.mediastudiokh; nothing was
+changed" — it never installs the wrong thing and never fails silently. Moving a Mac across is one of:
+
+1. the Launcher's record for `media-studio` on that Mac naming the new id (then the ordinary install
+   promotes the new bundle over the configured path and replaces the old copy in place), or
+2. one manual install of `Business Studio KH.app`, after which the record is the new id and automatic
+   updates resume; the old copy is removed by hand.
+
+`.dmg` rules and `scripts/uninstall-business-kh.sh` cover both ids. Old backups keep their old marker and
+still restore (`LEGACY_BACKUP_KINDS`).
 
 **`dist/` means the owner's checkout on the Mac you are on** — `$HOME/Developer/My Own Apps/business-studio-kh/dist` on the current Mac Studio (M2 Max; path and hardware verified 2026-11-02; earlier handoffs used the old Developer path), `$HOME/Developer/business-studio-kh/dist` on the Mac mini,
 which is where he looks for a release. `npm run dist` writes into the build worktree

@@ -49,7 +49,7 @@ function protectedVersions(distDir) {
 function launchdRuntimeVersion() {
   let out;
   try { out = execFileSync('/bin/launchctl', ['list'], { encoding: 'utf8' }); } catch { return null; }
-  const label = out.split('\n').map((line) => line.split('\t')[2]).find((name) => name && name.includes('mediastudiokh'));
+  const label = out.split('\n').map((line) => line.split('\t')[2]).find((name) => name && /(business|media)studiokh/.test(name));
   if (!label) return null;
   try {
     const detail = execFileSync('/bin/launchctl', ['print', `gui/${process.getuid()}/${label}`], { encoding: 'utf8' });

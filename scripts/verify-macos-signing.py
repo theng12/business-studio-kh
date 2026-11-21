@@ -21,7 +21,7 @@ import time
 import urllib.request
 import uuid
 
-BUNDLE_ID = 'com.terranash.mediastudiokh'
+BUNDLE_ID = 'app.businessstudiokh.desktop'
 APP_NAME = 'Business Studio KH'
 HELPERS = ['', ' (GPU)', ' (Plugin)', ' (Renderer)']
 
@@ -78,7 +78,7 @@ def launchd_start(app, expected_version, work):
         'dataDir': str(data_dir), 'firstLaunchHandled': True, 'mode': 'server',
         'serverPort': port, 'serverKeepAwake': False, 'webViewerEnabled': False,
     }))
-    label = 'com.terranash.mediastudiokh.signing-test.' + uuid.uuid4().hex
+    label = 'app.businessstudiokh.desktop.signing-test.' + uuid.uuid4().hex
     domain = 'gui/' + str(os.getuid())
     service = domain + '/' + label
     job = work / 'app.plist'

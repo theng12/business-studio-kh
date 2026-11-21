@@ -14,7 +14,7 @@ npm run build
 # electron-builder signs nested code and the bundle via build.mac.sign (scripts/sign-mac.js).
 codesign --verify --deep --strict "$APP"
 codesign -dvv "$APP" 2>&1 | grep -x 'Authority=KH Studio Local Signing' >/dev/null
-test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = 'com.terranash.mediastudiokh'
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")" = 'app.businessstudiokh.desktop'
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = "$VERSION"
 ditto "$APP" "$STAGE/Business Studio KH.app"
 ln -s /Applications "$STAGE/Applications"
@@ -35,4 +35,4 @@ mv "$STAGE" "_trash/updater-staging/$(basename "$STAGE")"
 # Owner 2026-11-12: retention is automatic — keep the newest two installers,
 # move anything older to the app's own _trash (guards and receipt in the script).
 node scripts/retain-dist.js
-printf 'Built %s (com.terranash.mediastudiokh, %s)\n' "$DMG" "$VERSION"
+printf 'Built %s (app.businessstudiokh.desktop, %s)\n' "$DMG" "$VERSION"
