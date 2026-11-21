@@ -26,7 +26,7 @@ function fresh(t) {
   db.initDb(dataDir);
   t.after(() => {
     db.closeDb();
-    const trash = path.join(__dirname, '../_trash/brand-rename-tests');
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'brand-rename-tests');
     fs.mkdirSync(trash, { recursive: true });
     fs.renameSync(dataDir, path.join(trash, path.basename(dataDir)));
   });

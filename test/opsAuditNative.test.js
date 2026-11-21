@@ -50,8 +50,8 @@ test.after(() => {
   Module._load = originalLoad;
   try { db?.getDb().close(); } catch {}
   if (dir) {
-    // Never rm: test data goes to the project's _trash (AGENTS.md working rule).
-    const trash = path.join(__dirname, '../_trash/test-data');
+    // Never rm: fixture data goes to a scratch folder under the system temp dir.
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'test-data');
     fs.mkdirSync(trash, { recursive: true });
     fs.renameSync(dir, path.join(trash, path.basename(dir)));
   }

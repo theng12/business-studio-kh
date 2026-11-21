@@ -118,7 +118,7 @@ test('crop preview and both destinations use the displayed raw-source rotation a
     }
   } finally {
     db.closeDb();
-    const trash = path.join(__dirname, '..', '_trash', 'crop-tests');
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'crop-tests');
     fs.mkdirSync(trash, { recursive: true });
     fs.renameSync(dataDir, path.join(trash, path.basename(dataDir)));
   }

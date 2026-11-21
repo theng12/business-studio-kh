@@ -1,7 +1,16 @@
 # HANDOFF — Business Studio KH
 
-**0.1.122 GATED — the fleet-hardening residuals (2026-11-22, branch `codex/fleet-hardening-0122`).**
-The two residuals the 0.1.112 pass left for the next patch; the pass itself was
+**0.1.122 PUBLISHED 2026-11-21T21:32:45Z — the fleet-hardening residuals (branch
+`codex/fleet-hardening-0122`, release commit `9445fec`, fast-forwarded into `main` and pushed).**
+Gate `GATE PASS media 9445fec1… 2026-11-21T21:28:28Z` (evidence
+`lead/gate-20261122-042256-20357/`). Artifact `dist/Business Studio KH-0.1.122.dmg`, sha256
+`229a4670abc62cb72175f4af9a6ef81cd2f2cdf9f650f5bf2cdb455dc13179ad`, 255,452,393 bytes, signature OK
+against the current KH Studio Local Signing identity, leak scan clean (417 files). Feed read back from
+1301: media-studio 0.1.122, previous 0.1.121, holdURL carried over; the served file was downloaded over
+HTTP and hashed to the same sha256. `dist/` keeps 0.1.121 + 0.1.122; 0.1.120 retired to
+`~/Desktop/_trash/media-studio/2026-11-22 retention/` with a manifest. Hidden-instance idle footprint:
+183 MB after 10 s, +0 MB while idle, no window ever shown. The two residuals the 0.1.112 pass left for
+the next patch; the pass itself was
 not re-run. (a) `main/db/index.js` now calls `rotateIfLarge()` before its direct `crash.log` append,
 so the migration line obeys the same 2 MB ceiling as the lifecycle writer. (b) `sweepStaleTemp()`
 now also clears `.iskh-bundle-extract-*`, `iskh-bundle-*` and a killed backup's `.partial` after 6 h,

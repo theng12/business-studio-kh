@@ -21,7 +21,7 @@ function load(file, stubs = {}) {
 async function fixture(body) {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'msk-label-output-'));
   try { await body(root); } finally {
-    const trash = path.join(ROOT, '_trash', 'task6-fixtures');
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'task6-fixtures');
     await fsp.mkdir(trash, { recursive: true });
     await fsp.rename(root, path.join(trash, path.basename(root)));
   }

@@ -64,7 +64,7 @@ test('native export completion preserves missing/partial/Skip/cancelled statuses
     assert.equal(products.get(complete.id).processStatus, 'done');
   } finally {
     db.closeDb();
-    const trash = path.resolve(__dirname, '../_trash/task6-fixtures');
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'task6-fixtures');
     await fsp.mkdir(trash, { recursive: true });
     await fsp.rename(root, path.join(trash, path.basename(root)));
   }

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const root = path.join(__dirname, '..');
@@ -77,7 +78,7 @@ test('updater packaging refuses a failed app signature before creating an instal
     assert.equal(result.status, 19, result.stderr);
     assert.equal(fs.existsSync(marker), false, 'a refused signature must not produce a DMG');
   } finally {
-    const trash = path.join(root, '_trash', 'updater-signature-tests');
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'updater-signature-tests');
     fs.mkdirSync(trash, { recursive: true });
     fs.renameSync(scratch, path.join(trash, path.basename(scratch)));
   }

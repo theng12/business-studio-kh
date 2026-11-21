@@ -15,7 +15,7 @@ async function fixture(body) {
   await sharp({ create: { width: 8, height: 8, channels: 3, background: '#b55' } }).png().toFile(path.join(root, 'assets', 'good.png'));
   await fsp.writeFile(path.join(root, 'assets', 'bad.png'), 'invalid-image');
   try { await body(root); } finally {
-    const trash = path.join(ROOT, '_trash', 'task6-fixtures');
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'task6-fixtures');
     await fsp.mkdir(trash, { recursive: true });
     await fsp.rename(root, path.join(trash, path.basename(root)));
   }
