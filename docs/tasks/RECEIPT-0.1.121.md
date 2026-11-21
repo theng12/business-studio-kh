@@ -76,6 +76,18 @@ The mirrored entry is media-studio `0.1.121` with the feed's sha256, byte count 
 (`92f508d6aab9-Business.Studio.KH-0.1.121.dmg` — GitHub stores spaces as dots). The mirror was rebuilt
 for the whole page from that feed, which also clears the `wire` row that had blocked step 8 earlier.
 
+## The shipped artifact was checked, not just the gate
+
+The published DMG was mounted, its app run **hidden** from the volume (`window:hidden-run`, zero
+`window:shown`) against a temporary profile, and the changed screens read from it directly:
+
+- Home tiles read **Photos & Media**; the sidebar pill reads **0.1.121**.
+- Purchase Orders: the PO number is a `link-button`, Delete is the ghost button, the placeholder is
+  the short one, and every dated cell renders on **one line** (`getClientRects().length === 1`).
+- History: 50 rows, **0** UUIDs, labels "HR Settings" and "FX Rate".
+- Facilities: the empty card carries a single **Add a bank** action and the header no longer shows a
+  dead "+ New facility".
+
 ## Retention
 
 `dist/` now holds 0.1.121 + 0.1.120 — current and previous, as the feed names them. `Media Studio
