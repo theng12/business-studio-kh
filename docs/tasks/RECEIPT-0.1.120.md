@@ -83,14 +83,15 @@ About box all say Business Studio KH; a fresh install lands as `Business Studio 
 - **SSD kits** carry a generated snapshot of the feed (`apps.json`). The new name appears when the
   owner runs the kit’s `2 Refresh the SSDs.command` (or `khu ssd-index --volume … --feed …`); the
   mounted SSDs were not rewritten here.
-- **The public page is stale, and updating it needs the owner's go-ahead.** Correcting an earlier note
-  in this receipt: the shared public page exists (`theng12/kh-releases`, public); only this app's own
-  repository has no Pages. That page's mirrored feed and its release row still carry media-studio
-  **0.1.118** while the 1301 feed serves 0.1.120, and the page mirror requires every row to match the
-  feed, so another app's page update is held behind this one. Publishing a DMG to a public destination
-  is outside what this session may do on its own: the attempt was refused by the environment's
-  permission classifier, and a dry run of the page-sync steps reported no problem with the artifact or
-  its hash. The owner (or the Developer with the owner's explicit approval naming that public repo and
-  this artifact) can finish it; the page keeps the newest row only, so the 0.1.118 row goes with it.
+- **The public page row is published; the mirrored feed is not yet.** The shared public page is
+  `theng12/kh-releases` (public); this app's own repository has no Pages. With the owner's explicit
+  approval ("publish it here", 2026-11-21) page-sync steps 1–6 passed for media-studio 0.1.120: the
+  release row `media-studio-0.1.120` carries `a7555994e789-Business.Studio.KH-0.1.120.dmg` with the
+  feed's digest and byte count, plus the feed's icon. **Step 8 (the signed mirror and its commit)
+  refused because another app is stale on the page: it has `wire-0.3.1` while the feed offers
+  `wire 0.4.1`.** Nothing after step 8 changed, so the page's mirrored `release.json` still serves
+  media-studio 0.1.118. Publishing `wire` 0.4.1 and re-running the page sync finishes it. The stale
+  `media-studio-0.1.118` row was left in place (rule 7 only retires the feed's own previous, 0.1.119,
+  which had no row); removing it is routine retention, not a blocker.
 - The Reminders page (0.1.119) has still not been clicked in a running app: the desktop-safety rule
   forbids opening a window here. Its wiring and data rules are covered by tests.
