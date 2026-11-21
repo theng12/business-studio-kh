@@ -91,7 +91,7 @@ function archive(env, kind) {
   fs.writeFileSync(path.join(stage, kind === 'bundle' ? 'config.partial.json' : 'config.json'),
     JSON.stringify({ openaiConcurrency: 9, customPresets: [{ name: 'dummy' }] }));
   fs.writeFileSync(path.join(stage, 'manifest.json'), JSON.stringify({
-    ...(kind === 'bundle' ? { bundleFormatVersion: 1 } : { backupFormatVersion: 1, kind: 'media-studio-kh-backup' }),
+    ...(kind === 'bundle' ? { bundleFormatVersion: 1 } : { backupFormatVersion: 1, kind: 'business-studio-kh-backup' }),
     appVersion: 'test', createdAt: Date.now(), includes: ['database.sqlite', 'assets/'],
   }));
   const archivePath = path.join(env.root, `fixture.iskh${kind}`);

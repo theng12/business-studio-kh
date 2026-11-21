@@ -24,7 +24,7 @@ const BACKUP_FORMAT_VERSION = 1;
 
 // Marker baked into every manifest so we can tell our backups apart
 // from an arbitrary .tar.gz the user renamed.
-const BACKUP_KIND = 'media-studio-kh-backup';
+const BACKUP_KIND = 'business-studio-kh-backup';
 
 /* v0.1.82: this app was renamed from **Business Studio KH**, and the old app wrote
  * `business-studio-kh-backup` into the same manifest field. The data itself did not
@@ -34,8 +34,12 @@ const BACKUP_KIND = 'media-studio-kh-backup';
  * refused it, which is a rename, not an incompatibility.
  *
  * Recognised rather than rewritten: a restored archive keeps saying which app
- * made it, and the restore screen shows that version. */
-const LEGACY_BACKUP_KINDS = ['business-studio-kh-backup'];
+ * made it, and the restore screen shows that version.
+ *
+ * 0.1.120: renamed again, Business Studio KH → Business Studio KH, so the names
+ * this app itself used before are both accepted. Every older backup must still
+ * list and restore. */
+const LEGACY_BACKUP_KINDS = ['media-studio-kh-backup', 'business-studio-kh-backup'];
 
 // Custom extension (a gzipped tar underneath). Custom so double-click
 // in Finder doesn't auto-expand it and it's obviously ours.
@@ -305,7 +309,7 @@ function backupStamp(date) {
 /** Default backup filename for a given timestamp slug + app version. */
 function backupFilename(stamp, appVersion) {
   const v = appVersion ? `v${appVersion}-` : '';
-  return `media-studio-kh-backup-${v}${stamp}.${BACKUP_EXT}`;
+  return `business-studio-kh-backup-${v}${stamp}.${BACKUP_EXT}`;
 }
 
 /**
@@ -316,10 +320,11 @@ function backupFilename(stamp, appVersion) {
  */
 function isBackupFilename(name) {
   if (typeof name !== 'string') return false;
-  // v0.1.82: `business-studio-kh-backup-…` is what the app wrote before the rename
-  // — the old files have to LIST in the restore picker, or the user cannot pick
-  // the very backup they are trying to restore.
-  return new RegExp(`^(?:media|image)-studio-kh-backup-.+\\.${BACKUP_EXT}$`).test(name);
+  // v0.1.82 and 0.1.120: `business-studio-kh-backup-…` and `media-studio-kh-backup-…`
+  // are what this app wrote before its two renames. The old files have to LIST in
+  // the restore picker, or the user cannot pick the very backup they are trying
+  // to restore.
+  return new RegExp(`^(?:business|media|image)-studio-kh-backup-.+\\.${BACKUP_EXT}$`).test(name);
 }
 
 /**

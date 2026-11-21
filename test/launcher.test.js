@@ -341,7 +341,7 @@ test('⌘K: records lead when there are any, unless the query is a module name',
   assert.equal(fuel[0].exact, true);
   assert.equal(reg.searchNav('fue', ['*'])[0].exact, false);
   assert.deepEqual(reg.paletteRows(fuel, [product]).map((r) => r.id), ['fuel', 'p1'], 'an exact module name leads');
-  assert.equal(reg.searchNav('media studio', ['*'])[0].exact, true);
+  assert.equal(reg.searchNav('business studio', ['*'])[0].exact, true);
   const palette = read('renderer/components/SearchPalette.jsx');
   assert.match(palette, /const rows = paletteRows\(navHits, visibleResults\);/);
   assert.match(palette, /const first = paletteRows\(navHits, visibleResults\)\[0\];/, 'a queued Enter opens the same first row');

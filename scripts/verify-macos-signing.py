@@ -105,7 +105,7 @@ def launchd_start(app, expected_version, work):
                 if time.monotonic() > deadline:
                     raise RuntimeError('Packaged app did not answer /api/ping; see the retained test logs')
                 time.sleep(0.5)
-        if not health.get('ok') or health.get('app') != 'media-studio-kh' or health.get('version') != expected_version:
+        if not health.get('ok') or health.get('app') != 'business-studio-kh' or health.get('version') != expected_version:
             raise ValueError('Packaged app health/version mismatch: %r' % health)
         state = run(['launchctl', 'print', service]).stdout
         pid = re.search(r'\bpid = (\d+)\b', state)

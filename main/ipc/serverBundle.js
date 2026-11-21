@@ -57,7 +57,7 @@ function register({ exposeLocal }) {
     // bundles is self-documenting. `safe-` filename — Save dialog
     // already restricts the user to writable locations.
     const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
-    const defaultName = `media-studio-kh-${app.getVersion()}-${stamp}.${BUNDLE_EXT}`;
+    const defaultName = `business-studio-kh-${app.getVersion()}-${stamp}.${BUNDLE_EXT}`;
 
     const res = await dialog.showSaveDialog({
       title: 'Export server bundle',

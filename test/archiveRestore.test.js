@@ -88,7 +88,7 @@ async function liveData(dataDir, marker = 'live') {
   await fsp.writeFile(path.join(dataDir, 'live-marker.txt'), marker);
 }
 
-function makeArchive(root, kind, value, mutate, schemaVersion = 2, backupKind = 'media-studio-kh-backup') {
+function makeArchive(root, kind, value, mutate, schemaVersion = 2, backupKind = 'business-studio-kh-backup') {
   const stageParent = fs.mkdtempSync(path.join(root, 'stage-'));
   const archiveRoot = path.join(stageParent, 'bundle');
   writeDb(path.join(archiveRoot, 'database.sqlite'), value, schemaVersion);

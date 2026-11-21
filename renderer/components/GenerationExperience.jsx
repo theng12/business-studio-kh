@@ -10,7 +10,7 @@ export function GenerationExperience({ open, title = 'Creating', progress = 0, p
       <div className="generation-experience__aurora" />
       <div className="generation-experience__content">
         <div className="generation-orb" aria-hidden="true"><span /><span /><span /></div>
-        <div className="generation-experience__eyebrow">MEDIA STUDIO</div>
+        <div className="generation-experience__eyebrow">BUSINESS STUDIO</div>
         <h2>{title}</h2>
         <p>{PHASES[Math.min(PHASES.length - 1, phase)]}</p>
         {detail ? <div className="generation-experience__detail">{detail}</div> : null}

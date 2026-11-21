@@ -84,7 +84,7 @@ function launch(profile, appBinary, tokenFile) {
       ...process.env,
       ELECTRON_RUN_AS_NODE: undefined,
       VITE_DEV_SERVER_URL: undefined,
-      MEDIA_STUDIO_HOLD_TOKEN_FILE: tokenFile,
+      BUSINESS_STUDIO_HOLD_TOKEN_FILE: tokenFile,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

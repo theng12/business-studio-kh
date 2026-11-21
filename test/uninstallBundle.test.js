@@ -10,7 +10,7 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
-const SCRIPT = path.join(ROOT, 'scripts', 'uninstall-media-kh.sh');
+const SCRIPT = path.join(ROOT, 'scripts', 'uninstall-business-kh.sh');
 const INDEX = read('main/index.js');
 
 test('the app clears its login item headlessly when asked', () => {
@@ -20,7 +20,7 @@ test('the app clears its login item headlessly when asked', () => {
 });
 
 test('the uninstall script clears the login item, unloads any job, trashes the bundle and keeps data', () => {
-  const script = read('scripts/uninstall-media-kh.sh');
+  const script = read('scripts/uninstall-business-kh.sh');
   assert.match(script, /--clear-login-item/);
   assert.match(script, /launchctl list/);
   assert.match(script, /grep -i 'mediastudiokh'/);

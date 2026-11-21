@@ -277,7 +277,7 @@ function initDb(dataDir) {
   addColumnIfMissing(db, 'products', 'carton_d_cm',        'REAL');
   addColumnIfMissing(db, 'products', 'weight_per_unit_kg', 'REAL');
 
-  /* Media Studio shared product fields. These stay on the canonical product
+  /* Business Studio shared product fields. These stay on the canonical product
      row so Label and Catalog Studio read the same values as the Library. */
   addColumnIfMissing(db, 'products', 'prices', "TEXT NOT NULL DEFAULT '{}'");
   /* v0.1.55: each price field carries its own currency, and a company can

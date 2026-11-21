@@ -131,7 +131,7 @@ test('a failed automatic backup is not counted, keeps its error through a "not d
   //    backup dropped in by hand) must NOT erase the failure from Settings.
   const notDueDeps = {
     ...base,
-    listBackups: async () => ({ backups: [{ fileName: 'media-studio-kh-backup-auto-v1-x.iskhbackup', backupPath: '/x', createdAt: now - DAY, auto: true }] }),
+    listBackups: async () => ({ backups: [{ fileName: 'business-studio-kh-backup-auto-v1-x.iskhbackup', backupPath: '/x', createdAt: now - DAY, auto: true }] }),
     createBackup: async () => { throw new Error('must not run'); },
   };
   const notDue = await b.runAutoBackupIfDue({ now, deps: notDueDeps });
@@ -169,7 +169,7 @@ function harness(initial, now0) {
     listBackups: async () => ({ backups: [...files].sort((x, y) => y.createdAt - x.createdAt) }),
     createBackup: async () => {
       calls.created += 1;
-      const fresh = { fileName: `media-studio-kh-backup-auto-v1-n${calls.created}.iskhbackup`, backupPath: `/b/new-${calls.created}`, createdAt: clock, auto: true, sizeBytes: 1 };
+      const fresh = { fileName: `business-studio-kh-backup-auto-v1-n${calls.created}.iskhbackup`, backupPath: `/b/new-${calls.created}`, createdAt: clock, auto: true, sizeBytes: 1 };
       files.push(fresh);
       return fresh;
     },
@@ -188,7 +188,7 @@ function harness(initial, now0) {
   return { deps, calls, files: () => files, tick: (ms) => { clock += ms; return clock; } };
 }
 
-const auto = (name, createdAt) => ({ fileName: `media-studio-kh-backup-auto-v1-${name}.iskhbackup`, backupPath: `/b/${name}`, createdAt, auto: true });
+const auto = (name, createdAt) => ({ fileName: `business-studio-kh-backup-auto-v1-${name}.iskhbackup`, backupPath: `/b/${name}`, createdAt, auto: true });
 
 test('a future-dated automatic backup does not make every 3-hour check due', async () => {
   const now = Date.UTC(2026, 9, 8, 9);
@@ -256,10 +256,10 @@ test('retention runs inside the tracked operation, so a restore cannot start mid
 /* ─── 29: order by the filename's time, not the copy's birth time ── */
 
 test('backups are ordered and dated by the time in their filename, so a copied backups folder keeps its order', async () => {
-  assert.equal(b.backupTimeFromName('media-studio-kh-backup-auto-v0.1.94-2026-10-08-0905.iskhbackup'), new Date(2026, 9, 8, 9, 5).getTime());
+  assert.equal(b.backupTimeFromName('business-studio-kh-backup-auto-v0.1.94-2026-10-08-0905.iskhbackup'), new Date(2026, 9, 8, 9, 5).getTime());
   assert.equal(b.backupTimeFromName('business-studio-kh-backup-v0.49.1-2025-01-31-2359.iskhbackup'), new Date(2025, 0, 31, 23, 59).getTime());
-  assert.equal(b.backupTimeFromName('media-studio-kh-backup-renamed.iskhbackup'), null);
-  assert.equal(b.backupTimeFromName('media-studio-kh-backup-v1-2026-02-30-1200.iskhbackup'), null, 'not a real date');
+  assert.equal(b.backupTimeFromName('business-studio-kh-backup-renamed.iskhbackup'), null);
+  assert.equal(b.backupTimeFromName('business-studio-kh-backup-v1-2026-02-30-1200.iskhbackup'), null, 'not a real date');
 
   const dataDir = tmpDir('rf-backup-order-');
   const backupsDir = path.join(dataDir, 'backups');
@@ -270,7 +270,7 @@ test('backups are ordered and dated by the time in their filename, so a copied b
   const names = ['2026-10-08-0900', '2026-10-01-0900', '2026-09-24-0900', '2026-09-17-0900', '2026-09-10-0900']
     .map((stamp) => b.autoBackupFilename(stamp, '0.1.94'));
   for (const name of names) fs.writeFileSync(path.join(backupsDir, name), 'x');
-  const renamed = 'media-studio-kh-backup-auto-renamed.iskhbackup';
+  const renamed = 'business-studio-kh-backup-auto-renamed.iskhbackup';
   fs.writeFileSync(path.join(backupsDir, renamed), 'x');
   const old = new Date(2026, 0, 1);
   fs.utimesSync(path.join(backupsDir, renamed), old, old);
@@ -357,14 +357,14 @@ test('stale temp sweep removes only this app\'s own old leftovers', async () => 
     if (stale) fs.utimesSync(p, oldT, oldT);
   };
   mk('.iskh-backup-staging-abc', true);
-  mk('.media-studio-kh-backup-auto-v1-2026-10-01-0900.iskhbackup.1-2.partial');
-  mk('.media-studio-kh-backup-auto-v1-2026-10-08-0900.iskhbackup.1-3.partial', false, false); // fresh: maybe running
-  mk('media-studio-kh-backup-v1-2026-01-01-0900.iskhbackup'); // a real backup
+  mk('.business-studio-kh-backup-auto-v1-2026-10-01-0900.iskhbackup.1-2.partial');
+  mk('.business-studio-kh-backup-auto-v1-2026-10-08-0900.iskhbackup.1-3.partial', false, false); // fresh: maybe running
+  mk('business-studio-kh-backup-v1-2026-01-01-0900.iskhbackup'); // a real backup
   mk('notes.partial'); // not ours
   await b._internals.sweepStaleTemp(dir);
   assert.deepEqual(fs.readdirSync(dir).sort(), [
-    '.media-studio-kh-backup-auto-v1-2026-10-08-0900.iskhbackup.1-3.partial',
-    'media-studio-kh-backup-v1-2026-01-01-0900.iskhbackup',
+    '.business-studio-kh-backup-auto-v1-2026-10-08-0900.iskhbackup.1-3.partial',
+    'business-studio-kh-backup-v1-2026-01-01-0900.iskhbackup',
     'notes.partial',
   ]);
 });

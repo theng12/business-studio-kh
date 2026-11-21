@@ -686,14 +686,14 @@ All are listed for the accountant in open question 3.
 ---
 
 ### Critical Files for Implementation
-- $HOME/Developer/media-studio-kh/main/db/fuelSchema.js (pattern for the new `main/db/assetSchema.js` and `ledgerSchema.js`; `fuel_assets` link and `branch_id` columns)
-- $HOME/Developer/media-studio-kh/main/db/fuel.js (`createAsset` / `updateAsset` must route identity fields through the shared register helper; `fxKhrPerUsd`)
-- $HOME/Developer/media-studio-kh/main/util/capabilities.js (new capabilities, `OPT_IN_CAPABILITIES`, CHANNEL_RULES incl. the `files:parseWorkbook` any-of change) together with $HOME/Developer/media-studio-kh/main/db/roles.js
-- $HOME/Developer/media-studio-kh/main/util/backupSafety.js (`fixed-assets` in both `BACKUP_DATA_ENTRIES` and `ARCHIVE_TOP_LEVEL_DIRS`) and $HOME/Developer/media-studio-kh/main/db/fuelHistory.js (`HISTORY_TABLES`)
-- $HOME/Developer/media-studio-kh/main/studioRenderer.js and $HOME/Developer/media-studio-kh/main/ipc/labels.js (asset data source for QR tags, `eclevel`), plus $HOME/Developer/media-studio-kh/main/server/index.js and $HOME/Developer/media-studio-kh/webclient/fuel/app.js (the `/a` route and shared phone-page code)
+- $HOME/Developer/business-studio-kh/main/db/fuelSchema.js (pattern for the new `main/db/assetSchema.js` and `ledgerSchema.js`; `fuel_assets` link and `branch_id` columns)
+- $HOME/Developer/business-studio-kh/main/db/fuel.js (`createAsset` / `updateAsset` must route identity fields through the shared register helper; `fxKhrPerUsd`)
+- $HOME/Developer/business-studio-kh/main/util/capabilities.js (new capabilities, `OPT_IN_CAPABILITIES`, CHANNEL_RULES incl. the `files:parseWorkbook` any-of change) together with $HOME/Developer/business-studio-kh/main/db/roles.js
+- $HOME/Developer/business-studio-kh/main/util/backupSafety.js (`fixed-assets` in both `BACKUP_DATA_ENTRIES` and `ARCHIVE_TOP_LEVEL_DIRS`) and $HOME/Developer/business-studio-kh/main/db/fuelHistory.js (`HISTORY_TABLES`)
+- $HOME/Developer/business-studio-kh/main/studioRenderer.js and $HOME/Developer/business-studio-kh/main/ipc/labels.js (asset data source for QR tags, `eclevel`), plus $HOME/Developer/business-studio-kh/main/server/index.js and $HOME/Developer/business-studio-kh/webclient/fuel/app.js (the `/a` route and shared phone-page code)
 
 **Repo notes:**
-- `codex/hr1` (worktree `$HOME/.codex/worktrees/workspace-concurrency/media-studio-kh`) has only a docs commit so far. It must coordinate on `employees.branch_id`.
+- `codex/hr1` (worktree `$HOME/.codex/worktrees/workspace-concurrency/business-studio-kh`) has only a docs commit so far. It must coordinate on `employees.branch_id`.
 - `codex/launcher` (the Home grid) has no changes yet.
 - No files were modified in this session.
 ---

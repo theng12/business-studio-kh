@@ -152,7 +152,7 @@ Primary planning worktree: `codex/app-audit-plan`, starting at `0732bb5`. The [i
 ## Verified implementation and release checkpoint — 2026-10-06
 
 Branch `codex/app-improvements`, implementation baseline `e3af16d`, final app-source checkpoint
-`d3d43a4`, worktree `$HOME/.codex/worktrees/app-improvements/media-studio-kh`. All
+`d3d43a4`, worktree `$HOME/.codex/worktrees/app-improvements/business-studio-kh`. All
 eight audit batches are implemented and independently reviewed; the review outcome is PASS. Use
 this checkpoint table for current status; task reports retain the detailed per-area evidence.
 

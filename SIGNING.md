@@ -47,7 +47,7 @@ citing the installed receipt. Package-only checks and `--skip-launch` cannot run
 
 Write trusted pins following `Shared Tools/portfolio/README.md` → Release dist retention:
 `schema: 1`, one `apps` entry with `app: "Business Studio KH"`,
-`project: "$HOME/Developer/My Own Apps/media-studio-kh"` (the real directory,
+`project: "$HOME/Developer/My Own Apps/business-studio-kh"` (the real directory,
 not a compatibility symlink), and one or two accepted `releases` (current plus rollback). Each pins `version`, absolute DMG `source`,
 `sha256`, `bytes` and absolute existing acceptance `evidence`. The previous release's acceptance
 is checked by the lead; evidence existence alone does not prove it. Do dependency/job checks
@@ -169,7 +169,7 @@ After signing is in place, the next step is `electron-updater` for auto-updates:
    "publish": {
      "provider": "github",
      "owner": "your-github-handle",
-     "repo": "media-studio-kh"
+     "repo": "business-studio-kh"
    }
    ```
 

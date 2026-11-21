@@ -134,7 +134,7 @@ function register({ expose, exposeLocal }) {
     const { buildProductSampleWorkbook } = require('../util/productWorkbook');
     return {
       companyId: activeCompanyId || null,
-      filename: 'media-studio-kh-products-sample.xlsx',
+      filename: 'business-studio-kh-products-sample.xlsx',
       bytes: buildProductSampleWorkbook({
         priceGroups: company?.priceGroups ?? [],
         customFields: activeCompanyId ? productsDb.customFieldKeys(activeCompanyId) : [],
@@ -151,7 +151,7 @@ function register({ expose, exposeLocal }) {
     const company = activeCompanyId ? companies.get(activeCompanyId) : null;
     const res = await dialog.showSaveDialog({
       title: 'Save sample workbook',
-      defaultPath: 'media-studio-kh-products-sample.xlsx',
+      defaultPath: 'business-studio-kh-products-sample.xlsx',
       filters: [{ name: 'Workbook', extensions: ['xlsx'] }],
     });
     if (res.canceled || !res.filePath) return null;

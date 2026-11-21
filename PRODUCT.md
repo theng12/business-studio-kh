@@ -36,7 +36,7 @@ A business suite that keeps the business's data and images on its own Mac, and k
 
 ## Capabilities and Constraints
 
-- Modules: Products, Media Studio (images/social), Labels & Catalogs, Purchasing, Pick & Pack, Fuel, Assets, People (HR), Finance, System.
+- Modules: Products, Business Studio (images/social), Labels & Catalogs, Purchasing, Pick & Pack, Fuel, Assets, People (HR), Finance, System.
 - Data is local-first in a user-configurable data folder; assets are copied into it, not referenced from the user's disk.
 - Free and local by default: no paid or cloud service is required; optional integrations are off unless the owner turns them on.
 - The pack bench never shows prices, including through the baseline product reads for packer roles.

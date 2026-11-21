@@ -38,7 +38,7 @@
 ## Delegation record
 
 Start commit: 2541c186aa350ce1c73dd998e889ddec5636bd41.
-Worktree: $HOME/.codex/worktrees/catalog-workflow/media-studio-kh, branch codex/catalog-workflow.
+Worktree: $HOME/.codex/worktrees/catalog-workflow/business-studio-kh, branch codex/catalog-workflow.
 Baseline focused JS: 65 pass, 0 failures/skips. Prior audit native baseline:17 pass.
 Independent workers own disjoint files. The primary alone edits index.jsx, index.css, package/release/docs; workers do not commit until primary integration.
 

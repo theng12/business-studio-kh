@@ -86,7 +86,7 @@ listing every page is replaced by two levels (verified 2026-10-08):
 
 **One source of truth: `renderer/lib/modules.js` (`APP_MODULES`).** The tiles, the sidebar, the
 ⌘1–9 / ⌘, map (`shortcutMap`), the shortcuts sheet (`NAV`) and ⌘K's "Go to …" rows (`searchNav`)
-are all derived from it. Current modules: Products, Media Studio, Labels & Catalogs, Purchasing,
+are all derived from it. Current modules: Products, Business Studio, Labels & Catalogs, Purchasing,
 Fuel, Assets, People, System.
 
 - **Add a page:** one `{ id, name, icon, caps?, shortcut? }` line in its module's section, plus the
@@ -526,7 +526,9 @@ the same two-version rule, owned by the Updater lead.
 
 **KH Updater packaging (owner, verified 2026-11-02; signing 2026-11-08):** `npm run dist:updater` builds one arm64 app signed by electron-builder with the shared KH Studio Local Signing identity (`SIGNING.md`; never ad-hoc or `--deep` signing), ad-hoc signs the DMG, verifies both, and never publishes. The stable bundle ID is `com.terranash.mediastudiokh`. Feed publication belongs to the KH Updater lead; no in-app updater is needed.
 
-**`dist/` means the owner's checkout on the Mac you are on** — `$HOME/Developer/My Own Apps/media-studio-kh/dist` on the current Mac Studio (M2 Max; path and hardware verified 2026-11-02; earlier handoffs used the old Developer path), `$HOME/Developer/media-studio-kh/dist` on the Mac mini,
+**The name is not the identity (0.1.120, 2026-11-21).** The app was renamed Business Studio KH → Business Studio KH and every user-visible name moved with it, but the bundle ID above and the feed id `media-studio` did **not** change. They are what the updater matches: a DMG whose identifier differs from the installed app is refused (`update-studio-kh`, `Sources/KHUpdaterCore/Recipes.swift`, the `expectedBundleID ?? installedInfo.identifier` guard), so changing either stops every installed copy updating. When the owner asks for the identifier itself to move, that is a fleet migration led by the Updater lead, not a rename in this repo. Old backups keep their old marker and still restore (`LEGACY_BACKUP_KINDS`).
+
+**`dist/` means the owner's checkout on the Mac you are on** — `$HOME/Developer/My Own Apps/business-studio-kh/dist` on the current Mac Studio (M2 Max; path and hardware verified 2026-11-02; earlier handoffs used the old Developer path), `$HOME/Developer/business-studio-kh/dist` on the Mac mini,
 which is where he looks for a release. `npm run dist` writes into the build worktree
 instead, so copy the release's DMG across as the last step of a release (one file since
 2026-09-27 — AGENTS.md §20).
@@ -613,7 +615,7 @@ leave completed work sitting uncommitted in a worktree.
   profiles, backups, graphs, credentials or generated reports. Those are local
   artifacts.
 - Before any push, confirm hosted Actions stays disabled:
-  `gh api repos/theng12/media-studio-kh/actions/permissions --jq .enabled` must
+  `gh api repos/theng12/business-studio-kh/actions/permissions --jq .enabled` must
   return `false`. Never enable or dispatch a hosted workflow.
 - Never force-push, `reset --hard`, or rewrite shared history.
 - Tagging, GitHub Releases, signing/notarization and publishing an installer

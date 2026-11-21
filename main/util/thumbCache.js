@@ -105,7 +105,7 @@ function getThumbCacheDir() {
       base = electron.app.getPath('userData');
     }
   } catch (_) { /* not running inside Electron */ }
-  return path.join(base || path.join(os.tmpdir(), 'media-studio-kh'), 'thumb-cache');
+  return path.join(base || path.join(os.tmpdir(), 'business-studio-kh'), 'thumb-cache');
 }
 
 /** Tests only: point the cache somewhere disposable (null restores the default). */

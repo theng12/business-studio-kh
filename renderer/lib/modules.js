@@ -55,7 +55,7 @@ export const APP_MODULES = [
   },
   {
     id: 'media',
-    name: 'Media Studio',
+    name: 'Business Studio',
     description: 'Edit photos, AI, overlays, exports and social posts.',
     icon: 'workspace',
     sections: [
@@ -437,7 +437,7 @@ function words(text) { return String(text || '').toLowerCase().split(/[^a-z0-9]+
  * this account may see; a PAGE row also only when it can open now
  * (`isAvailable` — most pages need a company). A module row is still offered
  * without one, and the palette says why it cannot open. `exact` marks a module
- * whose whole name is the query ("fuel", "media studio").
+ * whose whole name is the query ("fuel", "business studio").
  */
 export function searchNav(query, caps, { limit = 4, isAvailable = () => true } = {}) {
   const q = words(query);

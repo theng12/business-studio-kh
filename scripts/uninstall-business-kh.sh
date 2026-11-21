@@ -7,7 +7,7 @@
 set -euo pipefail
 
 APP="${1:-/Applications/Business Studio KH.app}"
-ROTATE="${ROTATE:-$HOME/Developer/My Own Apps/media-studio-kh/_trash/$(date +%Y-%m-%d) uninstall}"
+ROTATE="${ROTATE:-$HOME/Developer/My Own Apps/business-studio-kh/_trash/$(date +%Y-%m-%d) uninstall}"
 
 if [ ! -d "$APP" ]; then
   echo "Nothing to remove: $APP is not installed."

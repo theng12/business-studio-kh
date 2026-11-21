@@ -6,9 +6,9 @@
  * same (this repo was seeded from that app). What stood in the way was two
  * name guards written when the app was renamed:
  *
- *   - `isBackupFilename` only listed `media-studio-kh-backup-…`, so an old file
+ *   - `isBackupFilename` only listed `business-studio-kh-backup-…`, so an old file
  *     did not even appear in the restore list.
- *   - `validateManifest` only accepted `kind: 'media-studio-kh-backup'`, so a
+ *   - `validateManifest` only accepted `kind: 'business-studio-kh-backup'`, so a
  *     renamed file was then refused: "Not an Business Studio KH backup".
  *
  * This test builds a REAL archive in each shape and drives the real code, so
@@ -89,7 +89,7 @@ test('an Business Studio KH backup is still recognised, name and manifest', { sk
       dir, folderName: 'legacy-backup', fileName: 'business-studio-kh-backup-v0.49.40-2026-07-01.iskhbackup', kind: LEGACY_KIND,
     });
     const current = writeArchive({
-      dir, folderName: 'current-backup', fileName: 'media-studio-kh-backup-v0.1.81-2026-09-27.iskhbackup', kind: 'media-studio-kh-backup',
+      dir, folderName: 'current-backup', fileName: 'business-studio-kh-backup-v0.1.81-2026-09-27.iskhbackup', kind: 'business-studio-kh-backup',
     });
 
     const { safety, backupManager } = withModules((mods) => mods);
@@ -103,7 +103,7 @@ test('an Business Studio KH backup is still recognised, name and manifest', { sk
     assert.equal(preview.appVersion, '0.49.40');
 
     const today = await backupManager.previewBackup(current);
-    assert.equal(today.kind, 'media-studio-kh-backup');
+    assert.equal(today.kind, 'business-studio-kh-backup');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -113,12 +113,12 @@ test('a file that is not a backup at all is still refused', { skip: skipReason }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mskh-legacy-refuse-'));
   try {
     const { safety, backupManager } = withModules((mods) => mods);
-    assert.equal(safety.isBackupFilename('media-studio-kh-backup-note.txt'), false);
+    assert.equal(safety.isBackupFilename('business-studio-kh-backup-note.txt'), false);
     assert.equal(safety.isBackupFilename('holiday-photos.iskhbackup'), false);
 
     // Right name, wrong manifest marker: the structural checks still run.
     const impostor = writeArchive({
-      dir, folderName: 'impostor', fileName: 'media-studio-kh-backup-v9-2026-09-27.iskhbackup', kind: 'something-else',
+      dir, folderName: 'impostor', fileName: 'business-studio-kh-backup-v9-2026-09-27.iskhbackup', kind: 'something-else',
     });
     await assert.rejects(() => backupManager.previewBackup(impostor), /not a .*backup|wrong or missing kind/i);
   } finally {
@@ -132,6 +132,6 @@ test('an Business Studio KH server bundle needs no allowance at all', () => {
   // app-name marker, so an old .iskhbundle imports as it stands.
   const source = fs.readFileSync(path.join(__dirname, '..', 'main', 'serverBundle.js'), 'utf8');
   assert.match(source, /BUNDLE_FORMAT_VERSION = 1/, 'format v1, unchanged since the fork');
-  assert.doesNotMatch(source, /media-studio-kh-bundle|business-studio-kh-bundle/,
+  assert.doesNotMatch(source, /business-studio-kh-bundle|business-studio-kh-bundle/,
     'no app-name marker in the bundle path');
 });

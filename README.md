@@ -7,9 +7,10 @@ One shared Product Library sits at the centre. Product details are entered once 
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release: **0.1.99** (2026-10-09), adding HR2 payroll, loans and bilingual payslips.
-See the handoff for review, verification and installer evidence. It is built for home
-use — the owner's Macs and his brother's — and is not publicly distributed.
+Current release: **0.1.120** (2026-11-21), the rename from Business Studio KH, with Trade Finance
+(including maturity reminders) complete. See `CHANGELOG.md` for what each release changed and
+`docs/tasks/` for the release receipts. Built for home use — the owner's Macs — and distributed
+through the KH Updater.
 
 ## Where to read next
 
@@ -29,7 +30,7 @@ use — the owner's Macs and his brother's — and is not publicly distributed.
 | [`docs/PICK_AND_PACK_PLAN.md`](docs/PICK_AND_PACK_PLAN.md) | A design plan awaiting the owner's review. Not built. |
 | [`docs/archive/`](docs/archive/README.md) | Dated audits, plans and specs. Historical only. |
 
-The source is in the private [GitHub repository](https://github.com/theng12/media-studio-kh).
+The source is in the private [GitHub repository](https://github.com/theng12/business-studio-kh).
 DMGs, live data and credentials are not in the repository.
 
 ## Install

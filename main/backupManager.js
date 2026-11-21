@@ -237,7 +237,7 @@ async function sweepStaleTemp(dir, now = Date.now()) {
   let names;
   try { names = await fsp.readdir(dir); } catch (_) { return; }
   for (const name of names) {
-    const ours = name.startsWith(STAGING_PREFIX) || /^\.(?:media|image)-studio-kh-backup-.+\.partial$/.test(name);
+    const ours = name.startsWith(STAGING_PREFIX) || /^\.(?:business|media|image)-studio-kh-backup-.+\.partial$/.test(name);
     if (!ours) continue;
     const full = path.join(dir, name);
     try {
@@ -449,7 +449,7 @@ async function listBackups() {
  *     newest AUTOMATIC backup in the backups folder is 7+ days old (or there
  *     is none), one is made in the background.
  *   - Automatic backups are told apart by their filename
- *     (`media-studio-kh-backup-auto-…`), which isBackupFilename() already
+ *     (`business-studio-kh-backup-auto-…`), which isBackupFilename() already
  *     accepts, so they list and restore like any other.
  *   - Retention only ever touches automatic backups: the oldest beyond four
  *     go to the macOS Trash (main/util/fileTrash.js — never erased). A
@@ -464,7 +464,7 @@ const AUTO_BACKUP_INTERVAL_MS = 7 * 24 * 3600 * 1000;
 const AUTO_BACKUP_KEEP = 4;
 const AUTO_BACKUP_CHECK_MS = 3 * 3600 * 1000;
 const AUTO_BACKUP_FIRST_CHECK_MS = 2 * 60 * 1000;
-const AUTO_PREFIX = 'media-studio-kh-backup-auto-';
+const AUTO_PREFIX = 'business-studio-kh-backup-auto-';
 // A write into the data folder during the copy fails the snapshot check; on a
 // busy day that is common, so an automatic run retries sooner than the next
 // 3-hour check — a few times a day at most.
@@ -473,7 +473,7 @@ const AUTO_BACKUP_MAX_RETRIES_PER_DAY = 4;
 const RETRYABLE_BACKUP_ERROR = /Data folder changed during|Staged data does not match the source snapshot/;
 
 function autoBackupFilename(stamp, appVersion) {
-  return backupFilename(stamp, appVersion).replace('media-studio-kh-backup-', AUTO_PREFIX);
+  return backupFilename(stamp, appVersion).replace('business-studio-kh-backup-', AUTO_PREFIX);
 }
 
 function isAutoBackupName(name) {

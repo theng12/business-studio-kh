@@ -117,9 +117,9 @@ test('automatic backups: due after a week, named apart, and retention keeps the 
   assert.equal(b.AUTO_BACKUP_INTERVAL_MS, 7 * DAY);
 
   const name = b.autoBackupFilename('2026-10-08-0900', '0.1.94');
-  assert.equal(name, 'media-studio-kh-backup-auto-v0.1.94-2026-10-08-0900.iskhbackup');
+  assert.equal(name, 'business-studio-kh-backup-auto-v0.1.94-2026-10-08-0900.iskhbackup');
   assert.equal(b.isAutoBackupName(name), true);
-  assert.equal(b.isAutoBackupName('media-studio-kh-backup-v0.1.94-2026-10-08-0900.iskhbackup'), false);
+  assert.equal(b.isAutoBackupName('business-studio-kh-backup-v0.1.94-2026-10-08-0900.iskhbackup'), false);
   // Still a backup the list and the restore path accept.
   assert.equal(require('../main/util/backupSafety').isBackupFilename(name), true);
 
@@ -130,10 +130,10 @@ test('automatic backups: due after a week, named apart, and retention keeps the 
   // A future time counts as just made; lastAutoBackupAt skips future-dated
   // files, so it cannot postpone backups either (review fix 12).
   assert.equal(b.autoBackupDue({ lastAutoAt: now + DAY, now }), false);
-  assert.equal(b.lastAutoBackupAt([{ fileName: 'media-studio-kh-backup-auto-v1-f.iskhbackup', createdAt: now + 400 * DAY, auto: true }], now), null);
+  assert.equal(b.lastAutoBackupAt([{ fileName: 'business-studio-kh-backup-auto-v1-f.iskhbackup', createdAt: now + 400 * DAY, auto: true }], now), null);
 
-  const auto = (i) => ({ fileName: `media-studio-kh-backup-auto-v1-${i}.iskhbackup`, backupPath: `/b/auto-${i}`, createdAt: now - i * 7 * DAY, auto: true });
-  const manual = (i) => ({ fileName: `media-studio-kh-backup-v1-${i}.iskhbackup`, backupPath: `/b/manual-${i}`, createdAt: now - i * DAY - 1, auto: false });
+  const auto = (i) => ({ fileName: `business-studio-kh-backup-auto-v1-${i}.iskhbackup`, backupPath: `/b/auto-${i}`, createdAt: now - i * 7 * DAY, auto: true });
+  const manual = (i) => ({ fileName: `business-studio-kh-backup-v1-${i}.iskhbackup`, backupPath: `/b/manual-${i}`, createdAt: now - i * DAY - 1, auto: false });
   const listing = [auto(0), manual(0), auto(1), auto(2), manual(30), auto(3), auto(4), auto(5)];
   const prune = b.autoBackupsToPrune(listing);
   assert.deepEqual(prune.map((x) => x.backupPath), ['/b/auto-4', '/b/auto-5']);
@@ -146,9 +146,9 @@ test('runAutoBackupIfDue: backs up when due, retires old automatic ones to the T
   const b = loadBackupManager();
   const now = Date.UTC(2026, 9, 8);
   const autos = [1, 2, 3, 4].map((w) => ({
-    fileName: `media-studio-kh-backup-auto-v1-w${w}.iskhbackup`, backupPath: `/b/auto-w${w}`, createdAt: now - w * 7 * DAY, auto: true,
+    fileName: `business-studio-kh-backup-auto-v1-w${w}.iskhbackup`, backupPath: `/b/auto-w${w}`, createdAt: now - w * 7 * DAY, auto: true,
   }));
-  const manualOld = { fileName: 'media-studio-kh-backup-v1-old.iskhbackup', backupPath: '/b/manual-old', createdAt: now - 400 * DAY, auto: false };
+  const manualOld = { fileName: 'business-studio-kh-backup-v1-old.iskhbackup', backupPath: '/b/manual-old', createdAt: now - 400 * DAY, auto: false };
 
   function harness(cfg, initial) {
     let files = [...initial];
@@ -159,7 +159,7 @@ test('runAutoBackupIfDue: backs up when due, retires old automatic ones to the T
       createBackup: async ({ auto }) => {
         assert.equal(auto, true, 'the scheduler always asks for an automatic backup');
         calls.created += 1;
-        const fresh = { fileName: 'media-studio-kh-backup-auto-v1-now.iskhbackup', backupPath: '/b/auto-now', createdAt: now, auto: true, sizeBytes: 10 };
+        const fresh = { fileName: 'business-studio-kh-backup-auto-v1-now.iskhbackup', backupPath: '/b/auto-now', createdAt: now, auto: true, sizeBytes: 10 };
         files.push(fresh);
         return fresh;
       },

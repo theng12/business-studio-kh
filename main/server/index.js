@@ -443,7 +443,7 @@ async function handleRequest(req, res, dataDir) {
     // Connectivity pass: the server Mac's name, so a client's chip can say
     // which Mac it is connected to. The same name Bonjour already announces
     // on the network (`<name>.local`), so this reveals nothing new.
-    sendJson(res, 200, { ok: true, app: 'media-studio-kh', version: appVersion, name: serverDisplayName() });
+    sendJson(res, 200, { ok: true, app: 'business-studio-kh', version: appVersion, name: serverDisplayName() });
     return;
   }
 

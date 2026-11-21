@@ -21,11 +21,30 @@ const fs = require('node:fs');
 
 // Lock the app's identity so dev and packaged builds resolve to the SAME
 // userData folder. Without this, npm run dev uses the package.json `name`
-// (`media-studio-kh`) while the packaged build uses `productName`
+// (`business-studio-kh`) while the packaged build uses `productName`
 // (`Business Studio KH`) — producing two separate folders in
 // ~/Library/Application Support that don't share data or config.
 // Must run before app.whenReady().
 app.setName('Business Studio KH');
+
+/* 0.1.120 — the app was renamed from Business Studio KH. The profile folder is
+ * named after the app, so it moves with the name: config.json holds the AI key,
+ * the client token and the data-folder path, and starting on an empty profile
+ * would look like everything was lost. On the first launch under the new name
+ * the old folder is moved into place. The user's own data folder (Pictures/…)
+ * is never moved — config.json keeps pointing at whatever it already held.
+ * A failed move is logged and the app still starts. */
+(function adoptProfileFromOldName() {
+  try {
+    const { adoptProfile } = require('./util/profileMigration');
+    const result = adoptProfile({
+      base: app.getPath('appData'), fromName: 'Business Studio KH', toName: 'Business Studio KH',
+    });
+    if (result.status !== 'nothing-to-do') logEvent(`profile:${result.status}`, `${result.from} -> ${result.to}`);
+  } catch (err) {
+    logEvent('profile:migrate-failed', err.message);
+  }
+})();
 
 // Owner 2026-11-12: uninstall cleanup runs headlessly from the bundle itself —
 // clear this app's login item, then exit without a window. The uninstall script
@@ -78,7 +97,7 @@ function migrateLegacyUserData() {
       return; // Already migrated or fresh install with the new name.
     }
     const parent = path.dirname(newUserData);
-    const oldUserData = path.join(parent, 'media-studio-kh');
+    const oldUserData = path.join(parent, 'business-studio-kh');
     if (!fs.existsSync(oldUserData)) return;
     fs.mkdirSync(newUserData, { recursive: true });
     fs.cpSync(oldUserData, newUserData, { recursive: true, errorOnExist: false, force: false });
@@ -418,12 +437,12 @@ function handleFirstLaunch(config) {
   // Pick the most-data-bearing legacy folder. There are historically two
   // possible locations (see the long comment near app.setName above):
   //   ~/Library/Application Support/Business Studio KH/data/    (packaged)
-  //   ~/Library/Application Support/media-studio-kh/data/    (dev, pre-fix)
+  //   ~/Library/Application Support/business-studio-kh/data/    (dev, pre-fix)
   // We prefer the one with a database.sqlite, then the one most recently
   // modified, so we don't lose data the user actually cares about.
   const candidates = [
     legacyDataDir(),
-    path.join(path.dirname(legacyDataDir()), '..', 'media-studio-kh', 'data'),
+    path.join(path.dirname(legacyDataDir()), '..', 'business-studio-kh', 'data'),
   ];
   const legacyPath = candidates.find((p) =>
     fs.existsSync(path.join(p, 'database.sqlite')) || fs.existsSync(path.join(p, 'assets')),

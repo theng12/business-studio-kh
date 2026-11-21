@@ -23,7 +23,7 @@ H1–H15, review passes, per-version DMG hashes) is kept unchanged in
 | | |
 |---|---|
 | Version | `0.1.99` in package/lock, matching the top in-app changelog entry. |
-| Integration | [PR #119](https://github.com/theng12/media-studio-kh/pull/119) is the authoritative merge record. |
+| Integration | [PR #119](https://github.com/theng12/business-studio-kh/pull/119) is the authoritative merge record. |
 | Installed | **0.1.99** on the verified Mac Studio M2 Max (`$HOME`), 2026-10-09. Other Macs were not checked; the Mini's last inherited report was 0.1.93. |
 | DMG | Owner `dist/Business Studio KH-0.1.99-arm64.dmg` (and 0.1.98); older installers and the prior app remain recoverable in `_trash/`. SHA-256 is in the handoff. |
 | Next | Assets A3 QR tags / stock-take, after its owner questions; HR2 comparison and professional confirmation remain. |
@@ -69,7 +69,7 @@ The full step list is the handoff's "working loop". In short:
 4. Install through the approved signed release flow and verify actual installed launch,
    health, version, designated requirements and executable/asar hashes. Then use the
    `SIGNING.md` installed-verifier command with matching `--packaged-receipt` and explicit
-   `--retain-dist` trusted pins. Its project is `$HOME/Developer/My Own Apps/media-studio-kh`.
+   `--retain-dist` trusted pins. Its project is `$HOME/Developer/My Own Apps/business-studio-kh`.
    Preserve both installers and the existing `_trash` link while acceptance or retirement-layout
    compatibility is unresolved; helper refusal is not successful retention.
 5. Push, open a PR, merge. Hosted GitHub Actions stays disabled; tags, GitHub Releases, signing

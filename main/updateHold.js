@@ -186,7 +186,7 @@ function send(res, status, body) {
  * release this app.
  */
 function defaultTokenFile() {
-  return process.env.MEDIA_STUDIO_HOLD_TOKEN_FILE
+  return process.env.BUSINESS_STUDIO_HOLD_TOKEN_FILE
     || process.env.KHU_HOLD_TOKEN_FILE
     || path.join(os.homedir(), 'Library', 'KHUpdater', 'state', 'hold-token');
 }
