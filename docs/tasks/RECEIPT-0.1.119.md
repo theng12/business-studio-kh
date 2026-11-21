@@ -43,10 +43,11 @@ Media's own DB, IPC, permissions and UI kit. No code was copied from the source.
 
 ## Not published to a public page
 
-`packaging/page-sync.sh` is not applicable to this app yet: `theng12/media-studio-kh` is private and has
-no `release.json`, no GitHub Releases and no Pages site (all three answer 404), and the updater repo is
-private too. Every media release 0.1.111–0.1.118 used the 1301 feed + readback, which is what is recorded
-above. Turning on a public page is an owner decision, not something to create silently here.
+This app's own repository (`theng12/media-studio-kh`, private) has no `release.json`, no GitHub Releases
+and no Pages site. The shared public page is a different, public repo (`theng12/kh-releases`) whose
+mirrored feed still carried media-studio 0.1.118 at the time of this release; updating a public page
+needs the owner's explicit go-ahead and was not attempted here. The 1301 feed plus the readback above
+is the publish record for 0.1.119, as it was for 0.1.111–0.1.118. Corrected in `RECEIPT-0.1.120.md`.
 
 ## Not checked
 

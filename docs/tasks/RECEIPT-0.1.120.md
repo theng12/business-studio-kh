@@ -83,7 +83,14 @@ About box all say Business Studio KH; a fresh install lands as `Business Studio 
 - **SSD kits** carry a generated snapshot of the feed (`apps.json`). The new name appears when the
   owner runs the kit’s `2 Refresh the SSDs.command` (or `khu ssd-index --volume … --feed …`); the
   mounted SSDs were not rewritten here.
-- `packaging/page-sync.sh` still does not apply: this repo has no `release.json`, no Releases and no
-  Pages site (all 404, private), as in the 0.1.119 receipt.
+- **The public page is stale, and updating it needs the owner's go-ahead.** Correcting an earlier note
+  in this receipt: the shared public page exists (`theng12/kh-releases`, public); only this app's own
+  repository has no Pages. That page's mirrored feed and its release row still carry media-studio
+  **0.1.118** while the 1301 feed serves 0.1.120, and the page mirror requires every row to match the
+  feed, so another app's page update is held behind this one. Publishing a DMG to a public destination
+  is outside what this session may do on its own: the attempt was refused by the environment's
+  permission classifier, and a dry run of the page-sync steps reported no problem with the artifact or
+  its hash. The owner (or the Developer with the owner's explicit approval naming that public repo and
+  this artifact) can finish it; the page keeps the newest row only, so the 0.1.118 row goes with it.
 - The Reminders page (0.1.119) has still not been clicked in a running app: the desktop-safety rule
   forbids opening a window here. Its wiring and data rules are covered by tests.
