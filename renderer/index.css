@@ -12001,6 +12001,8 @@ a:hover { text-decoration-thickness: 2px; }
 
 /* PO list: "PO-2026-005" on one line. */
 .po-list-table .po-list__number { white-space: nowrap; }
+/* A date on one line: "Nov 16," / "2026" stacked read as two dates. */
+.po-list-table .po-list__date { white-space: nowrap; }
 
 /* PO detail lines table at 1280 px: SKU and numbers never wrap, the product
    name keeps room for Khmer, the row buttons stay on screen.

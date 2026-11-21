@@ -21,7 +21,9 @@ test('footer combines version and news with update controls after support', () =
 });
 
 test('update states use the shared contract and Settings holds connection details', () => {
-  for (const text of ['Not checked', 'Checking…', 'Checked just now · up to date', 'is available', 'Check failed:', '. Try again.']) assert.ok(sidebar.includes(text));
+  for (const text of ['Not checked', 'Checking…', 'Checked just now · up to date', 'is available', 'Update check failed', '>Retry<']) assert.ok(sidebar.includes(text));
+  // The reason lives in the tooltip now, not in a sentence that stays on screen.
+  assert.match(sidebar, /title=\{update\.state === 'failed' \? \(update\.reason/);
   assert.match(sidebar, /window\.api\.updates\.check\(\)/);
   assert.match(sidebar, /window\.api\.updates\.openUpdater\(\)/);
   assert.match(settings, /import \{ ConnectionStatus \} from/);

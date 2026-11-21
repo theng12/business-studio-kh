@@ -55,7 +55,7 @@ export const APP_MODULES = [
   },
   {
     id: 'media',
-    name: 'Business Studio',
+    name: 'Photos & Media',
     description: 'Edit photos, AI, overlays, exports and social posts.',
     icon: 'workspace',
     sections: [

@@ -91,7 +91,7 @@ export function Sidebar({ onSearch }) {
   const updateLine = update.state === 'checking' ? 'Checking…'
     : update.state === 'up-to-date' ? 'Checked just now · up to date'
     : update.state === 'available' ? `Checked just now · ${update.version} is available`
-    : update.state === 'failed' ? `Check failed: ${update.reason || 'Unknown error'}. Try again.`
+    : update.state === 'failed' ? 'Update check failed'
     : 'Not checked';
   const modKey = platform === 'darwin' ? '⌘' : 'Ctrl+';
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
@@ -311,7 +311,11 @@ export function Sidebar({ onSearch }) {
                 <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.6v6.2M5.2 6.2 8 9l2.8-2.8M2.8 11.4v1.6h10.4v-1.6" /></svg>
               </button> : null}
             </div>
-            <div className="sidebar__update-status" role="status" aria-live="polite">{updateLine}</div>
+            <div className="sidebar__update-status" role="status" aria-live="polite"
+              title={update.state === 'failed' ? (update.reason || 'Unknown error') : undefined}>
+              {updateLine}
+              {update.state === 'failed' ? <> · <button type="button" className="link-button" onClick={checkUpdates}>Retry</button></> : null}
+            </div>
           </div>
         </div>
       </aside>

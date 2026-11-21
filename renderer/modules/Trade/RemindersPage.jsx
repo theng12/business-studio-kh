@@ -214,6 +214,7 @@ export function TradeReminders() {
         <EmptyState
           title="Nothing is due."
           body="When a drawdown nears its maturity date, a fee is about to post or an overdraft reaches month-end, it appears here."
+          action={canManage ? <Button variant="primary" onClick={() => setEditingRule({})}>+ New rule</Button> : null}
         />
       ) : null}
 

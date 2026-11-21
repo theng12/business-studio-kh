@@ -1,5 +1,14 @@
 # What's new
 
+## 0.1.121 — 2026-11-21
+
+- FIX — The photo module is called Photos & Media again. Renaming the app had also renamed this module, so "Business Studio" showed up as one of its own modules on Home.
+- FIX — A failed update check now reads "Update check failed" with a Retry button beside it, instead of a long sentence that stayed on screen until the app restarted.
+- FIX — Purchase orders open from the PO number, which is now a link, and Delete is a quiet button instead of the loudest thing on every row. Dates no longer wrap onto two lines.
+- FIX — The history page names what changed. Rows that showed a long internal id now read "HR Settings", "FX Rate" and so on.
+- FIX — Empty Trade Finance pages offer the next step inside the box: Add a bank, Go to Facilities, or New rule.
+- Internal — Search boxes on Purchase Orders and History no longer cut off their own placeholder text.
+
 ## 0.1.120 — 2026-11-21
 
 - NEW — The app is now Business Studio KH. Everything works as before: the same data, the same people and permissions, the same updates. The first time it opens after updating, your settings, AI key and server connection move across by themselves.

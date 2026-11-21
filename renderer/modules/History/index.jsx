@@ -98,6 +98,15 @@ function actionLabel(action) { return ACTION_LABELS[action] ?? action; }
 // Sentence-case names for the entity chip (it used to read PROD / IMG).
 const KIND_LABELS = { product: 'Product', image: 'Image', brand: 'Brand', category: 'Category' };
 
+// Every other audited kind (hr_settings, fx_rate, fuel_fill …) has no label of
+// its own. Title-case the key — "HR Settings", never "hr_settings".
+const TYPE_WORDS = { i: 'I', hr: 'HR', fx: 'FX', po: 'PO', gl: 'GL', khr: 'KHR', usd: 'USD' };
+function typeLabel(et) {
+  return String(et).split(/[_-]+/).filter(Boolean)
+    .map((w) => TYPE_WORDS[w] || w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
 export function History() {
   const attributionUsers = useAppStore((s) => s.attributionUsers);
   const allProducts = useAppStore((s) => s.allProducts);
@@ -257,7 +266,11 @@ export function History() {
       const c = categoryById.get(entityId);
       return { kind: 'category', text: c?.name || (recorded ? `${recorded} (deleted)` : '(deleted category)'), subtitle: null };
     }
-    return { kind: et, text: String(entityId ?? ''), subtitle: null };
+    // Any other kind (supplier, purchase order, expense …) has no name in the
+    // store: show what the audit row recorded, never the raw entity id.
+    const recordedName = entry.before?.name || entry.after?.name
+      || entry.after?.poNumber || entry.after?.reference || entry.after?.number || null;
+    return { kind: et, text: recordedName || (KIND_LABELS[et] || typeLabel(et)), subtitle: null };
   }
 
   function userLabel(entry) {
@@ -358,7 +371,7 @@ export function History() {
           className="history-page__search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search SKU, name or a changed value"
+          placeholder="Search SKU, name or value"
           aria-label="Search history"
         />
         {anyFilter || search ? (

@@ -326,7 +326,7 @@ test('PurchaseOrders keeps B supplier choices and rows when A and older searches
     await hook.settle(Component); await delay(210);
     supplierCalls.find((call) => call.companyId === 'company-b').gate.resolve([{ id: 'supplier-b', name: 'B supplier', defaultCurrency: 'USD', defaultIncoterm: 'FOB' }]);
     await flush(); await hook.settle(Component);
-    input(hook.getOutput(), (props) => props.placeholder === 'Search PO number, supplier, SKU or product…').props.onChange({ target: { value: 'B' } });
+    input(hook.getOutput(), (props) => props.placeholder === 'Search PO, supplier or SKU…').props.onChange({ target: { value: 'B' } });
     await hook.settle(Component); await delay(210);
     listCalls.find((call) => call.companyId === 'company-b' && call.query.search === '').gate.reject(new Error('obsolete search failed'));
     await flush(); await hook.settle(Component);

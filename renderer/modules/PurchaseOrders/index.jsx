@@ -300,7 +300,7 @@ export function PurchaseOrders() {
                 type="search"
                 className="search-input"
                 aria-label="Search purchase orders"
-                placeholder="Search PO number, supplier, SKU or product…"
+                placeholder="Search PO, supplier or SKU…"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(0); }}
               />
@@ -364,7 +364,12 @@ export function PurchaseOrders() {
                       className="is-clickable"
                       onClick={() => setOpenPoId(po.id)}
                     >
-                      <td className="po-list__number"><strong>{po.poNumber || '(no number)'}</strong></td>
+                      <td className="po-list__number">
+                        <button type="button" className="link-button" title="Open this purchase order"
+                          onClick={(e) => { e.stopPropagation(); setOpenPoId(po.id); }}>
+                          <strong>{po.poNumber || '(no number)'}</strong>
+                        </button>
+                      </td>
                       <td>{po.supplierName || '—'}</td>
                       <td><Badge tone={STATUS_TONE(po.status)}>{STATUS_LABEL(po.status)}</Badge></td>
                       <td>
@@ -376,11 +381,12 @@ export function PurchaseOrders() {
                       <td>{po.currency || '—'}</td>
                       <td className="is-num">{po.linesCount || 0}</td>
                       <td className="is-num">{fmtUsd(po.totalValueUsd + (po.totalComponentsUsd || 0))}</td>
-                      <td>{formatDate(po.orderedAt)}</td>
-                      <td>{formatDate(po.receivedAt)}</td>
+                      <td className="po-list__date">{formatDate(po.orderedAt)}</td>
+                      <td className="po-list__date">{formatDate(po.receivedAt)}</td>
                       {canManage ? (
                         <td className="is-actions" onClick={(e) => e.stopPropagation()}>
-                          <Button variant="danger" size="sm" onClick={() => handleRemove(po)}>Delete</Button>
+                          <Button variant="ghost" size="sm" aria-label={`Delete ${po.poNumber || 'purchase order'}`}
+                            title="Delete this purchase order" onClick={() => handleRemove(po)}>Delete</Button>
                         </td>
                       ) : null}
                     </tr>

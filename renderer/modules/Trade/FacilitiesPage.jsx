@@ -421,7 +421,9 @@ export function TradeFacilities() {
         actions={canManage ? (
           <div className="tf-actions">
             <Button onClick={() => setBankOpen(true)} data-testid="trade-add-bank">Add bank</Button>
-            <Button variant="primary" onClick={() => setNewOpen(true)} data-testid="trade-facility-new" disabled={!activeBanks.length}>+ New facility</Button>
+            {/* A dead primary in the header reads as broken; with no bank the
+                empty card carries the one action. */}
+            {activeBanks.length ? <Button variant="primary" onClick={() => setNewOpen(true)} data-testid="trade-facility-new">+ New facility</Button> : null}
           </div>
         ) : null}
       />
@@ -448,7 +450,9 @@ export function TradeFacilities() {
         <EmptyState
           title="No facilities yet."
           body="Record each bank's credit line — its limit, rate and how interest is charged."
-          action={canManage && activeBanks.length ? <Button variant="primary" onClick={() => setNewOpen(true)}>+ New facility</Button> : null}
+          action={!canManage ? null : activeBanks.length
+            ? <Button variant="primary" onClick={() => setNewOpen(true)}>+ New facility</Button>
+            : <Button variant="primary" onClick={() => setBankOpen(true)}>Add a bank</Button>}
         />
       ) : rows.length ? (
         <div className="data-table-wrap">

@@ -319,6 +319,7 @@ function Repayments({ row, currency, today, onChanged }) {
 
 export function TradeDrawdowns() {
   const activeCompanyId = useAppStore((s) => s.activeCompanyId);
+  const setActiveModule = useAppStore((s) => s.setActiveModule);
   const context = useTradeContext();
   const tick = useTradeTick();
   const [editing, setEditing] = useState(null); // { id } | { isNew: true } | null
@@ -419,7 +420,9 @@ export function TradeDrawdowns() {
         <EmptyState
           title={filters.q || filters.facilityId ? 'No drawdowns match these filters.' : 'No drawdowns yet.'}
           body="Record one when a facility is used — a TR, an RC draw. Its maturity date is what the reminders watch."
-          action={canManage && context.facilities.length ? <Button variant="primary" onClick={() => setEditing({ isNew: true })}>+ New drawdown</Button> : null}
+          action={!canManage ? null : context.facilities.length
+            ? <Button variant="primary" onClick={() => setEditing({ isNew: true })}>+ New drawdown</Button>
+            : <Button onClick={() => setActiveModule('tradefacilities')}>Go to Facilities</Button>}
         />
       ) : (
         <div className="data-table-wrap">
