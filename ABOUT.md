@@ -5,10 +5,10 @@ keeps product photos, labels, catalogs, purchasing, fuel, fixed assets and peopl
 records in one place, with role-based access for the people who use them.
 
 It was called **Business Studio KH** until 0.1.120 (and Business Studio KH before that).
-0.1.121 moved the app's identifier to `app.businessstudiokh.desktop` (it was
-`com.terranash.mediastudiokh`), matching the other KH apps; the updater feed id
-stays `media-studio`, which is the key the Updater matches by. Older backups keep
-their old names and still restore.
+Those were renames: the app's identifier (`com.terranash.mediastudiokh`) and its
+updater feed id (`media-studio`) deliberately did not change, because the updater
+matches them to update an installed copy. Older backups keep their old names and
+still restore.
 
 ## What it does
 

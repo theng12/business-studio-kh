@@ -4,11 +4,8 @@
 
 Builds sign with the shared **KH Studio Local Signing** identity in this build Mac's login
 Keychain (the same certificate Library Studio KH uses), so the app's designated requirement —
-`identifier "app.businessstudiokh.desktop" and certificate leaf = H"b8f43e85…"` — stays the same
-across versions and macOS permissions survive updates. 0.1.121 changed the identifier from
-`com.terranash.mediastudiokh` at the owner's decision (the family convention, and because a
-`terranash` string in the feed blocks the public page rebuild); that one release re-asks macOS
-permissions once, as the certificate change did in 0.1.115. The certificate is self-signed and
+`identifier "com.terranash.mediastudiokh" and certificate leaf = H"b8f43e85…"` — stays the same
+across versions and macOS permissions survive updates. The certificate is self-signed and
 untrusted on purpose: never copy, export, recreate or change its trust; stop and leave any
 password, key-access or trust prompt to the owner.
 
@@ -30,8 +27,8 @@ password, key-access or trust prompt to the owner.
 Run `npm ci` once, then `npm run dist:updater`. This builds one arm64 app,
 signs it with the shared identity above and strictly verifies the app (refusing one not signed
 by that identity), and creates and ad-hoc signs
-`dist/Business Studio KH-<package-version>.dmg` (arm64; filename standard verified 2026-11-03). Bundle ID is
-`app.businessstudiokh.desktop`. The script checks the packaged ID and version,
+`dist/Business Studio KH-<package-version>.dmg` (arm64; filename standard verified 2026-11-03). Bundle ID stays
+`com.terranash.mediastudiokh`. The script checks the packaged ID and version,
 verifies DMG integrity and restores host native bindings. Building never prunes rollback installers.
 
 ### Retention after installed acceptance (2026-11-10)

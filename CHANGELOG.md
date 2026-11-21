@@ -1,10 +1,5 @@
 # What's new
 
-## 0.1.121 — 2026-11-21
-
-- NOTE — The app's system identifier changed to `app.businessstudiokh.desktop`, the same family pattern the other KH apps use. Nothing you see changes and your data stays put. Because macOS treats a changed identifier as a new app, it will ask for camera and other permissions once more after this update, and a Mac that still runs the old build needs one install of this one; after that updates carry on by themselves.
-- Internal — The Updater installs only an app whose identifier matches the copy already on the Mac, so the old build refuses this one with a plain message instead of installing something wrong. The updater counts on the new identifier from here on.
-
 ## 0.1.120 — 2026-11-21
 
 - NEW — The app is now Business Studio KH. Everything works as before: the same data, the same people and permissions, the same updates. The first time it opens after updating, your settings, AI key and server connection move across by themselves.

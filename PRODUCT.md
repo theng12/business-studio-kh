@@ -45,7 +45,7 @@ A business suite that keeps the business's data and images on its own Mac, and k
 
 ## Brand Commitments
 
-- Name: Business Studio KH. Stable bundle identity `app.businessstudiokh.desktop`, signed with the shared KH Studio Local Signing identity.
+- Name: Business Studio KH. Stable bundle identity `com.terranash.mediastudiokh`, signed with the shared KH Studio Local Signing identity.
 - Voice: plain, direct English; no marketing language, no emoji in UI copy; errors state the real reason.
 - The app's existing light/dark visual identity, tokens and components are the incumbent world; preserve them unless the owner asks for a new one.
 

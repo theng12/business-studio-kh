@@ -1,7 +1,7 @@
 {
   "name": "business-studio-kh",
   "private": true,
-  "version": "0.1.121",
+  "version": "0.1.120",
   "description": "Business Studio KH — product images, labels, and catalogs in one workspace",
   "author": "TerraNash",
   "main": "dist-electron/main/index.js",
@@ -58,7 +58,7 @@
     "vite-plugin-electron-renderer": "^1.0.0"
   },
   "build": {
-    "appId": "app.businessstudiokh.desktop",
+    "appId": "com.terranash.mediastudiokh",
     "productName": "Business Studio KH",
     "afterPack": "./scripts/after-pack.js",
     "asar": true,

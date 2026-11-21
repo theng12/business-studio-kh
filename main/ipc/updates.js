@@ -23,7 +23,7 @@ function installedVersion() {
 function check() {
   return checkForUpdate({
     homeDir: os.homedir(),
-    bundleID: 'app.businessstudiokh.desktop',
+    bundleID: 'com.terranash.mediastudiokh',
     installedVersion: installedVersion(),
     fetchImpl: (url) => fetch(url, { signal: AbortSignal.timeout(8000) }),
   });
