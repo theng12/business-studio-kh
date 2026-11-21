@@ -66,9 +66,15 @@ notification channels (Phase C is in-app), PWA/phone pages, and any GL posting (
 - **B — overdraft, reconciliation, fees (implemented 2026-11-17):** movement ledger with a running balance
   on the facility form, month-end capitalisation that compounds a catch-up, bank-actual reconciliation with
   a variance status, fee list and scheduled recurring fees that catch up every missed period.
-- **C — reminders:** rules, snooze, log, Home badge, daily pass, start-up notice (in-app only in v1).
+- **C — reminders (implemented 2026-11-21):** rules (global and per facility), snooze, a dedupe log, the
+  Reminders page, the Home tile badge, a once-per-session Home notice and a daily background pass
+  (`main/tradeScheduler.js`). In-app only: no email, Telegram or SMS. The same pass posts month-end
+  capitalisation and due scheduled fees only for a company that switched auto-post on (a switch on the
+  Reminders page; off by default). Files: `tf_reminder_rules`, `tf_reminder_log`, `tf_settings` and
+  `tf_drawdowns.snooze_until` (all additive), `tradeMath.chooseReminderRule`, the `trade.reminders.*` and
+  `trade.settings.*` channels, `renderer/modules/Trade/RemindersPage.jsx`.
 - **D — purchase-order financing:** link a drawdown to a PO and show its financing cost. Purchasing screens
-  are not reshaped.
+  are not reshaped. (The column and the link ship with Phase A/B; the financing figure is on Reports.)
 
 ## 6. Accepted limits
 
@@ -81,7 +87,8 @@ notification channels (Phase C is in-app), PWA/phone pages, and any GL posting (
   month was charged — the bank's own figure then reconciles to a real difference, not a self-made one.
 - No GL posting: trade-finance liabilities do not appear in the Finance balance sheet. Accepted by the
   Developer as written; adding a liability ledger is its own decision, not a quiet change.
-- Reminders are Phase C; until then the Reports page's cash-flow forecast is the due list.
+- Reminders only appear inside Media. The Reminders page and the Home badge are computed live, so nothing
+  is missed while the app is closed; the log records what was surfaced and is the duplicate guard.
 
 ## 7. Proving checks
 
@@ -91,5 +98,7 @@ validator coverage, preload surface, additive schema) and `test/tradeFinanceNati
 over-repayment refused, posting period, clientUuid replay, reference uniqueness, company isolation,
 derived reports) and `test/tradeFinancePhaseBNative.test.js` (movements and running balance, a drawdown
 refused on a balance facility, capitalisation posted once and compounding, ours equal to the charge,
-variance status, fee idempotency, recurring catch-up). The guarded native files run under
-`npm run test:native`.
+variance status, fee idempotency, recurring catch-up) and `test/tradeRemindersNative.test.js` (default
+rules seeded once, most-urgent lead chosen, overdue daily dedupe, pre-due logged once, snooze keeps a
+reminder out of the log, per-facility override, auto-post off by default, company isolation). The guarded
+native files run under `npm run test:native`.

@@ -175,6 +175,26 @@ function ladderBucket(daysTo) {
 
 const LADDER_BUCKETS = ['overdue', '0–30', '31–60', '61–90', '90+'];
 
+/**
+ * Which reminder rule fires for a drawdown `daysTo` days from maturity.
+ * `rules` are `{ leadDays, enabled }`. Before maturity the MOST URGENT crossed
+ * lead time wins (3 days out with 7/3/1 rules picks 3, never 7 and 3 both);
+ * once overdue only the lead-0 rule applies, and it fires every day.
+ * Returns `{ leadDays, daily }` or null.
+ */
+function chooseReminderRule(daysTo, rules = []) {
+  if (daysTo == null || !Number.isFinite(Number(daysTo))) return null;
+  const active = rules.filter((r) => r.enabled !== 0 && Number.isFinite(Number(r.leadDays)));
+  if (daysTo < 0) {
+    const overdue = active.find((r) => Number(r.leadDays) === 0);
+    return overdue ? { leadDays: 0, daily: true } : null;
+  }
+  const reached = active.filter((r) => Number(r.leadDays) > 0 && Number(r.leadDays) >= daysTo);
+  if (!reached.length) return null;
+  const best = reached.reduce((a, b) => (Number(b.leadDays) < Number(a.leadDays) ? b : a));
+  return { leadDays: Number(best.leadDays), daily: false };
+}
+
 module.exports = {
   MS_PER_DAY,
   PERIODS_PER_YEAR,
@@ -192,4 +212,5 @@ module.exports = {
   utilisation,
   ladderBucket,
   LADDER_BUCKETS,
+  chooseReminderRule,
 };

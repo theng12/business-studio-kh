@@ -207,7 +207,7 @@ const CHANNEL_RULES = [
   [/^finance:/,                                         ['finance.record', 'finance.view']],
   // Trade Finance: reads are trade.view, every write trade.manage. The module
   // is opt-in, so an account with neither cap never sees its channels or tile.
-  [/^trade:(context|facilities:(list|get)|drawdowns:(list|get)|interest:(list|preview)|reports:summary|movements:list|capitalisation:preview|reconciliation:list|fees:list|recurring:list)$/, 'trade.view'],
+  [/^trade:(context|facilities:(list|get)|drawdowns:(list|get)|interest:(list|preview)|reports:summary|movements:list|capitalisation:preview|reconciliation:list|fees:list|recurring:list|reminders:(due|rules|log)|settings:get)$/, 'trade.view'],
   [/^trade:/,                                           'trade.manage'],
   [/^fx:setShared$/,                                    ADMIN_ONLY],
   [/^ledger:(lockPeriod|unlockPeriod)$/,                ADMIN_ONLY],

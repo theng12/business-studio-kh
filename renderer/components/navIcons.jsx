@@ -531,6 +531,17 @@ function IconInterest({ className }) {
   );
 }
 
+// Trade Finance — reminders: a bell.
+function IconBell({ className }) {
+  return (
+    <svg className={className} width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+      <path d="M4.5 7.8a4.5 4.5 0 0 1 9 0c0 2.6.6 3.7 1.3 4.5H3.2c.7-.8 1.3-1.9 1.3-4.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M7.4 14.4a1.7 1.7 0 0 0 3.2 0" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M9 2.4v1.1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export const NAV_ICONS = {
   home: IconHome,
   products: IconProducts,
@@ -569,6 +580,7 @@ export const NAV_ICONS = {
   bank: IconBank,
   loan: IconLoan,
   interest: IconInterest,
+  bell: IconBell,
   staff: IconStaff,
   attendance: IconAttendance,
   attreview: IconAttReview,

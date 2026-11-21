@@ -204,6 +204,26 @@ const TRADE_VALIDATORS = {
     })(a.patch);
   }),
   'trade:recurring:postDue': noArgs,
+
+  /* Phase C */
+  'trade:reminders:due': noArgs,
+  'trade:reminders:rules': noArgs,
+  'trade:reminders:rules:save': shape(['id', 'facilityId', 'leadDays', 'label', 'enabled'], (a) => {
+    if (a.id != null && !id(a.id)) return 'id must be an id';
+    if (a.facilityId != null && a.facilityId !== '' && !id(a.facilityId)) return 'facilityId must be an id';
+    if (!Number.isSafeInteger(a.leadDays) || a.leadDays < 0 || a.leadDays > 365) return 'leadDays must be a whole number from 0 to 365';
+    if (!text(a.label, 120)) return 'label must be text';
+    if (a.enabled != null && typeof a.enabled !== 'boolean') return 'enabled must be true or false';
+    return true;
+  }),
+  'trade:reminders:snooze': shape(['id', 'until'], (a) => {
+    if (!id(a.id)) return 'id is required';
+    return dateOrBlank(a.until) || 'until must look like 2026-03-12';
+  }),
+  'trade:reminders:log': shape(['limit'], (a) => a.limit == null || (Number.isSafeInteger(a.limit) && a.limit > 0) || 'limit must be a positive whole number', true),
+  'trade:settings:get': noArgs,
+  'trade:settings:save': shape(['autoPost'], (a) =>
+    a.autoPost == null || typeof a.autoPost === 'boolean' || 'autoPost must be true or false', true),
 };
 
 module.exports = { TRADE_VALIDATORS };

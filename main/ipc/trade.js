@@ -189,6 +189,30 @@ function register({ expose }) {
     return rows;
   });
 
+  /* Phase C: reminders and the auto-post switch */
+  expose('trade:reminders:due', () => ({ asOf: todayPhnomPenh(), reminders: trade.dueReminders(companyForView()) }));
+  expose('trade:reminders:rules', () => trade.listReminderRules(companyForView()));
+  expose('trade:reminders:rules:save', (input = {}) => {
+    const companyId = companyForManage();
+    const row = trade.saveReminderRule(companyId, input, getCallerUserId());
+    emitTradeChange('reminder_rule', 'save', row.id, companyId);
+    return row;
+  });
+  expose('trade:reminders:snooze', ({ id, until } = {}) => {
+    const companyId = companyForManage();
+    const row = trade.snoozeDrawdown(companyId, id, until || null, getCallerUserId());
+    emitTradeChange('drawdown', 'snooze', id, companyId);
+    return row;
+  });
+  expose('trade:reminders:log', ({ limit } = {}) => trade.listReminderLog(companyForView(), limit));
+  expose('trade:settings:get', () => trade.getSettings(companyForView()));
+  expose('trade:settings:save', (patch = {}) => {
+    const companyId = companyForManage();
+    const row = trade.saveSettings(companyId, patch || {}, getCallerUserId());
+    emitTradeChange('settings', 'update', null, companyId);
+    return row;
+  });
+
   /* reports */
   expose('trade:reports:summary', () => trade.reportSummary(companyForView()));
 }

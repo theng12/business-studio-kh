@@ -1,5 +1,12 @@
 # What's new
 
+## 0.1.119 — 2026-11-21
+
+- NEW — Trade Finance now reminds you. A Reminders page lists every loan maturity, overdraft month-end and scheduled fee that is due, with rules for how many days before to say so, a per-facility override, snooze and a log so the same reminder is not repeated. The Trade Finance tile shows a count and Home says it once when the app opens. Reminders stay inside the app; nothing is emailed or messaged.
+- NEW — Month-end overdraft interest and due scheduled fees can post themselves. It is off by default and switched on under Trade Finance → Reminders → Month-end.
+- UPDATE — Trade Finance now covers everything the separate banking app did: credit lines, drawdowns and part-repayments, overdraft running balances, the interest engine with month-end capitalisation and bank reconciliation, commitment and scheduled fees, maturity reminders, trade-finance reports and the cost of financing per purchase order. It stays off until an owner grants its two permissions in Settings → Roles.
+- Internal — New tables `tf_reminder_rules`, `tf_reminder_log` and `tf_settings`, plus `tf_drawdowns.snooze_until`; all additive, no schema version bump. The background pass runs a minute after start and every 12 hours.
+
 ## 0.1.118 — 2026-11-20
 
 - FIX — A single image generation is no longer cut off after 30 seconds. Long jobs (several images at once, high quality) were being aborted while OpenAI was still working on them and shown as failed.

@@ -20,6 +20,12 @@ records in one place, with role-based access for the people who use them.
 - Includes HR2 payroll, configurable staff loans and bilingual payslips; statutory
   estimates need professional confirmation and financial permissions are separate
   from HR access.
+- Tracks what the business owes lenders in an optional Trade Finance module: bank
+  credit lines, drawdowns and part-repayments, overdraft running balances, an
+  interest engine with month-end capitalisation and bank-actual reconciliation,
+  commitment and scheduled fees, maturity reminders inside the app, and
+  trade-finance reports including cost of financing per purchase order. The
+  module is off until an owner grants its permissions.
 - Serves several Macs in server/client mode with per-user tokens and live updates,
   and a phone browser viewer at port 13180 for catalog browsing and overlays.
 - Keeps an audit history, backups, roles and a 30-day Recently deleted area;
@@ -45,5 +51,5 @@ data and credentials stay in the app's own data folder.
 
 ## Current version
 
-0.1.118, from the `version` field in `package.json`; the newest `CHANGELOG.md` entry
+0.1.119, from the `version` field in `package.json`; the newest `CHANGELOG.md` entry
 agrees. The README still names 0.1.99.

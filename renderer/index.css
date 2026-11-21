@@ -13148,6 +13148,14 @@ tr.is-retired { opacity: 0.6; }
 .tf-meter__fill { height: 100%; background: var(--c-brand); border-radius: 999px; }
 .tf-meter__label { font-size: var(--fs-sm); color: var(--c-text-muted); min-width: 34px; text-align: right; }
 .tf-archived-toggle { margin-top: var(--s-4); }
+/* Home start-up notice for trade-finance reminders (Phase C). */
+.trade-notice {
+  display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap;
+  margin-bottom: var(--s-5); padding: var(--s-3) var(--s-4);
+  background: var(--c-warning-bg, var(--c-hover-bg)); border: 1px solid var(--c-border);
+  border-radius: var(--r-md, 8px);
+}
+.trade-notice > span { flex: 1 1 auto; }
 .tf-editor-actions { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-4); }
 .tf-repayment-form {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto;

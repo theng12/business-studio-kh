@@ -207,7 +207,55 @@ function ensureTradeFinanceSchema(db) {
       updated_by_user_id  TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_tf_recurring_company ON tf_recurring_fees(company_id, next_date);
+
+    /* Phase C: reminders. A rule is a lead time in days before a maturity;
+       lead_days = 0 is the overdue rule that fires daily. facility_id NULL is
+       a global rule; any rule on a facility replaces the global set for it.
+       Rules are disabled, never deleted — like everything else here. */
+    CREATE TABLE IF NOT EXISTS tf_reminder_rules (
+      id                  TEXT PRIMARY KEY,
+      company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      facility_id         TEXT REFERENCES tf_facilities(id),
+      lead_days           INTEGER NOT NULL CHECK (lead_days >= 0),
+      label               TEXT NOT NULL,
+      enabled             INTEGER NOT NULL DEFAULT 1,
+      created_at          INTEGER NOT NULL,
+      updated_at          INTEGER NOT NULL,
+      updated_by_user_id  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_tf_reminder_rules_company ON tf_reminder_rules(company_id, facility_id);
+
+    /* What the app has already surfaced. A pre-due rule logs once; the overdue
+       rule logs once a day. The unique index is the dedupe guard. */
+    CREATE TABLE IF NOT EXISTS tf_reminder_log (
+      id                  TEXT PRIMARY KEY,
+      company_id          TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      subject_kind        TEXT NOT NULL CHECK (subject_kind IN ('drawdown', 'facility', 'recurring_fee')),
+      subject_id          TEXT NOT NULL,
+      rule_key            TEXT NOT NULL,
+      send_date           TEXT NOT NULL,
+      status              TEXT NOT NULL DEFAULT 'shown',
+      detail              TEXT,
+      sent_at             INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tf_reminder_log
+      ON tf_reminder_log(company_id, subject_kind, subject_id, rule_key, send_date);
+    CREATE INDEX IF NOT EXISTS idx_tf_reminder_log_company ON tf_reminder_log(company_id, sent_at);
+
+    /* Phase C: per-company switch for the background money postings (month-end
+       capitalisation, recurring fees). Off by default — an auto-action is a
+       deliberate switch (owner, 2026-11-13). The reminder pass always runs. */
+    CREATE TABLE IF NOT EXISTS tf_settings (
+      company_id          TEXT PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+      auto_post           INTEGER NOT NULL DEFAULT 0,
+      updated_at          INTEGER NOT NULL,
+      updated_by_user_id  TEXT
+    );
   `);
+
+  // Phase C: a drawdown's reminders can be snoozed until a date.
+  const { addColumnIfMissing } = require('./index');
+  addColumnIfMissing(db, 'tf_drawdowns', 'snooze_until', 'TEXT');
 }
 
 module.exports = { ensureTradeFinanceSchema };

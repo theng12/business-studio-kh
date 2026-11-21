@@ -273,13 +273,23 @@ export const APP_MODULES = [
     // than broken-looking. Both caps are granted per role in Settings → Roles.
     id: 'trade',
     name: 'Trade Finance',
-    description: 'Bank credit lines, drawdowns, interest and maturity reports.',
+    description: 'Credit lines, drawdowns, interest and maturity reminders.',
     icon: 'bank',
+    badge: {
+      caps: ['trade.view', 'trade.manage'],
+      async load(api) {
+        const res = await api.trade.reminders.due();
+        return Array.isArray(res?.reminders) ? res.reminders.filter((r) => !r.snoozed).length : 0;
+      },
+      label: (n) => `${n} due`,
+      tone: 'amber',
+    },
     sections: [{
       pages: [
         { id: 'tradefacilities', name: 'Facilities', icon: 'bank', caps: ['trade.view', 'trade.manage'] },
         { id: 'tradedrawdowns', name: 'Drawdowns', icon: 'loan', caps: ['trade.view', 'trade.manage'] },
         { id: 'tradeinterest', name: 'Interest', icon: 'interest', caps: ['trade.view', 'trade.manage'] },
+        { id: 'tradereminders', name: 'Reminders', icon: 'bell', caps: ['trade.view', 'trade.manage'] },
         { id: 'tradereports', name: 'Reports', icon: 'assetreport', caps: ['trade.view', 'trade.manage'] },
       ],
     }],

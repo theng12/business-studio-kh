@@ -26,13 +26,14 @@ function load(rel) {
 }
 
 const reg = load('renderer/lib/modules.js');
-const PAGE_IDS = ['tradefacilities', 'tradedrawdowns', 'tradeinterest', 'tradereports'];
+const PAGE_IDS = ['tradefacilities', 'tradedrawdowns', 'tradeinterest', 'tradereminders', 'tradereports'];
 
-test('Trade Finance is one opt-in module with four built pages', () => {
+test('Trade Finance is one opt-in module with five built pages', () => {
   const mod = reg.APP_MODULES.find((m) => m.id === 'trade');
   assert.ok(mod, 'the trade module exists');
   assert.equal(mod.name, 'Trade Finance');
   assert.equal(mod.icon, 'bank');
+  assert.equal(typeof mod.badge?.load, 'function', 'the tile badge counts due reminders');
   assert.deepEqual(reg.allPages().filter((p) => p.moduleId === 'trade').map((p) => p.id), PAGE_IDS);
   for (const page of reg.allPages().filter((p) => p.moduleId === 'trade')) {
     assert.deepEqual(page.caps, ['trade.view', 'trade.manage'], `${page.id} is gated on the trade caps`);
@@ -57,7 +58,7 @@ test('the caps are opt-in and resolve reads to view, writes to manage', () => {
   assert.match(caps, /key: 'trade\.view'/);
   assert.match(caps, /key: 'trade\.manage'/);
   assert.match(caps, /OPT_IN_CAPABILITIES = new Set\(\[[^\]]*'trade\.view', 'trade\.manage'/);
-  assert.match(caps, /\[\/\^trade:\(context\|facilities:\(list\|get\)\|drawdowns:\(list\|get\)\|interest:\(list\|preview\)\|reports:summary\|movements:list\|capitalisation:preview\|reconciliation:list\|fees:list\|recurring:list\)\$\/, 'trade\.view'\]/);
+  assert.match(caps, /\[\/\^trade:\(context\|facilities:\(list\|get\)\|drawdowns:\(list\|get\)\|interest:\(list\|preview\)\|reports:summary\|movements:list\|capitalisation:preview\|reconciliation:list\|fees:list\|recurring:list\|reminders:\(due\|rules\|log\)\|settings:get\)\$\/, 'trade\.view'\]/);
   assert.match(caps, /\[\/\^trade:\/, +'trade\.manage'\]/);
 });
 
@@ -76,11 +77,12 @@ test('preload exposes the same surface the screens use', () => {
   for (const call of [
     "invoke('trade:context')", "invoke('trade:facilities:list'", "invoke('trade:drawdowns:list'",
     "invoke('trade:repayments:add'", "invoke('trade:interest:preview')", "invoke('trade:reports:summary')",
+    "invoke('trade:reminders:due')", "invoke('trade:reminders:rules:save', input)", "invoke('trade:reminders:snooze', { id, until })",
     "'trade:changed'",
   ]) {
     assert.ok(preload.includes(call), `preload has ${call}`);
   }
-  for (const file of ['FacilitiesPage.jsx', 'DrawdownsPage.jsx', 'InterestPage.jsx', 'ReportsPage.jsx']) {
+  for (const file of ['FacilitiesPage.jsx', 'DrawdownsPage.jsx', 'InterestPage.jsx', 'RemindersPage.jsx', 'ReportsPage.jsx']) {
     const src = read(`renderer/modules/Trade/${file}`);
     assert.ok(src.includes('export function Trade'), `${file} exports a screen`);
   }

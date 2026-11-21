@@ -19,7 +19,7 @@ const {
 const {
   calendarDaysBetween, daysUntil, accruedMinor, outstandingMinor,
   commitmentPerPeriodMinor, utilisation, ladderBucket, LADDER_BUCKETS, interestMinor,
-  lastDayOfMonth, addPeriod,
+  lastDayOfMonth, addPeriod, chooseReminderRule,
 } = require('../util/tradeMath');
 
 const KINDS = ['OD', 'RC', 'TR', 'Other'];
@@ -124,6 +124,7 @@ function rowToDrawdown(r) {
     rate: r.rate, reference: r.reference ?? null,
     settleCurrency: r.settle_currency ?? null, fxRate: r.fx_rate ?? null,
     purchaseOrderId: r.purchase_order_id ?? null, note: r.note ?? null,
+    snoozeUntil: r.snooze_until ?? null,
     status: r.status, createdAt: r.created_at, updatedAt: r.updated_at,
   };
 }
@@ -1245,6 +1246,249 @@ function feeTotals(companyId, year) {
   return { ytd, byBank };
 }
 
+/* ── Phase C: reminders ─────────────────────────────────────────────── */
+
+/* A company with no rules of its own gets this set. Seeded as real rows so
+   every one can be edited or switched off, never a hidden default. */
+const DEFAULT_REMINDER_RULES = [
+  { leadDays: 7, label: 'One week before maturity' },
+  { leadDays: 3, label: 'Three days before maturity' },
+  { leadDays: 1, label: 'One day before maturity' },
+  { leadDays: 0, label: 'Overdue — remind every day' },
+];
+
+const OD_LEAD_DAYS = 3;      // heads-up before month-end interest is capitalised
+const RECFEE_LEAD_DAYS = 3;  // heads-up before a scheduled fee posts
+
+function rowToRule(r) {
+  if (!r) return null;
+  return {
+    id: r.id, companyId: r.company_id, facilityId: r.facility_id ?? null,
+    facilityName: r.facility_name ?? null, leadDays: r.lead_days, label: r.label,
+    enabled: !!r.enabled, createdAt: r.created_at, updatedAt: r.updated_at,
+  };
+}
+
+function listReminderRules(companyId) {
+  return getDb().prepare(`
+    SELECT r.*, f.name AS facility_name
+    FROM tf_reminder_rules r LEFT JOIN tf_facilities f ON f.id = r.facility_id
+    WHERE r.company_id = ?
+    ORDER BY (r.facility_id IS NOT NULL), r.lead_days DESC`).all(companyId).map(rowToRule);
+}
+
+/** Seed the default global rules once — idempotent, safe to call every pass. */
+function ensureReminderRules(companyId) {
+  const db = getDb();
+  const n = db.prepare('SELECT COUNT(*) AS n FROM tf_reminder_rules WHERE company_id = ?').get(companyId).n;
+  if (n) return listReminderRules(companyId);
+  const now = Date.now();
+  const insert = db.prepare(`INSERT INTO tf_reminder_rules
+    (id, company_id, facility_id, lead_days, label, enabled, created_at, updated_at, updated_by_user_id)
+    VALUES (?,?,NULL,?,?,1,?,?,NULL)`);
+  db.transaction(() => {
+    for (const r of DEFAULT_REMINDER_RULES) insert.run(randomUUID(), companyId, r.leadDays, r.label, now, now);
+  })();
+  return listReminderRules(companyId);
+}
+
+/** Create a rule, or edit one by id. A rule is switched off, never deleted. */
+function saveReminderRule(companyId, input = {}, userId = null) {
+  const leadDays = Number(input.leadDays);
+  if (!Number.isSafeInteger(leadDays) || leadDays < 0 || leadDays > 365) {
+    throw badRequest('Lead days must be a whole number from 0 to 365');
+  }
+  const label = str(input.label, 120) || (leadDays === 0 ? 'Overdue — remind every day' : `${leadDays} day${leadDays === 1 ? '' : 's'} before maturity`);
+  const facilityId = input.facilityId || null;
+  if (facilityId && !getDb().prepare('SELECT 1 FROM tf_facilities WHERE id = ? AND company_id = ?').get(facilityId, companyId)) {
+    throw notFound('Facility');
+  }
+  const enabled = input.enabled === false ? 0 : 1;
+  const now = Date.now();
+  const existing = input.id
+    ? getDb().prepare('SELECT * FROM tf_reminder_rules WHERE id = ? AND company_id = ?').get(input.id, companyId)
+    : null;
+  if (input.id && !existing) throw notFound('Reminder rule');
+  if (existing) {
+    getDb().prepare(`UPDATE tf_reminder_rules SET facility_id = ?, lead_days = ?, label = ?, enabled = ?,
+        updated_at = ?, updated_by_user_id = ? WHERE id = ? AND company_id = ?`)
+      .run(facilityId, leadDays, label, enabled, now, userId, existing.id, companyId);
+    audit('tf_reminder_rule', existing.id, 'update', { before: rowToRule(existing), after: { leadDays, label, enabled } });
+    return rowToRule(getDb().prepare('SELECT * FROM tf_reminder_rules WHERE id = ?').get(existing.id));
+  }
+  const id = randomUUID();
+  getDb().prepare(`INSERT INTO tf_reminder_rules
+    (id, company_id, facility_id, lead_days, label, enabled, created_at, updated_at, updated_by_user_id)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(id, companyId, facilityId, leadDays, label, enabled, now, now, userId);
+  audit('tf_reminder_rule', id, 'create', { after: { companyId, leadDays, label, enabled } });
+  return rowToRule(getDb().prepare('SELECT * FROM tf_reminder_rules WHERE id = ?').get(id));
+}
+
+/** Snooze a drawdown's reminders until a date; an empty date clears it. */
+function snoozeDrawdown(companyId, drawdownId, untilISO, userId = null) {
+  const row = getDb().prepare('SELECT * FROM tf_drawdowns WHERE id = ? AND company_id = ?').get(drawdownId, companyId);
+  if (!row) throw notFound('Drawdown');
+  const until = untilISO ? calendarDate(untilISO, 'Snooze until') : null;
+  getDb().prepare('UPDATE tf_drawdowns SET snooze_until = ?, updated_at = ?, updated_by_user_id = ? WHERE id = ? AND company_id = ?')
+    .run(until, Date.now(), userId, drawdownId, companyId);
+  return getDrawdown(companyId, drawdownId);
+}
+
+function rowToLog(r) {
+  return {
+    id: r.id, subjectKind: r.subject_kind, subjectId: r.subject_id, ruleKey: r.rule_key,
+    sendDate: r.send_date, status: r.status, detail: r.detail ?? null, sentAt: r.sent_at,
+  };
+}
+
+function listReminderLog(companyId, limit = 50) {
+  const n = Math.max(1, Math.min(200, Number(limit) || 50));
+  return getDb().prepare('SELECT * FROM tf_reminder_log WHERE company_id = ? ORDER BY sent_at DESC LIMIT ?')
+    .all(companyId, n).map(rowToLog);
+}
+
+/**
+ * Everything due as of `asOf` — a live window, not a queue, so a day the app
+ * was closed loses nothing. Drawdown maturities (per-facility rules replace
+ * the global set for that facility), overdraft month-end interest and
+ * scheduled fees. Snoozed drawdowns are skipped until their date.
+ */
+function dueReminders(companyId, asOf = todayPhnomPenh()) {
+  ensureReminderRules(companyId);
+  const db = getDb();
+  const rules = listReminderRules(companyId);
+  const globalRules = rules.filter((r) => !r.facilityId);
+  const byFacility = new Map();
+  for (const r of rules) {
+    if (!r.facilityId) continue;
+    if (!byFacility.has(r.facilityId)) byFacility.set(r.facilityId, []);
+    byFacility.get(r.facilityId).push(r);
+  }
+
+  const out = [];
+
+  const drawdowns = db.prepare(`
+    SELECT d.id, d.reference, d.maturity_date, d.snooze_until, d.facility_id,
+           f.name AS facility_name, f.currency,
+           d.principal_minor - COALESCE((SELECT SUM(r.principal_minor) FROM tf_repayments r WHERE r.drawdown_id = d.id), 0) AS outstanding_minor
+    FROM tf_drawdowns d JOIN tf_facilities f ON f.id = d.facility_id
+    WHERE d.company_id = ? AND d.status = 'active' AND d.maturity_date IS NOT NULL AND f.active = 1`)
+    .all(companyId);
+  for (const d of drawdowns) {
+    if (d.outstanding_minor <= 0) continue;
+    const snoozed = !!(d.snooze_until && d.snooze_until > asOf);
+    const daysTo = daysUntil(d.maturity_date, asOf);
+    const facilityRules = byFacility.get(d.facility_id) || globalRules;
+    const rule = chooseReminderRule(daysTo, facilityRules);
+    if (!rule && !snoozed) continue;
+    const chosen = rule ? facilityRules.find((r) => r.leadDays === rule.leadDays) : null;
+    out.push({
+      kind: 'drawdown', subjectKind: 'drawdown', subjectId: d.id,
+      ruleKey: snoozed ? `snoozed-${d.id}` : (chosen?.id || `lead-${rule.leadDays}`),
+      ruleLabel: snoozed ? 'Snoozed' : (chosen?.label || (rule.leadDays ? `${rule.leadDays} days before` : 'Overdue')),
+      daily: snoozed ? false : rule.daily, facilityId: d.facility_id, facilityName: d.facility_name,
+      currency: d.currency, reference: d.reference ?? null,
+      dueDate: d.maturity_date, daysTo, amountMinor: d.outstanding_minor,
+      snoozed, snoozedUntil: d.snooze_until ?? null,
+      message: daysTo < 0
+        ? `${d.reference || 'A drawdown'} on ${d.facility_name} is ${-daysTo} day(s) overdue.`
+        : daysTo === 0
+          ? `${d.reference || 'A drawdown'} on ${d.facility_name} matures today.`
+          : `${d.reference || 'A drawdown'} on ${d.facility_name} matures in ${daysTo} day(s).`,
+    });
+  }
+
+  // Overdraft month-end: a heads-up just before interest is capitalised.
+  const monthEndDate = (() => {
+    const [y, m] = String(asOf).split('-').map(Number);
+    return `${y}-${pad2(m)}-${pad2(lastDayOfMonth(y, m))}`;
+  })();
+  const dme = daysUntil(monthEndDate, asOf);
+  if (dme != null && dme >= 0 && dme <= OD_LEAD_DAYS) {
+    const ods = db.prepare(`SELECT f.id, f.name, f.currency,
+        COALESCE((SELECT SUM(amount_minor) FROM tf_ledger_entries le WHERE le.facility_id = f.id), 0) AS balance_minor
+      FROM tf_facilities f
+      WHERE f.company_id = ? AND f.active = 1 AND f.interest_basis = 'balance'`).all(companyId);
+    for (const f of ods) {
+      if (f.balance_minor <= 0) continue;
+      out.push({
+        kind: 'od', subjectKind: 'facility', subjectId: f.id,
+        ruleKey: `od-monthend-${monthEndDate.slice(0, 7)}`, ruleLabel: 'Overdraft month-end interest',
+        daily: false, facilityId: f.id, facilityName: f.name, currency: f.currency,
+        reference: null, dueDate: monthEndDate, daysTo: dme, amountMinor: f.balance_minor,
+        snoozedUntil: null,
+        message: `Interest on ${f.name}'s overdraft balance will be charged on month-end.`,
+      });
+    }
+  }
+
+  // Scheduled fees: a heads-up before the next one posts.
+  const fees = db.prepare(`SELECT rf.*, f.name AS facility_name
+    FROM tf_recurring_fees rf LEFT JOIN tf_facilities f ON f.id = rf.facility_id
+    WHERE rf.company_id = ? AND rf.enabled = 1`).all(companyId);
+  for (const rf of fees) {
+    const dt = daysUntil(rf.next_date, asOf);
+    if (dt == null || dt < 0 || dt > RECFEE_LEAD_DAYS) continue;
+    out.push({
+      kind: 'recurring_fee', subjectKind: 'recurring_fee', subjectId: rf.id,
+      ruleKey: `recfee-${rf.id}-${rf.next_date}`, ruleLabel: 'Scheduled fee due',
+      daily: false, facilityId: rf.facility_id ?? null, facilityName: rf.facility_name ?? 'No facility',
+      currency: rf.currency, reference: rf.kind, dueDate: rf.next_date, daysTo: dt,
+      amountMinor: rf.amount_minor, snoozedUntil: null,
+      message: `${rf.kind} (${rf.currency}) is due on ${rf.next_date}.`,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Record what the app has surfaced today. A pre-due rule logs once ever; the
+ * overdue rule logs once a day. Returns only the rows newly written, so a
+ * caller can say what is new. The unique index is the final guard.
+ */
+function recordReminders(companyId, asOf = todayPhnomPenh()) {
+  const db = getDb();
+  const fresh = [];
+  for (const r of dueReminders(companyId, asOf)) {
+    if (r.snoozed) continue;
+    const exists = r.daily
+      ? db.prepare(`SELECT 1 FROM tf_reminder_log WHERE company_id = ? AND subject_kind = ? AND subject_id = ? AND rule_key = ? AND send_date = ?`)
+        .get(companyId, r.subjectKind, r.subjectId, r.ruleKey, asOf)
+      : db.prepare(`SELECT 1 FROM tf_reminder_log WHERE company_id = ? AND subject_kind = ? AND subject_id = ? AND rule_key = ?`)
+        .get(companyId, r.subjectKind, r.subjectId, r.ruleKey);
+    if (exists) continue;
+    try {
+      db.prepare(`INSERT INTO tf_reminder_log
+        (id, company_id, subject_kind, subject_id, rule_key, send_date, status, detail, sent_at)
+        VALUES (?,?,?,?,?,?,'shown',?,?)`).run(
+        randomUUID(), companyId, r.subjectKind, r.subjectId, r.ruleKey, asOf, r.message, Date.now(),
+      );
+      fresh.push(r);
+    } catch (err) {
+      if (!/UNIQUE/.test(String(err?.message || ''))) throw err;
+    }
+  }
+  return fresh;
+}
+
+/** Per-company switch for the background money postings. Off unless set. */
+function getSettings(companyId) {
+  const row = getDb().prepare('SELECT * FROM tf_settings WHERE company_id = ?').get(companyId);
+  return { autoPost: !!row?.auto_post };
+}
+
+function saveSettings(companyId, patch = {}, userId = null) {
+  const autoPost = patch.autoPost ? 1 : 0;
+  getDb().prepare(`INSERT INTO tf_settings (company_id, auto_post, updated_at, updated_by_user_id)
+    VALUES (?,?,?,?)
+    ON CONFLICT(company_id) DO UPDATE SET auto_post = excluded.auto_post,
+      updated_at = excluded.updated_at, updated_by_user_id = excluded.updated_by_user_id`)
+    .run(companyId, autoPost, Date.now(), userId);
+  audit('tf_settings', companyId, 'update', { after: { autoPost: !!autoPost } });
+  return getSettings(companyId);
+}
+
 module.exports = {
   KINDS, FACILITY_CURRENCIES, DRAWDOWN_STATUSES, MOVEMENT_KINDS,
   listBanks, getBank, createBank, updateBank, archiveBank,
@@ -1255,4 +1499,8 @@ module.exports = {
   capitalisationDue, runCapitalisation,
   computeOurs, listReconciliations, addReconciliation,
   listFees, addFee, listRecurring, addRecurring, updateRecurring, postDueRecurring,
+  DEFAULT_REMINDER_RULES,
+  ensureReminderRules, listReminderRules, saveReminderRule, snoozeDrawdown,
+  dueReminders, recordReminders, listReminderLog,
+  getSettings, saveSettings,
 };

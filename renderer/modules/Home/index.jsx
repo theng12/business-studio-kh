@@ -5,14 +5,15 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { Badge, Button, EmptyState } from '../../components/ui.jsx';
 import { NavIcon } from '../../components/navIcons.jsx';
 import { clearBadgeCache, entryPage, loadBadge, loadLastPages, noCompanyReason, visibleModules } from '../../lib/modules.js';
+import { hasAnyCap } from '../../lib/capabilities.js';
 import { gridLayout, moveFocus } from './layout.js';
 import { noCompanyState } from './noCompany.js';
 
 /**
  * Which badges a change event makes stale: fuel records, purchase orders, HR
- * (People's waiting count), fixed assets.
+ * (People's waiting count), fixed assets, trade finance reminders.
  */
-export const BADGE_EVENTS = { fuel: 'fuel', purchaseOrder: 'purchasing', hr: 'people', assets: 'assets' };
+export const BADGE_EVENTS = { fuel: 'fuel', purchaseOrder: 'purchasing', hr: 'people', assets: 'assets', trade: 'trade' };
 const BADGE_DEBOUNCE_MS = 400;
 
 /** Height kept under the grid for the one-line keyboard hint. */
@@ -86,12 +87,36 @@ export function Home() {
     // HR1: a clock-in to review, a correction or a leave request changes People's count.
     const offHr = window.api?.hr?.onChanged?.(() => stale(BADGE_EVENTS.hr));
     const offAssets = window.api?.assets?.onChanged?.(() => stale(BADGE_EVENTS.assets));
+    const offTrade = window.api?.trade?.onChanged?.((evt) => {
+      if (evt?.kind !== 'scheduler') stale(BADGE_EVENTS.trade);
+    });
     const offCatalog = window.api?.events?.onCatalogChanged?.((evt) => {
       const moduleId = BADGE_EVENTS[evt?.kind];
-      if (moduleId && moduleId !== 'fuel' && moduleId !== 'people' && moduleId !== 'assets') stale(moduleId);
+      if (moduleId && moduleId !== 'fuel' && moduleId !== 'people' && moduleId !== 'assets' && moduleId !== 'trade') stale(moduleId);
     });
-    return () => { clearTimeout(timer); offFuel?.(); offHr?.(); offAssets?.(); offCatalog?.(); };
+    return () => { clearTimeout(timer); offFuel?.(); offHr?.(); offAssets?.(); offTrade?.(); offCatalog?.(); };
   }, []);
+
+  /* Phase C start-up notice: what is due today, said once per app session.
+   * The tile badge already carries the count; this is the loud version for
+   * someone who would not otherwise open Trade Finance. */
+  const [tradeDue, setTradeDue] = useState(0);
+  const [noticeShown, setNoticeShown] = useState(() => {
+    try { return sessionStorage.getItem('trade-notice-dismissed') !== '1'; } catch { return false; }
+  });
+  const tradeCaps = hasAnyCap(caps, ['trade.view', 'trade.manage']);
+  useEffect(() => {
+    if (!activeCompanyId || !tradeCaps || !window.api?.trade?.reminders?.due) { setTradeDue(0); return undefined; }
+    let live = true;
+    window.api.trade.reminders.due()
+      .then((res) => { if (live) setTradeDue((res?.reminders || []).filter((r) => !r.snoozed).length); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [activeCompanyId, tradeCaps, badgeTick]);
+  function dismissNotice() {
+    setNoticeShown(false);
+    try { sessionStorage.setItem('trade-notice-dismissed', '1'); } catch { /* private mode */ }
+  }
 
   /* Geometry from the room the grid actually has (lib: ./layout.js). */
   const boxRef = useRef(null);
@@ -138,6 +163,13 @@ export function Home() {
             body={intro.body}
             action={<Button variant="primary" onClick={() => setActiveModule('company')}>{intro.action}</Button>}
           />
+        </div>
+      ) : null}
+      {tradeDue > 0 && noticeShown ? (
+        <div className="trade-notice" role="status">
+          <span><strong>{tradeDue}</strong> trade-finance reminder{tradeDue === 1 ? '' : 's'} due today.</span>
+          <Button size="sm" variant="primary" onClick={() => setActiveModule('tradereminders')}>Open Reminders</Button>
+          <Button size="sm" onClick={dismissNotice}>Not now</Button>
         </div>
       ) : null}
       <div className="home-grid-box" ref={boxRef}>

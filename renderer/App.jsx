@@ -115,6 +115,7 @@ const FinanceReports = lazy(() => import('./modules/Finance/index.jsx').then((m)
 const TradeFacilities = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeFacilities })));
 const TradeDrawdowns = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeDrawdowns })));
 const TradeInterest = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeInterest })));
+const TradeReminders = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeReminders })));
 const TradeReports = lazy(() => import('./modules/Trade/index.jsx').then((m) => ({ default: m.TradeReports })));
 // HR1: the attendance kiosk screen, previewed inside the app (hidden page; the
 // real kiosk is its own window — renderer/main.jsx #kiosk).
@@ -168,6 +169,7 @@ const PAGES = {
   tradefacilities: TradeFacilities,
   tradedrawdowns: TradeDrawdowns,
   tradeinterest: TradeInterest,
+  tradereminders: TradeReminders,
   tradereports: TradeReports,
   orders: Orders,
   kiosk: KioskPreview,

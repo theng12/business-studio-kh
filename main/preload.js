@@ -464,6 +464,19 @@ contextBridge.exposeInMainWorld('api', {
       update:         (id, patch)    => invoke('trade:recurring:update', { id, patch }),
       postDue:        ()             => invoke('trade:recurring:postDue'),
     },
+    reminders: {
+      due:            ()             => invoke('trade:reminders:due'),
+      rules: {
+        list:         ()             => invoke('trade:reminders:rules'),
+        save:         (input)        => invoke('trade:reminders:rules:save', input),
+      },
+      snooze:         (id, until)    => invoke('trade:reminders:snooze', { id, until }),
+      log:            (limit)        => invoke('trade:reminders:log', { limit }),
+    },
+    settings: {
+      get:            ()             => invoke('trade:settings:get'),
+      save:           (patch)        => invoke('trade:settings:save', patch),
+    },
     reports: {
       summary:        ()             => invoke('trade:reports:summary'),
     },

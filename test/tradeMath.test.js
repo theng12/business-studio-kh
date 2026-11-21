@@ -86,6 +86,20 @@ test('periods clamp to the month and month bounds are real', () => {
   assert.deepEqual(m.monthBounds('2026-02-14'), { start: '2026-02-01', end: '2026-02-28' });
 });
 
+test('reminder rules: most urgent crossed lead wins, overdue fires daily', () => {
+  const rules = [{ leadDays: 7, enabled: 1 }, { leadDays: 3, enabled: 1 }, { leadDays: 1, enabled: 1 }, { leadDays: 0, enabled: 1 }];
+  assert.deepEqual(m.chooseReminderRule(3, rules), { leadDays: 3, daily: false }, 'a 3-day gap picks 3, not 7');
+  assert.deepEqual(m.chooseReminderRule(2, rules), { leadDays: 3, daily: false }, 'past the 3-day mark the 3-day rule still owns it');
+  assert.deepEqual(m.chooseReminderRule(0, rules), { leadDays: 1, daily: false }, 'due today is the nearest pre-due rule');
+  assert.deepEqual(m.chooseReminderRule(-1, rules), { leadDays: 0, daily: true }, 'overdue fires every day');
+  assert.equal(m.chooseReminderRule(8, rules), null, 'outside every window, nothing fires');
+  assert.equal(m.chooseReminderRule(-1, rules.filter((r) => r.leadDays !== 0)), null, 'no overdue rule, no overdue reminder');
+  assert.deepEqual(
+    m.chooseReminderRule(1, rules.map((r) => ({ ...r, enabled: r.leadDays === 1 ? 0 : 1 }))),
+    { leadDays: 3, daily: false }, 'a disabled rule does not fire',
+  );
+});
+
 test('utilisation and ladder buckets', () => {
   assert.equal(m.utilisation(5_000, 10_000), 0.5);
   assert.equal(m.utilisation(5_000, 0), 0, 'no limit is not Infinity');

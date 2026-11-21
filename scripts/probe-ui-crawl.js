@@ -3200,6 +3200,7 @@ const PAGE_LABELS = [
   ['tradefacilities', 'Facilities', 'trade'],
   ['tradedrawdowns', 'Drawdowns', 'trade'],
   ['tradeinterest', 'Interest', 'trade'],
+  ['tradereminders', 'Reminders', 'trade'],
   ['tradereports', 'Reports', 'trade'],
   // Pick & Pack Phase 0.
   ['orders', 'Orders', 'packing'],
