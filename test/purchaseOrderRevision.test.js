@@ -23,7 +23,7 @@ test.after(() => {
   Module._load = originalLoad;
   try { db?.getDb().close(); } catch {}
   if (dir) {
-    const trash = path.join(__dirname, '../_trash/test-data'); fs.mkdirSync(trash, { recursive: true });
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'test-data'); fs.mkdirSync(trash, { recursive: true });
     fs.renameSync(dir, path.join(trash, path.basename(dir)));
   }
 });

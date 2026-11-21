@@ -369,6 +369,67 @@ test('stale temp sweep removes only this app\'s own old leftovers', async () => 
   ]);
 });
 
+test('stale sweep clears bundle staging and moves a week-old data copy aside', async () => {
+  const dir = tmpDir('rf-backup-sweep2-');
+  const now = Date.now();
+  const age = (name, days) => {
+    const t = new Date(now - days * DAY);
+    fs.utimesSync(path.join(dir, name), t, t);
+  };
+  // The live folder plus the copy an import replaced eight days ago.
+  fs.mkdirSync(path.join(dir, 'Biz'));
+  fs.writeFileSync(path.join(dir, 'Biz', 'database.sqlite'), '');
+  fs.mkdirSync(path.join(dir, 'Biz.bak.1700000000000'));
+  fs.writeFileSync(path.join(dir, 'Biz.bak.1700000000000', 'database.sqlite'), '');
+  age('Biz.bak.1700000000000', 8);
+  // No live sibling: this copy may be the only surviving data — keep it.
+  fs.mkdirSync(path.join(dir, 'Gone.pre-restore.1700000000000'));
+  age('Gone.pre-restore.1700000000000', 30);
+  // Sibling exists but holds no database: keep the copy.
+  fs.mkdirSync(path.join(dir, 'Empty'));
+  fs.mkdirSync(path.join(dir, 'Empty.bak.1700000000001'));
+  age('Empty.bak.1700000000001', 8);
+  // Recent copy: a restore may still be running — keep it.
+  fs.mkdirSync(path.join(dir, 'Biz.pre-restore.1800000000000'));
+  // A killed import's own staging is ours to remove.
+  fs.mkdirSync(path.join(dir, '.iskh-bundle-extract-abc'));
+  age('.iskh-bundle-extract-abc', 1);
+
+  await b._internals.sweepStaleTemp(dir, now);
+
+  assert.deepEqual(fs.readdirSync(dir).sort(), [
+    'Biz',
+    'Biz.pre-restore.1800000000000',
+    'Empty',
+    'Empty.bak.1700000000001',
+    'Gone.pre-restore.1700000000000',
+    '_trash',
+  ]);
+  const swept = path.join(
+    dir, '_trash', `${new Date(now).toISOString().slice(0, 10)} swept data copies`,
+    'Biz.bak.1700000000000', 'database.sqlite',
+  );
+  assert.ok(fs.existsSync(swept), 'the replaced data copy was moved aside, not deleted');
+});
+
+test('the data-folder sweep takes only copies of the live data folder by name', async () => {
+  const dir = tmpDir('rf-backup-sweep3-');
+  const now = Date.now();
+  const old = new Date(now - 8 * DAY);
+  for (const n of ['Biz', 'Biz.bak.1700000000000', 'Other.bak.1700000000001']) {
+    fs.mkdirSync(path.join(dir, n));
+    fs.writeFileSync(path.join(dir, n, 'database.sqlite'), '');
+  }
+  fs.utimesSync(path.join(dir, 'Biz.bak.1700000000000'), old, old);
+  fs.utimesSync(path.join(dir, 'Other.bak.1700000000001'), old, old);
+
+  await b._internals.sweepStaleTemp(dir, now, { liveName: 'Biz' });
+
+  const left = fs.readdirSync(dir).sort();
+  assert.ok(left.includes('Other.bak.1700000000001'), "another folder's copy is untouched");
+  assert.ok(!left.includes('Biz.bak.1700000000000'), 'our old data copy was moved aside');
+});
+
 /* ─── 31: one backup at a time ──────────────────────────────────── */
 
 test('manual and automatic backups run one at a time', async () => {

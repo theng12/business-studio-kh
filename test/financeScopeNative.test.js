@@ -23,7 +23,7 @@ function fixture(t) {
     db.closeDb();
     if (originalServer) require.cache[serverPath] = originalServer;
     else delete require.cache[serverPath];
-    const trash = path.join(__dirname, '../_trash/finance-tests');
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'finance-tests');
     fs.mkdirSync(trash, { recursive: true });
     fs.renameSync(dir, path.join(trash, path.basename(dir)));
   });

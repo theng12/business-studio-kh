@@ -1,5 +1,19 @@
 # HANDOFF — Business Studio KH
 
+**0.1.122 GATED — the fleet-hardening residuals (2026-11-22, branch `codex/fleet-hardening-0122`).**
+The two residuals the 0.1.112 pass left for the next patch; the pass itself was
+not re-run. (a) `main/db/index.js` now calls `rotateIfLarge()` before its direct `crash.log` append,
+so the migration line obeys the same 2 MB ceiling as the lifecycle writer. (b) `sweepStaleTemp()`
+now also clears `.iskh-bundle-extract-*`, `iskh-bundle-*` and a killed backup's `.partial` after 6 h,
+and **moves** (never deletes) a replaced data copy `<name>.bak.<ts>` / `<name>.pre-restore.<ts>` into
+`<parent>/_trash/<date> swept data copies/` after 7 days — only when the live folder holds
+`database.sqlite`, and the data-folder sweep only matches copies of the live data folder by name. It
+runs on every backup for the backups folder, the system temp folder and the data folder's parent.
+(c) A quit inside the first ~2 s is **still open** — scoped in
+`_orchestra/developer-business/media-studio-kh/lead/0.1.122/SCOPE.md`, with the probe a fix needs
+before it may ship. Docs corrected in the same release: the README and ABOUT current-version lines
+were both still at 0.1.120.
+
 **0.1.120 PUBLISHED 2026-11-21 — renamed from Business Studio KH.** One release that moves every
 user-visible name: product name, window/menu/About copy, executable, phone-page titles, default data
 folder for new installs, installer and DMG names, GitHub repository, and the feed entry's `name`

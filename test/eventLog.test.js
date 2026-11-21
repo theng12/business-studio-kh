@@ -80,6 +80,15 @@ test('the app wires the bounded logger and flushes on quit', () => {
   assert.doesNotMatch(src, /fs\.appendFileSync\(crashLogPath\(\)/, 'no unbounded append left behind');
 });
 
+test('the migration logger rotates before it appends, so it cannot outgrow the bound', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../main/db/index.js'), 'utf8');
+  assert.match(
+    src,
+    /rotateIfLarge\(crashLog, fs\);\s*fs\.appendFileSync\(crashLog, line\)/,
+    'main/db/index.js must rotate crash.log before its direct append',
+  );
+});
+
 test('an oversized log left by an older build shrinks at the first new line', () => {
   const { dir, file } = tmp();
   fs.writeFileSync(file, Buffer.alloc(MAX_BYTES + 1024, 0x41));

@@ -227,23 +227,51 @@ async function sumInventoryBytes(dataDir, treeSnapshot) {
 
 const STAGING_PREFIX = '.iskh-backup-staging-';
 const STALE_TEMP_MS = 6 * 3600 * 1000;
+// A killed bundle import or restore leaves a full copy of the previous data
+// folder beside the live one (`<name>.bak.<ts>` / `<name>.pre-restore.<ts>`).
+// It stays the safety copy for a week, then moves aside — never straight out.
+const STALE_DATA_COPY_MS = 7 * 24 * 3600 * 1000;
+const DATA_COPY_RE = /^(.+)\.(?:bak|pre-restore)\.\d{13}$/;
+
+/** The replaced copies of one data folder; with liveName, only that folder's. */
+function dataCopyOf(name, liveName) {
+  const m = DATA_COPY_RE.exec(name);
+  if (!m) return null;
+  return liveName && m[1] !== liveName ? null : m;
+}
 
 /**
  * Remove this app's own leftovers from an earlier run that was killed before
- * it could clean up (hidden staging folders and `.partial` archives). Only
- * names this file creates, and only ones untouched for hours.
+ * it could clean up (hidden staging folders, `.partial` archives, bundle
+ * extract staging), and move week-old data copies a killed import/restore
+ * left behind into `<dir>/_trash/` — only at names this app creates, only
+ * untouched ones, and a data copy only once the live folder holds a database.
  */
-async function sweepStaleTemp(dir, now = Date.now()) {
+async function sweepStaleTemp(dir, now = Date.now(), { liveName = null } = {}) {
   let names;
   try { names = await fsp.readdir(dir); } catch (_) { return; }
   for (const name of names) {
-    const ours = name.startsWith(STAGING_PREFIX) || /^\.(?:business|media|image)-studio-kh-backup-.+\.partial$/.test(name);
-    if (!ours) continue;
+    const ours = name.startsWith(STAGING_PREFIX)
+      || name.startsWith('iskh-bundle-') // killed export/peek staging in the system temp folder
+      || name.startsWith('.iskh-bundle-extract-') // killed import staging beside the target
+      || /^\.(?:business|media|image)-studio-kh-backup-.+\.partial$/.test(name);
+    const dataCopy = ours ? null : dataCopyOf(name, liveName);
+    if (!ours && !dataCopy) continue;
     const full = path.join(dir, name);
     try {
       const st = await fsp.lstat(full);
-      if (now - st.mtimeMs < STALE_TEMP_MS) continue;
-      await fsp.rm(full, { recursive: true, force: true });
+      if (ours) {
+        if (now - st.mtimeMs < STALE_TEMP_MS) continue;
+        await fsp.rm(full, { recursive: true, force: true });
+        continue;
+      }
+      // Deleting the copy could be the only surviving data; move it instead,
+      // and only when the live folder proves it was replaced by a real one.
+      if (now - st.mtimeMs < STALE_DATA_COPY_MS) continue;
+      if (!fs.existsSync(path.join(dir, dataCopy[1], 'database.sqlite'))) continue;
+      const trashDir = path.join(dir, '_trash', `${new Date(now).toISOString().slice(0, 10)} swept data copies`);
+      await fsp.mkdir(trashDir, { recursive: true });
+      await fsp.rename(full, path.join(trashDir, name));
     } catch (_) { /* best effort */ }
   }
 }
@@ -286,6 +314,12 @@ async function createBackupNow({ destDir, onProgress, auto = false } = {}) {
   const stageOnDest = !sameDisk(os.tmpdir(), backupsDir);
   const stagingParent = stageOnDest ? backupsDir : os.tmpdir();
   await sweepStaleTemp(backupsDir);
+  // Killed exports/imports and restores leave their staging and the replaced
+  // data copy elsewhere; sweep those spots too, so a single nightly backup
+  // bounds them without waiting for another import to run.
+  await sweepStaleTemp(os.tmpdir());
+  const dataParent = path.dirname(dataDir);
+  if (dataParent !== backupsDir) await sweepStaleTemp(dataParent, Date.now(), { liveName: path.basename(dataDir) });
   const stagingRoot = await fsp.mkdtemp(path.join(stagingParent, stageOnDest ? STAGING_PREFIX : 'iskh-backup-'));
   const stagingName = `iskh-backup-${stamp}`;
   const stagingDir = path.join(stagingRoot, stagingName);

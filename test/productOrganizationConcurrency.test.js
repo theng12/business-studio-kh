@@ -23,7 +23,7 @@ function fixture() {
   return { db, dataDir, company, handlers, companies, products: require('../main/db/products'), images: require('../main/db/productImages'), categories: require('../main/db/categories') };
 }
 function cleanup(e) {
-  e.db.closeDb(); const trash = path.join(__dirname, '../_trash/task-2-tests'); fs.mkdirSync(trash, { recursive: true }); fs.renameSync(e.dataDir, path.join(trash, path.basename(e.dataDir)));
+  e.db.closeDb(); const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'task-2-tests'); fs.mkdirSync(trash, { recursive: true }); fs.renameSync(e.dataDir, path.join(trash, path.basename(e.dataDir)));
 }
 for (const kind of ['companies', 'categories']) test(`${kind} stale snapshots conflict through shared IPC/RPC handler, overwrite remains explicit`, { skip }, async () => {
   const e = fixture();

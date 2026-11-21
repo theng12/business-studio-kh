@@ -412,7 +412,12 @@ function initDb(dataDir) {
       const userDataDir = app?.getPath?.('userData');
       if (userDataDir) {
         fs.mkdirSync(userDataDir, { recursive: true });
-        fs.appendFileSync(path.join(userDataDir, 'crash.log'), line);
+        const crashLog = path.join(userDataDir, 'crash.log');
+        // Same ceiling as the lifecycle writer; it cannot be imported here
+        // (this runs before main/index.js owns its logger), but the rotation
+        // helper can, so a migration line never grows the log past the bound.
+        require('../util/eventLog').rotateIfLarge(crashLog, fs);
+        fs.appendFileSync(crashLog, line);
       }
     } catch (_) {/* best-effort */}
   };

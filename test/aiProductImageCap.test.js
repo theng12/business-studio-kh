@@ -73,7 +73,7 @@ test('the existing product lock enforces cap before writing, and at-cap identica
   } finally {
     db.close();
     // Project policy preserves discarded fixture files rather than erasing them.
-    const trash = path.join(__dirname, '../_trash/ai-cap-fixtures'); fs.mkdirSync(trash, { recursive: true });
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'ai-cap-fixtures'); fs.mkdirSync(trash, { recursive: true });
     fs.renameSync(root, path.join(trash, path.basename(root)));
   }
 });

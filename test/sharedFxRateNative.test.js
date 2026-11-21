@@ -38,7 +38,7 @@ const fixtureDirs = [];
 test.afterEach(() => {
   if (!db) return;
   db.closeDb();
-  const trash = path.join(__dirname, '../_trash/finance-tests');
+  const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'finance-tests');
   fs.mkdirSync(trash, { recursive: true });
   for (const dir of fixtureDirs.splice(0)) fs.renameSync(dir, path.join(trash, path.basename(dir)));
 });

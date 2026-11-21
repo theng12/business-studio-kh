@@ -1,5 +1,11 @@
 # What's new
 
+## 0.1.122 — 2026-11-22
+
+- FIX — A backup or a restore that was cut off no longer leaves a full copy of your old data folder sitting beside it for ever. After a week the copy moves into a `_trash` folder next to your data, where you can still recover it, and only once the live folder is proven to hold a working database.
+- FIX — Leftover temp folders from an interrupted export, import or backup are cleaned up on the next automatic backup.
+- Internal — The database-upgrade line in the log now obeys the same size limit as every other log line, so it can no longer grow the file past the 2 MB ceiling.
+
 ## 0.1.121 — 2026-11-21
 
 - FIX — The photo module is called Photos & Media again. Renaming the app had also renamed this module, so "Business Studio" showed up as one of its own modules on Home.

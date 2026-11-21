@@ -67,11 +67,12 @@ function closeDb() { try { db.closeDb(); } catch (_) { /* not open */ } }
 
 /**
  * The project rule is that nothing is erased — a finished fixture is MOVED
- * into `_trash/finance-tests`, the same convention the Finance scope test uses.
+ * into a fixtures folder under the system temp dir, the same convention the
+ * Finance scope test uses. A checkout keeps no `_trash` (owner 2026-11-18).
  */
 function preserveFixture(root) {
   try {
-    const trash = path.join(__dirname, '..', '_trash', 'finance-tests');
+    const trash = path.join(os.tmpdir(), 'msk-test-fixtures', 'finance-tests');
     fs.mkdirSync(trash, { recursive: true });
     fs.renameSync(root, path.join(trash, path.basename(root)));
   } catch (_) { /* leaving the fixture in temp beats failing the test */ }
