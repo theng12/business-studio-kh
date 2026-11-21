@@ -528,6 +528,14 @@ the same two-version rule, owned by the Updater lead.
 
 **The name is not the identity (0.1.120, 2026-11-21).** The app was renamed Business Studio KH → Business Studio KH and every user-visible name moved with it, but the bundle ID above and the feed id `media-studio` did **not** change. They are what the updater matches: a DMG whose identifier differs from the installed app is refused (`update-studio-kh`, `Sources/KHUpdaterCore/Recipes.swift`, the `expectedBundleID ?? installedInfo.identifier` guard), so changing either stops every installed copy updating. When the owner asks for the identifier itself to move, that is a fleet migration led by the Updater lead, not a rename in this repo. Old backups keep their old marker and still restore (`LEGACY_BACKUP_KINDS`).
 
+**The identifier was briefly changed and put back (2026-11-21).** A release candidate moved the id to
+`app.businessstudiokh.desktop`; the owner reversed that on better information before it was published:
+a bundle id is public by design (it sits inside every DMG), so renaming it buys no privacy and would
+break updates on installed Macs. The real fault was `page-sync` matching the word `terranash` anywhere;
+that is fixed in `update-studio-kh` `5a20d36`, where `com.terranash.<app>` is exempt in every field
+while tailnet hosts, `ts.net` URLs, addresses and `terranash-<host>` still fail. The candidate was never
+published — the feed stayed on 0.1.120 — and the commit is reverted in this repo (`53d2dac`).
+
 **`dist/` means the owner's checkout on the Mac you are on** — `$HOME/Developer/My Own Apps/business-studio-kh/dist` on the current Mac Studio (M2 Max; path and hardware verified 2026-11-02; earlier handoffs used the old Developer path), `$HOME/Developer/business-studio-kh/dist` on the Mac mini,
 which is where he looks for a release. `npm run dist` writes into the build worktree
 instead, so copy the release's DMG across as the last step of a release (one file since
