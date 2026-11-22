@@ -896,10 +896,26 @@ app.on('before-quit', (event) => {
   }
 });
 
+// Measured 2026-11-23 (lead/0.1.123/quit-wedge-probe.sh, 4 of 6 wedged): a stop
+// signal between boot and the first window is swallowed — `before-quit` runs
+// cleanly but the quit never completes, and the process stays alive past any
+// bound. Re-request it on a bounded retry instead of force-exiting (deleted in
+// this release): every quit guard still applies to each request, and a stop
+// that stays refused is named in the log rather than left silent.
 process.on('SIGTERM', () => {
   logEvent('sigterm', 'stop signal; requesting a normal quit');
-  if (app.isReady()) app.quit();
-  else void app.whenReady().then(() => app.quit());
+  // A quit swallowed mid-boot never completes on its own (measured above), so
+  // re-request it on a bounded retry: every request still goes through the
+  // quit guards, and a quit that stays refused is named in the log instead of
+  // being forced. The timer dies with the process, so an exit ends the retry.
+  const deadline = Date.now() + 10000;
+  const request = () => {
+    if (Date.now() > deadline) { logEvent('sigterm:still-refused', 'quit stayed refused past 10 s; leaving the guards in charge'); return; }
+    if (app.isReady()) app.quit();
+    else void app.whenReady().then(() => app.quit());
+    setTimeout(request, 300);
+  };
+  request();
 });
 
 app.on('window-all-closed', () => {
