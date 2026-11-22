@@ -129,6 +129,7 @@ test('the phone viewer\'s image delete points at the bin too (v0.1.89)', () => {
   const VIEWER = read('webclient/index.html');
   assert.doesNotMatch(VIEWER, /This can\\'t be undone\./, 'the viewer still calls an image delete final');
   assert.match(VIEWER, /It goes to Recently deleted on the Mac \(Settings → Recently deleted\)/);
-  assert.match(VIEWER, /window\.confirm\(deleteImageConfirmText\(index\)\)/);
+  assert.match(VIEWER, /await confirmInPage\(deleteImageConfirmText\(index\)/);
+  assert.doesNotMatch(VIEWER, /window\.confirm\(/);
   assert.match(VIEWER, /rpc\('images:removeFromProduct'/);
 });

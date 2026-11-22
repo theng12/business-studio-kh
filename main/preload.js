@@ -880,6 +880,7 @@ contextBridge.exposeInMainWorld('api', {
     checkCollisions: (profileId, productIds, outputRoot, imageScope) =>
       invoke('exports:checkCollisions', { profileId, productIds, outputRoot, imageScope }),
     listRuns: (limit) => invoke('exports:listRuns', limit),
+    listRecovery: () => invoke('exports:listRecovery'),
     // v0.1.89: stop a running export after the image in progress. `runId`
     // is the id the caller passed to `run`.
     cancel: (runId) => invoke('exports:cancel', runId),

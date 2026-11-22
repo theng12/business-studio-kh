@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 
@@ -38,14 +39,14 @@ function harness(options = {}) {
     },
     '../db/products': { get: (id) => id ? { id, sku: 'TEST' } : null, recomputeProcessStatus: () => {}, touchUpdated: () => {} },
     '../db/productImages': { addFromSource: async (...args) => { attachments.push(args); return options.attach ? options.attach(...args) : { image: { id: 'image', filepath: 'product.png' } }; }, setMainById: (...args) => mainSets.push(args) },
-    '../db': { getDataDir: () => '/synthetic-data' },
+    '../db': { getDataDir: () => options.dataDir || '/synthetic-data' },
     '../util/slug': { slugify: (s) => s.toLowerCase() },
     './models': { byKey: () => ({ modelId: 'gpt-image-2', supportsSource: false }) },
     './providers/openai': { generate: () => { const d = deferred(); calls.push(d); return d.promise; } },
     './costs': { actualForModel: () => ({ usd: 0.25 }) },
     './_fetchTimeouts': { fetchWithTimeout: async () => { throw new Error('download failed (403)'); }, TIMEOUT_DOWNLOAD: 1 },
     '../events': { broadcast: (...args) => events.push(args) },
-    '../updateHold': { isPaused: () => hold.paused, inflightIds: () => [...hold.ids] },
+    '../updateHold': options.updateHold || { isPaused: () => hold.paused, inflightIds: () => [...hold.ids] },
   };
   const sandbox = { require: (name) => { assert.ok(name in stubs, `unexpected dependency ${name}`); return stubs[name]; }, module: { exports: {} }, Buffer, Date: options.Date || Date,
     process: { stderr: { write: (line) => logs.push(line) } },
@@ -57,6 +58,41 @@ function harness(options = {}) {
   runner.start({ getConfig: () => ({ openaiConcurrency: 1, openaiApiKey: 'synthetic-key' }) });
   return { runner, aiTasks, tasks, gallery, calls, writes, attachments, events, logs, mainSets, runTick, hold };
 }
+
+test('a live hold refuses an in-flight task and keeps queued work waiting', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'business-hold-fixture-'));
+  const profile = path.join(root, 'profile');
+  const data = path.join(root, 'data');
+  fs.mkdirSync(profile); fs.mkdirSync(data);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const hold = require('../main/updateHold');
+  hold.setLog(() => {});
+  t.after(() => hold.releaseHold());
+  const journal = require('../main/exportJournal').createJournal(profile, () => hold.isPaused());
+  const h = harness({ updateHold: hold, dataDir: data });
+  journal.start('live-export', data);
+  const first = h.aiTasks.create({});
+  const waiting = h.aiTasks.create({});
+  await h.runTick();
+  assert.equal(h.calls.length, 1);
+  const reply = await hold.takeHold(0, 60, () => [...h.runner.inflightIds(), ...journal.inFlightIds()]);
+  assert.equal(reply.safe, false);
+  assert.equal(reply.in_flight, 2);
+  assert.throws(() => journal.start('new-export', data), /update.*paused/);
+  assert.equal(hold.isUpdaterQuit(), false);
+  h.runner.nudge(); await h.runTick();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.aiTasks.get(waiting.id).status, 'queued');
+  h.calls[0].resolve(response()); await flush();
+  assert.equal(h.aiTasks.get(first.id).status, 'done');
+  journal.finish('live-export');
+  hold.releaseHold();
+  h.runner.nudge(); await h.runTick();
+  assert.equal(h.calls.length, 2);
+  h.calls[1].resolve(response());
+  await h.runner.stop();
+  assert.equal(h.aiTasks.get(waiting.id).status, 'done');
+});
 
 test('cancelled provider retains its slot, refuses live Repair, and late success records charge without accepting results', async () => {
   const h = harness(); const a = h.aiTasks.create({}); const b = h.aiTasks.create({});

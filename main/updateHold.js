@@ -41,6 +41,7 @@ const HOLD_PORT = 13181;
 let pausedUntil = 0;
 let pauseTimer = null;
 let updaterHoldUntil = 0;
+let holdGeneration = 0;
 let available = false;
 let log = (message) => process.stderr.write(`[update-hold] ${message}\n`);
 
@@ -54,27 +55,29 @@ function isPaused() { return Date.now() < pausedUntil; }
  * long job with no row to re-dispatch, so the installer is told to wait for it
  * rather than quit inside it. Lookups never hold an installer hostage.
  *
- * shortcut: the hold closes the queue's claim path; it does not refuse a
- * person's own export or render, only report it in flight — upgrade when an
- * update must freeze every user action, not just queued work.
+ * The hold also refuses a new export (main/ipc/exports.js,
+ * main/exportJournal.js) so an update cannot start one behind itself.
  */
 function inFlightIds() {
   const ids = [];
   try {
     for (const id of require('./ai/queueRunner').inflightIds()) ids.push(`ai-task:${id}`);
-  } catch (_) { /* runner not up yet */ }
+  } catch (_) { ids.push('ai-work-status-unavailable'); }
   try {
     if (require('./ipc/exports').hasActiveRun()) ids.push('export-run');
-  } catch (_) { /* no export runner in this mode */ }
+  } catch (_) { ids.push('export-status-unavailable'); }
   try {
     if (require('./renderWindow').isRendering()) ids.push('render-job');
-  } catch (_) { /* no render window in this mode */ }
+  } catch (_) { ids.push('render-status-unavailable'); }
+  try {
+    for (const id of require('./exportJournal').instance().inFlightIds()) ids.push(`local-export:${id}`);
+  } catch (_) { ids.push('export-recovery-unavailable'); }
   return ids;
 }
 
 function pause(pauseS) {
   pausedUntil = Date.now() + pauseS * 1000;
-  updaterHoldUntil = Date.now() + Math.min(pauseS * 1000, UPDATER_QUIT_WINDOW_MS);
+  updaterHoldUntil = 0;
   if (pauseTimer) clearTimeout(pauseTimer);
   pauseTimer = setTimeout(() => {
     pauseTimer = null;
@@ -94,7 +97,7 @@ function pause(pauseS) {
  * already `kill` this app, which needs no credential and skips no PIN.
  */
 function isUpdaterQuit() {
-  return Date.now() < updaterHoldUntil;
+  return isPaused() && Date.now() < updaterHoldUntil && inFlightIds().length === 0;
 }
 
 /** Did the loopback hold open? When it did not, no update may start (main/ipc/updates.js). */
@@ -114,8 +117,9 @@ function resumed(why) {
  * installing over it.
  */
 async function takeHold(timeoutS, pauseS, inFlight = inFlightIds) {
+  const generation = ++holdGeneration;
   pause(pauseS);
-  const ids = () => { try { return inFlight() || []; } catch (_) { return []; } };
+  const ids = () => { try { return inFlight() || []; } catch (_) { return ['work-status-unavailable']; } };
   const first = ids();
   log(`held: ${first.length ? first.join(', ') : 'nothing'} in flight, new work paused ${pauseS} s, settling for up to ${timeoutS} s`);
 
@@ -126,20 +130,25 @@ async function takeHold(timeoutS, pauseS, inFlight = inFlightIds) {
     remaining = ids();
   }
   if (remaining.length > 0) {
-    log(`${remaining.join(', ')} still running at the ${timeoutS} s bound; the next start follows it, so this update waits`);
+    log(`${remaining.join(', ')} still running at the ${timeoutS} s bound; this update must wait`);
   } else {
     log(`settled in under ${timeoutS} s`);
   }
+  const stillHeld = generation === holdGeneration && isPaused();
+  if (remaining.length === 0 && stillHeld) {
+    updaterHoldUntil = Date.now() + Math.min(pausedUntil - Date.now(), UPDATER_QUIT_WINDOW_MS);
+  }
   return {
-    safe: remaining.length === 0,
-    unsettled: remaining,
-    dispatch_paused_s: pauseS,
+    safe: remaining.length === 0 && stillHeld,
+    unsettled: stillHeld ? remaining : [...remaining, 'hold-expired-or-released'],
+    dispatch_paused_s: stillHeld ? pauseS : 0,
     in_flight: remaining.length,
   };
 }
 
 /** Resume at once. Never required — the pause expires by itself. */
 function releaseHold() {
+  holdGeneration += 1;
   if (pauseTimer) clearTimeout(pauseTimer);
   pauseTimer = null;
   const wasPaused = isPaused();

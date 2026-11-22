@@ -2446,13 +2446,19 @@ function registerClientImageImportBridges() {
    * is preserved — same `{ exported, skipped, products, outputPath,
    * skips }` so the Export Center's result modal Just Works.
    */
+  handleLocal('exports:listRecovery', () => require('../exportJournal').instance().list());
   handleLocal('exports:run', async ({ profileId, productIds, outputRoot, onExisting, saveToLibrary, runId, imageScope } = {}) => {
     if (!profileId) throw new Error('profileId required');
     if (!outputRoot) throw new Error('outputRoot required');
+    const id = typeof runId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(runId)
+      ? runId : `export-${require('node:crypto').randomUUID()}`;
+    const journal = require('../exportJournal').instance();
+    journal.start(id, path.resolve(outputRoot));
+    try {
     // v0.31.0: forward saveToLibrary — the server appends the exports to
     // ITS library (the shared source of truth) + broadcasts a catalog
     // change, which this client picks up like any other remote edit.
-    const result = await rpc('exports:runForClient', { profileId, productIds, saveToLibrary, runId, imageScope });
+    const result = await rpc('exports:runForClient', { profileId, productIds, saveToLibrary, runId: id, imageScope, recoveryCapable: true });
     const files = Array.isArray(result?.files) ? result.files : [];
 
     /* v0.1.27: honour the collision choice the user already made.
@@ -2501,6 +2507,7 @@ function registerClientImageImportBridges() {
     // Drop the bytes from the return value — renderer doesn't need
     // them and we shouldn't keep them in store memory.
     const { files: _files, ...rest } = result;
+    journal.finish(id, rest.cancelled ? 'Export cancelled before completion.' : null);
     return {
       ...rest,
       outputPath: outRootAbs,
@@ -2511,6 +2518,10 @@ function registerClientImageImportBridges() {
       skipped: (rest.skipped ?? 0) + skippedExisting,
       skips: [...(rest.skips ?? []), ...skippedNow],
     };
+    } catch (err) {
+      journal.finish(id, err.message);
+      throw err;
+    }
   });
 
   /**

@@ -140,10 +140,11 @@ test('actual runForClient route refuses an unsafe stored subfolder in its tempor
       '../db/companies': {}, '../db/brands': {},
       '../db/exportProfiles': { get: () => ({ ...profile, id: 'profile', outputSubfolder: '../outside' }) },
       '../db/exportRuns': { record: () => assert.fail('failed export must not record success') },
+      '../exportJournal': { instance: () => ({ start() {}, finish() {} }) },
       '../exportRunner': exporter, '../events': { broadcast() {} }, './helpers': { emitCatalogChange() {} },
     });
     ipc.register({ expose: (name, fn) => handlers.set(name, fn), exposeLocal() {}, assertEntityInActiveCompany: (row) => row, assertProductInActiveCompany() {} });
-    await assert.rejects(handlers.get('exports:runForClient')({ profileId: 'profile', productIds: ['p'] }), /subfolder|relative|path/i);
+    await assert.rejects(handlers.get('exports:runForClient')({ profileId: 'profile', productIds: ['p'], recoveryCapable: true }), /subfolder|relative|path/i);
   });
 });
 

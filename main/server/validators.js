@@ -397,10 +397,12 @@ const VALIDATORS = {
   'exports:duplicateProfile': requireStringArg('profile id'),
   // v0.1.89: the run id is the export's progress-event id.
   'exports:cancel':         requireStringArg('export run id'),
+  'exports:listRecovery':   (a) => a == null ? true : 'no arguments expected',
   'exports:runForClient':   (a) => {
     if (!isObject(a)) return 'expected object';
     if (!isString(a.profileId)) return 'profileId required';
     if (!isArray(a.productIds)) return 'productIds must be an array';
+    if (a.recoveryCapable !== true) return 'client export recovery is required; update the client';
     const scope = optionalImageScope(a.imageScope);
     return scope === true ? optionalRunId(a.runId) : scope;
   },

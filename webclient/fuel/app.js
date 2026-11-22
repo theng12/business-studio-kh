@@ -283,6 +283,29 @@
     crew: 'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6z|M3 20a6 6 0 0 1 12 0|M16 5.2a3 3 0 0 1 0 5.6|M21 20a6 6 0 0 0-4-5.6',
   };
 
+  /* A packaged webview silently ignores window.confirm, so the page asks in
+   * its own small dialog and resolves true only when the person confirms. */
+  function confirmInPage(message, action) {
+    if (document.getElementById('fuel-confirm')) return Promise.resolve(false);
+    return new Promise(function (resolve) {
+      var cancel = h('button', { type: 'submit', class: 'big big--soft', value: 'cancel', text: tr('cancel') });
+      cancel.autofocus = true;
+      var box = h('dialog', { id: 'fuel-confirm', class: 'dialog', 'aria-labelledby': 'fuel-confirm-text' }, [
+        h('form', { method: 'dialog', class: 'dialog__box' }, [
+          h('p', { id: 'fuel-confirm-text', class: 'dialog__text', text: message }),
+          h('div', { class: 'row2' }, [cancel, h('button', { type: 'submit', class: 'big', value: 'confirm', text: action })]),
+        ]),
+      ]);
+      box.addEventListener('click', function (e) { if (e.target === box) box.close(); });
+      box.addEventListener('close', function () {
+        box.remove();
+        resolve(box.returnValue === 'confirm');
+      }, { once: true });
+      document.body.appendChild(box);
+      box.showModal();
+    });
+  }
+
   var toastTimer = null;
   function toast(msg) {
     var el = document.getElementById('toast');
@@ -1502,7 +1525,7 @@
           h('button', { type: 'button', class: 'big big--soft', text: tr('send_now'), onclick: function () { outbox.retry(it.clientRef).then(scheduleWake); } }),
           h('button', {
             type: 'button', class: 'big big--soft', text: tr('delete'),
-            onclick: function () { if (window.confirm(tr('delete_confirm'))) outbox.remove(it.clientRef); },
+            onclick: function () { confirmInPage(tr('delete_confirm'), tr('delete')).then(function (yes) { if (yes) outbox.remove(it.clientRef); }); },
           }),
         ]) : null,
       ]);
@@ -1601,10 +1624,12 @@
   }
 
   function withdraw(id) {
-    if (!window.confirm(tr('withdraw_confirm'))) return;
-    rpc('leave:cancelSelf', { id: id }).then(function () { toast(tr('withdrawn')); return refreshMine(); }).then(function () {
-      if (screen.name === 'mine') render();
-    }, function (err) { toast(err && err.network ? tr('need_connection') : tr('save_failed', { error: errorText(err && err.message) })); });
+    confirmInPage(tr('withdraw_confirm'), tr('withdraw')).then(function (yes) {
+      if (!yes) return;
+      rpc('leave:cancelSelf', { id: id }).then(function () { toast(tr('withdrawn')); return refreshMine(); }).then(function () {
+        if (screen.name === 'mine') render();
+      }, function (err) { toast(err && err.network ? tr('need_connection') : tr('save_failed', { error: errorText(err && err.message) })); });
+    });
   }
 
   function showCrew() {
@@ -1978,7 +2003,12 @@
   }
 
   function signOut() {
-    if (!window.confirm(tr('sign_out_confirm'))) return;
+    confirmInPage(tr('sign_out_confirm'), tr('sign_out')).then(function (yes) {
+      if (yes) finishSignOut();
+    });
+  }
+
+  function finishSignOut() {
     token = '';
     lsSet(LS.tok, null);
     S.user = null;

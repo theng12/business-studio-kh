@@ -2,7 +2,12 @@
 
 ## 0.1.123 — 2026-11-22
 
-- FIX — Stopping the app with a plain stop signal (what scripts and cleanup tools send) now closes it like a Quit does. Before, it kept running until it was force-killed.
+- FIX — Updates wait while exports or other work are still running. Interrupted exports show their destination and start time in Export Center.
+- FIX — If work is still running when you quit, the app stays open and tells you why.
+- FIX — The phone pages ask for confirmation inside the page rather than using a browser popup.
+- FIX — A stop signal asks the app to quit safely instead of forcing it closed.
+- Internal — Exporting from another Mac now needs both Macs on this version.
+- Internal — Update information now identifies Business Studio KH as a business app.
 
 ## 0.1.122 — 2026-11-22
 

@@ -43,6 +43,8 @@ function pickRunId(runId) {
 }
 
 function startRun(opId) {
+  if (require('../updateHold').isPaused()) throw new Error('Export cannot start while an update is paused. Try again shortly.');
+  if (activeRuns.has(opId)) throw new Error('An export with this run ID is already running.');
   const run = { cancelled: false };
   activeRuns.set(opId, run);
   return run;
@@ -97,6 +99,7 @@ function buildProductsWorkbook({ companyId, scope = 'all', ids } = {}, { countOn
 }
 
 function register({ expose, assertEntityInActiveCompany, assertProductInActiveCompany, exposeLocal }) {
+  exposeLocal('exports:listRecovery', () => require('../exportJournal').instance().list());
   /**
    * v0.1.89: stop a running export after the image in progress. Exposed (not
    * local) because in client mode the run happens on the server, inside
@@ -248,10 +251,12 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     let done = 0;
     let result;
     const run = startRun(opId);
-    // A first event before any image is encoded, so the Export Center learns
-    // the run id (and can offer Cancel) straight away.
-    broadcast('progress:event', { id: opId, kind: 'export-run', done: 0, total: null, phase: 'exporting', label: null, cancellable: true });
+    let journalStarted = false;
     try {
+      require('../exportJournal').instance().start(opId, outputRoot);
+      journalStarted = true;
+      // Announce only after the recovery record is durable.
+      broadcast('progress:event', { id: opId, kind: 'export-run', done: 0, total: null, phase: 'exporting', label: null, cancellable: true });
       result = await exportRunner.runExport({
         profile,
         productIds,
@@ -282,6 +287,11 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
           }
         },
       });
+      require('../exportJournal').instance().finish(opId, result.cancelled ? 'Export cancelled before completion.' : null);
+      journalStarted = false;
+    } catch (err) {
+      if (journalStarted) require('../exportJournal').instance().finish(opId, err.message);
+      throw err;
     } finally {
       activeRuns.delete(opId);
       broadcast('progress:event', { id: opId, complete: true });
@@ -312,15 +322,13 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
    * out with a clear message ("Use the server Mac for very large
    * exports, or split the selection").
    */
-  expose('exports:runForClient', async ({ profileId, productIds, saveToLibrary, runId, imageScope } = {}) => {
+  expose('exports:runForClient', async ({ profileId, productIds, saveToLibrary, runId, imageScope, recoveryCapable } = {}) => {
+    if (recoveryCapable !== true) throw new Error('This client cannot protect interrupted exports. Update the client and try again.');
     const profile = assertEntityInActiveCompany(exportProfiles.get(profileId), 'Profile');
     for (const pid of (productIds ?? [])) {
       assertProductInActiveCompany(pid);
     }
 
-    // Run the export to a unique temp folder.
-    const os = require('node:os');
-    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'iskh-export-'));
     // v0.17.1: same progress emission as the standalone
     // exports:run. The events get pushed to the caller (RPC
     // client) via the broadcast bus — both the local renderer
@@ -329,8 +337,13 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     const opId = pickRunId(runId);
     let done = 0;
     const run = startRun(opId);
-    broadcast('progress:event', { id: opId, kind: 'export-run', done: 0, total: null, phase: 'processing', label: null, cancellable: true });
+    let tmpRoot;
+    // The client's own journal is the recovery of record for a client export:
+    // it names the real destination, which this server cannot see.
     try {
+      const os = require('node:os');
+      tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'iskh-export-'));
+      broadcast('progress:event', { id: opId, kind: 'export-run', done: 0, total: null, phase: 'processing', label: null, cancellable: true });
       const result = await exportRunner.runExport({
         profile,
         productIds,
@@ -385,11 +398,8 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
         productCount: result.products,
         imageCount: result.exported,
         skippedCount: result.skipped,
-        // outputPath records what the client TOLD the server
-        // they wanted. Server doesn't know the client's real
-        // path; the client patches the run history if it cares.
         outputPath: null,
-        notes: runNotes(result),
+        notes: ['Prepared for the client; delivery is not confirmed.', runNotes(result)].filter(Boolean).join('\n'),
       });
 
       // v0.31.0: the append-to-library happened on the SERVER's DB+assets,
@@ -399,7 +409,7 @@ function register({ expose, assertEntityInActiveCompany, assertProductInActiveCo
     } finally {
       activeRuns.delete(opId);
       broadcast('progress:event', { id: opId, complete: true });
-      try { await fs.promises.rm(tmpRoot, { recursive: true, force: true }); } catch (_) {}
+      if (tmpRoot) { try { await fs.promises.rm(tmpRoot, { recursive: true, force: true }); } catch (_) {} }
     }
   });
 

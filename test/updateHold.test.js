@@ -13,6 +13,8 @@ const path = require('node:path');
 
 const net = require('node:net');
 
+const journalPath = require.resolve('../main/exportJournal');
+require.cache[journalPath] = { id: journalPath, filename: journalPath, loaded: true, exports: { instance: () => ({ inFlightIds: () => [] }) } };
 const hold = require('../main/updateHold');
 const { takeHold, releaseHold, isPaused, startListener, isUpdaterQuit, isAvailable } = hold;
 
@@ -50,6 +52,7 @@ test('the settle is bounded by timeout_s and never waits for the work to finish'
   assert.equal(reply.safe, false);
   assert.deepEqual(reply.unsettled, ['ai-task:t1', 'ai-task:t2']);
   assert.equal(reply.in_flight, 2, 'in_flight is what is really running');
+  assert.equal(isUpdaterQuit(), false, 'an unsafe hold cannot authorize a kiosk quit');
   running = [];
 });
 
@@ -60,6 +63,23 @@ test('work that settles inside the window makes the hold safe', async () => {
   assert.equal(reply.safe, true);
   assert.deepEqual(reply.unsettled, []);
   assert.equal(reply.in_flight, 0);
+});
+
+test('releasing a settling hold cannot authorize a later quit', async () => {
+  let running = ['export-run'];
+  const pending = takeHold(2, 60, () => running);
+  assert.equal(isUpdaterQuit(), false, 'settling has not yet proven safety');
+  releaseHold();
+  running = [];
+  const reply = await pending;
+  assert.equal(reply.safe, false);
+  assert.equal(isUpdaterQuit(), false);
+});
+
+test('a failed work lookup fails closed', async () => {
+  const reply = await takeHold(0, 60, () => { throw new Error('unavailable'); });
+  assert.equal(reply.safe, false);
+  assert.equal(isUpdaterQuit(), false);
 });
 
 test('DELETE resumes at once and reports no pause left', async () => {
@@ -216,7 +236,7 @@ test('only a quit that follows a hold is the installer\'s; a released or expired
 test('the installer-quit window never outlives the pause it belongs to', () => {
   const src = fs.readFileSync(require.resolve('../main/updateHold.js'), 'utf8');
   assert.match(src, /UPDATER_QUIT_WINDOW_MS = 60 \* 1000/, 'a stale hold must not open the kiosk for long');
-  assert.match(src, /Math\.min\(pauseS \* 1000, UPDATER_QUIT_WINDOW_MS\)/);
+  assert.match(src, /Math\.min\(pausedUntil - Date\.now\(\), UPDATER_QUIT_WINDOW_MS\)/);
 });
 
 test('a hold port it cannot open fails closed: unholdable and said out loud', async (t) => {

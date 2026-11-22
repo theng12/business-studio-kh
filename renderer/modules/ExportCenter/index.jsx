@@ -68,6 +68,15 @@ export function ExportCenter() {
   const addToast = useAppStore((s) => s.addToast);
   const setActiveModule = useAppStore((s) => s.setActiveModule);
 
+  const [recovery, setRecovery] = useState([]);
+  const [recoveryError, setRecoveryError] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    if (!window.api?.exports?.listRecovery) { setRecoveryError('Export recovery is unavailable.'); return; }
+    window.api.exports.listRecovery().then((rows) => { if (alive) { setRecovery(rows); setRecoveryError(null); } })
+      .catch((err) => { if (alive) setRecoveryError(err.message); });
+    return () => { alive = false; };
+  }, [running]);
   const [editing, setEditing] = useState(null);
   const [queuePage, setQueuePage] = useState(0);
   // §10: 50 by default. The run bar is sticky at the top of the column, so a
@@ -404,6 +413,19 @@ export function ExportCenter() {
         subtitle="One profile per run. Each photo uses its processed version when it has one, and the original otherwise."
         actions={<Button variant="primary" onClick={() => setEditing({})}>+ New profile</Button>}
       />
+      {recoveryError && <p role="alert">Could not read export recovery: {recoveryError}</p>}
+      {recovery.length > 0 && (
+        <section className="card" aria-label="Exports needing attention">
+          <h2 className="section-title">Exports needing attention</h2>
+          <p>These exports did not finish. Check the destination before running them again.</p>
+          <ul>{recovery.map((item) => (
+            <li key={item.id} style={{ overflowWrap: 'anywhere' }}>
+              {item.status === 'interrupted' ? 'Interrupted' : 'Failed'} · {new Date(item.startedAt).toLocaleString()} · {item.target} · {item.id}
+              {item.error ? ` — ${item.error}` : ''}
+            </li>
+          ))}</ul>
+        </section>
+      )}
 
       {profiles.length === 0 ? (
         <EmptyState

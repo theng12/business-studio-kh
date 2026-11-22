@@ -132,7 +132,7 @@ test('client image protocol preserves version identity upstream and forbids oute
   }
 });
 
-function loadClientHarness({ rpcResult, assetResponse, imageResponse }) {
+function loadClientHarness({ rpcResult, assetResponse, imageResponse, journal }) {
   const handlers = new Map();
   const sendHandlers = new Map();
   const electron = {
@@ -162,6 +162,7 @@ function loadClientHarness({ rpcResult, assetResponse, imageResponse }) {
   delete require.cache[clientFilename];
   Module._load = function (request, parent, isMain) {
     if (request === 'electron') return electron;
+    if (request === '../exportJournal') return { instance: () => journal || { start() {}, finish() {}, list: () => [] } };
     if (request === 'ws') return FakeWebSocket;
     return originalLoad.call(this, request, parent, isMain);
   };
@@ -421,6 +422,29 @@ test('registered client auto-match reports upload failures separately from dupli
     } finally {
       harness.restore();
     }
+  });
+});
+
+test('client export stays tracked until its files are written', async () => {
+  await withTempDir(async (root) => {
+    const profile = path.join(root, 'profile');
+    const output = path.join(root, 'data');
+    await fsp.mkdir(profile); await fsp.mkdir(output);
+    let paused = false;
+    const journal = require('../main/exportJournal').createJournal(profile, () => paused);
+    let release;
+    const server = new Promise((resolve) => { release = resolve; });
+    const harness = loadClientHarness({ journal, rpcResult: async (channel) => channel === 'exports:runForClient' ? server : {} });
+    try {
+      const pending = harness.handlers.get('exports:run')({}, { profileId: 'p', productIds: [], outputRoot: output, runId: 'client-export' });
+      assert.deepEqual(journal.inFlightIds(), ['client-export']);
+      paused = true;
+      assert.throws(() => journal.start('another', output), /update.*paused/);
+      release({ files: [{ relPath: 'out.png', bytes: Buffer.from('written') }], skipped: 0, skips: [] });
+      await pending;
+      assert.equal(await fsp.readFile(path.join(output, 'out.png'), 'utf8'), 'written');
+      assert.deepEqual(journal.inFlightIds(), []);
+    } finally { harness.restore(); }
   });
 });
 

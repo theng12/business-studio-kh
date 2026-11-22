@@ -188,16 +188,13 @@ function notifyQuitRequested() {
 }
 
 /**
- * Is a job the app must not abandon halfway through running right now? An
- * export or a client-mode render is tracked; an import or an image edit is a
- * single server call, so an unattended quit lands between rows (the database
- * is WAL and every write commits on its own) rather than inside one.
+ * Use the same work check as the update hold, including client exports and AI.
  */
 function isWorkInProgress() {
   try {
-    return require('./ipc/exports').hasActiveRun() || require('./renderWindow').isRendering();
+    return require('./updateHold').inFlightIds().length > 0;
   } catch (_) {
-    return false;  // never hold an installer hostage to a lookup failure
+    return true;
   }
 }
 
@@ -208,6 +205,8 @@ function isWorkInProgress() {
  * read that can already `kill` this app — same result, no token, no PIN.
  * A lookup failure falls back to "a person's", so the kiosk stays guarded.
  */
+function revokeQuit() { allowQuit = false; }
+
 function isUpdaterQuit() {
   try {
     return require('./updateHold').isUpdaterQuit();
@@ -249,10 +248,8 @@ function releaseUnansweredQuit(deadline, reason) {
   }
   allowQuit = true;
   log('kiosk:unattended-quit', `${reason}: released`);
-  // Quit the ordinary way, so index.js still stops the server and frees the
-  // port; the hard exit below is the net for a server that will not stop.
+  // Quit the ordinary way so the other shutdown guards still apply.
   app.quit();
-  setTimeout(() => { log('kiosk:unattended-quit-exit', 'the app did not quit in time; exiting'); app.exit(0); }, 10000).unref?.();
 }
 
 /**
@@ -286,14 +283,13 @@ function installKioskGuards() {
   if (guardsInstalled) return;
   guardsInstalled = true;
   Menu.setApplicationMenu(Menu.buildFromTemplate(kioskMenuTemplate(app.getName())));
-  app.on('before-quit', (e) => {
+  app.prependListener('before-quit', (e) => {
     if (allowQuit) return;
     // The installer took this app's update hold and quits straight after reading
     // `safe`: the queue is paused and work it could not settle was reported to
     // it, not cut off here. No PIN screen — there is nobody to answer it — and
     // no deferral, which is the ten minutes an unattended kiosk used to lose.
     if (isUpdaterQuit()) {
-      allowQuit = true;
       log('kiosk:updater-quit', 'the update hold is live, so this is the installer: quitting without the manager PIN');
       return;
     }
@@ -579,6 +575,7 @@ function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = 
         cancelUnansweredQuit('a manager PIN was tried, so someone is at the kiosk');   // wrong PIN: the kiosk stays
         throw err;
       }
+      if (isWorkInProgress()) throw new Error('Work is still running. Wait for it to finish, then try quitting again.');
       log('kiosk:quit', `manager=${employeeId}`);
       cancelUnansweredQuit('a manager PIN allowed the quit');
       allowQuit = true;
@@ -605,6 +602,7 @@ module.exports = {
   KIOSK_WINDOW_ARG,
   // pure, for tests
   isWorkInProgress,
+  revokeQuit,
   cancelUnansweredQuit,
   isKioskNavigationAllowed,
   isBlockedShortcut,

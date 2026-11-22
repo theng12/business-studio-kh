@@ -28,10 +28,10 @@ test('quit stops the server before the process goes away', () => {
   assert.match(block, /stopServer\(\)/);
 });
 
-test('a server that will not stop cannot keep the process and its single-instance lock alive', () => {
+test('a server stop timeout reports the refusal rather than forcing the app out', () => {
   const block = INDEX.slice(INDEX.indexOf("app.on('before-quit'"), INDEX.indexOf("app.on('window-all-closed'"));
-  // Bounded: a timer exits anyway, and the normal path clears it.
-  assert.match(block, /setTimeout\(\(\) => \{[\s\S]{0,160}app\.exit\(0\)/);
+  assert.doesNotMatch(block, /app\.exit\(/);
+  assert.match(block, /if \(!timedOut\) app\.quit\(\)/);
   assert.match(block, /clearTimeout\(bail\)/);
   assert.match(block, /before-quit:stop-timeout/);
 });

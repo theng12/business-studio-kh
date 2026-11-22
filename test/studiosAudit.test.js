@@ -267,7 +267,8 @@ test('validators: image scope and the reveal channel', () => {
   assert.equal(run({ profileId: 'p' }), true);
   assert.match(String(run({ profileId: 'p', imageScope: { mode: 'first', count: 0 } })), /count/);
   assert.match(String(run({ profileId: 'p', imageScope: { mode: 'odd' } })), /mode/);
-  assert.equal(getValidator('exports:runForClient')({ profileId: 'p', productIds: [], imageScope: { mode: 'main' } }), true);
+  assert.equal(getValidator('exports:runForClient')({ profileId: 'p', productIds: [], recoveryCapable: true, imageScope: { mode: 'main' } }), true);
+  assert.match(String(getValidator('exports:runForClient')({ profileId: 'p', productIds: [] })), /recovery/);
   assert.equal(getValidator('exports:expectedOutputs')({ profileId: 'p', productIds: [], imageScope: { mode: 'all' } }), true);
   const reveal = getValidator('files:revealPath');
   assert.equal(reveal(os.tmpdir()), true);

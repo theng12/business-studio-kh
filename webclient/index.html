@@ -307,6 +307,10 @@
   /* Bottom-anchored sheet on phones, centered card on tablet+. */
   .sheet-overlay { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,0.5); display: none; }
   .sheet-overlay.open { display: flex; align-items: flex-end; justify-content: center; }
+  #confirmSheet { width: min(480px, calc(100% - 32px)); color: inherit; padding: 16px; }
+  #confirmSheet::backdrop { background: rgba(0, 0, 0, .5); }
+  .confirm-text { white-space: pre-line; margin: 0 0 16px; }
+  .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
   @media (min-width: 640px) { .sheet-overlay.open { align-items: center; } }
   .sheet-box {
     background: var(--bg); width: 100%; max-width: 560px; max-height: 85vh;
@@ -939,6 +943,18 @@
     <div class="sheet-list" id="companySheetList"></div>
   </div>
 </div>
+
+<!-- window.confirm is a silent no-op in the packaged webview, so confirmations
+     ask in this page's own sheet. -->
+<dialog id="confirmSheet" class="sheet-box" aria-labelledby="confirmSheetText">
+  <form method="dialog">
+    <p class="confirm-text" id="confirmSheetText"></p>
+    <div class="confirm-actions">
+      <button class="btn" value="cancel" autofocus>Cancel</button>
+      <button class="btn btn--primary" id="confirmSheetYes" value="confirm"></button>
+    </div>
+  </form>
+</dialog>
 
 <!-- v0.46.0: searchable category picker (the old <select id="catFilter"> wasn't
      searchable, and the catalog has many categories — typing now filters live). -->
@@ -1926,8 +1942,23 @@
       .finally(function () { btn.disabled = false; btn.textContent = 'Connect'; });
   });
 
-  document.getElementById('disconnect').addEventListener('click', function () {
-    if (!window.confirm('Disconnect from the server?\n\nYou’ll need to paste your access token again to reconnect.')) return;
+  function confirmInPage(message, action) {
+    var sheet = document.getElementById('confirmSheet');
+    if (sheet.open) return Promise.resolve(false);
+    document.getElementById('confirmSheetText').textContent = message;
+    document.getElementById('confirmSheetYes').textContent = action;
+    sheet.returnValue = '';
+    return new Promise(function (resolve) {
+      sheet.addEventListener('close', function () { resolve(sheet.returnValue === 'confirm'); }, { once: true });
+      sheet.showModal();
+    });
+  }
+  document.getElementById('confirmSheet').addEventListener('click', function (e) {
+    if (e.target === this) this.close();
+  });
+
+  document.getElementById('disconnect').addEventListener('click', async function () {
+    if (!await confirmInPage('Disconnect from the server?\n\nYou’ll need to paste your access token again to reconnect.', 'Disconnect')) return;
     resetSessionState();
     localStorage.removeItem(LS.tok);
     token = '';
@@ -3125,9 +3156,9 @@
   // Server is authoritative; we just bust the in-page caches and re-render.
   // The image cap on the product means deletion can only DECREMENT imageCount,
   // never push it negative; the Math.max guard is a belt-and-braces clamp.
-  function confirmAndDeleteImage(productId, imageId, expectedContentHash, index) {
+  async function confirmAndDeleteImage(productId, imageId, expectedContentHash, index) {
     if (!imageId) { toast('Photo no longer available. Refresh and try again.'); return; }
-    if (!window.confirm(deleteImageConfirmText(index))) return;
+    if (!await confirmInPage(deleteImageConfirmText(index), 'Delete photo')) return;
     rpc('images:removeFromProduct', { productId: productId, imageId: imageId, expectedContentHash: expectedContentHash })
       .then(function () {
         clearImageCaches(productId);

@@ -834,7 +834,32 @@ app.whenReady().then(() => {
   app.exit(1);
 });
 
+let serverShutdownInProgress = false;
+function quitBlocked(message) {
+  logEvent('before-quit:blocked', message);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('progress:event', { id: 'quit-blocked', complete: true, error: message });
+  }
+}
 app.on('before-quit', (event) => {
+  if (event.defaultPrevented) return;
+  try {
+    const hold = require('./updateHold');
+    const unsettled = hold.inFlightIds();
+    if (unsettled.length || (hold.isPaused() && !hold.isUpdaterQuit())) {
+      event.preventDefault();
+      require('./kioskWindow').revokeQuit();
+      quitBlocked(unsettled.length
+        ? `Quit paused while work is running (${unsettled.join(', ')}). Try again when it finishes.`
+        : 'Quit paused while the update is settling. Try again once the hold ends.');
+      return;
+    }
+  } catch (err) {
+    event.preventDefault();
+    try { require('./kioskWindow').revokeQuit(); } catch (_) { /* remain blocked */ }
+    quitBlocked(`Could not check running work; the app stayed open: ${err.message}`);
+    return;
+  }
   logEvent('before-quit');
   eventLog.flush();
   destroyTray();
@@ -844,37 +869,37 @@ app.on('before-quit', (event) => {
     const server = require('./server');
     if (server.getStatus().running) {
       event.preventDefault();
-      // A stop that never settles must not keep the process (and the
-      // single-instance lock) alive: the next launch would then exit
-      // silently and the app would look gone after an update. Bounded.
+      if (serverShutdownInProgress) {
+        quitBlocked('The local server is still stopping. Try quitting again when it has stopped.');
+        return;
+      }
+      serverShutdownInProgress = true;
+      let timedOut = false;
       const bail = setTimeout(() => {
-        logEvent('before-quit:stop-timeout', 'the server did not stop in 5s; exiting anyway');
-        app.exit(0);
+        timedOut = true;
+        logEvent('before-quit:stop-timeout', 'the server did not stop in 5s; quit remains blocked');
+        quitBlocked('The local server did not stop within 5 seconds. Try quitting again when it has stopped.');
       }, 5000);
       bail.unref?.();
-      server.stopServer().finally(() => { clearTimeout(bail); app.exit(0); });
+      server.stopServer().then(() => {
+        clearTimeout(bail);
+        serverShutdownInProgress = false;
+        if (!timedOut) app.quit();
+      }, (err) => {
+        clearTimeout(bail);
+        serverShutdownInProgress = false;
+        quitBlocked(`The local server could not stop: ${err.message}. Try quitting again.`);
+      });
     }
   } catch (err) {
     logEvent('before-quit:stop-failed', err.message);
   }
 });
 
-// Measured 2026-11-22 (lead/0.1.122/quit-wedge-probe.sh): after startup the
-// process survived a plain `kill` for >10 s at every delay, because SIGTERM is
-// not an Electron quit event and `before-quit` never fired. Route it through
-// the app's own quit path: the kiosk guard still applies its own policy
-// (a kiosk quit is refused unless it is the installer's), unchanged here.
 process.on('SIGTERM', () => {
-  logEvent('sigterm', 'stop signal; quitting through the normal quit path');
-  app.quit();
-  // Between boot and the first window, app.quit() is swallowed (measured: the
-  // process kept starting after the request). A stop signal must always end the
-  // app, so it is bounded the same way the server stop is — never left to a
-  // force-kill.
-  setTimeout(() => {
-    logEvent('sigterm:force-exit', 'the quit did not settle in 5 s; exiting');
-    app.exit(0);
-  }, 5000).unref?.();
+  logEvent('sigterm', 'stop signal; requesting a normal quit');
+  if (app.isReady()) app.quit();
+  else void app.whenReady().then(() => app.quit());
 });
 
 app.on('window-all-closed', () => {

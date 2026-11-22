@@ -76,7 +76,9 @@ test('the logger rotates by itself past the ceiling and says so', () => {
 test('the app wires the bounded logger and flushes on quit', () => {
   const src = fs.readFileSync(path.join(__dirname, '../main/index.js'), 'utf8');
   assert.match(src, /createEventLog\(\{[\s\S]{0,200}filePath: crashLogPath\(\)/);
-  assert.match(src, /app\.on\('before-quit'[\s\S]{0,200}eventLog\.flush\(\)/);
+  const quit = src.slice(src.indexOf("app.on('before-quit'"), src.indexOf("app.on('window-all-closed'"));
+  assert.match(quit, /eventLog\.flush\(\)/, 'the quit handler flushes the log');
+  assert.ok(quit.indexOf('eventLog.flush()') < quit.indexOf('app.quit()'), 'flushed before it quits');
   assert.doesNotMatch(src, /fs\.appendFileSync\(crashLogPath\(\)/, 'no unbounded append left behind');
 });
 

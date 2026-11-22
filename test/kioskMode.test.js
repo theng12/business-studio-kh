@@ -446,6 +446,7 @@ function loadGuardedKiosk({ work, updaterQuit } = {}) {
       getPath: () => userData,
       getName: () => 'Business Studio KH',
       on: (event, fn) => { handlers[event] = fn; },
+      prependListener: (event, fn) => { handlers[event] = fn; },
       exit: (code) => { exits.push(`exit:${code}`); },
       relaunch: () => {},
       quit: () => { exits.push('quit'); },
@@ -468,8 +469,10 @@ function loadGuardedKiosk({ work, updaterQuit } = {}) {
     delete require.cache[renderId];
   }
   const holdId = path.join(ROOT, 'main/updateHold.js');
-  if (updaterQuit === undefined) delete require.cache[holdId];
-  else require.cache[holdId] = { id: holdId, filename: holdId, loaded: true, exports: { isUpdaterQuit: () => updaterQuit } };
+  require.cache[holdId] = { id: holdId, filename: holdId, loaded: true, exports: {
+    isUpdaterQuit: () => !!updaterQuit,
+    inFlightIds: () => work?.has() ? ['fixture-work'] : [],
+  } };
   delete require.cache[require.resolve('../main/kioskWindow')];
   const fresh = require('../main/kioskWindow');
   fresh.configureKiosk({ log: () => {} });
