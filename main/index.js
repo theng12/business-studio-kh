@@ -894,14 +894,37 @@ app.on('before-quit', (event) => {
   } catch (err) {
     logEvent('before-quit:stop-failed', err.message);
   }
+  // Measured 2026-11-23 (lead/0.1.123/quit-wedge-probe.sh, twice 4 of 6): a quit
+  // asked for while the first window is still loading is swallowed — before-quit
+  // runs clean and nothing further happens, so the process outlives a 10 s kill.
+  // The request never reaches the Node SIGTERM handler in the packaged app, so
+  // the retry lives here: ask again on a fixed 10 s budget until the process is
+  // gone. A quit the guards keep refusing runs out the budget and is named in
+  // the log; the timer dies with the process, so a landed quit never retries.
+  if (!event.defaultPrevented) armQuitSettleWatchdog();
 });
 
-// Measured 2026-11-23 (lead/0.1.123/quit-wedge-probe.sh, 4 of 6 wedged): a stop
-// signal between boot and the first window is swallowed — `before-quit` runs
-// cleanly but the quit never completes, and the process stays alive past any
-// bound. Re-request it on a bounded retry instead of force-exiting (deleted in
-// this release): every quit guard still applies to each request, and a stop
-// that stays refused is named in the log rather than left silent.
+let quitWatchdog = null;
+function armQuitSettleWatchdog() {
+  if (quitWatchdog) return;
+  const deadline = Date.now() + 10000;
+  const retry = () => {
+    quitWatchdog = null;
+    if (Date.now() > deadline) {
+      logEvent('quit:unfinished', 'the quit did not finish in 10 s; the guards stay in charge');
+      return;
+    }
+    logEvent('quit:re-request', 'a quit did not finish; asking again');
+    app.quit();
+  };
+  quitWatchdog = setTimeout(retry, 500);
+  quitWatchdog.unref?.();
+}
+
+// Measured 2026-11-23: in the packaged app a SIGTERM never reaches this Node
+// handler (Electron's own handling requests the quit instead), so the retry
+// that makes a swallowed quit land lives in the before-quit path above. This
+// handler stays for the paths where it does run (the test fixtures prove it).
 process.on('SIGTERM', () => {
   logEvent('sigterm', 'stop signal; requesting a normal quit');
   // A quit swallowed mid-boot never completes on its own (measured above), so
