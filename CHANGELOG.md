@@ -1,5 +1,9 @@
 # What's new
 
+## 0.1.123 — 2026-11-22
+
+- FIX — Stopping the app with a plain stop signal (what scripts and cleanup tools send) now closes it like a Quit does. Before, it kept running until it was force-killed.
+
 ## 0.1.122 — 2026-11-22
 
 - FIX — A backup or a restore that was cut off no longer leaves a full copy of your old data folder sitting beside it for ever. After a week the copy moves into a `_trash` folder next to your data, where you can still recover it, and only once the live folder is proven to hold a working database.

@@ -859,6 +859,16 @@ app.on('before-quit', (event) => {
   }
 });
 
+// Measured 2026-11-22 (lead/0.1.122/quit-wedge-probe.sh): after startup the
+// process survived a plain `kill` for >10 s at every delay, because SIGTERM is
+// not an Electron quit event and `before-quit` never fired. Route it through
+// the app's own quit path: the kiosk guard still applies its own policy
+// (a kiosk quit is refused unless it is the installer's), unchanged here.
+process.on('SIGTERM', () => {
+  logEvent('sigterm', 'stop signal; quitting through the normal quit path');
+  app.quit();
+});
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });

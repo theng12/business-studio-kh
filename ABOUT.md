@@ -57,5 +57,5 @@ data and credentials stay in the app's own data folder.
 
 ## Current version
 
-0.1.122, from the `version` field in `package.json`; the newest `CHANGELOG.md` entry
+0.1.123, from the `version` field in `package.json`; the newest `CHANGELOG.md` entry
 agrees, and the README names the same release.
