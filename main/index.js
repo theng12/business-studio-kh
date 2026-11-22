@@ -867,6 +867,14 @@ app.on('before-quit', (event) => {
 process.on('SIGTERM', () => {
   logEvent('sigterm', 'stop signal; quitting through the normal quit path');
   app.quit();
+  // Between boot and the first window, app.quit() is swallowed (measured: the
+  // process kept starting after the request). A stop signal must always end the
+  // app, so it is bounded the same way the server stop is — never left to a
+  // force-kill.
+  setTimeout(() => {
+    logEvent('sigterm:force-exit', 'the quit did not settle in 5 s; exiting');
+    app.exit(0);
+  }, 5000).unref?.();
 });
 
 app.on('window-all-closed', () => {

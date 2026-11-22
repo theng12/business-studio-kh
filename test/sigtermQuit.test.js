@@ -16,4 +16,6 @@ const path = require('node:path');
 test('main wires SIGTERM through the app quit path', () => {
   const src = fs.readFileSync(path.join(__dirname, '../main/index.js'), 'utf8');
   assert.match(src, /process\.on\('SIGTERM'[\s\S]{0,200}app\.quit\(\);/);
+  // Bounded: a quit swallowed during startup must still end the process.
+  assert.match(src, /SIGTERM'[\s\S]{0,900}setTimeout\([\s\S]{0,200}app\.exit\(0\)/);
 });
