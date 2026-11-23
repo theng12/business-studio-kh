@@ -1,5 +1,27 @@
 # HANDOFF — Business Studio KH
 
+**0.1.124 — on branch `codex/sparkle-0124`, gate pending, NOT published.** Sparkle 2.10.1 is
+embedded at `Contents/Frameworks/Sparkle.framework` and copied with `ditto`, never `fs.cpSync` — the
+latter rewrites the bundle's version symlinks to absolute paths and leaves the framework unsealable
+(`after-pack.js` now throws if `Versions/Current` is ever absolute). `scripts/sign-mac.js` signs it
+inside-out (XPC services → `Updater.app` → `Autoupdate` → `Versions/B` → framework) before the app,
+never deep. A Node-API addon `native/khsparkle.node` (`scripts/build-khsparkle-addon.sh`) loads the
+shared shim from the Electron main process; `main/updateCheck.js` starts it once after `installTray`
+and logs `kh-sparkle:refused` when the bundle carries no `SUFeedURL`.
+`build/entitlements.mac.plist` is committed and applied under the hardened runtime: allow-jit,
+allow-unsigned-executable-memory, disable-library-validation, network.client, network.server,
+files.user-selected.read-write, files.downloads.read-write — 7 keys, where 0.1.123 carried 3 (all
+electron-builder defaults). `SUPublicEDKey`, `KHHoldURL` and `KHHoldTokenFile` ship; **`SUFeedURL`
+deliberately does not**, so Sparkle stays dormant until a feed address answers. The unsafe five-second
+SIGTERM `app.exit()` is gone: a quit holds first, settles within the 20–30 s contract, and only then
+lets the updater quit; a quit refused by running work shows a toast naming what is running rather than
+draining silently. Interrupted exports are recorded in `main/exportJournal.js` (atomic 0600 write) and
+listed in Export Center's "Exports needing attention" card with time, target and id. Test hook:
+`--data-dir <path>` — what `install-launch-check.sh` passes — points the app at that data folder and
+puts its profile at `<path>/.appdata`, skipping the old-name profile move, so a hidden instance never
+touches the owner's profile or data. Artifact `dist/Business Studio KH-0.1.124.dmg`; `dist/` keeps
+0.1.124 + 0.1.123. This paragraph also clears the doc's own 0.1.123 gap.
+
 **0.1.122 PUBLISHED 2026-11-21T21:32:45Z — the fleet-hardening residuals (branch
 `codex/fleet-hardening-0122`, release commit `9445fec`, fast-forwarded into `main` and pushed).**
 Gate `GATE PASS media 9445fec1… 2026-11-21T21:28:28Z` (evidence

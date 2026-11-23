@@ -3,6 +3,7 @@
 ## 0.1.124 — 2026-11-23
 
 - NEW — Business Studio KH can update itself with Sparkle, pausing its own work first.
+- NOTE — If macOS says the app is damaged when you open it, run xattr -cr "/Applications/Business Studio KH.app" in Terminal once.
 - Internal — Sparkle 2.10.1 is signed inside its app and loads under the hardened runtime; the update feed stays switched off until its address answers.
 
 ## 0.1.123 — 2026-11-22
