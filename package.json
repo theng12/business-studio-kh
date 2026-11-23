@@ -1,7 +1,7 @@
 {
   "name": "business-studio-kh",
   "private": true,
-  "version": "0.1.123",
+  "version": "0.1.124",
   "description": "Business Studio KH — product images, labels, and catalogs in one workspace",
   "author": "TerraNash",
   "main": "dist-electron/main/index.js",
@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "icon:build": "node scripts/build-icon.js",
     "webclient:bundle": "node scripts/build-webclient.js",
-    "predist": "npm run webclient:bundle && npm run install:sharp",
+    "predist": "npm run build:sparkle && npm run webclient:bundle && npm run install:sharp",
     "dist": "vite build && electron-builder",
     "dist:updater": "bash scripts/build-updater-dmg.sh",
     "postdist": "node scripts/scan-dmg-leaks.js && npm run native:host && node scripts/retain-dist.js",
@@ -29,7 +29,8 @@
     "check:client-server": "cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/probe-server-client.js",
     "check:update-hold": "node scripts/probe-update-hold.js",
     "dmgs:prune": "node scripts/prune-dmgs.js --apply",
-    "dmgs:prune:dry": "node scripts/prune-dmgs.js"
+    "dmgs:prune:dry": "node scripts/prune-dmgs.js",
+    "build:sparkle": "scripts/build-khsparkle-addon.sh"
   },
   "dependencies": {
     "@imgly/background-removal": "^1.7.0",
@@ -85,6 +86,10 @@
       {
         "from": "assets/fonts",
         "to": "fonts"
+      },
+      {
+        "from": "native/khsparkle.node",
+        "to": "native/khsparkle.node"
       }
     ],
     "extraMetadata": {
@@ -104,12 +109,18 @@
       "minimumSystemVersion": "12.0.0",
       "identity": "-",
       "sign": "./scripts/sign-mac.js",
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "timestamp": "none",
       "gatekeeperAssess": false,
       "extendInfo": {
-        "NSCameraUsageDescription": "កុំព្យូទ័រកត់ត្រាវត្តមានថតរូបអ្នក នៅពេលអ្នកចូល និងចេញពីការងារ។ The attendance kiosk takes your photo when you clock in and out."
-      }
+        "NSCameraUsageDescription": "កុំព្យូទ័រកត់ត្រាវត្តមានថតរូបអ្នក នៅពេលអ្នកចូល និងចេញពីការងារ។ The attendance kiosk takes your photo when you clock in and out.",
+        "SUPublicEDKey": "rBhQUerHG9stW+oDp1P5A1yTfkCPcGvHaTrOmDfL7Rk=",
+        "KHHoldURL": "http://127.0.0.1:13181/api/maintenance/hold",
+        "KHHoldTokenFile": "~/Library/KHUpdater/state/hold-token",
+        "SUEnableAutomaticChecks": true
+      },
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "dmg": {
       "title": "Business Studio KH ${version} (${arch})",

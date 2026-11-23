@@ -533,6 +533,11 @@ app.whenReady().then(() => {
   installAppMenu(showMainWindow);
   installTray({ showWindow: showMainWindow, log: logEvent });
 
+  // Sparkle: once, after the window/menu-bar item exists. It takes this app's own
+  // update hold before any feed fetch and refuses, with a reason, rather than
+  // checking without one.
+  require('./updateCheck').startUpdateCheck({ log: logEvent });
+
   // v0.15.1: initialise the event bus before anything that might
   // call broadcast() (queueRunner, IPC writes, server WS handler).
   events.init({ getMainWindow: () => mainWindow });

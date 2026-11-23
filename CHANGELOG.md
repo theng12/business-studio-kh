@@ -1,5 +1,10 @@
 # What's new
 
+## 0.1.124 — 2026-11-23
+
+- NEW — Business Studio KH can update itself with Sparkle, pausing its own work first.
+- Internal — Sparkle 2.10.1 is signed inside its app and loads under the hardened runtime; the update feed stays switched off until its address answers.
+
 ## 0.1.123 — 2026-11-22
 
 - FIX — Updates wait while exports or other work are still running. Interrupted exports show their destination and start time in Export Center.

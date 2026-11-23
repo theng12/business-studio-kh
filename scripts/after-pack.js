@@ -1,8 +1,34 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+
+const SHIM = process.env.KH_SPARKLE_SHIM
+  || path.join(os.homedir(), 'Developer', '_orchestra', 'developer-system', 'sparkle-shim-20261123');
+
+/** Copies Sparkle in before signing. A build without it is refused: an app that
+ *  advertises an updater but cannot load it fails silently at launch. */
+function copySparkleFramework(appPath) {
+  const source = process.env.SPARKLE_FRAMEWORK || path.join(SHIM, 'vendor', 'Sparkle.framework');
+  if (!fs.existsSync(source)) {
+    throw new Error(`sparkle: no framework at ${source} (set SPARKLE_FRAMEWORK or KH_SPARKLE_SHIM)`);
+  }
+  const dest = path.join(appPath, 'Contents', 'Frameworks', 'Sparkle.framework');
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.cpSync(source, dest, { recursive: true, dereference: false });
+  if (!fs.existsSync(path.join(dest, 'Versions', 'B', 'Sparkle'))) {
+    throw new Error(`sparkle: ${dest} has no Versions/B/Sparkle`);
+  }
+  console.log(`sparkle: copied framework to ${dest}`);
+}
+
+function assertSparkleAddon(appPath) {
+  const addon = path.join(appPath, 'Contents', 'Resources', 'native', 'khsparkle.node');
+  if (!fs.existsSync(addon)) throw new Error(`sparkle: ${addon} missing — run scripts/build-khsparkle-addon.sh`);
+}
 
 function readKey(plist, key) {
   try {
@@ -74,9 +100,13 @@ function assertNoTestCode(appPath) {
 module.exports = async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return;
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
+  copySparkleFramework(appPath);
+  assertSparkleAddon(appPath);
   updateHelperBundles(appPath);
   assertNoTestCode(appPath);
 };
 module.exports.updateHelperBundles = updateHelperBundles;
 module.exports.assertNoTestCode = assertNoTestCode;
+module.exports.copySparkleFramework = copySparkleFramework;
+module.exports.assertSparkleAddon = assertSparkleAddon;
 module.exports.TEST_PATH = TEST_PATH;

@@ -8,6 +8,7 @@ APP="dist/mac-arm64/Business Studio KH.app"
 DMG="dist/Business Studio KH-$VERSION.dmg"
 STAGE="$(mktemp -d -t media-updater)"
 trap 'npm run native:host' EXIT
+npm run build:sparkle
 npm run webclient:bundle
 npm run build
 ./node_modules/.bin/electron-builder --dir --arm64 --publish never

@@ -47,3 +47,6 @@ graphify-out
 # _trash/README.md and the "Working rules" section in AGENTS.md.
 _trash/
 /_trash
+
+# Built Sparkle bridge — rebuilt by npm run build:sparkle
+native/khsparkle.node
