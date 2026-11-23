@@ -12,7 +12,7 @@ const { signApp } = require('@electron/osx-sign')
 const IDENTITY = process.env.MEDIA_SIGNING_IDENTITY || 'KH Studio Local Signing'
 
 /** Sparkle's nested code, signed inside-out so the framework's own seal covers it.
- *  Never `--deep`: a deep seal here would hide an unsigned XPC from `--deep --strict` later. */
+ *  Never deep-sign: a deep seal here would hide an unsigned XPC from a strict deep verify later. */
 function signSparkle(appPath, identity) {
   const framework = path.join(appPath, 'Contents', 'Frameworks', 'Sparkle.framework')
   if (!fs.existsSync(framework)) return
