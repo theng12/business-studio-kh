@@ -18,7 +18,7 @@
  *   node scripts/prune-dmgs.js --dir <path>    # a dist folder other than ./dist
  *
  * Run it after `npm run dist`. The delivered copies in the owner's checkout
- * (`/Users/vengtheng/Developer/business-studio-kh/dist`) are pruned by running it
+ * (`$HOME/Developer/business-studio-kh/dist`) are pruned by running it
  * with `--dir` pointing there, or from that checkout directly.
  */
 const fs = require('node:fs');
