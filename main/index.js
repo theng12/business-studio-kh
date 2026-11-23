@@ -27,6 +27,20 @@ const fs = require('node:fs');
 // Must run before app.whenReady().
 app.setName('Business Studio KH');
 
+/* A hidden test instance — `--data-dir <path>`, which the studio gate's launch check
+ * passes — keeps its profile beside that folder as well, so no such run can read or
+ * write the live profile or the live data folder. Must run before app.whenReady(). */
+const ISOLATED_RUN = (function isolateTestInstance() {
+  const i = process.argv.indexOf('--data-dir');
+  const inline = process.argv.find((a) => a.startsWith('--data-dir='));
+  const dir = (i !== -1 && process.argv[i + 1]) || (inline && inline.slice('--data-dir='.length));
+  if (!dir) return false;
+  const isolated = path.join(path.resolve(dir), '.appdata');
+  fs.mkdirSync(isolated, { recursive: true });
+  app.setPath('userData', isolated);
+  return true;
+})();
+
 /* 0.1.120 — the app was renamed from Media Studio KH. The profile folder is
  * named after the app, so it moves with the name: config.json holds the AI key,
  * the client token and the data-folder path, and starting on an empty profile
@@ -35,6 +49,7 @@ app.setName('Business Studio KH');
  * is never moved — config.json keeps pointing at whatever it already held.
  * A failed move is logged and the app still starts. */
 (function adoptProfileFromOldName() {
+  if (ISOLATED_RUN) return; // a test instance never moves the live profile
   try {
     const { adoptProfile } = require('./util/profileMigration');
     const result = adoptProfile({

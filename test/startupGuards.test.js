@@ -60,3 +60,10 @@ test('a failed boot never waits for a click on a hidden or unattended start', ()
   assert.match(block, /const unattended = process\.argv\.includes\('--hidden'\)/);
   assert.match(block, /if \(!unattended\) \{\s*dialog\.showErrorBox/);
 });
+
+test('a hidden --data-dir run keeps its own profile and never moves the live one', () => {
+  const isolated = INDEX.slice(INDEX.indexOf('ISOLATED_RUN'), INDEX.indexOf('adoptProfileFromOldName'));
+  assert.match(isolated, /app\.setPath\('userData'/);
+  assert.ok(INDEX.indexOf("app.setPath('userData'") < INDEX.indexOf('app.whenReady().then'), 'before the app is ready');
+  assert.match(INDEX, /if \(ISOLATED_RUN\) return;/);
+});

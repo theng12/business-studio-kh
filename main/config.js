@@ -159,11 +159,27 @@ function migrateThemePreference(config) {
   return next;
 }
 
+/** A hidden test instance runs against its own folder: `--data-dir <path>` (the studio
+ *  gate's launch check passes this). Never written back to config.json. */
+function dataDirOverride() {
+  const i = process.argv.indexOf('--data-dir');
+  if (i !== -1 && process.argv[i + 1]) return process.argv[i + 1];
+  const inline = process.argv.find((a) => a.startsWith('--data-dir='));
+  return inline ? inline.slice('--data-dir='.length) : null;
+}
+
+function applyDataDirOverride(cfg) {
+  const dir = dataDirOverride();
+  if (dir) cfg.dataDir = dir;
+  return cfg;
+}
+
 function loadConfig() {
   const p = configPath();
   if (!fs.existsSync(p)) {
-    const cfg = defaultConfig();
-    saveConfig(cfg);
+    const defaults = defaultConfig();
+    saveConfig(defaults);
+    const cfg = applyDataDirOverride({ ...defaults });
     ensureDir(cfg.dataDir);
     return cfg;
   }
@@ -176,6 +192,7 @@ function loadConfig() {
       const recovered = JSON.parse(fs.readFileSync(recoveryPath, 'utf8'));
       const cfg = { ...defaultConfig(), ...migrateThemePreference(recovered) };
       writeConfigAtomically(cfg);
+      applyDataDirOverride(cfg);
       ensureDir(cfg.dataDir);
       process.stderr.write(`[config] primary config was unreadable; recovered the last valid configuration from ${recoveryPath}\n`);
       return cfg;
@@ -190,6 +207,7 @@ function loadConfig() {
   const migrated = migrateThemePreference(parsed);
   const cfg = { ...defaultConfig(), ...migrated };
   if (migrated !== parsed) writeConfigAtomically(cfg);
+  applyDataDirOverride(cfg);
   ensureDir(cfg.dataDir);
   return cfg;
 }

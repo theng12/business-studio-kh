@@ -58,3 +58,20 @@ test('loadConfig recovers a corrupt primary from its last-known-good copy', asyn
     await fsp.rm(root, { recursive: true, force: true });
   }
 });
+
+test('--data-dir points a hidden run at its own folder without saving that path', async () => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'iskh-config-datadir-'));
+  const savedArgv = process.argv;
+  try {
+    const config = loadConfig(root);
+    const scratch = path.join(root, 'scratch-data');
+    process.argv = [...savedArgv, '--data-dir', scratch];
+    const cfg = config.loadConfig();
+    assert.equal(cfg.dataDir, scratch);
+    const onDisk = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+    assert.equal(onDisk.dataDir, config.defaultConfig().dataDir, 'the override is never persisted');
+  } finally {
+    process.argv = savedArgv;
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+});
