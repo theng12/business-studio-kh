@@ -159,7 +159,7 @@ export function BackupsPanel({ config }) {
 
   /**
    * v0.1.83: restore a backup that is NOT in the backups folder — the route
-   * for the old Business Studio KH backups, which were written by another app to
+   * for the old Image Studio KH backups, which were written by another app to
    * somewhere else entirely. Picks the file, then runs the exact same
    * preview → confirm → restore path the list uses, so there is one restore
    * implementation and one warning.

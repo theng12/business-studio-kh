@@ -28,7 +28,7 @@
 
 - NEW — The app is now Business Studio KH. Everything works as before: the same data, the same people and permissions, the same updates. The first time it opens after updating, your settings, AI key and server connection move across by themselves.
 - NOTE — Your data folder is not moved. It stays exactly where it is now (usually `Pictures/Business Studio KH`), so nothing has to be re-found or copied. Only a brand-new install starts in `Pictures/Business Studio KH`.
-- NOTE — Your old backups still list and restore. Files named `media-studio-kh-backup-…` and older `business-studio-kh-backup-…` are both recognised.
+- NOTE — Your old backups still list and restore, including ones written before the rename.
 - Internal — The app's identifier (`com.terranash.mediastudiokh`) and its feed id (`media-studio`) stay as they are on purpose: the updater matches those to update an installed copy, so changing them would stop updates. The installer, the SSD kit and the GitHub repository carry the new name.
 
 ## 0.1.119 — 2026-11-21

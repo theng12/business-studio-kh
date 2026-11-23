@@ -22,7 +22,7 @@
  *   - backups:pickFile   → choose one .iskhbackup from anywhere on this
  *                          Mac (v0.1.83) — for a backup that lives outside
  *                          the backups folder, such as the ones the old
- *                          Business Studio KH app wrote.
+ *                          Image Studio KH app wrote.
  *   - backups:restore    → REPLACE the data folder from a backup. The
  *                          owning process restarts after remote restores;
  *                          local renderers relaunch after the response.
@@ -125,7 +125,7 @@ function register({ expose, exposeLocal }) {
    * v0.1.83: pick a backup file from anywhere on this Mac.
    *
    * The folder list is the normal route, but it cannot reach a backup written
-   * somewhere else — most importantly the ones the old Business Studio KH app
+   * somewhere else — most importantly the ones the old Image Studio KH app
    * left outside this app's backups folder, which is the "I have the old
    * backup, can I bring it in?" case. Requiring a Finder copy first, and then
    * a trip out of this panel and back for the list to notice it, was

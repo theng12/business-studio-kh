@@ -110,15 +110,15 @@ async function siblingNames(dataDir) {
   return (await fsp.readdir(parent)).filter((name) => name.startsWith(prefix));
 }
 
-test('a backup made by the OLD app (Business Studio KH) restores like a current one', { skip: skipReason }, async () => {
+test('a backup made by the OLD app (Image Studio KH) restores like a current one', { skip: skipReason }, async () => {
   // v0.1.82: the app was renamed, and the old build wrote
-  // `kind: 'business-studio-kh-backup'`. The archive layout and the database schema
+  // `kind: 'image-studio-kh-backup'`. The archive layout and the database schema
   // never changed, so the only thing standing between the owner and his old
   // data was that marker — recognised now, rather than rewritten.
   const env = await fixture();
   try {
     await liveData(env.dataDir, 'current');
-    const archive = makeArchive(env.root, 'backup', 'legacy-data', null, 2, 'business-studio-kh-backup');
+    const archive = makeArchive(env.root, 'backup', 'legacy-data', null, 2, 'image-studio-kh-backup');
     const result = await restoreBackup({ backupPath: archive });
     assert.equal(result.success, true, 'an old backup restores');
     assert.equal(dbValue(path.join(env.dataDir, 'database.sqlite')), 'legacy-data',

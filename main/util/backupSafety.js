@@ -26,8 +26,8 @@ const BACKUP_FORMAT_VERSION = 1;
 // from an arbitrary .tar.gz the user renamed.
 const BACKUP_KIND = 'business-studio-kh-backup';
 
-/* v0.1.82: this app was renamed from **Business Studio KH**, and the old app wrote
- * `business-studio-kh-backup` into the same manifest field. The data itself did not
+/* v0.1.82: this app was renamed from **Image Studio KH**, and the old app wrote
+ * `image-studio-kh-backup` into the same manifest field. The data itself did not
  * change — same archive layout, and the database schema was already version 2,
  * which is what it still is (later columns arrive through addColumnIfMissing) —
  * so an old backup restores perfectly well. It was only ever the marker that
@@ -36,10 +36,10 @@ const BACKUP_KIND = 'business-studio-kh-backup';
  * Recognised rather than rewritten: a restored archive keeps saying which app
  * made it, and the restore screen shows that version.
  *
- * 0.1.120: renamed again, Business Studio KH → Business Studio KH, so the names
+ * 0.1.120: renamed again, Media Studio KH → Business Studio KH, so the names
  * this app itself used before are both accepted. Every older backup must still
  * list and restore. */
-const LEGACY_BACKUP_KINDS = ['media-studio-kh-backup', 'business-studio-kh-backup'];
+const LEGACY_BACKUP_KINDS = ['media-studio-kh-backup', 'image-studio-kh-backup'];
 
 // Custom extension (a gzipped tar underneath). Custom so double-click
 // in Finder doesn't auto-expand it and it's obviously ours.
@@ -320,7 +320,7 @@ function backupFilename(stamp, appVersion) {
  */
 function isBackupFilename(name) {
   if (typeof name !== 'string') return false;
-  // v0.1.82 and 0.1.120: `business-studio-kh-backup-…` and `media-studio-kh-backup-…`
+  // v0.1.82 and 0.1.120: `image-studio-kh-backup-…` and `media-studio-kh-backup-…`
   // are what this app wrote before its two renames. The old files have to LIST in
   // the restore picker, or the user cannot pick the very backup they are trying
   // to restore.

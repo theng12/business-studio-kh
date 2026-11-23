@@ -4,8 +4,7 @@ Business Studio KH is a macOS desktop app for the owner's businesses in Cambodia
 keeps product photos, labels, catalogs, purchasing, fuel, fixed assets and people
 records in one place, with role-based access for the people who use them.
 
-It was called **Business Studio KH** until 0.1.120 (and Business Studio KH before that).
-Those were renames: the app's identifier (`com.terranash.mediastudiokh`) and its
+It has been renamed twice, most recently in 0.1.120. Those were renames: the app's identifier (`com.terranash.mediastudiokh`) and its
 updater feed id (`media-studio`) deliberately did not change, because the updater
 matches them to update an installed copy. Older backups keep their old names and
 still restore.

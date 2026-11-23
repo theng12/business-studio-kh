@@ -23,7 +23,7 @@ runs on every backup for the backups folder, the system temp folder and the data
 before it may ship. Docs corrected in the same release: the README and ABOUT current-version lines
 were both still at 0.1.120.
 
-**0.1.120 PUBLISHED 2026-11-21 — renamed from Business Studio KH.** One release that moves every
+**0.1.120 PUBLISHED 2026-11-21 — renamed in 0.1.120.** One release that moves every
 user-visible name: product name, window/menu/About copy, executable, phone-page titles, default data
 folder for new installs, installer and DMG names, GitHub repository, and the feed entry's `name`
 and `bundleName`. Two identities deliberately did **not** move, because the KH Updater matches them

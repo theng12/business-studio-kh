@@ -335,7 +335,7 @@ function register({ expose, exposeLocal }) {
       throw new Error('Folder no longer exists');
     }
     if (!looksLikeOurDataDir(targetPath)) {
-      throw new Error('That folder doesn\'t look like an Business Studio KH data folder — refusing to trash it for safety.');
+      throw new Error('That folder doesn\'t look like a Business Studio KH data folder — refusing to trash it for safety.');
     }
     await shell.trashItem(targetPath);
     return { ok: true, path: targetPath };

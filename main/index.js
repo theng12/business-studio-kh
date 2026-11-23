@@ -27,7 +27,7 @@ const fs = require('node:fs');
 // Must run before app.whenReady().
 app.setName('Business Studio KH');
 
-/* 0.1.120 — the app was renamed from Business Studio KH. The profile folder is
+/* 0.1.120 — the app was renamed from Media Studio KH. The profile folder is
  * named after the app, so it moves with the name: config.json holds the AI key,
  * the client token and the data-folder path, and starting on an empty profile
  * would look like everything was lost. On the first launch under the new name
@@ -38,7 +38,7 @@ app.setName('Business Studio KH');
   try {
     const { adoptProfile } = require('./util/profileMigration');
     const result = adoptProfile({
-      base: app.getPath('appData'), fromName: 'Business Studio KH', toName: 'Business Studio KH',
+      base: app.getPath('appData'), fromName: 'Media Studio KH', toName: 'Business Studio KH',
     });
     if (result.status !== 'nothing-to-do') logEvent(`profile:${result.status}`, `${result.from} -> ${result.to}`);
   } catch (err) {

@@ -1,4 +1,4 @@
-# Business Studio KH — 0.1.120 receipt (renamed from Business Studio KH)
+# Business Studio KH — 0.1.120 receipt (renamed in 0.1.120)
 
 Published 2026-11-21T15:14Z to the 1301 feed from `main`, commit `28eb850`.
 Gate on that commit:

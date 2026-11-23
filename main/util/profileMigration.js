@@ -1,5 +1,5 @@
 /**
- * 0.1.120 — the app was renamed from Business Studio KH, and Electron names the
+ * 0.1.120 — the app was renamed, and Electron names the
  * profile folder after the app. config.json inside it holds the AI key, the
  * client token and the data-folder path, so a first launch on an empty profile
  * would look like everything was lost.

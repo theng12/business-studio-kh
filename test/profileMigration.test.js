@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { adoptProfile } = require('../main/util/profileMigration');
 
-const OLD = 'Business Studio KH';
+const OLD = 'Media Studio KH';
 const NEW = 'Business Studio KH';
 
 function base() {

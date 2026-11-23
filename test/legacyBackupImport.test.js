@@ -1,5 +1,5 @@
 /**
- * "Can I import the old Business Studio KH backup into Business Studio KH?"
+ * "Can I import the old Image Studio KH backup into Business Studio KH?"
  *
  * The data itself is compatible — the database schema was 2 in the old app and
  * is 2 now (additive columns are added at boot), and the archive layout is the
@@ -9,7 +9,7 @@
  *   - `isBackupFilename` only listed `business-studio-kh-backup-…`, so an old file
  *     did not even appear in the restore list.
  *   - `validateManifest` only accepted `kind: 'business-studio-kh-backup'`, so a
- *     renamed file was then refused: "Not an Business Studio KH backup".
+ *     renamed file was then refused: "Not a Business Studio KH backup".
  *
  * This test builds a REAL archive in each shape and drives the real code, so
  * "the old backup still restores" is a checked claim rather than a promise.
@@ -35,7 +35,7 @@ try {
   }
 }
 
-const LEGACY_KIND = 'business-studio-kh-backup';
+const LEGACY_KIND = 'image-studio-kh-backup';
 
 /**
  * A minimal but REAL backup archive: the same layout the app writes (a single
@@ -82,11 +82,11 @@ function withModules(fn) {
   }
 }
 
-test('an Business Studio KH backup is still recognised, name and manifest', { skip: skipReason }, async () => {
+test('an Image Studio KH backup is still recognised, name and manifest', { skip: skipReason }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mskh-legacy-backup-'));
   try {
     const legacy = writeArchive({
-      dir, folderName: 'legacy-backup', fileName: 'business-studio-kh-backup-v0.49.40-2026-07-01.iskhbackup', kind: LEGACY_KIND,
+      dir, folderName: 'legacy-backup', fileName: 'image-studio-kh-backup-v0.49.40-2026-07-01.iskhbackup', kind: LEGACY_KIND,
     });
     const current = writeArchive({
       dir, folderName: 'current-backup', fileName: 'business-studio-kh-backup-v0.1.81-2026-09-27.iskhbackup', kind: 'business-studio-kh-backup',
@@ -126,12 +126,12 @@ test('a file that is not a backup at all is still refused', { skip: skipReason }
   }
 });
 
-test('an Business Studio KH server bundle needs no allowance at all', () => {
+test('an Image Studio KH server bundle needs no allowance at all', () => {
   // The other migration route — Settings → Multi-Mac → Export server bundle —
   // checks the bundle FORMAT version and the archive structure, never an
   // app-name marker, so an old .iskhbundle imports as it stands.
   const source = fs.readFileSync(path.join(__dirname, '..', 'main', 'serverBundle.js'), 'utf8');
   assert.match(source, /BUNDLE_FORMAT_VERSION = 1/, 'format v1, unchanged since the fork');
-  assert.doesNotMatch(source, /business-studio-kh-bundle|business-studio-kh-bundle/,
+  assert.doesNotMatch(source, /business-studio-kh-bundle|image-studio-kh-bundle/,
     'no app-name marker in the bundle path');
 });

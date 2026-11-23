@@ -3,7 +3,7 @@
  *
  * Why this exists: the only route to an existing backup used to be the folder
  * list, and that list can only see files already inside the backups folder.
- * The owner's question — "i have the backup of that [old Business Studio KH]
+ * The owner's question — "i have the backup of that [old Image Studio KH]
  * app, can i import it?" — lands exactly there: the file is somewhere else on
  * disk (an external drive, Downloads, the old app's own folder). Copying it in
  * with Finder worked but was undiscoverable, and the list did not notice a file
@@ -128,7 +128,7 @@ test('backups:pickFile is registered locally, never over the wire', async () => 
     assert.deepEqual(
       dialogCalls[0].filters[0].extensions,
       ['iskhbackup'],
-      'the old Business Studio KH backups carry the same extension, so they are listed too',
+      'the old Image Studio KH backups carry the same extension, so they are listed too',
     );
 
     // Cancelling is not an error and not a path.
@@ -143,21 +143,21 @@ test('backups:pickFile is registered locally, never over the wire', async () => 
 test('picking a file runs the same preview, warning and restore as a list row', async () => {
   const seen = [];
   const { context, calls } = panelHarness({
-    pickFile: () => '/Volumes/Old/business-studio-kh-backup-2026-08-01.iskhbackup',
+    pickFile: () => '/Volumes/Old/image-studio-kh-backup-2026-08-01.iskhbackup',
     preview: okPreview,
     restore: async (p) => { seen.push(p); return { restartScheduled: true }; },
   });
 
   await context.fromFile();
 
-  assert.deepEqual(seen, ['/Volumes/Old/business-studio-kh-backup-2026-08-01.iskhbackup'],
+  assert.deepEqual(seen, ['/Volumes/Old/image-studio-kh-backup-2026-08-01.iskhbackup'],
     'the picked path is what gets restored — no copy step in between');
   assert.deepEqual(calls.map((c) => c[0]), ['pickFile', 'preview', 'confirm', 'restoringPath', 'restore'],
     'order matters: preview and the destructive confirm come before anything is replaced');
   const confirmOpts = calls.find((c) => c[0] === 'confirm')[1];
   assert.match(confirmOpts.message, /REPLACES everything in your current data folder/);
   assert.equal(confirmOpts.danger, true);
-  assert.match(confirmOpts.detail, /business-studio-kh-backup-2026-08-01\.iskhbackup/,
+  assert.match(confirmOpts.detail, /image-studio-kh-backup-2026-08-01\.iskhbackup/,
     'the confirm names the file, so a wrong pick is visible before it is applied');
 });
 

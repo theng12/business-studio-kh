@@ -324,7 +324,7 @@ async function diagnoseServer({ url, token } = {}) {
         name: 'ping',
         label: 'Server reachable',
         ok: false,
-        message: `Server returned ${res.status} on /api/ping. The address is reachable but isn't an Business Studio KH server.`,
+        message: `Server returned ${res.status} on /api/ping. The address is reachable but isn't a Business Studio KH server.`,
       });
       return { overall: 'fail', steps };
     }

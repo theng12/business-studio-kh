@@ -434,7 +434,7 @@ async function handleRequest(req, res, dataDir) {
     // non-existent dist-electron/package.json. The throw made the
     // ENTIRE ping endpoint return 500, which surfaced to clients as a
     // permanent "Server hiccup" (amber) chip + a failing network
-    // diagnostic ("reachable but not an Business Studio KH server"),
+    // diagnostic ("reachable but not a Business Studio KH server"),
     // even though /api/whoami and all RPC calls worked fine. Use
     // app.getVersion() — the canonical Electron API that reads the
     // version correctly in both dev and production. Inline-required

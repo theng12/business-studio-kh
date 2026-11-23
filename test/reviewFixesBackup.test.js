@@ -257,7 +257,7 @@ test('retention runs inside the tracked operation, so a restore cannot start mid
 
 test('backups are ordered and dated by the time in their filename, so a copied backups folder keeps its order', async () => {
   assert.equal(b.backupTimeFromName('business-studio-kh-backup-auto-v0.1.94-2026-10-08-0905.iskhbackup'), new Date(2026, 9, 8, 9, 5).getTime());
-  assert.equal(b.backupTimeFromName('business-studio-kh-backup-v0.49.1-2025-01-31-2359.iskhbackup'), new Date(2025, 0, 31, 23, 59).getTime());
+  assert.equal(b.backupTimeFromName('image-studio-kh-backup-v0.49.1-2025-01-31-2359.iskhbackup'), new Date(2025, 0, 31, 23, 59).getTime());
   assert.equal(b.backupTimeFromName('business-studio-kh-backup-renamed.iskhbackup'), null);
   assert.equal(b.backupTimeFromName('business-studio-kh-backup-v1-2026-02-30-1200.iskhbackup'), null, 'not a real date');
 
