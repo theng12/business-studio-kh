@@ -57,5 +57,5 @@ data and credentials stay in the app's own data folder.
 
 ## Current version
 
-0.1.122 is published. The checkout is preparing 0.1.123; its package version and
-changelog do not mean it has been released.
+0.1.123 is published (2026-11-23). Its `package.json` version and `CHANGELOG.md`
+top heading name the same release.
