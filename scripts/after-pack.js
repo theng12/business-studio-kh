@@ -18,9 +18,15 @@ function copySparkleFramework(appPath) {
   const dest = path.join(appPath, 'Contents', 'Frameworks', 'Sparkle.framework');
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.cpSync(source, dest, { recursive: true, dereference: false });
+  // ditto, not fs.cpSync: cp rewrites the framework's relative version symlinks to
+  // absolute paths, which leaves the bundle unsealable ("unsealed contents").
+  execFileSync('/usr/bin/ditto', [source, dest]);
   if (!fs.existsSync(path.join(dest, 'Versions', 'B', 'Sparkle'))) {
     throw new Error(`sparkle: ${dest} has no Versions/B/Sparkle`);
+  }
+  const current = fs.readlinkSync(path.join(dest, 'Versions', 'Current'));
+  if (path.isAbsolute(current)) {
+    throw new Error(`sparkle: copied framework points at ${current}; the bundle must keep relative symlinks`);
   }
   console.log(`sparkle: copied framework to ${dest}`);
 }

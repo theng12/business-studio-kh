@@ -7,7 +7,7 @@
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
   <!-- Sparkle.framework is signed by the local KH Studio identity, which has no Team ID,
        so library validation must be off or dyld refuses the framework at launch
-       (the Displays 0.1.8 lesson: that refusal is invisible to codesign --deep --strict). -->
+       (the Displays 0.1.8 lesson: that refusal is invisible to a deep codesign verify). -->
   <key>com.apple.security.cs.disable-library-validation</key><true/>
   <!-- Server / client mode, and files the person picks. -->
   <key>com.apple.security.network.client</key><true/>
