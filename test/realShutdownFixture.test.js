@@ -52,6 +52,18 @@ test('hidden app refuses quit with live work and resumes queued work safely', { 
       check();
     });
   }
+  // The window line is written on ready-to-show, which lands after the provider fixture
+  // reports in: poll the log instead of reading it once, or a loaded machine fails a
+  // correct app.
+  async function waitForLog(file, pattern, ms = 20000) {
+    const deadline = Date.now() + ms;
+    let log = '';
+    for (;;) {
+      try { log = fs.readFileSync(file, 'utf8'); } catch (_) { log = ''; }
+      if (pattern.test(log) || Date.now() >= deadline) return log;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
   function request(method, suffix = '') {
     return new Promise((resolve, reject) => {
       const req = http.request({ host: '127.0.0.1', port: 13181, path: `/api/maintenance/hold${suffix}`,
@@ -67,7 +79,7 @@ test('hidden app refuses quit with live work and resumes queued work safely', { 
     const seeded = await waitFor((m) => m.event === 'seeded' || m.event === 'error', 'seed');
     if (seeded.event === 'error') throw new Error(seeded.message);
     await waitFor((m) => m.event === 'inflight', 'provider fixture');
-    const log = fs.readFileSync(path.join(profile, 'crash.log'), 'utf8');
+    const log = await waitForLog(path.join(profile, 'crash.log'), /window:hidden-run/);
     assert.match(log, /window:hidden-run/);
     assert.doesNotMatch(log, /window:shown/);
     child.send('recovery');
