@@ -141,7 +141,9 @@ test('hidden app refuses quit with live work and resumes queued work safely', { 
   }
 });
 
-test('hidden app handles SIGTERM during startup without forcing exit', { timeout: 45000 }, async () => {
+// The app's own quit budget is 10 s (armQuitSettleWatchdog, main/index.js); a tighter
+// bound here fails a correct app on a loaded machine.
+test('hidden app handles SIGTERM during startup without forcing exit', { timeout: 120000 }, async () => {
   for (const delay of [200, 1000, 2000]) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'business-startup-live-'));
     const profile = path.join(root, 'profile');
@@ -159,13 +161,15 @@ test('hidden app handles SIGTERM during startup without forcing exit', { timeout
     const exit = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
     await new Promise((resolve) => setTimeout(resolve, delay));
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-    const outcome = await Promise.race([exit, new Promise((resolve) => setTimeout(() => resolve(null), 6000))]);
+    // 12 s = the 10 s contract plus margin. The fallback stays: if it fires, the app
+    // ignored SIGTERM and only quit on IPC, which is worth knowing.
+    const outcome = await Promise.race([exit, new Promise((resolve) => setTimeout(() => resolve(null), 12000))]);
     if (!outcome) {
       if (child.connected) child.send('quit');
       if (!ready) child.once('message', () => { if (child.connected) child.send('quit'); });
       await Promise.race([exit, new Promise((resolve) => setTimeout(resolve, 5000))]);
     }
-    assert.ok(outcome, `SIGTERM at ${delay} ms did not finish within 6 s`);
+    assert.ok(outcome, `SIGTERM at ${delay} ms did not finish within 12 s`);
     assert.ok(outcome.code === 0 || outcome.signal === 'SIGTERM', `unexpected exit at ${delay} ms`);
   }
 });
