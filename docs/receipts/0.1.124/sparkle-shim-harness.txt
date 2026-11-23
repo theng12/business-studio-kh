@@ -1,0 +1,40 @@
+# sparkle shim harness — re-run for Business 0.1.124 (run 2, includes 2b/token-home-plist)
+# library: $HOME/Developer/_orchestra/developer-system/sparkle-shim-20261123/dist/libkhsparkle.a sha256 818826a79d4e54885cbb5ad167f7425da8ba77436c6a5e277532f400aa1b4216
+# library mtime: Nov 23 19:59:28 2026
+# run at: 2026-11-23T15:23:42Z by developer-business
+# note: evidence/harness-run.txt in the shim tree is dated 19:58, BEFORE this library was built at 19:59; it must not be cited for these bytes.
+
+run dir: /var/folders/qp/64pbc0jn23x2ytbmpzp0rxgm0000gn/T//kh-harness-run-53287   port: 18559
+# harness-run transcript — written by run-harness.sh on every run
+library sha256:  818826a79d4e54885cbb5ad167f7425da8ba77436c6a5e277532f400aa1b4216
+library mtime:   2026-11-23T19:59:28Z
+inputs manifest: 30e22b923b8a0de4ea19d989d149124b9af5dcd909643955a9cc111cd27f5782
+date (UTC):      2026-11-23T15:22Z
+
+ASSERT 1: PASS  bad plist -> start=2, reason: Info.plist is missing SUPublicEDKey
+ASSERT 2: PASS  POST hold (line 1) before feed fetch (line 2)
+ASSERT 3: PASS  no window created (samples=0), never frontmost (0)
+ASSERT 4a: PASS  states 1,2,2, (state 2 set before Sparkle terminated the app)
+ASSERT 2b/500: PASS  refused: hold refused with 500: {"code":"INTERNAL"}
+ASSERT 2b/safe-false: PASS  refused: hold answered 200 without safe:true
+ASSERT 2b/405: PASS  refused: hold refused with 405: {"code":"METHOD_NOT_ALLOWED"}
+ASSERT 2b/token-ok: PASS  
+ASSERT 2b/token-0644: PASS  refused: hold refused with 401: {"code":"MAINTENANCE_UNAUTHORIZED"}
+ASSERT 2b/token-missing: PASS  refused: hold token file missing or unreadable: /var/folders/qp/64pbc0jn23x2ytbmpzp0rxgm0000gn/T//kh-harness-run-53287/hold-token
+ASSERT 5/token-missing-no-request: PASS  missing token file -> refused before any request
+ASSERT 2b/token-home-plist: PASS  plist carries the literal form: ~/Library/Caches/studio.kh.harness/hold-token
+ASSERT 2b/token-home: PASS  
+ASSERT 2b/token-home-missing: PASS  refused: hold token file missing or unreadable: $HOME/Library/Caches/studio.kh.harness/missing-token
+ASSERT 5/token-home-missing-names-path: PASS  refused: hold token file missing or unreadable: $HOME/Library/Caches/studio.kh.harness/missing-token
+ASSERT 4b: PASS  abort -> states 1,0,, reason: updater error [SUSparkleErrorDomain 4005]: The update is improperly signed and could not be validated. Please try again later or contact the app developer.
+ASSERT 5a: PASS  marker at start -> start=3, reason: another install is in progress; not starting a check
+ASSERT 5b: PASS  marker appearing mid-check -> refused before download: another install is in progress; not swapping this app
+ASSERT 6: PASS  codesign --verify --deep --strict passed; order: sign order: XPC services -> Updater.app -> Autoupdate -> framework -> app
+ASSERT 7: PASS  shape A (Tauri build.rs) linked and ran: cargo-linktest: linked. start=2 state=0 reason=Info.plist is missing SUFeedURL
+ASSERT 8: PASS  shape B (shell-built bundle) built, verified and ran
+ASSERT 9: PASS  run-plain: rc=134 -> @rpath/Sparkle.framework/Versions/B/Sparkle
+ASSERT 10: PASS  verify-appcast exits 0 verified / 1 invalid / 2 usage (SIGNATURE INVALID at rc=1)
+ASSERT 11: PASS  runtime, no entitlement:          dead: Library not loaded: @rpath/Sparkle.framework/Versions/B/Sparkle / runtime + disable-lib-validation: alive after 1.2 s
+ASSERT 12: PASS  pinned: 818826a79d4e54885cbb5ad167f7425da8ba77436c6a5e277532f400aa1b4216 — dist matches PIN.txt
+
+HARNESS: all assertions passed
