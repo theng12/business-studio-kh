@@ -122,6 +122,11 @@ export function KioskModePanel({ config, addToast }) {
           <span>Open the kiosk when this Mac starts{status.packaged ? '' : ' (installed app only)'}</span>
         </label>
       </div>
+      {status.loginItemStatus === 'requires-approval' ? (
+        <p className="settings-note" role="status">
+          Waiting for approval in System Settings → General → Login Items — allow Business Studio KH so the kiosk can open when this Mac starts.
+        </p>
+      ) : null}
       {!status.canEnable ? (
         <p className="settings-note" role="note">
           {isClient

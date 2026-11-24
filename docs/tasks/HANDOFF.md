@@ -1,5 +1,31 @@
 # HANDOFF — Business Studio KH
 
+**0.1.126 — on branch `codex/polish-0126` (base `main` `9bf8fcf`); gate + preflight run by lead,
+merge/publish owned by Developer (`Developer - Business - B001`).** Four bounded items:
+
+1. **SMAppService login-item readback, UI notice & one-shot re-registration.** `main/kioskWindow.js`
+   adds `loginItemStatus()` (`enabled | requires-approval | not-found | not-registered | unknown`,
+   or `dev-unregistered` unpackaged), logs `kiosk:login-item-state` after `applyLoginItem`, and on
+   the first packaged kiosk launch after a version change (`syncKioskLoginItem`, tracked via
+   machine-local `kioskLoginItemRegisteredVersion` in `main/config.js`, refused by generic setters
+   and excluded from `PORTABLE_CONFIG_KEYS`) re-registers once if `kioskOpenAtLogin !== false` and
+   status is not `'enabled'`. `kioskMode:status` returns `loginItemStatus` and
+   `renderer/modules/Kiosk/KioskModeSettings.jsx` renders a System Settings notice when
+   `'requires-approval'`. Pinned in `test/kioskMode.test.js`. **Honest boundary:** live kiosk Mac
+   boot/reboot and `sudo sfltool dumpbtm` remain **UNMEASURED** (owner/hardware-gated).
+2. **Trade Finance Facilities UI clarity (`lead/0.1.125/FINDINGS.md` #2 & #3).** `formatCommitmentFee`
+   in `renderer/modules/Trade/tradeModel.js` renders the period beside each fee (`$112.50 / quarter`,
+   `$71.88 / month`, or `Waived`) in `renderer/modules/Trade/FacilitiesPage.jsx`. The Tracking column
+   labels non-overdraft rows `Via Drawdowns` beside `Movements` on overdraft rows, with a one-line
+   table note explaining the distinction. Pinned in `test/tradeWiring.test.js`.
+3. **2026-11-20 owed items.** Added `assert.equal(selfIn.event.workDate, calc.ppDate(selfIn.event.at))`
+   in `test/hrNative.test.js` and documented the kiosk local-only remote-unlock PIN boundary and
+   window/Finder-action rules in `main/kioskWindow.js`, `main/ipc/kioskMode.js`,
+   `docs/PEOPLE_AND_FUEL_PLAN.md` and `AGENTS.md`.
+4. **0.1.126 release plumbing.** Version bumped in `package.json` + both `package-lock.json` entries,
+   `CHANGELOG.md`, `README.md`, `ABOUT.md`; 8-step gate config `_orchestra/tools/gate-configs/media-0126.sh`
+   (adds `idle-check-step.sh` as step 8 inside the gate).
+
 **0.1.125 — PUBLISHED 2026-11-24** (release commit `d07532f` fast-forwarded to `main` and
 pushed; GitHub release `0.1.125` non-draft at `theng12/business-studio-kh` with
 `23b0943c65e0-Business.Studio.KH-0.1.125.dmg` (256,391,516 B, sha256 `23b0943c65e0426f…`) and

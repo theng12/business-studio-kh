@@ -19,7 +19,7 @@ import { useAppStore } from '../../store/index.js';
 import { LoadError } from '../Fuel/FuelShared.jsx';
 import { useTradeContext, useTradeTick } from './tradeHooks.js';
 import {
-  COMMITMENT_FREQS, KINDS, daysLabel, errText, formatMinor, formatPercent, formatRate,
+  COMMITMENT_FREQS, KINDS, daysLabel, errText, formatCommitmentFee, formatMinor, formatPercent, formatRate,
   minorToInput, newClientId, parseAmount, todayISO,
 } from './tradeModel.js';
 
@@ -469,7 +469,7 @@ export function TradeFacilities() {
                 <th className="is-num">Commitment</th>
                 <th>Next maturity</th>
                 <th>Status</th>
-                <th></th>
+                <th>Tracking</th>
               </tr>
             </thead>
             <tbody>
@@ -497,16 +497,21 @@ export function TradeFacilities() {
                     </div>
                   </td>
                   <td className="is-num">{formatRate(f.rate)}</td>
-                  <td className="is-num">{f.commitmentPerPeriodMinor ? `${formatMinor(f.commitmentPerPeriodMinor, f.currency)}` : <span className="muted">Waived</span>}</td>
+                  <td className="is-num">{f.commitmentPerPeriodMinor ? formatCommitmentFee(f.commitmentPerPeriodMinor, f.currency, f.commitmentFreq) : <span className="muted">Waived</span>}</td>
                   <td className="muted">{f.nextMaturity ? daysLabel(Math.round((Date.parse(`${f.nextMaturity}T00:00:00Z`) - Date.parse(`${context.today}T00:00:00Z`)) / 86400000)) : '—'}{f.nextMaturity ? <div className="tf-sub">{f.nextMaturity}</div> : null}</td>
                   <td>{f.active ? <Badge tone="emerald">Open</Badge> : <Badge tone="slate">Retired</Badge>}</td>
                   <td onClick={(e) => e.stopPropagation()}>
-                    {f.balanceBased ? <Button size="sm" onClick={() => setMovementsFor(f)}>Movements</Button> : null}
+                    {f.balanceBased
+                      ? <Button size="sm" onClick={() => setMovementsFor(f)} title="Record overdraft deposits and withdrawals">Movements</Button>
+                      : <span className="muted tf-sub" title="Tracked per drawdown on the Drawdowns screen">Via Drawdowns</span>}
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          <p className="muted tf-sub">
+            Overdraft (running-balance) facilities track deposits and withdrawals under Movements; credit lines (RC / TR) are tracked per drawdown on the Drawdowns screen.
+          </p>
         </div>
       ) : null}
 

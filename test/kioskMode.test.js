@@ -18,16 +18,20 @@ const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/
 /* ── a fake Electron, installed before anything requires 'electron' ── */
 const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'kiosk-mode-test-'));
 const calls = { relaunch: 0, exit: [], quit: 0, loginItems: [], asked: 0 };
+let fakeLoginItemSettings = () => ({ openAtLogin: true, status: 'enabled' });
+let fakeAppVersion = '0.1.126';
 const fakeElectron = {
   app: {
     isPackaged: true,
     getPath: () => userData,
     getName: () => 'Business Studio KH',
+    getVersion: () => fakeAppVersion,
     relaunch: () => { calls.relaunch += 1; },
     exit: (code) => { calls.exit.push(code); },
     quit: () => { calls.quit += 1; },
     on: () => {},
     setLoginItemSettings: (s) => { calls.loginItems.push(s); },
+    getLoginItemSettings: () => fakeLoginItemSettings(),
   },
   systemPreferences: {
     getMediaAccessStatus: () => 'not-determined',
@@ -59,7 +63,7 @@ test('kioskMode is a config.json key that defaults off and is never carried by a
   assert.equal(cfg.kioskMode, false);
   assert.equal(cfg.kioskOpenAtLogin, true);
   assert.deepEqual(config.KIOSK_CONFIG_KEYS, [
-    'kioskMode', 'kioskOpenAtLogin',
+    'kioskMode', 'kioskOpenAtLogin', 'kioskLoginItemRegisteredVersion',
     'kioskRecoveryHash', 'kioskRecoverySalt', 'kioskRecoveryFailures', 'kioskRecoveryLockedUntil', 'kioskRecoveryLockCount',
   ]);
   for (const k of config.KIOSK_CONFIG_KEYS) assert.ok(k in cfg, `${k} has a default`);
@@ -67,7 +71,7 @@ test('kioskMode is a config.json key that defaults off and is never carried by a
 });
 
 test('the generic settings setters refuse the kiosk keys — on both paths, through the shared guard', () => {
-  for (const patch of [{ kioskMode: false }, { kioskMode: true }, { kioskOpenAtLogin: false }, { theme: 'dark', kioskMode: false }, { kioskRecoveryHash: 'ab' }, { kioskRecoveryLockedUntil: 0 }, { kioskRecoveryFailures: 0 }]) {
+  for (const patch of [{ kioskMode: false }, { kioskMode: true }, { kioskOpenAtLogin: false }, { kioskLoginItemRegisteredVersion: '0.1.126' }, { theme: 'dark', kioskMode: false }, { kioskRecoveryHash: 'ab' }, { kioskRecoveryLockedUntil: 0 }, { kioskRecoveryFailures: 0 }]) {
     assert.throws(() => config.assertKnownConfigKeys(patch), /manager PIN/);
   }
   assert.doesNotThrow(() => config.assertKnownConfigKeys({ theme: 'dark' }));
@@ -629,3 +633,133 @@ test('the skip is bounded: a stuck job cannot hold the quit for good', () => {
   assert.match(src, /unattendedQuitDeferrals > UNATTENDED_QUIT_MAX_DEFERRALS/);
   assert.match(src, /kiosk:quit-deferred/);
 });
+
+/* ── SMAppService login-item readback & one-shot re-registration (0.1.126) ── */
+
+test('loginItemStatus reads SMAppService status safely and returns dev-unregistered unpackaged', async () => {
+  const savedPackaged = fakeElectron.app.isPackaged;
+  const savedGetter = fakeLoginItemSettings;
+  try {
+    fakeElectron.app.isPackaged = true;
+    for (const st of ['enabled', 'requires-approval', 'not-found', 'not-registered']) {
+      fakeLoginItemSettings = () => ({ openAtLogin: st === 'enabled', status: st });
+      assert.equal(kiosk.loginItemStatus(), st);
+    }
+    fakeLoginItemSettings = () => ({ openAtLogin: false, status: 'unexpected-value' });
+    assert.equal(kiosk.loginItemStatus(), 'unknown');
+    fakeLoginItemSettings = () => ({});
+    assert.equal(kiosk.loginItemStatus(), 'unknown');
+    fakeLoginItemSettings = () => { throw new Error('SMAppService unavailable'); };
+    assert.equal(kiosk.loginItemStatus(), 'unknown');
+
+    // status() surfaces loginItemStatus, and KioskModeSettings renders a plain-words note for requires-approval.
+    fakeLoginItemSettings = () => ({ openAtLogin: true, status: 'requires-approval' });
+    const st = await handlers().h.status();
+    assert.equal(st.loginItemStatus, 'requires-approval');
+    const settingsSrc = read('renderer/modules/Kiosk/KioskModeSettings.jsx');
+    assert.match(settingsSrc, /status\.loginItemStatus === 'requires-approval'/);
+    assert.match(settingsSrc, /Waiting for approval in System Settings → General → Login Items/);
+
+    // Unpackaged (dev): dev-unregistered, never calls getLoginItemSettings.
+    fakeElectron.app.isPackaged = false;
+    let called = false;
+    fakeLoginItemSettings = () => { called = true; return { status: 'enabled' }; };
+    assert.equal(kiosk.loginItemStatus(), 'dev-unregistered');
+    assert.equal(called, false);
+  } finally {
+    fakeElectron.app.isPackaged = savedPackaged;
+    fakeLoginItemSettings = savedGetter;
+  }
+});
+
+test('applyLoginItem logs kiosk:login-item-state after applying in packaged builds', () => {
+  const savedPackaged = fakeElectron.app.isPackaged;
+  const savedGetter = fakeLoginItemSettings;
+  const lines = [];
+  try {
+    fakeElectron.app.isPackaged = true;
+    fakeLoginItemSettings = () => ({ openAtLogin: true, status: 'requires-approval' });
+    kiosk.configureKiosk({ log: (e, d) => lines.push(`${e} ${d || ''}`.trim()) });
+    const beforeLen = calls.loginItems.length;
+    const status = kiosk.applyLoginItem(true);
+    assert.equal(status, 'requires-approval');
+    assert.deepEqual(calls.loginItems.slice(beforeLen), [{ openAtLogin: true }]);
+    assert.ok(lines.includes('kiosk:login-item-state openAtLogin=true status=requires-approval'));
+  } finally {
+    kiosk.configureKiosk({ log: () => {} });
+    fakeElectron.app.isPackaged = savedPackaged;
+    fakeLoginItemSettings = savedGetter;
+  }
+});
+
+test('syncKioskLoginItem re-registers once on version change, does not thrash when enabled or recorded, and is a no-op in dev', () => {
+  const savedPackaged = fakeElectron.app.isPackaged;
+  const savedGetter = fakeLoginItemSettings;
+  const savedVersion = fakeAppVersion;
+  const lines = [];
+  try {
+    kiosk.configureKiosk({ log: (e, d) => lines.push(`${e} ${d || ''}`.trim()) });
+
+    // 1. Version change + not-registered → one-shot unregister + register, persists version.
+    fakeElectron.app.isPackaged = true;
+    fakeAppVersion = '0.1.126';
+    config.updateConfig({ kioskOpenAtLogin: true, kioskLoginItemRegisteredVersion: '0.1.125' });
+    let state = 'not-registered';
+    const origSet = fakeElectron.app.setLoginItemSettings;
+    const seq = [];
+    fakeElectron.app.setLoginItemSettings = (s) => {
+      seq.push(s);
+      if (s.openAtLogin === true) state = 'requires-approval';
+    };
+    fakeLoginItemSettings = () => ({ openAtLogin: state === 'enabled', status: state });
+    try {
+      const r1 = kiosk.syncKioskLoginItem();
+      assert.deepEqual(r1, { status: 'requires-approval', reregistered: true });
+      assert.deepEqual(seq, [{ openAtLogin: false }, { openAtLogin: true }]);
+      assert.equal(config.loadConfig().kioskLoginItemRegisteredVersion, '0.1.126');
+      assert.ok(lines.some((l) => l.includes('kiosk:login-item-state') && l.includes('reregistered=true') && l.includes('status=requires-approval')));
+
+      // 2. Subsequent boot on the SAME version while still requires-approval → no thrashing.
+      seq.length = 0;
+      const r2 = kiosk.syncKioskLoginItem();
+      assert.deepEqual(r2, { status: 'requires-approval', reregistered: false });
+      assert.deepEqual(seq, []);
+
+      // 3. New version when ALREADY enabled → records version, never calls setLoginItemSettings.
+      fakeAppVersion = '0.1.127';
+      state = 'enabled';
+      seq.length = 0;
+      const r3 = kiosk.syncKioskLoginItem();
+      assert.deepEqual(r3, { status: 'enabled', reregistered: false });
+      assert.deepEqual(seq, []);
+      assert.equal(config.loadConfig().kioskLoginItemRegisteredVersion, '0.1.127');
+
+      // 4. Dev (unpackaged) → complete no-op: no setLoginItemSettings, does not touch version.
+      fakeElectron.app.isPackaged = false;
+      fakeAppVersion = '0.1.128';
+      state = 'not-registered';
+      seq.length = 0;
+      const r4 = kiosk.syncKioskLoginItem();
+      assert.deepEqual(r4, { status: 'dev-unregistered', reregistered: false });
+      assert.deepEqual(seq, []);
+      assert.equal(config.loadConfig().kioskLoginItemRegisteredVersion, '0.1.127');
+
+      // 5. kioskOpenAtLogin === false → turns login item off, never re-registers.
+      fakeElectron.app.isPackaged = true;
+      config.updateConfig({ kioskOpenAtLogin: false });
+      seq.length = 0;
+      const r5 = kiosk.syncKioskLoginItem();
+      assert.equal(r5.reregistered, false);
+      assert.deepEqual(seq, [{ openAtLogin: false }]);
+    } finally {
+      fakeElectron.app.setLoginItemSettings = origSet;
+      config.updateConfig({ kioskOpenAtLogin: true, kioskLoginItemRegisteredVersion: null });
+    }
+  } finally {
+    kiosk.configureKiosk({ log: () => {} });
+    fakeElectron.app.isPackaged = savedPackaged;
+    fakeLoginItemSettings = savedGetter;
+    fakeAppVersion = savedVersion;
+  }
+});
+

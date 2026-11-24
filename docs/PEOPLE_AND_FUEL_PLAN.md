@@ -919,14 +919,19 @@ but wrong ones are not counted and no lock is written; a preview session's clock
 validate and answer `{ preview: true }` without writing anything (no events, requests, alerts or History).
 The badge says "Preview — nothing is saved".
 
-**The kiosk Mac itself (`kioskMode:*`, local).** `config.json` `kioskMode` (+ `kioskOpenAtLogin`) turns
+**The kiosk Mac itself (`kioskMode:*`, local).** `config.json` `kioskMode` (+ `kioskOpenAtLogin` +
+`kioskLoginItemRegisteredVersion`) turns
 the Mac into the kiosk: one full-screen window on `index.html#kiosk` (`renderer/modules/Kiosk`, only
 `kiosk:*` / `kioskMode:*`), `kiosk: true`, a menu with no Quit/Hide/Close/Reload/DevTools, every ⌘/Ctrl
 chord except ⌘A/C/V/X/Z swallowed, any other quit (Dock, AppleScript, `kill`) refused until a manager PIN
-(a shutdown / restart / log-out passes), opened at login. Machine-local: not in `PORTABLE_CONFIG_KEYS`,
-and the generic settings setters refuse both keys on both paths (`assertValidConfigValues`). Code:
+(a shutdown / restart / log-out passes), opened at login (SMAppService status read back on boot and
+re-registered once on version change when not `'enabled'`). Machine-local: not in `PORTABLE_CONFIG_KEYS`,
+and the generic settings setters refuse these keys on both paths (`assertValidConfigValues`). Code:
 `main/kioskWindow.js` (+ `main/ipc/kioskMode.js` exposeLocal, `main/client/index.js` handleLocal — same
-handlers; validators in `main/server/hrValidators.js`). `kioskMode:enable` re-checks `/api/whoami` caps
+handlers; validators in `main/server/hrValidators.js`). All `kioskMode:*` channels stay local-only
+(never `expose()`d to the RPC server) because a remote unlock defeats the PIN. Inside the kiosk window,
+no Finder / file-open or new-window action is exposed (`setWindowOpenHandler` denies; `will-navigate` /
+`will-redirect` allow only the exact kiosk URL). `kioskMode:enable` re-checks `/api/whoami` caps
 on a client; on a standalone / server Mac it is refused until at least one active staff member is a manager
 (account with `hr.manage`) and has a PIN. `leave` / `quit` call `kiosk:verifyManagerPin` (in-process, or over
 RPC on a client). The window is told it is the kiosk by main (`additionalArguments` → preload
@@ -936,7 +941,7 @@ URL; only the exact kiosk URL may load. A render error is caught (`KioskErrorBou
 the recovery code, reload after 5 s then 10 s, and no more reloads after 3 crashes in 2 minutes.
 | Channel | Args | Returns |
 |---|---|---|
-| `kioskMode:status` | — | `{ enabled, openAtLogin, mode, canEnable (attendance.kiosk / hr.manage / owner's window), camera ('granted'\|'denied'\|'restricted'\|'not-determined'), packaged, windowed }` |
+| `kioskMode:status` | — | `{ enabled, openAtLogin, loginItemStatus ('enabled'\|'requires-approval'\|'not-found'\|'not-registered'\|'unknown'\|'dev-unregistered'), mode, canEnable (attendance.kiosk / hr.manage / owner's window), camera ('granted'\|'denied'\|'restricted'\|'not-determined'), packaged, windowed }` |
 | `kioskMode:askCamera` | — | `{ status }` — `systemPreferences.askForMediaAccess('camera')` (NSCameraUsageDescription is in `build.mac.extendInfo`) |
 | `kioskMode:newRecoveryCode` | — | `{ code }` (`XXXX-XXXX-XXXX`, shown ONCE in the turn-on dialog; only a scrypt hash + salt are kept, and only when `enable` follows within 15 min) |
 | `kioskMode:enable` | `{ openAtLogin? }` | `{ ok }`, then relaunches as the kiosk (refused unless a recovery code was just shown) |

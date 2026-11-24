@@ -1,5 +1,12 @@
 # What's new
 
+## 0.1.126 — 2026-11-25
+
+- POLISH — Trade Finance → Facilities now shows the commitment fee period beside each fee (for example $112.50 / quarter or $71.88 / month) and makes it clear which lines are tracked under Movements (overdrafts) and which are tracked on Drawdowns (RC / TR).
+- POLISH — Attendance kiosk settings now report when macOS is waiting for login-item approval in System Settings, and a packaged kiosk Mac re-registers its login item once after an update if macOS dropped it.
+- NOTE — If macOS says the app is damaged when you open it, run xattr -cr "/Applications/Business Studio KH.app" in Terminal once.
+- Internal — Added SMAppService login-item readback (kiosk:login-item-state) and one-shot re-registration tracked by machine-local kioskLoginItemRegisteredVersion; pinned the HR before-noon workDate arithmetic check and documented the kiosk local-only PIN and window/Finder boundaries. Live kiosk Mac boot/reboot and sfltool dumpbtm remain UNMEASURED.
+
 ## 0.1.125 — 2026-11-24
 
 - POLISH — Background removal now runs in a small hidden helper window of its own, which closes itself when it is not in use. The window you work in keeps the strictest security policy, and the app holds nothing in the background between removals.

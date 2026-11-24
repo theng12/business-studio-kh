@@ -95,3 +95,19 @@ test('the schema is additive and the DB is registered', () => {
   assert.match(read('main/db/index.js'), /ensureTradeFinanceSchema\(db\)/);
   assert.match(read('main/ipc.js'), /tradeDomain\.register\(helpers\)/);
 });
+
+test('Facilities UI shows commitment fee period and clarifies Movements vs Drawdowns (0.1.126)', () => {
+  const tradeModel = load('renderer/modules/Trade/tradeModel.js');
+  assert.equal(tradeModel.formatCommitmentFee(11250, 'USD', 'quarterly'), '$112.50 / quarter');
+  assert.equal(tradeModel.formatCommitmentFee(7188, 'USD', 'monthly'), '$71.88 / month');
+  assert.equal(tradeModel.formatCommitmentFee(50000, 'USD', 'yearly'), '$500.00 / year');
+  assert.equal(tradeModel.formatCommitmentFee(125000, 'KHR', 'monthly'), '៛125,000 / month');
+  assert.equal(tradeModel.formatCommitmentFee(0, 'USD', 'monthly'), 'Waived');
+  assert.equal(tradeModel.formatCommitmentFee(null, 'USD', 'quarterly'), 'Waived');
+  assert.equal(tradeModel.formatCommitmentFee(5000, 'USD', 'other'), '$50.00');
+
+  const page = read('renderer/modules/Trade/FacilitiesPage.jsx');
+  assert.match(page, /formatCommitmentFee\(f\.commitmentPerPeriodMinor, f\.currency, f\.commitmentFreq\)/);
+  assert.match(page, /Via Drawdowns/);
+  assert.match(page, /Overdraft \(running-balance\) facilities track deposits and withdrawals under Movements/);
+});

@@ -128,6 +128,7 @@ function defaultConfig() {
      * plus the wrong-try counters — main/util/kioskRecovery.js). */
     kioskMode: false,
     kioskOpenAtLogin: true,
+    kioskLoginItemRegisteredVersion: null,
     kioskRecoveryHash: null,
     kioskRecoverySalt: null,
     kioskRecoveryFailures: 0,
@@ -321,7 +322,7 @@ function assertValidConfigValues(patch) {
 
 /** HR1: config keys only the kioskMode:* channels may write. */
 const KIOSK_CONFIG_KEYS = [
-  'kioskMode', 'kioskOpenAtLogin',
+  'kioskMode', 'kioskOpenAtLogin', 'kioskLoginItemRegisteredVersion',
   'kioskRecoveryHash', 'kioskRecoverySalt', 'kioskRecoveryFailures', 'kioskRecoveryLockedUntil', 'kioskRecoveryLockCount',
 ];
 

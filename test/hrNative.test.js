@@ -244,6 +244,7 @@ test('HR1 end to end over the real server', { skip: skipReason }, async (t) => {
   const outNow = await ok(phoneUser.token, 'attendance:clockSelf', { photo, clientRef: 'phone-dara:0003' });
   assert.equal(outNow.duplicate, false);
   // A record that waited > 15 min is HELD: listed, explained, not counted until accepted.
+  assert.equal(selfIn.event.workDate, calc.ppDate(selfIn.event.at));
   const dayP = async () => (await ok(manager.token, 'attendance:day', { date: selfIn.event.workDate })).rows.find((r) => r.employeeId === P.id);
   assert.notEqual((await dayP()).firstIn, selfIn.event.at, 'held — not counted');
   const heldItem = (await ok(manager.token, 'attendance:listReview', { employeeId: P.id })).items.find((x) => x.id === selfIn.event.id);

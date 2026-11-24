@@ -7,7 +7,7 @@ One shared Product Library sits at the centre. Product details are entered once 
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release: **0.1.125** (2026-11-24), the background-removal isolation release. See `CHANGELOG.md` for what
+Current release: **0.1.126** (2026-11-25), the Trade Facilities clarity and kiosk login-item status release. See `CHANGELOG.md` for what
 each release changed and `docs/tasks/` for the release receipts.
 
 ![The product library with the seeded demo catalogue](docs/screenshots/product-library-light.png)

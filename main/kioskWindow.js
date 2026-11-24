@@ -47,10 +47,13 @@
  * kiosk keys (main/config.js assertValidConfigValues), so there is no other way
  * to turn it off from the app.
  *
- * The eight `kioskMode:*` channels are LOCAL (they act on this Mac): registered
+ * The nine `kioskMode:*` channels are LOCAL (they act on this Mac): registered
  * with exposeLocal() in main/ipc/kioskMode.js and handleLocal() in
  * main/client/index.js, both from `makeKioskModeHandlers` below, both validated
- * by main/server/hrValidators.js.
+ * by main/server/hrValidators.js. They must never be `expose()`d to the RPC
+ * server: a remote unlock defeats the PIN (any remote client with a token could
+ * turn kiosk mode off or quit the shop Mac without a manager present).
+ * Inside the kiosk window, no Finder / file-open or new-window action is exposed.
  */
 
 const { app, BrowserWindow, Menu, powerMonitor, systemPreferences } = require('electron');
@@ -313,7 +316,7 @@ function installKioskGuards() {
   } catch (err) {
     log('kiosk:power-monitor-failed', err.message);
   }
-  applyLoginItem(loadConfig().kioskOpenAtLogin !== false);
+  syncKioskLoginItem();
 }
 
 /**
@@ -368,14 +371,93 @@ function createKioskWindow({ preloadPath, rendererUrl }) {
 
 /* ─── login item, camera ─────────────────────────────────────────── */
 
+const VALID_LOGIN_ITEM_STATUSES = new Set(['enabled', 'requires-approval', 'not-found', 'not-registered']);
+
+function currentAppVersion() {
+  try {
+    const v = typeof app.getVersion === 'function' ? app.getVersion() : '';
+    return v ? String(v) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Read macOS SMAppService login-item status (Electron `app.getLoginItemSettings().status`).
+ * Returns 'enabled' | 'requires-approval' | 'not-found' | 'not-registered' | 'unknown',
+ * or 'dev-unregistered' when running unpackaged.
+ */
+function loginItemStatus() {
+  if (!app.isPackaged) return 'dev-unregistered';
+  try {
+    const info = typeof app.getLoginItemSettings === 'function' ? app.getLoginItemSettings() : null;
+    const st = info && typeof info.status === 'string' ? info.status : null;
+    if (st && VALID_LOGIN_ITEM_STATUSES.has(st)) return st;
+    return 'unknown';
+  } catch (err) {
+    log('kiosk:login-item-read-failed', err.message);
+    return 'unknown';
+  }
+}
+
 /** Open at login. Only for the packaged app: in dev it would register the bare Electron binary. */
 function applyLoginItem(openAtLogin) {
-  if (!app.isPackaged) { log('kiosk:login-item-skipped', `dev build (would set openAtLogin=${!!openAtLogin})`); return; }
+  const want = !!openAtLogin;
+  if (!app.isPackaged) {
+    log('kiosk:login-item-skipped', `dev build (would set openAtLogin=${want})`);
+    return 'dev-unregistered';
+  }
   try {
-    app.setLoginItemSettings({ openAtLogin: !!openAtLogin });
+    app.setLoginItemSettings({ openAtLogin: want });
   } catch (err) {
     log('kiosk:login-item-failed', err.message);
   }
+  const status = loginItemStatus();
+  log('kiosk:login-item-state', `openAtLogin=${want} status=${status}`);
+  return status;
+}
+
+/**
+ * Reconcile the SMAppService login item on kiosk boot.
+ * On the first packaged launch after an app-version / signing-identity change
+ * (tracked by machine-local `kioskLoginItemRegisteredVersion`), if openAtLogin
+ * is enabled and readback status is not 'enabled', unregister then re-register
+ * once, log the resulting state, and persist the version so later boots do not
+ * thrash. Already-'enabled' or already-recorded boots never re-register.
+ */
+function syncKioskLoginItem() {
+  const cfg = loadConfig();
+  const want = cfg.kioskOpenAtLogin !== false;
+  if (!app.isPackaged) {
+    log('kiosk:login-item-skipped', `dev build (would set openAtLogin=${want})`);
+    return { status: 'dev-unregistered', reregistered: false };
+  }
+  if (!want) {
+    return { status: applyLoginItem(false), reregistered: false };
+  }
+  const version = currentAppVersion();
+  const before = loginItemStatus();
+  if (before === 'enabled') {
+    if (version && cfg.kioskLoginItemRegisteredVersion !== version) {
+      updateConfig({ kioskLoginItemRegisteredVersion: version });
+    }
+    log('kiosk:login-item-state', `openAtLogin=true status=enabled${version ? ` version=${version}` : ''}`);
+    return { status: 'enabled', reregistered: false };
+  }
+  if (version && cfg.kioskLoginItemRegisteredVersion !== version) {
+    try {
+      app.setLoginItemSettings({ openAtLogin: false });
+      app.setLoginItemSettings({ openAtLogin: true });
+    } catch (err) {
+      log('kiosk:login-item-failed', err.message);
+    }
+    const after = loginItemStatus();
+    updateConfig({ kioskLoginItemRegisteredVersion: version });
+    log('kiosk:login-item-state', `openAtLogin=true status=${after} reregistered=true version=${version} prevStatus=${before}`);
+    return { status: after, reregistered: true };
+  }
+  log('kiosk:login-item-state', `openAtLogin=true status=${before}${version ? ` version=${version}` : ''}`);
+  return { status: before, reregistered: false };
 }
 
 function cameraStatus() {
@@ -424,6 +506,7 @@ function recoveryCounters(cfg) {
 }
 
 const CLEARED_RECOVERY = {
+  kioskLoginItemRegisteredVersion: null,
   kioskRecoveryHash: null, kioskRecoverySalt: null,
   kioskRecoveryFailures: 0, kioskRecoveryLockedUntil: 0, kioskRecoveryLockCount: 0,
 };
@@ -468,6 +551,7 @@ function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = 
       return {
         enabled: isKioskMode(cfg),
         openAtLogin: cfg.kioskOpenAtLogin !== false,
+        loginItemStatus: loginItemStatus(),
         mode: cfg.mode,
         canEnable: canEnableKiosk(caps),
         camera: cameraStatus(),
@@ -497,16 +581,18 @@ function makeKioskModeHandlers({ verifyManagerPin, getCaps, isServerReachable = 
         pendingRecovery = null;
         throw new Error('Show the recovery code first (it is part of turning kiosk mode on), then try again.');
       }
+      const open = openAtLogin !== false;
       updateConfig({
         ...CLEARED_RECOVERY,
         kioskMode: true,
-        kioskOpenAtLogin: openAtLogin !== false,
+        kioskOpenAtLogin: open,
+        kioskLoginItemRegisteredVersion: app.isPackaged && open ? currentAppVersion() : null,
         kioskRecoveryHash: pendingRecovery.hash,
         kioskRecoverySalt: pendingRecovery.salt,
       });
       pendingRecovery = null;
-      applyLoginItem(openAtLogin !== false);
-      log('kiosk:enabled', `openAtLogin=${openAtLogin !== false} recoveryCode=set`);
+      applyLoginItem(open);
+      log('kiosk:enabled', `openAtLogin=${open} recoveryCode=set`);
       scheduleRelaunch('kiosk mode on');
       return { ok: true };
     },
@@ -604,6 +690,9 @@ module.exports = {
   isWorkInProgress,
   revokeQuit,
   cancelUnansweredQuit,
+  loginItemStatus,
+  applyLoginItem,
+  syncKioskLoginItem,
   isKioskNavigationAllowed,
   isBlockedShortcut,
   kioskMenuTemplate,

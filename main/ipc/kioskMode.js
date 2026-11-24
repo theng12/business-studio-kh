@@ -1,6 +1,7 @@
 /**
  * HR1: the kiosk Mac's own switch — kioskMode:* (LOCAL channels; they act on
  * this Mac's config.json, login item, camera permission and window).
+ * All channels stay `exposeLocal` (never `expose`): a remote unlock defeats the PIN.
  *
  * Standalone / server half. Client mode registers the same five names with
  * handleLocal() in main/client/index.js; both build their handlers from

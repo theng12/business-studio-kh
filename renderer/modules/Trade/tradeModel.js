@@ -20,6 +20,7 @@ export const KINDS = [
 
 export const DAY_COUNTS = [360, 365];
 export const COMMITMENT_FREQS = ['monthly', 'quarterly', 'yearly'];
+const COMMITMENT_PERIOD_UNIT = { monthly: 'month', quarterly: 'quarter', yearly: 'year' };
 export const STATUSES = ['active', 'closed', 'cancelled'];
 
 function decimalsFor(currency) {
@@ -75,6 +76,14 @@ export function formatPercent(fraction) {
   const n = Number(fraction);
   if (!Number.isFinite(n)) return '—';
   return `${Math.round(n * 100)}%`;
+}
+
+/** "$112.50 / quarter" / "$71.88 / month" / "Waived" — commitment fee with its period. */
+export function formatCommitmentFee(minor, currency, frequency) {
+  if (!minor) return 'Waived';
+  const amount = formatMinor(minor, currency);
+  const unit = COMMITMENT_PERIOD_UNIT[frequency];
+  return unit ? `${amount} / ${unit}` : amount;
 }
 
 /** 7.5 → "7.5%" */

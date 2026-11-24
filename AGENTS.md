@@ -321,10 +321,11 @@ and `main/util/validateArgs.js`):
 | `exposeLocal(channel, handler)` | no | anything that acts on the *machine running the handler* |
 
 `exposeLocal()` is for native dialogs (`files:pickFolder`), absolute paths on
-this Mac (`files:readImageThumb`, `watermarks:upload`), and this Mac's own
-settings and database file (`settings:changeDataFolder`, `backups:restore`). A
-remote client calling one of those through `expose()` would act on the wrong
-computer.
+this Mac (`files:readImageThumb`, `watermarks:upload`), local window and Finder
+actions (`files:revealPath`, `kioskMode:*` — a remote unlock defeats the PIN),
+and this Mac's own settings and database file (`settings:changeDataFolder`,
+`backups:restore`). A remote client calling one of those through `expose()`
+would act on the wrong computer.
 
 The trap this rule exists to prevent: "local-only" was once implemented as a
 bare `ipcMain.handle`, which *also* meant "unvalidated". 57 channels were
