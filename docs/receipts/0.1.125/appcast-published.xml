@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Business Studio KH's Sparkle feed. The release pass rewrites this file from the exact
+     published DMG bytes (sign_update) — never by hand. An empty channel is honest: it says
+     there is nothing to update to, not that an unsigned item exists.
+
+     Served as a release asset of this repo, not from Pages: a branch-source Pages build runs as
+     a hosted workflow, and this repo's Actions is disabled (issue 20261124-51). SUFeedURL names
+     https://github.com/theng12/business-studio-kh/releases/latest/download/appcast.xml, so every
+     release must upload this file beside its DMG (issue 20261124-52) — latest moves. -->
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
+     xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Business Studio KH</title>
+    <link>https://github.com/theng12/business-studio-kh/releases/latest/download/appcast.xml</link>
+    <description>The newest Business Studio KH for Macs that already have it.</description>
+    <language>en</language>
+  
+    <item>
+      <title>Version 0.1.125</title>
+      <pubDate>Tue, 24 Nov 2026 10:03:31 +0000</pubDate>
+      <sparkle:version>0.1.125</sparkle:version>
+      <sparkle:shortVersionString>0.1.125</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[- Background removal now runs in a small hidden helper window of its own, which closes itself when it is not in use. The window you work in keeps the strictest security policy, and the app holds nothing in the background between removals.
+- Business Studio KH can update itself from now on: it checks a signed update file for this Mac, pauses its own work first, and installs without a prompt or a click.
+- NOTE — If macOS says the app is damaged when you open it, run this once in Terminal: xattr -cr "/Applications/Business Studio KH.app"]]></description>
+      <enclosure url="https://github.com/theng12/business-studio-kh/releases/download/0.1.125/23b0943c65e0-Business.Studio.KH-0.1.125.dmg" length="256391516" type="application/octet-stream" sparkle:edSignature="V7PXd+8K+JI6GwRNYt0xBeNoMS8YFr1tju9pFYID1pgJJrguuDIMjBGRpTHuNDW9oVm6ZARAawLTIVrP/o5ACg==" />
+    </item>
+  </channel>
+</rss>
