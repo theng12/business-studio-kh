@@ -2,6 +2,8 @@
 
 Owner's instruction (2026-11-16): *"banking-studio-kh should have it's unique attributes added to Media-Studio-KH."*
 The product behind that name is `github.com/theng12/facility-ledger` (private, `main`, last push 2026-08-18).
+The repo was **archived on 2026-11-24** at the owner's word, so it is read-only and nothing upstream is live;
+**this module's absorption is the source of record** for its feature set.
 The Developer approved this scope and the four phase order on 2026-11-16. Source was read read-only from
 `_orchestra/media-lead/facility-absorption-20261116/source/repo`; no code was copied.
 
