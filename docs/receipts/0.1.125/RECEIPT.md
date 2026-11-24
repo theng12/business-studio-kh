@@ -10,8 +10,8 @@ scan: sha256=23b0943c65e0426fb5ad9e92796d495a8d2d9532af10e2903bc80db998d8b8aa cl
 gate config: /Users/vengtheng/Developer/_orchestra/tools/gate-configs/media-0125.sh
 gate exit: 0 — GATE PASS media d07532f14d50e67bd574ef036959c7e0c0d5462c 2026-11-24T09:47:56Z
 gate runner: gate-run.sh f05b010c16e577986c796341a43b41b450e4639b82159f664c15b7b89d06bd5a, 43,672 bytes
-feed readback: Pages feed still serves 0.1.124 (sha256 6095ed577ccf…) — the 0.1.125 row is System's feed pass, generated from this release; the app's own address is proved below
-page state: behind — row pending the feed pass
+feed readback: 0.1.125, sha256 23b0943c65e0426fb5ad9e92796d495a8d2d9532af10e2903bc80db998d8b8aa, served by the Pages feed — `feed-verify.sh media-studio --expect-version 0.1.125` → PASS, published 2026-11-24T10:30:40Z
+page state: same
 dirty: false
 retired: none — 0 bytes freed; `dist/` holds 0.1.125 + 0.1.124 (retention pair intact)
 not proven: install acceptance on an intended machine (the Launcher installs automatically); a real self-update (no installed build has ever carried `SUFeedURL` — 0.1.126 is that proof); idle footprint by this gate (`idle-footprint :: UNMEASURED — no IDLE_PID in the config`)
@@ -88,6 +88,9 @@ then runs `appcast-check.sh` against the mounted app. Served state, read after t
   `sparkle:length` where the item carries `length` (so it refused a correct file), and `appcast-write.py`
   **appends**, so a second run served the 0.1.125 item **twice**. The script now starts from
   `appcast-empty.xml`, a re-run is idempotent, and the served file was re-read to confirm one item.
+  **The duplicate was caught because the step reads the served file back after writing it** — not by
+  the script's own success line, which said `1 item(s)` both times. That readback stays part of the
+  step, not an extra: a file that is correct on disk and wrong when served is exactly this defect.
 
 ## What changed
 
@@ -110,8 +113,10 @@ retired: none — 0 bytes freed. Nothing was deleted. The two non-shipped builds
   — `summary.txt`, `GATE-PASS.txt`, `step-*.log` for every step, `00-lock-wait.log`.
   The superseded first run is `lead/gate-20261124-160615-21335/`.
 - readback command and output: `sh …/scripts/feed-verify.sh media-studio --expect-version 0.1.125
-  --expect-sha 23b0943c…` → `version 0.1.124 … FAIL version 0.1.124 != 0.1.125`, i.e. the Pages row has
-  not been regenerated yet. The app's own address was proved instead:
-  `curl -sSL releases/latest/download/appcast.xml` → 200, 1 item naming `23b0943c65e0`.
+  --expect-sha 23b0943c…` → `version 0.1.125 … sha256 23b0943c… … published 2026-11-24T10:30:40.620Z`
+  → **PASS**. The first run, made minutes after publishing, read `0.1.124 … FAIL`: the row is regenerated
+  by System's feed pass, which landed afterwards and was then re-read to confirm it.
+- the app's own update address: `curl -sSL releases/latest/download/appcast.xml` → 200, **1 item**,
+  `sparkle:version 0.1.125`, `length="256391516"`, naming `download/0.1.125/23b0943c65e0-…`.
 - install acceptance: UNMEASURED — the Launcher installs automatically on the owner's setting; to be
   read back when it does.
