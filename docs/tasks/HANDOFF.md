@@ -81,7 +81,7 @@ and **moves** (never deletes) a replaced data copy `<name>.bak.<ts>` / `<name>.p
 `database.sqlite`, and the data-folder sweep only matches copies of the live data folder by name. It
 runs on every backup for the backups folder, the system temp folder and the data folder's parent.
 (c) A quit inside the first ~2 s is **still open** — scoped in
-`_orchestra/developer-business/media-studio-kh/lead/0.1.122/SCOPE.md`, with the probe a fix needs
+`_orchestra/developer-business/business-studio-kh/lead/0.1.122/SCOPE.md`, with the probe a fix needs
 before it may ship. Docs corrected in the same release: the README and ABOUT current-version lines
 were both still at 0.1.120.
 
