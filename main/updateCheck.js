@@ -5,8 +5,10 @@
  * reason and changes nothing else.
  *
  * Config comes from the bundle's Info.plist: SUFeedURL, SUPublicEDKey,
- * KHHoldURL, KHHoldTokenFile. A missing SUFeedURL is a refusal (rc 2), which is
- * the correct state until the appcast host serves the feed.
+ * KHHoldURL, KHHoldTokenFile. 0.1.125 is the first version to carry SUFeedURL —
+ * the appcast address answers 200 anonymously, and the gate asserts it from the
+ * mounted image before the build is released (lead/0.1.125/appcast-check.sh).
+ * A bundle without one is still refused (rc 2) and logged, never assumed quiet.
  */
 
 const path = require('node:path');

@@ -23,7 +23,13 @@ test('the plist carries this app\'s Sparkle keys and never the private key', () 
   assert.equal(info.KHHoldURL, 'http://127.0.0.1:13181/api/maintenance/hold');
   assert.equal(info.KHHoldTokenFile, '~/Library/KHUpdater/state/hold-token');
   assert.equal(info.SUEnableAutomaticChecks, true);
-  assert.equal(info.SUFeedURL, undefined, 'SUFeedURL ships only once the appcast answers 200');
+  // 0.1.125: the address answers 200 anonymously (measured 2026-11-24), so Sparkle is on. It must
+  // be this app's own repo — a shared appcast host stops every app the day it fails (issue
+  // 20261123-62) — and it is a release asset, not Pages, because a branch-source Pages build is a
+  // hosted workflow and this repo's Actions is disabled (issue 20261124-51). Every release uploads
+  // appcast.xml beside its DMG, since the address follows `latest` (issue 20261124-52).
+  assert.equal(info.SUFeedURL, 'https://github.com/theng12/business-studio-kh/releases/latest/download/appcast.xml');
+  assert.match(info.SUFeedURL, /^https:\/\/github\.com\/theng12\/business-studio-kh\//, 'the feed address must be this app\'s own repo');
   assert.doesNotMatch(read('package.json') + read('build/entitlements.mac.plist'), /private\.key|ed25519-private/);
 });
 

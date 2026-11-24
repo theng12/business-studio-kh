@@ -115,6 +115,7 @@
       "extendInfo": {
         "NSCameraUsageDescription": "កុំព្យូទ័រកត់ត្រាវត្តមានថតរូបអ្នក នៅពេលអ្នកចូល និងចេញពីការងារ។ The attendance kiosk takes your photo when you clock in and out.",
         "SUPublicEDKey": "rBhQUerHG9stW+oDp1P5A1yTfkCPcGvHaTrOmDfL7Rk=",
+        "SUFeedURL": "https://github.com/theng12/business-studio-kh/releases/latest/download/appcast.xml",
         "KHHoldURL": "http://127.0.0.1:13181/api/maintenance/hold",
         "KHHoldTokenFile": "~/Library/KHUpdater/state/hold-token",
         "SUEnableAutomaticChecks": true

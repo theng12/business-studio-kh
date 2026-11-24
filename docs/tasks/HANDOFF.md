@@ -30,8 +30,14 @@ Business - B001`) owns the gate, preflight, publish and receipt.** Four items, a
 4. **Docs.** This file, `CHANGELOG.md` 0.1.125 (quarantine NOTE as plain text), `README.md` and
    `ABOUT.md` current-version lines, `package.json` + both `package-lock.json` version strings.
 
-Artifact `dist/Business Studio KH-0.1.125.dmg`. Do not add `SUFeedURL` as part of this version —
-Sparkle stays dormant (Developer's decision, outside this lead's brief).
+Artifact `dist/Business Studio KH-0.1.125.dmg`. **0.1.125 is the first version to carry
+`SUFeedURL`, so Sparkle is live.** The address is
+`https://github.com/theng12/business-studio-kh/releases/latest/download/appcast.xml` — the app
+repo's own release asset, not Pages: a branch-source Pages build is itself a hosted workflow and
+this repo's Actions is disabled (issue 20261124-51). Because the address follows `latest`, **every
+release uploads `docs/appcast.xml` beside its DMG before the release goes non-draft** (issue
+20261124-52); the gate's `appcast` step reads `SUFeedURL` out of the mounted image and refuses a
+build whose address does not answer 200 anonymously.
 
 **0.1.124 — PUBLISHED 2026-11-23** (branch `codex/sparkle-0124`, gate passed, GitHub release
 non-draft, feed row served from Pages; Sparkle embedded but dormant — no `SUFeedURL`). Sparkle 2.10.1 is

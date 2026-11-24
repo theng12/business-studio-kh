@@ -367,7 +367,7 @@ out not to have them.
 | Images | `sharp` |
 | PDF | Electron's built-in `webContents.printToPDF()` (see note) |
 | Barcodes / QR | `bwip-js` (main process) |
-| Background removal | `@imgly/background-removal` (local ONNX, renderer) |
+| Background removal | `@imgly/background-removal` (local ONNX, in the hidden engine window `main/bgRemovalWindow.js` since 0.1.125 — never in a visible renderer) |
 | Icons | Inline SVG, no library |
 
 Source code in JavaScript (`.jsx` / `.js`) unless I ask for TypeScript.
