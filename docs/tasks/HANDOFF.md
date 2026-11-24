@@ -1,6 +1,40 @@
 # HANDOFF — Business Studio KH
 
-**0.1.124 — on branch `codex/sparkle-0124`, gate pending, NOT published.** Sparkle 2.10.1 is
+**0.1.125 — on branch `codex/csp-0125` (base `main` `ae49fe1`); the Developer (`Developer -
+Business - B001`) owns the gate, preflight, publish and receipt.** Four items, all in this version:
+
+1. **CSP hardened.** The @imgly ONNX engine (which generates code at runtime) moved out of the
+   visible renderer into a hidden window: `main/bgRemovalWindow.js` (created on first use, destroyed
+   after 60 s idle; `MSKH_BG_WORKER_IDLE_MS` overrides the idle window for a probe) and
+   `renderer/bg-worker.html` + `renderer/bg-worker.js`, built as a second Vite page. The main-window
+   and client-mode policies are now `script-src 'self' 'wasm-unsafe-eval'` (no `'unsafe-eval'`, no
+   `blob:`); only that window's own `RELAXED_CSP` carries them, selected in both
+   `onHeadersReceived` handlers by `relaxedCspFor(details.webContentsId)`. `renderer/lib/bgRemoval.js`
+   posts pixels to `bgRemoval:remove` (local-only channel in both modes) and forwards progress as
+   `bgRemoval:progress`; the old module Worker `renderer/lib/bgRemoval.worker.js` is gone.
+   `test/bgRemovalWorkerWindow.test.js` pins the policy split and the lazy/idle window.
+2. **Login item — UNMEASURED, with the reason.** This Mac has no `/Applications/Business Studio KH.app`
+   and `launchctl print gui/$(id -u)` has no entry naming the app or `com.terranash.mediastudiokh`,
+   so there is no registration to read. The kiosk path (`main/kioskWindow.js:372` `applyLoginItem`)
+   only *writes* `app.setLoginItemSettings({ openAtLogin })` (Electron's SMAppService-backed main-app
+   login item) and never reads `app.getLoginItemSettings().status`, so the app cannot report
+   `requires-approval`; the Kiosk settings row shows its own config key (`kioskOpenAtLogin`), not the
+   system's state. Kiosk enable needs a real kiosk Mac and a relaunch; steps 3 (`sudo sfltool dumpbtm`)
+   and 6 (a restart at a quiet point) are owner-only. Fix shape: after `applyLoginItem`, read the
+   status back, log it (`kiosk:login-item-state`), show "waiting for approval in System Settings"
+   when it is `requires-approval`, and re-register once (`register()` after `unregister()`) at the
+   first launch after a signing-identity change.
+3. **Screenshots (estate policy §5d).** `docs/screenshots/product-library-light.png`,
+   `purchase-orders-dark.png`, `trade-facilities-light.png`, captured from the 0.1.125 packaged build
+   on a throwaway profile with seeded demo content, app window only.
+4. **Docs.** This file, `CHANGELOG.md` 0.1.125 (quarantine NOTE as plain text), `README.md` and
+   `ABOUT.md` current-version lines, `package.json` + both `package-lock.json` version strings.
+
+Artifact `dist/Business Studio KH-0.1.125.dmg`. Do not add `SUFeedURL` as part of this version —
+Sparkle stays dormant (Developer's decision, outside this lead's brief).
+
+**0.1.124 — PUBLISHED 2026-11-23** (branch `codex/sparkle-0124`, gate passed, GitHub release
+non-draft, feed row served from Pages; Sparkle embedded but dormant — no `SUFeedURL`). Sparkle 2.10.1 is
 embedded at `Contents/Frameworks/Sparkle.framework` and copied with `ditto`, never `fs.cpSync` — the
 latter rewrites the bundle's version symlinks to absolute paths and leaves the framework unsealable
 (`after-pack.js` now throws if `Versions/Current` is ever absolute). `scripts/sign-mac.js` signs it

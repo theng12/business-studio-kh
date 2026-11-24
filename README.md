@@ -7,8 +7,14 @@ One shared Product Library sits at the centre. Product details are entered once 
 edited images, AI variations, overlays, barcodes, labels, shelf cards, catalogs and exports. The
 app works on one Mac, or on several Macs sharing one catalog, with a browser viewer for phones.
 
-Current release: **0.1.123** (2026-11-23), the safe-shutdown and export-recovery release. See `CHANGELOG.md` for what
+Current release: **0.1.125** (2026-11-24), the background-removal isolation release. See `CHANGELOG.md` for what
 each release changed and `docs/tasks/` for the release receipts.
+
+![The product library with the seeded demo catalogue](docs/screenshots/product-library-light.png)
+
+![Trade Finance → Facilities, showing an active facility and its schedule](docs/screenshots/trade-facilities-light.png)
+
+More screens from the same build: [Purchase Orders in dark mode — supplier orders with their currencies, totals and received dates](docs/screenshots/purchase-orders-dark.png).
 Built for home use — the owner's Macs — and distributed through the KH Updater.
 
 ## Where to read next

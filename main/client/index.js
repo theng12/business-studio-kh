@@ -1368,6 +1368,10 @@ function registerClientProxies(loadConfigFn) {
     handleLocal('app:clearCache', () => clearAppCache());
   }
 
+  // 0.1.125: background removal is this Mac's own CPU work, in the hidden
+  // engine window (main/bgRemovalWindow.js) — the same local handler both modes.
+  handleLocal('bgRemoval:remove', (args) => require('../bgRemovalWindow').remove(args));
+
   // v0.26.51: crash-log tail reader. The About tab's "Recent crash
   // log" panel calls this, and the About tab is visible in ALL modes
   // — so a client opening it hit "No handler registered for

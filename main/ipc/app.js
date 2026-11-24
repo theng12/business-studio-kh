@@ -115,6 +115,14 @@ function register({ expose, URL_ALLOW, exposeLocal }) {
   const { readCacheInfo, clearAppCache } = require('../util/appCache');
   exposeLocal('app:getCacheInfo', () => readCacheInfo());
   exposeLocal('app:clearCache', () => clearAppCache());
+
+  /**
+   * 0.1.125: background removal runs in THIS Mac's hidden engine window
+   * (main/bgRemovalWindow.js) — CPU work on the machine the user is sitting
+   * at, so it is local-only in every mode (the client copy is registered in
+   * main/client/index.js).
+   */
+  exposeLocal('bgRemoval:remove', (args) => require('../bgRemovalWindow').remove(args));
 }
 
 module.exports = { register };

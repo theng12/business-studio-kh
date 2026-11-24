@@ -426,6 +426,8 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    // 0.1.125: nothing is going to ask for a cutout with no window open.
+    require('./bgRemovalWindow').teardown();
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
@@ -557,6 +559,11 @@ app.whenReady().then(() => {
   // call broadcast() (queueRunner, IPC writes, server WS handler).
   events.init({ getMainWindow: () => mainWindow });
 
+  // 0.1.125: the hidden window that owns the background-removal engine
+  // (main/bgRemovalWindow.js). Created on first use, destroyed when idle;
+  // started for every mode so its progress events can reach the main window.
+  require('./bgRemovalWindow').init({ getMainWindow: () => mainWindow });
+
   /* Update hold (owner 2026-11-15; contract _orchestra/youtube-stack/update-hold/):
    * the installer POSTs /api/maintenance/hold on loopback before it replaces this
    * app. Started for every mode — a client or kiosk copy has work to keep too —
@@ -600,18 +607,18 @@ app.whenReady().then(() => {
         try { return new URL(config.clientServerUrl).origin; } catch { return ''; }
       })();
       session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
-        cb({
-          responseHeaders: {
-            ...details.responseHeaders,
-            'Content-Security-Policy': [
+        // 0.1.125: the hidden background-removal window keeps its own relaxed
+        // policy (main/bgRemovalWindow.js); every visible document gets the
+        // tight one. See the standalone-mode header below.
+        const policy = require('./bgRemovalWindow').relaxedCspFor(details.webContentsId) || (
               "default-src 'self'; " +
               "img-src 'self' app-image: data: blob:; " +
               "font-src 'self' data:; " +
               "style-src 'self' 'unsafe-inline'; " +
-              // v0.26.5: 'unsafe-eval' is required by @imgly's ONNX
-              // backend. See the comment on the standalone-mode CSP
-              // below for the full rationale.
-              "script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:; " +
+              // 0.1.125: background removal moved to its own hidden window,
+              // so this document no longer needs 'unsafe-eval' or blob: in
+              // script-src. The engine's policy lives in main/bgRemovalWindow.js.
+              "script-src 'self' 'wasm-unsafe-eval'; " +
               "worker-src 'self' blob:; " +
               // v0.49.33: added `https://staticimgly.com` to the
               // client-mode CSP allow-list. Without it, bg-removal on
@@ -626,8 +633,12 @@ app.whenReady().then(() => {
               // downloads + caches the same way it does in standalone
               // mode — first run pulls ~80 MB; subsequent launches are
               // offline.
-              `connect-src 'self' ${serverOrigin} https://staticimgly.com app-image: data: blob:;`,
-            ],
+              `connect-src 'self' ${serverOrigin} https://staticimgly.com app-image: data: blob:;`
+        );
+        cb({
+          responseHeaders: {
+            ...details.responseHeaders,
+            'Content-Security-Policy': [policy],
           },
         });
       });
@@ -635,7 +646,7 @@ app.whenReady().then(() => {
 
     createWindow();
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
+      if (!mainWindow || mainWindow.isDestroyed()) createWindow();
     });
     return;
   }
@@ -758,41 +769,30 @@ app.whenReady().then(() => {
   // so prod is strictly tighter than dev.
   if (!isDev) {
     session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
-      cb({
-        responseHeaders: {
-          ...details.responseHeaders,
-          'Content-Security-Policy': [
+      // 0.1.125: the hidden background-removal window (main/bgRemovalWindow.js)
+      // is the one document allowed 'unsafe-eval' — its ONNX engine needs it.
+      // Every other response gets the tight policy below.
+      const policy = require('./bgRemovalWindow').relaxedCspFor(details.webContentsId) || (
             "default-src 'self'; " +
             "img-src 'self' app-image: data: blob:; " +
             "font-src 'self' data:; " +
             "style-src 'self' 'unsafe-inline'; " +
-            // `blob:` in script-src is required by @imgly/background-removal:
-            // ONNX Runtime spawns a worker from a Blob URL and then does
-            // dynamic `import('blob:...')` for its WASM backend. Without
-            // blob: here, the prod build fails with
-            //   "Failed to create session: no available backend found.
-            //    ERR: [wasm] TypeError: Failed to fetch dynamically imported
-            //    module: blob:app://local/<uuid>"
-            // (regression introduced when this header was added in v0.6.0.)
-            //
-            // v0.26.5: 'unsafe-eval' added. @imgly v1.5.x's ONNX backend
-            // now also uses runtime JS code generation (new Function /
-            // eval) — 'wasm-unsafe-eval' only covers WebAssembly.compile,
-            // not JS code generation. Symptom without it: "Background
-            // removal failed: Refused to evaluate a string as JavaScript
-            // because 'unsafe-eval' is not an allowed source of script".
-            // Safe in our context: contextIsolation: true and
-            // nodeIntegration: false sandbox the renderer from Node;
-            // the script-src origin allowlist still restricts WHERE
-            // scripts can come from ('self' + blob: for the ONNX worker).
-            "script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:; " +
+            // 0.1.125: was `'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:` for
+            // the @imgly engine that used to run in this renderer. The engine
+            // now runs in its own hidden window, so this policy drops both
+            // 'unsafe-eval' (JS code generation) and blob: (its WASM worker).
+            "script-src 'self' 'wasm-unsafe-eval'; " +
             "worker-src 'self' blob:; " +
             // v0.49.33: dropped `https://api.remove.bg` — the paid
             // bg-removal engine was removed. The only third-party host
             // in connect-src now is staticimgly.com (for the local
             // @imgly model download).
-            "connect-src 'self' https://staticimgly.com app-image: data: blob:;",
-          ],
+            "connect-src 'self' https://staticimgly.com app-image: data: blob:;"
+      );
+      cb({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': [policy],
         },
       });
     });
@@ -819,7 +819,9 @@ app.whenReady().then(() => {
   createWindow();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    // mainWindow, not getAllWindows(): the hidden background-removal window
+    // (0.1.125) is not a window the user can see or open.
+    if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   });
 }).catch((err) => {
   // v0.1.3: this chain used to have no rejection handler. A throw anywhere
@@ -883,6 +885,7 @@ app.on('before-quit', (event) => {
   logEvent('before-quit');
   eventLog.flush();
   destroyTray();
+  try { require('./bgRemovalWindow').teardown(); } catch (_) { /* nothing to free */ }
   // Owner 2026-11-12: quit must release everything — stop the server so its
   // port and sockets are freed before the process goes away.
   try {

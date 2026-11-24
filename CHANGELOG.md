@@ -1,5 +1,11 @@
 # What's new
 
+## 0.1.125 — 2026-11-24
+
+- POLISH — Background removal now runs in a small hidden helper window of its own, which closes itself when it is not in use. The window you work in keeps the strictest security policy, and the app holds nothing in the background between removals.
+- NOTE — If macOS says the app is damaged when you open it, run xattr -cr "/Applications/Business Studio KH.app" in Terminal once.
+- Internal — The @imgly ONNX engine moved out of the renderer into main/bgRemovalWindow.js and renderer/bg-worker.html; main and client-mode CSPs are now script-src 'self' 'wasm-unsafe-eval' and only the engine window's policy carries unsafe-eval. Release screenshots are in docs/screenshots/.
+
 ## 0.1.124 — 2026-11-23
 
 - NEW — Business Studio KH can update itself with Sparkle, pausing its own work first.

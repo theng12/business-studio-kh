@@ -1026,6 +1026,11 @@ const VALIDATORS = {
   'samples:generateProductSheet': () => true,
   'samples:getProductSheet':      () => true,
 
+  /* 0.1.125 — the hidden background-removal engine window */
+  'bgRemoval:remove':            (a) => !isObject(a) ? 'expected { bytes, jobId, type }'
+    : (typeof a.jobId !== 'string' ? 'jobId must be a string'
+      : (a.bytes == null ? 'bytes are required' : true)),
+
   /* app — this Mac's own folders, cache and lifecycle */
   'updates:check':               () => true,
   'updates:openUpdater':         () => true,

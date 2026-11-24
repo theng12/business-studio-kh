@@ -35,6 +35,18 @@ contextBridge.exposeInMainWorld('api', {
     check:       () => invoke('updates:check'),
     openUpdater: () => invoke('updates:openUpdater'),
   },
+  /** 0.1.125: background removal runs in the hidden window in
+   *  main/bgRemovalWindow.js, which is the only document whose CSP allows the
+   *  engine's eval. `remove` sends the pixels there and resolves to PNG bytes;
+   *  `onProgress` forwards its progress for one job id. */
+  bgRemoval: {
+    remove:     (bytes, jobId, type) => invoke('bgRemoval:remove', { bytes, jobId, type }),
+    onProgress: (cb) => {
+      const fn = (_e, data) => cb(data);
+      ipcRenderer.on('bgRemoval:progress', fn);
+      return () => ipcRenderer.removeListener('bgRemoval:progress', fn);
+    },
+  },
   settings: {
     getAll:                 ()                 => invoke('settings:getAll'),
     setOne:                 (key, value)       => invoke('settings:setOne', { key, value }),

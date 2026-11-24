@@ -193,6 +193,10 @@ test('validator coverage — no bare ipcMain.handle with a channel name anywhere
 
 test('validator coverage — fire-and-forget channels stay on the audited drag path', () => {
   assert.deepEqual(bareOnChannels(), [
+    // 0.1.125: the hidden background-removal window replies here (progress and
+    // the finished bytes). Not a renderer-facing channel: main/bgRemovalWindow.js
+    // drops anything whose sender is not its own engine window.
+    'bg:from-worker  (main/bgRemovalWindow.js)',
     'images:startDragOut  (main/client/index.js)',
     'images:startDragOut  (main/ipc/images.js)',
   ]);

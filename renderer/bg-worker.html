@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 0.1.125: the ONE document allowed to run the background-removal engine,
+         and the only one whose policy carries 'unsafe-eval' — @imgly's ONNX
+         backend generates code at runtime. It never draws anything: the hidden
+         window in main/bgRemovalWindow.js loads this page, sends it image bytes
+         and gets a PNG back. Keep this policy in step with RELAXED_CSP there;
+         the production header for this window is served from that constant. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval' blob:; worker-src 'self' blob:; connect-src 'self' https://staticimgly.com data: blob:;" />
+    <title>Background removal</title>
+  </head>
+  <body>
+    <script type="module" src="./bg-worker.js"></script>
+  </body>
+</html>

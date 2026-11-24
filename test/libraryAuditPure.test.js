@@ -329,12 +329,12 @@ test('Library table: ConnImg, button headers with aria-sort, keyboard rows, data
   for (const key of ['barcode', 'retail', 'wholesale', 'stock']) assert.match(cols, new RegExp(`key: '${key}'`));
 });
 
-test('bg removal runs in a module worker with a main-thread fallback', () => {
-  const lib = read('renderer/lib/bgRemoval.js');
-  assert.match(lib, /new Worker\(new URL\('\.\/bgRemoval\.worker\.js', import\.meta\.url\), \{ type: 'module' \}\)/);
-  assert.match(lib, /WorkerStartError/);
-  assert.match(read('renderer/lib/bgRemoval.worker.js'), /import\('@imgly\/background-removal'\)/);
-  assert.match(read('vite.config.js'), /worker: \{ format: 'es' \}/);
+test('bg removal runs in the hidden engine window, never in the visible one', () => {
+  const libCode = read('renderer/lib/bgRemoval.js').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+  assert.match(libCode, /window\.api\.bgRemoval\.remove\(/);
+  assert.doesNotMatch(libCode, /@imgly\/background-removal/);
+  assert.match(read('renderer/bg-worker.js'), /import\('@imgly\/background-removal'\)/);
+  assert.match(read('vite.config.js'), /renderer\/bg-worker\.html/);
 });
 
 test('a product save merges the row and refreshes in the background', () => {

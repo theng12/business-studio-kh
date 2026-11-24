@@ -18,104 +18,31 @@
 // v0.49.33 fix there. Symptom on the client was a "no available backend"
 // error that looked like a model-loader bug but was a CSP block.
 
-let enginePromise = null;
 const cutoutCache = new Map(); // filepath -> { blob, bytes }
 const inFlight = new Map();    // same key -> Promise
 
-/* ─── 0.1.94: run the engine in a module Worker ─────────────────────────
+/* ─── 0.1.125: the engine runs in its own hidden window ──────────────────
  *
- * On the main thread @imgly froze the whole window for ~7.9 s per photo
- * (measured): no scrolling, no typing, no progress paint. The engine now runs
- * in renderer/lib/bgRemoval.worker.js with the same input, options and
- * progress callbacks; this file's API is unchanged. The worker is created
- * once and reused (the model stays loaded in it). If it cannot start at all —
- * an old Electron, a CSP that refuses it — the engine runs here as before, so
- * the feature never stops working because of the worker. */
-let worker = null;
-let workerUnavailable = false;
-let workerSeq = 0;
-const workerJobs = new Map(); // id -> { resolve, reject, onProgress }
+ * 0.1.94 moved it off this thread into a module Worker, but a Worker inherits
+ * this document's CSP — so the visible window had to allow 'unsafe-eval' for
+ * the engine's ONNX backend. It now runs in main/bgRemovalWindow.js's hidden
+ * window, whose own policy relaxes that, and this renderer only passes pixels
+ * over IPC. The window is created on first use and destroyed when idle. */
 
-class WorkerStartError extends Error {}
-
-function failAllWorkerJobs(err) {
-  for (const job of workerJobs.values()) job.reject(err);
-  workerJobs.clear();
-}
-
-function getWorker() {
-  if (workerUnavailable || typeof Worker === 'undefined') return null;
-  if (worker) return worker;
-  try {
-    worker = new Worker(new URL('./bgRemoval.worker.js', import.meta.url), { type: 'module' });
-  } catch {
-    workerUnavailable = true;
-    return null;
-  }
-  worker.onmessage = (event) => {
-    const msg = event.data || {};
-    const job = workerJobs.get(msg.id);
-    if (!job) return;
-    if (msg.type === 'progress') { job.onProgress?.(msg.key, msg.ratio); return; }
-    workerJobs.delete(msg.id);
-    if (msg.type === 'done') job.resolve(msg.blob);
-    else job.reject(new Error(msg.message || 'Background removal failed'));
-  };
-  // A script that cannot load (or crashes) reports here, not via a message.
-  worker.onerror = (event) => {
-    event.preventDefault?.();
-    workerUnavailable = true;
-    try { worker.terminate(); } catch {}
-    worker = null;
-    failAllWorkerJobs(new WorkerStartError(event.message || 'The background-removal worker could not start'));
-  };
-  return worker;
-}
-
-function runInWorker(w, blob, onProgress) {
-  return new Promise((resolve, reject) => {
-    const id = ++workerSeq;
-    workerJobs.set(id, { resolve, reject, onProgress });
-    try {
-      w.postMessage({ id, blob });
-    } catch (err) {
-      workerJobs.delete(id);
-      reject(new WorkerStartError(err?.message || String(err)));
-    }
-  });
-}
-
-/** The engine call, in the worker when possible. Resolves to the PNG Blob. */
+/** The engine call, in the hidden window. Resolves to the PNG Blob. */
 async function runEngine(blob, onProgress) {
-  const w = getWorker();
-  if (w) {
-    try {
-      return await runInWorker(w, blob, onProgress);
-    } catch (err) {
-      if (!(err instanceof WorkerStartError)) throw err;
-      // The worker never started — fall through to the main thread.
-    }
+  const jobId = typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `bg-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const off = onProgress
+    ? window.api.bgRemoval.onProgress((p) => { if (p.jobId === jobId) onProgress(p.key, p.ratio); })
+    : null;
+  try {
+    const bytes = await window.api.bgRemoval.remove(await blob.arrayBuffer(), jobId, blob.type);
+    return new Blob([bytes], { type: 'image/png' });
+  } finally {
+    off?.();
   }
-  const engine = await loadLocalEngine();
-  return engine(blob, {
-    output: { format: 'image/png' },
-    progress: onProgress
-      ? (key, current, total) => onProgress(key, total > 0 ? current / total : 0)
-      : undefined,
-  });
-}
-
-function loadLocalEngine() {
-  if (!enginePromise) {
-    enginePromise = import('@imgly/background-removal').then((m) => {
-      const engine = m.removeBackground ?? m.default;
-      if (typeof engine !== 'function') {
-        throw new Error('Failed to load @imgly/background-removal — engine export not found');
-      }
-      return engine;
-    });
-  }
-  return enginePromise;
 }
 
 /**
@@ -186,7 +113,7 @@ export async function prefetchLocalModel(onProgress) {
   }
   if (!blob) throw new Error('Failed to build warm-up image (canvas returned null)');
   try {
-    // 0.1.94: warmed where it will run — in the worker (see runEngine).
+    // 0.1.125: warmed where it will run — in the engine window (see runEngine).
     await runEngine(blob, onProgress);
   } catch (err) {
     // Reuse the same friendly translator the workspace uses so users get
