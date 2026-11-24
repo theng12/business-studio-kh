@@ -1,7 +1,10 @@
 # HANDOFF — Business Studio KH
 
-**0.1.125 — on branch `codex/csp-0125` (base `main` `ae49fe1`); the Developer (`Developer -
-Business - B001`) owns the gate, preflight, publish and receipt.** Four items, all in this version:
+**0.1.125 — PUBLISHED 2026-11-24** (release commit `d07532f` fast-forwarded to `main` and
+pushed; GitHub release `0.1.125` non-draft at `theng12/business-studio-kh` with
+`23b0943c65e0-Business.Studio.KH-0.1.125.dmg` (256,391,516 B, sha256 `23b0943c65e0426f…`) and
+`appcast.xml` (2,315 B, 1 item); Pages feed verified PASS; full receipt in
+`docs/receipts/0.1.125/RECEIPT.md`). Four items shipped in this version:
 
 1. **CSP hardened.** The @imgly ONNX engine (which generates code at runtime) moved out of the
    visible renderer into a hidden window: `main/bgRemovalWindow.js` (created on first use, destroyed
@@ -27,8 +30,20 @@ Business - B001`) owns the gate, preflight, publish and receipt.** Four items, a
 3. **Screenshots (estate policy §5d).** `docs/screenshots/product-library-light.png`,
    `purchase-orders-dark.png`, `trade-facilities-light.png`, captured from the 0.1.125 packaged build
    on a throwaway profile with seeded demo content, app window only.
-4. **Docs.** This file, `CHANGELOG.md` 0.1.125 (quarantine NOTE as plain text), `README.md` and
-   `ABOUT.md` current-version lines, `package.json` + both `package-lock.json` version strings.
+4. **Docs & closeout.** This file, `CHANGELOG.md` 0.1.125 (quarantine NOTE as plain text),
+   `README.md` and `ABOUT.md` current-version lines, `package.json` + both `package-lock.json`
+   version strings, and `docs/receipts/0.1.125/RECEIPT.md`. Post-publish closeout (2026-11-25):
+   - **Idle footprint measured on the shipped DMG** (quiet light lane, no `ALLOW_BUSY`, 120 s settled
+     window after `db:ready` + 30 s settle): main process **137 MB (−43 MB while idle, ceiling
+     500 MB → OK)**; full 4-process tree **417.4 → 333.5 MB (−83.9 MB)**; swap **2,625.44 / 4,096.00 MB**
+     before & after (**+0.00 MB**); `window:shown=0`; SIGTERM clean exit **0.44 s**; live data
+     untouched. Reusable step script: `lead/0.1.125/idle-check-step.sh` (wire into `media-0126.sh`).
+   - **Reversible retirement:** 3 non-shipped DMGs (1,313,876,030 B) + 3,452 stale `.cache/tmp` dirs
+     (9,938,333,696 B) moved to `$HOME/Desktop/_trash/business-studio-kh/2026-11-25 closeout/` with
+     `MANIFEST.md` (zero `rm`); `dist/` holds only the 0.1.125 + 0.1.124 retention pair.
+   - **Open for 0.1.126:** real Sparkle self-update proof (0.1.125 → 0.1.126), install acceptance on
+     an intended machine, SMAppService login-item status readback/measurement, and wiring
+     `idle-check-step.sh` into the 0.1.126 gate config.
 
 Artifact `dist/Business Studio KH-0.1.125.dmg`. **0.1.125 is the first version to carry
 `SUFeedURL`, so Sparkle is live.** The address is

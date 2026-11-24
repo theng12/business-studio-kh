@@ -13,8 +13,9 @@ gate runner: gate-run.sh f05b010c16e577986c796341a43b41b450e4639b82159f664c15b7b
 feed readback: 0.1.125, sha256 23b0943c65e0426fb5ad9e92796d495a8d2d9532af10e2903bc80db998d8b8aa, served by the Pages feed — `feed-verify.sh media-studio --expect-version 0.1.125` → PASS, published 2026-11-24T10:30:40Z
 page state: same
 dirty: false
-retired: none — 0 bytes freed; `dist/` holds 0.1.125 + 0.1.124 (retention pair intact)
-not proven: install acceptance on an intended machine (the Launcher installs automatically); a real self-update (no installed build has ever carried `SUFeedURL` — 0.1.126 is that proof); idle footprint by this gate (`idle-footprint :: UNMEASURED — no IDLE_PID in the config`)
+retired: 3 non-shipped DMGs (1,313,876,030 B) + 3,452 stale `.cache/tmp` dirs (9,938,333,696 B) moved reversibly to `$HOME/Desktop/_trash/business-studio-kh/2026-11-25 closeout/` with `MANIFEST.md` (11,252,209,726 B staged in `_trash`, zero `rm`); `dist/` holds only the 0.1.125 + 0.1.124 retention pair
+idle footprint: PASS (post-publish on shipped DMG, no `ALLOW_BUSY`) — main pid 137 MB after 120 s (−43 MB while idle, ceiling 500 MB); full 4-process tree 417.4 → 333.5 MB (−83.9 MB); swap 2,625.44 / 4,096.00 MB before & after (+0.00 MB); `window:shown=0`; SIGTERM clean exit 0.44 s; live data untouched
+not proven: install acceptance on an intended machine (the Launcher installs automatically); a real self-update (no installed build has ever carried `SUFeedURL` — 0.1.126 is that proof); SMAppService login-item registration (UNMEASURED — no `/Applications` copy or `launchctl` entry on this Mac)
 
 ## The three artifacts this version produced, and why only one shipped
 
@@ -28,7 +29,8 @@ not proven: install acceptance on an intended machine (the Launcher installs aut
   15:32, `a63ead0` 15:38). Proved by mounting it, not by timestamps: `plutil -extract SUFeedURL` on
   the app inside returns *"Could not extract value … SUFeedURL"*. Publishing it would have shipped an
   app with no self-update while its notes say it has one. Kept, not deleted, so a later reader can
-  mount it and see the same. Removed from `dist/` before the gate so the gate could not adopt it.
+  mount it and see the same (moved reversibly to `_trash` during closeout; see `## Closeout`).
+  Removed from `dist/` before the gate so the gate could not adopt it.
 - **`b246ced9` passed its gate and was still not shipped.** `GATE PASS media a63ead0… 09:18:23Z`
   on the pre-merge tree. `main` carried `docs/appcast.xml` (af0504a, 18ab120) from before the branch
   existed, so `main` could not fast-forward to the gated commit and the tree that would ship differed
@@ -101,17 +103,53 @@ then runs `appcast-check.sh` against the mounted app. Served state, read after t
   ever update itself.
 - Three screenshots in `docs/screenshots/` (policy §5d), read by a person: demo data only.
 
+## Idle footprint (measured post-publish on the shipped DMG)
+
+The release gate's own `idle-footprint` check reported `UNMEASURED` (no `IDLE_PID` in
+`media-0125.sh`). Closed on 2026-11-25 against the shipped DMG (`23b0943c65e0426f…`) on a quiet
+light lane (`media-studio` via `app-test-lock.sh`) with no `ALLOW_BUSY`, using reusable
+`$HOME/Developer/_orchestra/developer-business/business-studio-kh/lead/0.1.125/idle-check-step.sh`:
+
+- **Machine state:** swap **2,625.44 of 4,096.00 MB (64.1%)** before and after (**+0.00 MB** swap
+  growth over the run).
+- **Startup & settle:** mounted read-only, launched `--hidden --user-data-dir=<tmp>` with an
+  isolated `config.json`; `db:ready` in **6 s**, settled **30 s** before measurement.
+- **Main process (`check-idle-footprint.sh`, 120 s settled idle window):** **137 MB after 120 s,
+  −43 MB while idle** (ceiling 500 MB) → **OK**.
+- **Full process tree (4 processes):** **417.4 MB → 333.5 MB (−83.9 MB while idle)** — main
+  180.2 → 137.4 MB, Helper 76.1 → 62.7 MB, Helper 41.6 → 38.8 MB, Renderer 119.4 → 94.6 MB. No
+  background-removal worker window was spawned and no polling loop ran.
+- **Isolation & shutdown:** `crash.log` recorded `db:ready=1 window:hidden-run=1 window:shown=0`;
+  SIGTERM exited cleanly in **0.44 s**; `$HOME/Pictures/Business Studio KH` untouched; DMG unmounted
+  cleanly.
+- **Next gate (0.1.126+):** wire `idle-check-step.sh` directly into `media-0126.sh` so the gate
+  measures idle footprint as a required step.
+
 ## Closeout
 
-retired: none — 0 bytes freed. Nothing was deleted. The two non-shipped builds live in
-`lead/0.1.125/` as named evidence, `dist/` holds the retention pair (0.1.125 + 0.1.124), and the
-`node_modules`/`.cache` build caches are kept as tooling cache.
+Moved reversibly (zero `rm`) to `$HOME/Desktop/_trash/business-studio-kh/2026-11-25 closeout/` with
+`MANIFEST.md` (sha256 + byte counts):
+
+- `.temp0lgwr7d4Business Studio KH-0.1.124.dmg` — 801,088,512 B (`8994b3e9…`), aborted 0.1.124
+  electron-builder temp DMG left in `dist/`.
+- `REJECTED-pre-sparkle-15-18-0.1.125.dmg` — 256,393,899 B (`7d7dd337…`), pre-Sparkle rejected build.
+- `superseded-b246ced9-0.1.125.dmg` — 256,393,619 B (`b246ced9…`), pre-merge superseded build.
+- `cache-tmp/` — 3,452 stale `TMPDIR` test/gate directories from `app/.cache/tmp/` (9,938,333,696 B;
+  no active processes referencing it); empty `app/.cache/tmp/` recreated.
+
+Total staged in `_trash` (recoverable until emptied by the owner): **11,252,209,726 B (~10.48 GiB)**
+(1,313,876,030 B DMGs + 9,938,333,696 B `.cache/tmp`). `dist/` now holds only the retention pair
+(`Business Studio KH-0.1.125.dmg` + `Business Studio KH-0.1.124.dmg`), verified by
+`python3 -I test/test_macos_retention.py` → PASS. `node_modules` and `app/_trash` left untouched.
 
 ## Evidence
 
 - gate log: `$HOME/Developer/_orchestra/developer-business/business-studio-kh/lead/gate-20261124-162037-7413/`
   — `summary.txt`, `GATE-PASS.txt`, `step-*.log` for every step, `00-lock-wait.log`.
   The superseded first run is `lead/gate-20261124-160615-21335/`.
+- idle footprint check: `$HOME/Developer/_orchestra/developer-business/business-studio-kh/lead/0.1.125/idle-check-step.sh`
+  and `$HOME/Developer/_orchestra/developer-business/business-studio-kh/lead/0.1.125/idle-check-0.1.125.log`.
+- closeout trash manifest: `$HOME/Desktop/_trash/business-studio-kh/2026-11-25 closeout/MANIFEST.md`.
 - readback command and output: `sh …/scripts/feed-verify.sh media-studio --expect-version 0.1.125
   --expect-sha 23b0943c…` → `version 0.1.125 … sha256 23b0943c… … published 2026-11-24T10:30:40.620Z`
   → **PASS**. The first run, made minutes after publishing, read `0.1.124 … FAIL`: the row is regenerated
