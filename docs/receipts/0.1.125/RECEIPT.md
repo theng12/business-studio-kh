@@ -3,7 +3,7 @@
 app: media-studio
 version: 0.1.125
 commit: d07532f14d50e67bd574ef036959c7e0c0d5462c
-artifact: /Users/vengtheng/Developer/_orchestra/developer-business/media-studio-kh/app/dist/Business Studio KH-0.1.125.dmg
+artifact: /Users/vengtheng/Developer/_orchestra/developer-business/business-studio-kh/app/dist/Business Studio KH-0.1.125.dmg
 sha256: 23b0943c65e0426fb5ad9e92796d495a8d2d9532af10e2903bc80db998d8b8aa
 bytes: 256391516
 scan: sha256=23b0943c65e0426fb5ad9e92796d495a8d2d9532af10e2903bc80db998d8b8aa clean — scan-dmg/2026-11-20, exit 0, 503 files, UNKNOWN none
@@ -106,7 +106,7 @@ retired: none — 0 bytes freed. Nothing was deleted. The two non-shipped builds
 
 ## Evidence
 
-- gate log: `/Users/vengtheng/Developer/_orchestra/developer-business/media-studio-kh/lead/gate-20261124-162037-7413/`
+- gate log: `/Users/vengtheng/Developer/_orchestra/developer-business/business-studio-kh/lead/gate-20261124-162037-7413/`
   — `summary.txt`, `GATE-PASS.txt`, `step-*.log` for every step, `00-lock-wait.log`.
   The superseded first run is `lead/gate-20261124-160615-21335/`.
 - readback command and output: `sh …/scripts/feed-verify.sh media-studio --expect-version 0.1.125
