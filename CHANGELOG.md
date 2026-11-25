@@ -1,5 +1,11 @@
 # What's new
 
+## 0.1.127 — 2026-11-25
+
+- FIX — Installed copies check for updates again at launch instead of silently skipping the feed. The check now waits until this app's own hold endpoint is listening, after startup work has finished.
+- NOTE — If macOS says the app is damaged when you open it, run this once in Terminal: xattr -cr "/Applications/Business Studio KH.app"
+- Internal — Sparkle starts from the hold's listening log; a refused hold gets up to three tries with backoff, and each try and the give-up are logged with the reason.
+
 ## 0.1.126 — 2026-11-25
 
 - POLISH — Trade Finance → Facilities now shows the commitment fee period beside each fee (for example $112.50 / quarter or $71.88 / month) and makes it clear which lines are tracked under Movements (overdrafts) and which are tracked on Drawdowns (RC / TR).

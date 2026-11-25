@@ -550,10 +550,9 @@ app.whenReady().then(() => {
   installAppMenu(showMainWindow);
   installTray({ showWindow: showMainWindow, log: logEvent });
 
-  // Sparkle: once, after the window/menu-bar item exists. It takes this app's own
-  // update hold before any feed fetch and refuses, with a reason, rather than
-  // checking without one.
-  require('./updateCheck').startUpdateCheck({ log: logEvent });
+  // Sparkle: once, after the window/menu-bar item exists. 0.1.127 starts it
+  // from the hold's "listening" log below, so the shim's single 5 s hold POST
+  // cannot race the startup DB work; a hold that never binds starts no check.
 
   // v0.15.1: initialise the event bus before anything that might
   // call broadcast() (queueRunner, IPC writes, server WS handler).
@@ -570,8 +569,13 @@ app.whenReady().then(() => {
    * and never shows anything. A port already in use is logged and the app carries
    * on: the installer then refuses to replace a running copy rather than quit it
    * mid-job (main/updateHold.js). */
+  const startSparkle = (opts) => require('./updateCheck').startUpdateCheck({ log: logEvent, ...opts });
+  const onHoldLog = require('./updateCheck').createHoldStartGate({ startCheck: startSparkle });
   try {
-    require('./updateHold').setLog((message) => logEvent('update-hold', message));
+    require('./updateHold').setLog((message) => {
+      logEvent('update-hold', message);
+      onHoldLog(message);
+    });
     require('./updateHold').startListener();
   } catch (err) {
     logEvent('update-hold:failed', err.message);
