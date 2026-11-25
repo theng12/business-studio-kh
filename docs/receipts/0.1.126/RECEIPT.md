@@ -10,12 +10,12 @@ scan: sha256=bbc6b7340dde99392019744a9167e1d0d231fda7acc04cd1154e117330328667 cl
 gate config: $HOME/Developer/_orchestra/tools/gate-configs/media-0126.sh
 gate exit: 0 — GATE PASS media 1c1c5ee3340aa21db78115e15162d69a2f5cfaac 2026-11-24T22:08:15Z
 gate runner: gate-run.sh 528de9fe53d0c0de552d30dca1b21092b073a24fac76daf53e21da738b3b6f46, 48,065 bytes
-feed readback: UNMEASURED — GitHub release 0.1.126 and signed appcast.xml published 2026-11-25T01:32:09Z; handed off to System (S001) for Pages feed regeneration (Pages currently serves 0.1.125, published 2026-11-24T20:02:00.067Z)
-page state: same
+feed readback: PASS — kh-releases Pages feed serves 0.1.126, sha256 bbc6b7340dde99392019744a9167e1d0d231fda7acc04cd1154e117330328667, bytes 256391761, file bbc6b7340dde-Business.Studio.KH-0.1.126.dmg, published 2026-11-25T01:32:08.853Z; feed-verify.sh media-studio --expect-version 0.1.126 --expect-sha bbc6b7340dde… --public-key (the app's own pinned public key) → PASS signature (Ed25519 verified, 23601 feed bytes / 64 signature bytes), exit 0; re-read by this Developer after System (S001) regenerated the feed, not taken from S001's report
+page state: same — the served row and the signed appcast name 0.1.126 / bbc6b7340dde…, matching the published GitHub release and the shipped DMG
 dirty: false
 retired: none in 0.1.126 closeout (dist/ holds only the 0.1.126 + 0.1.125 retention pair, verified by test_macos_retention.py 10/10 PASS)
 idle footprint: PASS (in-gate on shipped DMG, no ALLOW_BUSY) — main pid 166 MB after 120 s (−52 MB while idle, ceiling 500 MB); full 4-process tree 497.9 → 391.4 MB (−106.5 MB); swap 2,585.44 / 4,096.00 MB before & after (+0.00 MB); window:shown=0; SIGTERM clean exit 0.34 s; live data untouched
-not proven: live kiosk Mac boot/reboot & sudo sfltool dumpbtm (hardware/owner-gated); real Sparkle self-update from 0.1.125 → 0.1.126 (now unblocked by this release); install acceptance on an intended machine; Pages feed row readback (pending System S001 regen)
+not proven: live kiosk Mac boot/reboot & sudo sfltool dumpbtm (hardware/owner-gated); real Sparkle self-update from 0.1.125 → 0.1.126 (now unblocked by this release); install acceptance on an intended machine
 
 ## Published
 
