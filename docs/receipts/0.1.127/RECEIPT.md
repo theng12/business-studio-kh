@@ -10,10 +10,10 @@ scan: sha256=57143e54b7f3d4a2afc8d5276f057297b58ae3ae75c2b3f9c7834e3d6ddf4f49 cl
 gate config: $HOME/Developer/_orchestra/tools/gate-configs/media-0127.sh
 gate exit: 0 — GATE PASS media 0dda5572de1b5974ac07ff28a933a8a622147bac 2026-11-25T06:33:17Z
 gate runner: gate-run.sh 528de9fe53d0c0de552d30dca1b21092b073a24fac76daf53e21da738b3b6f46, 48,065 bytes
-feed readback: UNMEASURED — GitHub release 0.1.127 and signed appcast.xml published 2026-11-25T07:50:04Z; handed to System (S001) for the kh-releases Pages row (the feed currently serves 0.1.126, published 2026-11-25T01:32:08.853Z)
-page state: same
+feed readback: PASS — kh-releases Pages feed serves 0.1.127, sha256 57143e54b7f3d4a2afc8d5276f057297b58ae3ae75c2b3f9c7834e3d6ddf4f49, bytes 256395439, file 57143e54b7f3-Business.Studio.KH-0.1.127.dmg, tagline present, published 2026-11-25T08:14:24.247Z; feed-verify.sh media-studio --expect-version 0.1.127 --expect-sha 57143e54b7f3… --public-key (the app's own pinned public key) → PASS signature (Ed25519 verified, 23765 feed bytes / 64 signature bytes), exit 0; re-read by this Developer after System's pass, not taken from S001's report
+page state: same — the served row and the signed appcast both name 0.1.127 / 57143e54b7f3…, matching the published GitHub release and the shipped DMG
 dirty: false
-retired: none yet — dist/ holds 0.1.127, 0.1.126 and 0.1.125 until the Pages row serves 0.1.127; 0.1.125 then retires so the pair is 0.1.127 + 0.1.126
+retired: 0.1.125 moved recoverably to $HOME/Desktop/_trash/business-studio-kh/2026-11-25 retention/ with a manifest once the feed served 0.1.127; dist/ now holds exactly 0.1.127 + 0.1.126
 idle footprint: PASS (in-gate on the shipped DMG, no ALLOW_BUSY) — main pid 130 MB after 120 s (−46 MB while idle, ceiling 500 MB); full 4-process tree 400.9 → 318.5 MB (−82.4 MB); swap 4,319.44 → 4,279.44 MB (−40 MB); window:shown=0; SIGTERM clean exit 0.32 s; live data untouched
 not proven: the Sparkle install-and-relaunch step end to end (it terminates and relaunches the host with no arguments, so it needs one visible window and would open the default data folder — issue row 20261125-28); live kiosk Mac boot/reboot and sudo sfltool dumpbtm (hardware-gated); install acceptance on an intended machine
 
