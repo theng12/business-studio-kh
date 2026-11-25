@@ -1,6 +1,27 @@
 # HANDOFF — Business Studio KH
 
-**0.1.126 — on branch `codex/polish-0126` (base `main` `9bf8fcf`); gate + preflight run by lead,
+**0.1.127 — PUBLISHED 2026-11-25** (gated commit
+`0dda5572de1b5974ac07ff28a933a8a622147bac`; GitHub release `0.1.127` at
+`theng12/business-studio-kh` with
+`57143e54b7f3-Business.Studio.KH-0.1.127.dmg`, 256,395,439 bytes, sha256
+`57143e54b7f3d4a2afc8d5276f057297b58ae3ae75c2b3f9c7834e3d6ddf4f49`). One item
+shipped in this version:
+
+1. **The Sparkle update check now actually starts.** It starts from the update-hold
+   listener's `listening` log line, after the startup DB work that used to block the main
+   thread. A bounded retry (3 tries, 1 s then 3 s) only retries a pre-Sparkle `refused:`
+   hold failure; a stale refusal after a successful hold is ignored, and post-hold updater
+   errors are logged once (`kh-sparkle:error`) instead of retried.
+   `test/sparkleUpdateStart.test.js` pins the boot order and the retry bound. **Why it
+   mattered:** 0.1.125 and 0.1.126 carried `SUFeedURL` but never actually ran an update
+   check (issue row 20261125-31).
+
+**Still open after 0.1.127.** The Sparkle install-and-relaunch step needs an end-to-end
+proof with one visible window and a throwaway default data folder (issue row 20261125-28);
+live kiosk Mac boot/reboot and `sudo sfltool dumpbtm` are hardware-gated; install acceptance
+on the kiosk/server Macs is owed.
+
+**0.1.126 — superseded (carried `SUFeedURL` but ran no update check; see 0.1.127) — on branch `codex/polish-0126` (base `main` `9bf8fcf`); gate + preflight run by lead,
 merge/publish owned by Developer (`Developer - Business - B001`).** Four bounded items:
 
 1. **SMAppService login-item readback, UI notice & one-shot re-registration.** `main/kioskWindow.js`
@@ -63,16 +84,13 @@ pushed; GitHub release `0.1.125` non-draft at `theng12/business-studio-kh` with
      window after `db:ready` + 30 s settle): main process **137 MB (−43 MB while idle, ceiling
      500 MB → OK)**; full 4-process tree **417.4 → 333.5 MB (−83.9 MB)**; swap **2,625.44 / 4,096.00 MB**
      before & after (**+0.00 MB**); `window:shown=0`; SIGTERM clean exit **0.44 s**; live data
-     untouched. Reusable step script: `lead/0.1.125/idle-check-step.sh` (wire into `media-0126.sh`).
+     untouched. Reusable step script: `lead/0.1.125/idle-check-step.sh`.
    - **Reversible retirement:** 3 non-shipped DMGs (1,313,876,030 B) + 3,452 stale `.cache/tmp` dirs
      (9,938,333,696 B) moved to `$HOME/Desktop/_trash/business-studio-kh/2026-11-25 closeout/` with
-     `MANIFEST.md` (zero `rm`); `dist/` holds only the 0.1.125 + 0.1.124 retention pair.
-   - **Open for 0.1.126:** real Sparkle self-update proof (0.1.125 → 0.1.126), install acceptance on
-     an intended machine, SMAppService login-item status readback/measurement, and wiring
-     `idle-check-step.sh` into the 0.1.126 gate config.
+     `MANIFEST.md` (zero `rm`); at closeout `dist/` held only the 0.1.125 + 0.1.124 retention pair.
 
-Artifact `dist/Business Studio KH-0.1.125.dmg`. **0.1.125 is the first version to carry
-`SUFeedURL`, so Sparkle is live.** The address is
+Artifact `dist/Business Studio KH-0.1.125.dmg`. **0.1.125 was the first version to carry
+`SUFeedURL`, but no update check ran until 0.1.127.** The address is
 `https://github.com/theng12/business-studio-kh/releases/latest/download/appcast.xml` — the app
 repo's own release asset, not Pages: a branch-source Pages build is itself a hosted workflow and
 this repo's Actions is disabled (issue 20261124-51). Because the address follows `latest`, **every
@@ -383,7 +401,7 @@ infer another Mac's installed version from this checkout. No physical two-Mac te
 | | |
 |---|---|
 | App | Business Studio KH — Electron 44 main process (CommonJS) + React 18 renderer (ESM/JSX) + Vite 7, SQLite (better-sqlite3). Target: macOS 12+, Apple Silicon. |
-| Current release | **0.1.102** — KH Updater signed arm64 installer and in-app release notes from one `CHANGELOG.md`, starting at 0.1.100. Source PR 121; check 2,439 and native 465 pass. Feed publication held for Developer’s go. |
+| Current release | **0.1.127 — PUBLISHED 2026-11-25**, gated commit `0dda5572de1b5974ac07ff28a933a8a622147bac`; signed arm64 installer, in-app release notes from one `CHANGELOG.md`. Sparkle update check starts after the update-hold listener; install-and-relaunch proof and kiosk/server install acceptance still owed. |
 | Version file | `package.json` `version`; a release also edits `package-lock.json` and adds the top release in `CHANGELOG.md`, which feeds `renderer/components/WhatsNewModal.jsx` (verified 2026-11-02). A test (`test/bulkTableWiring.test.js`) fails if the two disagree. |
 | Versioning | **Patch only** (`0.1.x`). Minor/major only on an explicit ask — AGENTS.md §23. |
 | Branches | `main` is the only long-lived branch. Work on `codex/<topic>`, never directly on `main`. A merged branch is deleted only after its name + SHA are written into the owner's checkout `_trash/README-business-studio-kh-branch-log.md` on the Mac you are on (the build worktree's own `_trash/` is not the place — it was erased with the worktree on 2026-10-02). |
