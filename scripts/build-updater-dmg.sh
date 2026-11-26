@@ -20,8 +20,9 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Con
 ditto "$APP" "$STAGE/Business Studio KH.app"
 ln -s /Applications "$STAGE/Applications"
 if [ -e "$DMG" ]; then
-  # Owner 2026-11-12: a superseded build rotates into the app's own _trash.
-  ROTATE="_trash/$(date +%Y-%m-%d) retention"
+  # Owner 2026-11-12: a superseded build rotates into the one Desktop trash
+  # (owner 2026-11-18: no `_trash` inside a checkout).
+  ROTATE="$HOME/Desktop/_trash/business-studio-kh/$(date +%Y-%m-%d) retention"
   mkdir -p "$ROTATE"
   mv "$DMG" "$ROTATE/$(basename "$DMG" .dmg) $(date +%H-%M-%S).dmg"
 fi
@@ -31,9 +32,10 @@ codesign --verify --strict "$DMG"
 hdiutil verify "$DMG"
 # A public download must not carry the owner's network or machine identity.
 node scripts/scan-dmg-leaks.js "$DMG"
-mkdir -p _trash/updater-staging
-mv "$STAGE" "_trash/updater-staging/$(basename "$STAGE")"
+STAGING="$HOME/Desktop/_trash/business-studio-kh/$(date +%Y-%m-%d) updater-staging"
+mkdir -p "$STAGING"
+mv "$STAGE" "$STAGING/$(basename "$STAGE")"
 # Owner 2026-11-12: retention is automatic — keep the newest two installers,
-# move anything older to the app's own _trash (guards and receipt in the script).
+# move anything older to the one Desktop trash (guards and receipt in the script).
 node scripts/retain-dist.js
 printf 'Built %s (com.terranash.mediastudiokh, %s)\n' "$DMG" "$VERSION"

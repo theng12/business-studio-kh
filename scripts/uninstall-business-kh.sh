@@ -7,7 +7,7 @@
 set -euo pipefail
 
 APP="${1:-/Applications/Business Studio KH.app}"
-ROTATE="${ROTATE:-$HOME/Developer/My Own Apps/business-studio-kh/_trash/$(date +%Y-%m-%d) uninstall}"
+ROTATE="${ROTATE:-$HOME/Desktop/_trash/business-studio-kh/$(date +%Y-%m-%d) uninstall}"
 
 if [ ! -d "$APP" ]; then
   echo "Nothing to remove: $APP is not installed."
@@ -23,7 +23,7 @@ for label in $(/bin/launchctl list 2>/dev/null | awk '{print $3}' | grep -i 'med
   echo "Unloaded launchd job $label"
 done
 
-# 3. Move the bundle (helpers included) to the app's _trash — never deleted in place.
+# 3. Move the bundle (helpers included) to the one Desktop trash — never deleted in place.
 mkdir -p "$ROTATE"
 mv "$APP" "$ROTATE/Business Studio KH.app"
 echo "Moved $APP to $ROTATE"

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Keep the newest two releases' DMGs, move older ones into `_trash/`.
+ * Keep the newest two releases' DMGs, move older ones into the one Desktop trash.
  *
  * Owner's rule (2026-09-26): when a build is finished, keep the current
  * release and the one before it, and get the version two generations back out
@@ -8,7 +8,7 @@
  * DMG since 0.1.68 — twelve 240 MB files, none of them ever opened again.
  *
  * "Out of the way" is a MOVE, never a delete: the project's standing rule is
- * that every removal lands in `_trash/`, which is the owner's to empty
+ * that every removal lands in `~/Desktop/_trash/<app>/`, which is the owner's to empty
  * (AGENTS.md, working rules). This script has no delete path at all — see
  * test/dmgRetention.test.js, which fails if one is ever added.
  *
@@ -22,8 +22,8 @@
  * with `--dir` pointing there, or from that checkout directly.
  */
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
 
 // The rule. Two = the release just built plus the one before it.
 const KEEP_VERSIONS = 2;
@@ -68,18 +68,11 @@ function selectDmgsToPrune(names, keep = KEEP_VERSIONS) {
   };
 }
 
-/** The project's `_trash/`, found through the shared git dir so it works from
- *  the build worktree as well as from the owner's checkout. */
-function trashDir() {
-  try {
-    const commonDir = execFileSync('git', ['rev-parse', '--git-common-dir'], {
-      cwd: __dirname, encoding: 'utf8',
-    }).trim();
-    const root = path.dirname(path.resolve(__dirname, commonDir));
-    return path.join(root, '_trash', 'old-dmgs');
-  } catch (_) {
-    return path.join(__dirname, '..', '_trash', 'old-dmgs');
-  }
+/** The one Desktop trash (owner 2026-11-18: no `_trash` inside a checkout), so this
+ *  works the same from the build worktree and from the owner's checkout. */
+function trashDir(now = new Date()) {
+  return path.join(os.homedir(), 'Desktop', '_trash', 'business-studio-kh',
+    `${now.toISOString().slice(0, 10)} old-dmgs`);
 }
 
 function uniqueTarget(dir, name) {

@@ -1,13 +1,14 @@
 // Owner rule 2026-11-12 (corrected): retention is automatic — keep the newest
-// two installers in dist/, move older ones to the app's own `_trash/<date>
-// retention/`, and honour the protected-version guards.
+// two installers in dist/, move older ones to the one Desktop trash
+// (`~/Desktop/_trash/<app>/<date> <what>/`, owner 2026-11-18), and honour the
+// protected-version guards. Never app-local: that path collected 975 MB unseen.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { planRetention, retainDist, protectedVersions } = require('../scripts/retain-dist.js');
+const { planRetention, retainDist, protectedVersions, retireTrashDir } = require('../scripts/retain-dist.js');
 
 const dmg = (v) => `Business Studio KH-${v}.dmg`;
 const makeDist = () => {
@@ -17,6 +18,13 @@ const makeDist = () => {
   fs.mkdirSync(distDir);
   return { root, distDir, trashDir };
 };
+
+test('the rotation folder is the one Desktop trash, never inside the checkout (issue class: 975 MB collected unseen)', () => {
+  const dir = retireTrashDir(new Date('2026-11-26T12:00:00Z'));
+  assert.equal(dir, path.join(os.homedir(), 'Desktop', '_trash', 'business-studio-kh', '2026-11-26 retention'));
+  const project = path.join(__dirname, '..');
+  assert.ok(!dir.startsWith(project + path.sep), `rotation must not land in the checkout: ${dir}`);
+});
 
 test('the two newest installers are kept and older ones retire, newest first', () => {
   const plan = planRetention([dmg('0.1.9'), dmg('0.1.10'), dmg('0.1.105'), dmg('0.1.107'), dmg('0.1.106'), 'notes.txt', 'Business Studio KH-0.1.107.dmg.blockmap']);

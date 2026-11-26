@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const http = require('node:http');
 const net = require('node:net');
+const os = require('node:os');
 const path = require('node:path');
 
 if (process.argv[2] === '--seed-internal') {
@@ -998,7 +999,9 @@ async function main() {
     process.stdout.write(`${JSON.stringify(result)}\n`);
   } finally {
     await Promise.all(processes.map(stopChild));
-    const preservedRoot = path.join(ROOT, '_trash', 'packaged-probes', path.basename(root));
+    // Owner 2026-11-18: no `_trash` inside a checkout — a probe's residue goes to the Desktop trash.
+    const preservedRoot = path.join(os.homedir(), 'Desktop', '_trash', 'business-studio-kh',
+      `${new Date().toISOString().slice(0, 10)} packaged-probes`, path.basename(root));
     await fsp.mkdir(path.dirname(preservedRoot), { recursive: true });
     await fsp.rename(root, preservedRoot);
   }

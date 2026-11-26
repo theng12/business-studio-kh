@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Owner rule 2026-11-12 (corrected): retention is automatic. After a build,
 // dist/ keeps the newest two versioned installers and anything older goes to
-// the app's own `_trash/<date> retention/` — recoverable, no hand step.
+// the one Desktop trash, `~/Desktop/_trash/<app>/<date> <what>/` — recoverable,
+// no hand step. Owner 2026-11-18: no `_trash` inside a checkout, so this path
+// must never be app-local (it was, and collected 975 MB unseen).
 //
 // Guards, per the owner: never move a version that `release.json`,
 // `previous-release.json`, the ledger or a running/queued job names; never move
@@ -9,6 +11,7 @@
 // file. Every move is logged with hash, version and destination in the receipt.
 // `_trash` is for rotation; ~/.Trash is not used.
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
@@ -70,9 +73,13 @@ function planRetention(names, keep = 2, protectedSet = new Set()) {
   return { kept, retired };
 }
 
-function rotationDir(projectDir, now = new Date()) {
+/* The one Desktop trash (owner 2026-11-18): `~/Desktop/_trash/<app>/<date> <what>/`.
+ * `retireTrashDir` is the single place this file resolves it, so a test can point it at
+ * a temp dir and no run can write into the checkout. */
+const TRASH_APP = 'business-studio-kh';
+function retireTrashDir(now = new Date()) {
   const date = now.toISOString().slice(0, 10);
-  return path.join(projectDir, '_trash', `${date} retention`);
+  return path.join(os.homedir(), 'Desktop', '_trash', TRASH_APP, `${date} retention`);
 }
 
 function sha256(file) {
@@ -89,7 +96,7 @@ function retainDist({ distDir, trashDir, log = console.log } = {}) {
   if (runtime) protectedSet.add(runtime);
 
   const { kept, retired } = planRetention(fs.readdirSync(distDir), 2, protectedSet);
-  const destDir = trashDir || rotationDir(projectDir);
+  const destDir = trashDir || retireTrashDir();
   const moved = [];
   const failed = [];
 
@@ -124,4 +131,4 @@ if (require.main === module) {
   retainDist({ log: console.log });
 }
 
-module.exports = { planRetention, retainDist, protectedVersions, parseVersion };
+module.exports = { planRetention, retainDist, protectedVersions, parseVersion, retireTrashDir };
