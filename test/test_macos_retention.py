@@ -96,7 +96,13 @@ class InstalledRetention(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             self.run_acceptance()
         # The helper records the newly accepted release before it reaches the retirement step, so the tree
-        # is not byte-identical afterwards; the claim this test makes is the one that matters.
+        # is not byte-identical afterwards; the claim this test makes is the one that matters. Two setup
+        # runs are pinned (0.1.103 + 0.1.104) over a dist that already holds 0.1.102 from setUp, so this
+        # refusal comes from the retirement step and not from pin validation — assert both halves of that.
+        self.assertTrue((self.project / 'dist' / 'Business Studio KH-0.1.104.dmg').is_file(),
+                        'the copy step ran, so the refusal came from the retirement step')
+        self.assertTrue((self.project / 'dist' / 'Business Studio KH-0.1.102.dmg').is_file(),
+                        'a refusal is not a rollback: the obsolete DMG stays where it was')
         self.assertFalse((self.project / '_trash').exists(),
                          'a refused retire must not create a _trash inside the checkout')
 
