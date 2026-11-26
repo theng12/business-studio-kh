@@ -3,11 +3,13 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
-import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,9 +21,15 @@ spec.loader.exec_module(signing)
 
 class InstalledRetention(unittest.TestCase):
     def setUp(self):
-        self.work = Path(tempfile.mkdtemp(prefix='media-retention-'))
+        # The shared helper validates a pin's retirement_trash with `realpath == path`, so the fixture
+        # cannot live under $TMPDIR (/var/folders resolves to /private/var). It sits in the user's cache.
+        self.work = Path.home() / 'Library' / 'Caches' / f'business-retention-{uuid.uuid4().hex[:12]}'
+        self.work.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, self.work, True)
         self.project = self.work / 'project'
         self.project.mkdir()
+        self.trash = self.work / 'Desktop' / '_trash' / 'business-studio-kh'
+        self.trash.mkdir(parents=True)
         self.installed = self.work / 'installed.json'
         self.packaged = self.work / 'packaged.json'
         self.pins = self.work / 'pins.json'
@@ -41,7 +49,8 @@ class InstalledRetention(unittest.TestCase):
         self.current = releases[-1]
         self.current['evidence'] = str(self.installed)
         self.document = {'schema': 1, 'apps': [{'app': signing.APP_NAME,
-                         'project': str(self.project), 'releases': releases[:2]}]}
+                         'project': str(self.project), 'retirement_trash': str(self.trash),
+                         'releases': releases[:2]}]}
         self.pins.write_text(json.dumps(self.document))
         subprocess.run(['python3', '-I', str(HELPER), str(self.pins)], check=True, capture_output=True)
         self.document['apps'][0]['releases'] = releases[1:]
@@ -73,8 +82,23 @@ class InstalledRetention(unittest.TestCase):
         dist = self.project / 'dist'
         self.assertEqual(sorted(p.name for p in dist.glob('*.dmg')),
                          ['Business Studio KH-0.1.103.dmg', 'Business Studio KH-0.1.104.dmg'])
-        self.assertTrue((self.project / '_trash/dist/Business Studio KH-0.1.102.dmg').is_file())
+        self.assertTrue((self.trash / 'dist' / 'Business Studio KH-0.1.102.dmg').is_file(),
+                        'the retired DMG must land in the pinned Desktop trash')
+        self.assertFalse((self.project / '_trash').exists(),
+                         'owner 2026-11-18: no _trash inside a checkout')
         self.assertTrue(Path(self.current['source']).is_file(), 'shared helper must preserve source')
+
+    def test_checkout_without_a_pin_is_refused_not_written_locally(self):
+        # The class this guards: an unpinned retire used to CREATE `<project>/_trash` inside a checkout.
+        (self.project / '.git').mkdir()
+        del self.document['apps'][0]['retirement_trash']
+        self.pins.write_text(json.dumps(self.document))
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.run_acceptance()
+        # The helper records the newly accepted release before it reaches the retirement step, so the tree
+        # is not byte-identical afterwards; the claim this test makes is the one that matters.
+        self.assertFalse((self.project / '_trash').exists(),
+                         'a refused retire must not create a _trash inside the checkout')
 
     def test_failed_launch_preserves_pair_and_receipt(self):
         self.installed.write_text('prior installed evidence')
